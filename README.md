@@ -1,5 +1,7 @@
 # unreagent
 
+[![ci](https://github.com/Getty/unreagent/actions/workflows/ci.yml/badge.svg)](https://github.com/Getty/unreagent/actions/workflows/ci.yml)
+
 Ein schlanker **Launcher/Orchestrator** für Unreal-Engine-Projekte: startet und
 überwacht den Unreal-Editor **und** einen Agenten (z.B. Claude Code) und bietet
 dem Agenten einen **MCP-Server**, über den er den Editor steuern, Builds
