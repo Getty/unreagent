@@ -25,7 +25,8 @@ import (
 	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
-const version = "0.1.0"
+// version wird beim Release-Build per -ldflags "-X main.version=<tag>" gesetzt.
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {

@@ -1,0 +1,45 @@
+name: release
+
+# Ausgelöst durch das Pushen eines Version-Tags, z.B. v0.0.1.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # nötig, um ein Release zu erstellen
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build (Windows + Linux)
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.version=${VERSION}" -o dist/unreagent.exe ./cmd/launcher
+          GOOS=linux   GOARCH=amd64 go build -ldflags "-s -w -X main.version=${VERSION}" -o dist/unreagent     ./cmd/launcher
+
+      - name: Package
+        run: |
+          set -e
+          cp config.example.json README.md dist/
+          cd dist
+          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe config.example.json README.md
+          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent config.example.json README.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/*.zip dist/*.tar.gz \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
