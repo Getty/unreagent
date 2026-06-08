@@ -1,0 +1,3 @@
+/dist/
+# Echte Konfiguration ist lokal/maschinenspezifisch — Vorlage ist config.example.json
+/config.json
