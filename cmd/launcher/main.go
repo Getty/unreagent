@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -39,28 +40,33 @@ func run() error {
 	cfgPath := flag.String("config", "", "Pfad zur config.json (Standard: neben der ausführbaren Datei)")
 	flag.Parse()
 
-	path := *cfgPath
-	if path == "" {
-		path = defaultConfigPath()
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("Config nicht lesbar (%s): %w", path, err)
-	}
-	cfg, err := config.Parse(raw)
-	if err != nil {
-		return err
-	}
-
 	logger := func(line string) {
 		fmt.Printf("%s  %s\n", time.Now().Format("15:04:05"), line)
 	}
-	logger(fmt.Sprintf("unreagent %s — Config: %s", version, path))
 
-	// Pfade prüfen (nur Warnung, damit der Start auch bei Tippfehlern erklärt).
+	cfg, info, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	logger(fmt.Sprintf("unreagent %s — Config: %s", version, info.ConfigPath))
+	if info.LocalPath != "" {
+		logger("Lokales Overlay: " + info.LocalPath)
+	}
+	if info.EngineRoot != "" {
+		logger("Engine: " + info.EngineRoot)
+	} else {
+		logger("WARN Engine nicht gefunden — UE_ROOT oder engineRoot in unreagent.local.yaml setzen")
+	}
+	if info.Project != "" {
+		logger("Projekt: " + info.Project)
+	} else {
+		logger("WARN keine .uproject neben der Config gefunden — unreal.project setzen")
+	}
 	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
-	if cfg.Unreal.Project != "" {
-		warnIfMissing(logger, "unreal.project", cfg.Unreal.Project)
+	if cfg.Agent.Enabled {
+		if _, lookErr := exec.LookPath(cfg.Agent.Command); lookErr != nil {
+			logger("WARN Agent-Command nicht im PATH: " + cfg.Agent.Command + " (vollen Pfad in unreagent.local.yaml setzen)")
+		}
 	}
 
 	sup := supervisor.New(logger)
@@ -448,14 +454,6 @@ func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, l
 }
 
 // --- Hilfsfunktionen ---
-
-func defaultConfigPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "config.json"
-	}
-	return filepath.Join(filepath.Dir(exe), "config.json")
-}
 
 func secs(n int) time.Duration { return time.Duration(n) * time.Second }
 

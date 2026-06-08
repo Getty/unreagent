@@ -1,3 +1,5 @@
 /dist/
-# Echte Konfiguration ist lokal/maschinenspezifisch — Vorlage ist config.example.json
-/config.json
+# Lokale Maschinen-Overrides gehören nie ins Repo
+unreagent.local.yaml
+unreagent.local.yml
+# vendor/ wird bewusst committed (offline-reproduzierbare Builds)

@@ -31,10 +31,10 @@ jobs:
       - name: Package
         run: |
           set -e
-          cp config.example.json README.md dist/
+          cp unreagent.example.yaml README.md dist/
           cd dist
-          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe config.example.json README.md
-          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent config.example.json README.md
+          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe unreagent.example.yaml README.md
+          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent unreagent.example.yaml README.md
 
       - name: Create GitHub Release
         env:

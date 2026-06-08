@@ -8,8 +8,9 @@ dem Agenten einen **MCP-Server**, über den er den Editor steuern, Builds
 auslösen, Logs lesen und Python-/Node-Code in vorbereiteten Umgebungen ausführen
 kann.
 
-Eine einzige, abhängigkeitsfreie `.exe` (nur Go-Standardbibliothek) — **von
-Linux aus nach Windows cross-kompilierbar**.
+Eine einzige `.exe` — **von Linux aus nach Windows cross-kompilierbar**. Bis auf
+einen vendored YAML-Parser nur Go-Standardbibliothek; `vendor/` ist eingecheckt,
+Builds sind damit offline-reproduzierbar.
 
 ## Architektur
 
@@ -29,7 +30,8 @@ Linux aus nach Windows cross-kompilierbar**.
 
 ## Bauen
 
-Voraussetzung: Go (>= 1.19). Keine externen Module.
+Voraussetzung: Go (>= 1.19). Dependencies sind vendored (`vendor/`), Builds
+laufen offline.
 
 ```bash
 make windows   # -> dist/unreagent.exe  (Cross-Compile von Linux aus)
@@ -45,21 +47,58 @@ GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/unreagent.exe ./cmd/
 
 ## Einrichten
 
-1. `config.example.json` → `config.json` (neben `unreagent.exe`) kopieren.
-2. Pfade anpassen: `unreal.editor`, `unreal.project`, die `commands` (Build.bat-
-   Pfad + Target-Name `<Projekt>Editor`).
-3. `unreagent.exe` starten. Alternativer Config-Pfad via `-config <pfad>`.
+Der Launcher wird **ins UE-Projekt gelegt** und die Config **mit-committed**:
+
+1. `unreagent.exe` (aus dem Release) neben die `.uproject` legen — git-ignored.
+2. `unreagent.example.yaml` → **`unreagent.yaml`** umbenennen, neben die
+   `.uproject` legen und **ins Repo committen**. Diese Datei ist portabel.
+3. `unreagent.exe` starten (Doppelklick oder Konsole). Alternativer Config-Pfad
+   via `-config <pfad>`.
+
+`unreagent.yaml` enthält **keine Maschinenpfade**. Editor, `compile` und
+`package` werden automatisch abgeleitet. Eine minimale Config genügt:
+
+```yaml
+agent:       { enabled: true, command: claude, claudeIntegration: true }
+permissions: { enabled: true, mode: allow_all, deny: ["Bash(rm -rf *)"] }
+runtimes:    { python: { enabled: true }, node: { enabled: true } }
+mcp:         { enabled: true }
+```
+
+### Portabilität: Pfade werden zur Laufzeit aufgelöst
+
+| Platzhalter | Auflösung |
+|---|---|
+| `${ENGINE}` | Env `UE_ROOT` → `engineRoot` (local.yaml) → Auto-Detect der Epic-Standardpfade |
+| `${PROJECT}` / `${PROJECT_DIR}` / `${PROJECT_NAME}` | `.uproject` neben der Config (Auto-Detect) |
+
+Maschinenspezifisches gehört in eine **git-ignorierte `unreagent.local.yaml`**,
+die als Overlay über `unreagent.yaml` gelegt wird:
+
+```yaml
+# unreagent.local.yaml  (NICHT committen)
+engineRoot: "D:/UE/UE_5.7"                 # falls Auto-Detect scheitert
+agent: { command: "C:/.../claude.cmd" }    # falls claude nicht im PATH
+```
+
+Empfohlener `.gitignore`-Eintrag im UE-Projekt:
+
+```
+unreagent.exe
+unreagent.local.yaml
+```
 
 ## Konfiguration (Kurzüberblick)
 
 | Sektion | Zweck |
 |---|---|
-| `unreal` | Editor-Pfad, Projekt, Restart-Policy (`never`/`on-failure`/`always`) |
 | `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool) automatisch |
-| `commands` | benannte Einmal-Befehle (compile, package) für das MCP-Tool `run_command` |
-| `mcp` | MCP-Server an/aus, `address` (Default `127.0.0.1:8765`) |
 | `permissions` | Permission-Layer: `allow_all` / `allowlist` / `deny_all`, plus `allow`/`deny`-Regeln |
 | `runtimes` | `python` (via `uv run`) und `node` für `run_python`/`run_node` |
+| `mcp` | MCP-Server an/aus, `address` (Default `127.0.0.1:8765`) |
+| `unreal` | *optional* — Editor-Args, Restart-Policy (`never`/`on-failure`/`always`) |
+| `commands` | *optional* — eigene Einmal-Befehle (compile/package sind eingebaut) |
+| `engineRoot` | *meist nur in local.yaml* — Engine-Pfad-Override |
 
 ### Keine Prozess-Leichen (Windows)
 

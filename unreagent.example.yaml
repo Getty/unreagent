@@ -1,0 +1,68 @@
+# ============================================================
+#  unreagent — committbare Projekt-Konfiguration
+#
+#  Benenne diese Datei zu  unreagent.yaml  und lege sie neben die
+#  .uproject (und neben unreagent.exe). Sie ist portabel und gehört
+#  ins Projekt-Repo.
+#
+#  KEINE Maschinenpfade hier! Sie werden automatisch aufgelöst und
+#  über Platzhalter eingesetzt:
+#    ${ENGINE}        UE-Installationswurzel (Env UE_ROOT / Auto-Detect)
+#    ${PROJECT}       voller Pfad zur .uproject (Auto-Detect daneben)
+#    ${PROJECT_DIR}   Verzeichnis der .uproject
+#    ${PROJECT_NAME}  Name der .uproject ohne Endung
+#
+#  Maschinen-Overrides (Engine-Pfad, claude-Pfad …) gehören in eine
+#  git-ignorierte  unreagent.local.yaml  — Beispiel ganz unten.
+# ============================================================
+
+agent:
+  enabled: true
+  command: claude
+  # Hängt --mcp-config (+ --permission-prompt-tool) automatisch an:
+  claudeIntegration: true
+  # args: ["-p", "Starte und arbeite die Aufgaben ab"]   # optional
+
+permissions:
+  enabled: true
+  mode: allow_all            # allow_all | allowlist | deny_all
+  deny:
+    - "Bash(rm -rf *)"
+  # Bei mode: allowlist greift stattdessen diese Liste:
+  # allow: ["Read", "Edit", "Write", "Bash(git *)", "mcp__unreagent__*"]
+
+runtimes:
+  python:
+    enabled: true
+    prepareOnStart: true     # uv sync beim Start, falls pyproject.toml vorhanden
+  node:
+    enabled: true
+
+mcp:
+  enabled: true
+  address: 127.0.0.1:8765
+
+# ------------------------------------------------------------
+# unreal: und commands: sind OPTIONAL. Editor-Pfad sowie die
+# Befehle "compile" und "package" werden automatisch aus
+# ${ENGINE} + ${PROJECT} abgeleitet. Nur überschreiben, wenn nötig:
+#
+# unreal:
+#   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
+#   restart: on-failure
+#   maxRestarts: 5
+#
+# commands:
+#   cook:
+#     description: "Nur Content cooken"
+#     command: "${ENGINE}/Engine/Build/BatchFiles/RunUAT.bat"
+#     args: ["BuildCookRun", "-project=${PROJECT}", "-noP4", "-cook", "-skipstage"]
+# ------------------------------------------------------------
+
+# ============================================================
+#  Beispiel  unreagent.local.yaml  (NICHT committen — git-ignored):
+#
+#    engineRoot: "D:/UE/UE_5.7"        # falls Auto-Detect scheitert
+#    agent:
+#      command: "C:/Users/me/AppData/Roaming/npm/claude.cmd"  # claude nicht im PATH
+# ============================================================

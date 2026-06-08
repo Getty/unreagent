@@ -19,7 +19,8 @@ jobs:
 
       - name: gofmt prüfen
         run: |
-          unformatted="$(gofmt -l .)"
+          # vendor/ ist Fremdcode und wird nicht geprüft.
+          unformatted="$(gofmt -l cmd internal)"
           if [ -n "$unformatted" ]; then
             echo "Folgende Dateien sind nicht gofmt-konform:"
             echo "$unformatted"
