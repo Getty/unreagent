@@ -37,7 +37,9 @@ func main() {
 }
 
 func run() error {
-	cfgPath := flag.String("config", "", "Pfad zur config.json (Standard: neben der ausführbaren Datei)")
+	cfgPath := flag.String("config", "", "Pfad zur unreagent.yaml (Standard: neben der ausführbaren Datei)")
+	noAgent := flag.Bool("no-agent", false, "Agenten nicht starten (nur UE + MCP-Server; externer Agent kann sich verbinden)")
+	filesFlag := flag.Bool("files", false, "Datei-Tools (read/write/list/edit) über den MCP-Server aktivieren")
 	flag.Parse()
 
 	logger := func(line string) {
@@ -62,11 +64,27 @@ func run() error {
 	} else {
 		logger("WARN keine .uproject neben der Config gefunden — unreal.project setzen")
 	}
+	// CLI-Overrides.
+	if *noAgent && cfg.Agent.Enabled {
+		cfg.Agent.Enabled = false
+		logger("Flag -no-agent: Agent wird nicht gestartet (MCP-Server bleibt verfügbar)")
+	}
+	if *filesFlag && !cfg.Files.Enabled {
+		cfg.Files.Enabled = true
+	}
+
 	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
 	if cfg.Agent.Enabled {
 		if _, lookErr := exec.LookPath(cfg.Agent.Command); lookErr != nil {
 			logger("WARN Agent-Command nicht im PATH: " + cfg.Agent.Command + " (vollen Pfad in unreagent.local.yaml setzen)")
 		}
+	}
+	if cfg.Files.Enabled {
+		mode := "read/write"
+		if cfg.Files.ReadOnly {
+			mode = "read-only"
+		}
+		logger(fmt.Sprintf("Datei-Tools aktiv (%s) unter: %s", mode, cfg.Files.Root))
 	}
 
 	sup := supervisor.New(logger)
@@ -308,6 +326,15 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		})
 	}
 
+	// --- Datei-Tools (auf cfg.Files.Root beschränkt) ---
+	if cfg.Files.Enabled {
+		root := cfg.Files.Root
+		if root == "" {
+			root = agentWorkdir
+		}
+		registerFileTools(srv, root, cfg.Files.ReadOnly)
+	}
+
 	// --- Permission-Tool ---
 	if cfg.Permissions.Enabled {
 		srv.AddTool(mcp.Tool{
@@ -378,6 +405,162 @@ func scriptAction(sup *supervisor.Supervisor, command string, pre []string, dir,
 			Text:    fmt.Sprintf("exit %d\n\n%s", res.ExitCode, tailLines(res.Output, 300)),
 			IsError: res.ExitCode != 0,
 		}
+	}
+}
+
+// registerFileTools registriert read/list (+ write/edit, falls nicht readOnly)
+// auf dem MCP-Server, alle Pfade strikt auf root beschränkt.
+func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil || root == "" {
+		rootAbs, _ = filepath.Abs(".")
+	}
+	resolve := func(rel string) (string, error) {
+		if rel == "" {
+			rel = "."
+		}
+		abs, err := filepath.Abs(filepath.Join(rootAbs, rel))
+		if err != nil {
+			return "", err
+		}
+		if abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(os.PathSeparator)) {
+			return "", fmt.Errorf("Pfad außerhalb des erlaubten Roots")
+		}
+		return abs, nil
+	}
+
+	srv.AddTool(mcp.Tool{
+		Name:        "read_file",
+		Description: "Liest eine Textdatei aus dem UE-Projekt (Pfad relativ zum Projekt-Root). Damit kann ein Agent Quellcode/Config/Logs lesen, ohne lokal anwesend zu sein. Große Dateien werden gekürzt.",
+		InputSchema: pathSchema("path", "Pfad zur Datei, relativ zum Projekt-Root"),
+		Handler: func(args map[string]interface{}) mcp.ToolResult {
+			path := getString(args, "path", "")
+			if path == "" {
+				return mcp.ToolResult{Text: "Fehler: 'path' fehlt", IsError: true}
+			}
+			abs, err := resolve(path)
+			if err != nil {
+				return errResult(err)
+			}
+			b, err := os.ReadFile(abs)
+			if err != nil {
+				return errResult(err)
+			}
+			const max = 256 * 1024
+			if len(b) > max {
+				return mcp.ToolResult{Text: string(b[:max]) + "\n…[gekürzt]"}
+			}
+			return mcp.ToolResult{Text: string(b)}
+		},
+	})
+
+	srv.AddTool(mcp.Tool{
+		Name:        "list_dir",
+		Description: "Listet Einträge eines Verzeichnisses im UE-Projekt (Pfad relativ zum Root, leer = Root). Verzeichnisse enden mit /.",
+		InputSchema: pathSchema("path", "Verzeichnis relativ zum Root (leer = Root)"),
+		Handler: func(args map[string]interface{}) mcp.ToolResult {
+			abs, err := resolve(getString(args, "path", "."))
+			if err != nil {
+				return errResult(err)
+			}
+			entries, err := os.ReadDir(abs)
+			if err != nil {
+				return errResult(err)
+			}
+			var sb strings.Builder
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() {
+					name += "/"
+				}
+				sb.WriteString(name)
+				sb.WriteByte('\n')
+			}
+			return mcp.ToolResult{Text: sb.String()}
+		},
+	})
+
+	if readOnly {
+		return
+	}
+
+	srv.AddTool(mcp.Tool{
+		Name:        "write_file",
+		Description: "Schreibt/überschreibt eine Textdatei im UE-Projekt (Pfad relativ zum Root). Fehlende Verzeichnisse werden angelegt. Damit kann ein Agent Dateien erstellen/ändern, ohne lokal anwesend zu sein.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":    map[string]interface{}{"type": "string", "description": "Pfad relativ zum Root"},
+				"content": map[string]interface{}{"type": "string", "description": "Neuer Dateiinhalt"},
+			},
+			"required": []string{"path", "content"},
+		},
+		Handler: func(args map[string]interface{}) mcp.ToolResult {
+			path := getString(args, "path", "")
+			if path == "" {
+				return mcp.ToolResult{Text: "Fehler: 'path' fehlt", IsError: true}
+			}
+			abs, err := resolve(path)
+			if err != nil {
+				return errResult(err)
+			}
+			content := getString(args, "content", "")
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				return errResult(err)
+			}
+			if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+				return errResult(err)
+			}
+			return mcp.ToolResult{Text: fmt.Sprintf("geschrieben: %s (%d Bytes)", path, len(content))}
+		},
+	})
+
+	srv.AddTool(mcp.Tool{
+		Name:        "edit_file",
+		Description: "Ersetzt in einer Textdatei alle Vorkommen von old_string durch new_string (Pfad relativ zum Root). Fehler, wenn old_string nicht vorkommt.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":       map[string]interface{}{"type": "string", "description": "Pfad relativ zum Root"},
+				"old_string": map[string]interface{}{"type": "string", "description": "zu ersetzender Text"},
+				"new_string": map[string]interface{}{"type": "string", "description": "Ersatztext"},
+			},
+			"required": []string{"path", "old_string", "new_string"},
+		},
+		Handler: func(args map[string]interface{}) mcp.ToolResult {
+			path := getString(args, "path", "")
+			abs, err := resolve(path)
+			if err != nil {
+				return errResult(err)
+			}
+			oldS := getString(args, "old_string", "")
+			if oldS == "" {
+				return mcp.ToolResult{Text: "Fehler: 'old_string' fehlt", IsError: true}
+			}
+			b, err := os.ReadFile(abs)
+			if err != nil {
+				return errResult(err)
+			}
+			content := string(b)
+			n := strings.Count(content, oldS)
+			if n == 0 {
+				return mcp.ToolResult{Text: "Fehler: 'old_string' nicht gefunden", IsError: true}
+			}
+			content = strings.ReplaceAll(content, oldS, getString(args, "new_string", ""))
+			if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+				return errResult(err)
+			}
+			return mcp.ToolResult{Text: fmt.Sprintf("%d Vorkommen ersetzt in %s", n, path)}
+		},
+	})
+}
+
+func pathSchema(name, desc string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			name: map[string]interface{}{"type": "string", "description": desc},
+		},
 	}
 }
 

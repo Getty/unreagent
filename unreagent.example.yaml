@@ -38,6 +38,15 @@ runtimes:
   node:
     enabled: true
 
+# Datei-Tools (read_file/list_dir/write_file/edit_file) über den MCP-Server.
+# Praktisch zusammen mit `-no-agent`: UE + MCP laufen, ein externer Agent
+# verbindet sich und arbeitet am Projekt, ohne dass jemand lokal anwesend ist.
+# Schnell per Flag: unreagent.exe -files   (bzw. -no-agent für nur UE+MCP)
+files:
+  enabled: false
+  root: "${PROJECT_DIR}"     # alle Pfade strikt darauf beschränkt
+  readOnly: false            # true = nur lesen
+
 mcp:
   enabled: true
   address: 127.0.0.1:8765

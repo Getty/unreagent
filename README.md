@@ -169,7 +169,31 @@ dazu steht in der MCP-Tool-Beschreibung und ist damit automatisch im Kontext.
 | `run_command` | vorkonfigurierten Befehl ausführen (compile, package) |
 | `logs` | letzte Ausgabezeilen eines Service |
 | `run_python` / `run_node` | Code in vorbereiteter Umgebung ausführen |
+| `read_file` / `list_dir` / `write_file` / `edit_file` | Datei-Zugriff auf das Projekt (nur bei `files.enabled`/`-files`, auf `root` beschränkt) |
 | `approve` | Permission-Prompt-Tool für Claude Code |
+
+## CLI-Flags
+
+| Flag | Wirkung |
+|---|---|
+| `-config <pfad>` | Alternativer Pfad zur `unreagent.yaml` |
+| `-no-agent` | Agenten **nicht** starten — nur UE + MCP-Server. Ein externer Agent (deine eigene Claude-Code-Sitzung) verbindet sich dann mit dem MCP-Server. |
+| `-files` | Datei-Tools (`read_file`/`write_file`/`list_dir`/`edit_file`) aktivieren, auch wenn in der Config aus. |
+
+### Headless / externer Agent
+
+Mit `-no-agent` läuft alles ohne eingebetteten Agenten — UE + MCP-Server. So
+hängst du deinen eigenen Claude Code an, um „ohne dass jemand lokal anwesend ist"
+am Projekt zu arbeiten:
+
+```bash
+unreagent.exe -no-agent -files          # UE + MCP + Datei-Tools, kein eigener Agent
+# in deiner Claude-Code-Sitzung:
+claude --mcp-config '{"mcpServers":{"unreagent":{"type":"http","url":"http://127.0.0.1:8765/mcp"}}}'
+```
+
+Für Zugriff von einem anderen Rechner `mcp.address` auf `0.0.0.0:8765` setzen
+(nur in vertrauenswürdigen Netzen — der Server hat dann Datei-Schreibzugriff).
 
 ## Manuelle Bedienung (stdin)
 

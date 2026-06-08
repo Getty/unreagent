@@ -39,6 +39,16 @@ type Config struct {
 	MCP         MCPConfig              `yaml:"mcp"`
 	Permissions Permissions            `yaml:"permissions"`
 	Runtimes    Runtimes               `yaml:"runtimes"`
+	Files       FilesConfig            `yaml:"files"`
+}
+
+// FilesConfig exponiert Datei-Tools (read/write/list/edit) über den MCP-Server,
+// damit ein (auch externer/headless) Agent am UE-Projekt arbeiten kann, ohne
+// dass jemand lokal anwesend ist. Alle Pfade sind auf Root beschränkt.
+type FilesConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Root     string `yaml:"root"`     // default: ${PROJECT_DIR}
+	ReadOnly bool   `yaml:"readOnly"` // true = nur lesen, kein Schreiben/Editieren
 }
 
 // UnrealConfig beschreibt den Unreal-Editor-Prozess.
@@ -224,6 +234,9 @@ func (c *Config) applyDefaults() {
 	if c.Runtimes.Node.Npm == "" {
 		c.Runtimes.Node.Npm = "npm"
 	}
+	if c.Files.Root == "" {
+		c.Files.Root = "${PROJECT_DIR}"
+	}
 
 	// Eingebaute Default-Befehle (nur, wenn nicht selbst definiert).
 	if c.Commands == nil {
@@ -263,6 +276,7 @@ func (c *Config) substitute(engine, project, projectDir, projectName string) {
 	c.Agent.Workdir = rep.Replace(c.Agent.Workdir)
 	c.Runtimes.Python.Project = rep.Replace(c.Runtimes.Python.Project)
 	c.Runtimes.Node.Project = rep.Replace(c.Runtimes.Node.Project)
+	c.Files.Root = rep.Replace(c.Files.Root)
 	for name, cmd := range c.Commands {
 		cmd.Command = rep.Replace(cmd.Command)
 		cmd.Dir = rep.Replace(cmd.Dir)
