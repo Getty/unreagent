@@ -41,6 +41,16 @@ runtimes:
 mcp:
   enabled: true
   address: 127.0.0.1:8765
+  # Zusätzliche In-Editor-MCP-Server, über die der Agent IN der Engine arbeitet
+  # (z.B. UE LLM Toolkit: Node-Bridge -> HTTP-Server im Editor auf Port 3000).
+  # Werden zusammen mit dem unreagent-Server in --mcp-config gegeben.
+  # strict: false   # true = NUR diese Server (projekt-eigene .mcp.json ignorieren)
+  # extraServers:
+  #   ue-llm-toolkit:
+  #     command: node
+  #     args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
+  #     env:
+  #       UNREAL_MCP_URL: "http://127.0.0.1:3000"
 
 # ------------------------------------------------------------
 # unreal: und commands: sind OPTIONAL. Editor-Pfad sowie die

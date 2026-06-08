@@ -32,9 +32,11 @@ jobs:
         run: |
           set -e
           cp unreagent.example.yaml README.md dist/
+          # Demo-Config als unreagent.yaml -> exe ist sofort lauffaehig.
+          cp example/unreagent.yaml dist/unreagent.yaml
           cd dist
-          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe unreagent.example.yaml README.md
-          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent unreagent.example.yaml README.md
+          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe unreagent.yaml unreagent.example.yaml README.md
+          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent unreagent.yaml unreagent.example.yaml README.md
 
       - name: Create GitHub Release
         env:

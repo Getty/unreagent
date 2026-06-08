@@ -1,0 +1,35 @@
+# ============================================================
+#  unreagent — DEMO-Konfiguration (sofort ausprobieren)
+#
+#  Laeuft OHNE Unreal Engine und OHNE Agent. Als Platzhalter-"Editor"
+#  dient "ping" (ein langlebiger Prozess, der Log-Zeilen erzeugt).
+#  Zweck: Launcher + MCP-Server auf Windows in 30 Sekunden testen.
+#
+#  Fuer den echten Betrieb: siehe unreagent.example.yaml.
+# ============================================================
+
+unreal:
+  # Platzhalter statt echtem UnrealEditor.exe:
+  editor: ping
+  args: ["-n", "999999", "127.0.0.1"]
+  restart: on-failure
+
+agent:
+  enabled: false          # "LLM-Ding" (Claude Code) ist extern -> in der Demo aus
+
+mcp:
+  enabled: true
+  address: 127.0.0.1:8765
+
+permissions:
+  enabled: false          # ohne Agent nicht noetig
+
+runtimes:
+  python: { enabled: false }
+  node:   { enabled: false }
+
+commands:
+  hello:
+    description: "Demo-Befehl, der nur etwas ausgibt"
+    command: cmd
+    args: ["/c", "echo", "Hallo von unreagent run_command!"]

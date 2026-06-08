@@ -96,18 +96,24 @@ func run() error {
 		agentArgs := append([]string{}, cfg.Agent.Args...)
 		var agentEnv []string
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
-			inline := map[string]interface{}{
-				"mcpServers": map[string]interface{}{
-					config.MCPServerName: map[string]interface{}{"type": "http", "url": mcpURL},
-				},
+			// Unser Launcher-Server + alle zusätzlichen (In-Editor-)MCP-Server.
+			servers := map[string]interface{}{
+				config.MCPServerName: map[string]interface{}{"type": "http", "url": mcpURL},
 			}
-			b, _ := json.Marshal(inline)
+			for name, def := range cfg.MCP.ExtraServers {
+				servers[name] = def
+			}
+			b, _ := json.Marshal(map[string]interface{}{"mcpServers": servers})
 			agentArgs = append(agentArgs, "--mcp-config", string(b))
+			if cfg.MCP.Strict {
+				agentArgs = append(agentArgs, "--strict-mcp-config")
+			}
 			if cfg.Permissions.Enabled {
 				agentArgs = append(agentArgs, "--permission-prompt-tool", "mcp__"+config.MCPServerName+"__approve")
 			}
 			agentEnv = append(agentEnv, "UNREAGENT_MCP_URL="+mcpURL)
-			logger("Agent: Claude-Integration aktiv (--mcp-config" + perm(cfg.Permissions.Enabled) + ")")
+			logger(fmt.Sprintf("Agent: Claude-Integration aktiv (%d MCP-Server%s%s)",
+				len(servers), strictWord(cfg.MCP.Strict), perm(cfg.Permissions.Enabled)))
 		}
 		sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
@@ -527,7 +533,14 @@ func allowWord(b bool) string {
 
 func perm(enabled bool) string {
 	if enabled {
-		return " + --permission-prompt-tool"
+		return " + permission-prompt-tool"
+	}
+	return ""
+}
+
+func strictWord(strict bool) string {
+	if strict {
+		return ", strict"
 	}
 	return ""
 }

@@ -23,10 +23,27 @@ Builds sind damit offline-reproduzierbar.
 │  • Ring-Buffer-Logs          run_python / run_node   │
 │       │                      approve (Permissions)   │
 │       ▼                          ▲                    │
-│  UnrealEditor.exe                │ HTTP/JSON-RPC      │
-│  Claude Code  ───────────────────┘ (--mcp-config)    │
+│  UnrealEditor.exe                │                    │
+│   └─ In-Editor-MCP-Plugin        │                    │
+│      (z.B. UE LLM Toolkit,       │                    │
+│       HTTP :3000)                │                    │
+│            ▲                     │                    │
+│   Node-Bridge (stdio MCP)        │                    │
+│            ▲                     │                    │
+│  Claude Code ──────────┬─────────┘ unreagent-MCP      │
+│                        └───────────► In-Editor-MCP    │
+│                          (beide via --mcp-config)     │
 └──────────────────────────────────────────────────────┘
 ```
+
+Zwei MCP-Server bedienen den Agenten:
+- **unreagent-MCP** (dieser Launcher, HTTP) — *Prozess*-Ebene: Editor starten/
+  stoppen/neu starten, compilen, Logs, run_python/run_node, Permissions.
+- **In-Editor-MCP** (z.B. [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit),
+  läuft *in* der Engine) — *Inhalts*-Ebene: Blueprints, Assets, Level, UE-Python.
+
+Der Launcher gibt dem Agenten beide über `--mcp-config` mit (`mcp.extraServers`
+in der Config). So muss der Agent nichts selbst einrichten.
 
 ## Bauen
 
@@ -44,6 +61,18 @@ Oder direkt:
 ```bash
 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/unreagent.exe ./cmd/launcher
 ```
+
+## Sofort ausprobieren (Demo)
+
+Im Release-Zip liegt eine fertige Demo-`unreagent.yaml`, die **ohne UE und ohne
+Agent** läuft (`ping` als Platzhalter-„Editor"). Einfach das Zip entpacken und
+`unreagent.exe` starten — der MCP-Server läuft dann auf
+`http://127.0.0.1:8765/mcp`. Details: [`example/`](example/). In der Konsole:
+`status`, `logs`, `c hello`, `r ue`, `q`.
+
+> Das „LLM-Ding" (Claude Code) ist nicht enthalten — es ist eine separat zu
+> installierende CLI. Die Demo lässt den Agenten deshalb aus; zum Scharfschalten
+> `agent.enabled: true` setzen (siehe unten).
 
 ## Einrichten
 

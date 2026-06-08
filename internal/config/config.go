@@ -73,10 +73,20 @@ type CommandSpec struct {
 	Dir         string   `yaml:"dir"`
 }
 
-// MCPConfig steuert den eingebauten MCP-Server.
+// MCPConfig steuert den eingebauten MCP-Server sowie zusätzliche MCP-Server, die
+// dem Agenten mitgegeben werden (z.B. ein In-Editor-Plugin wie UE LLM Toolkit,
+// über das Claude Code IN der Engine arbeitet).
 type MCPConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"`
+	// Strict gibt --strict-mcp-config an den Agenten weiter: nur die hier/vom
+	// Launcher definierten Server werden genutzt (projekt-eigene .mcp.json wird
+	// ignoriert). Default false = additiv.
+	Strict bool `yaml:"strict"`
+	// ExtraServers sind roh durchgereichte MCP-Server-Definitionen im Format der
+	// Claude-Code-.mcp.json (Felder type/url/command/args/env/headers …).
+	// Platzhalter wie ${PROJECT_DIR} werden in allen String-Werten ersetzt.
+	ExtraServers map[string]map[string]interface{} `yaml:"extraServers"`
 }
 
 // Permissions steuert das Permission-Prompt-Tool für den Agenten.
@@ -258,6 +268,32 @@ func (c *Config) substitute(engine, project, projectDir, projectName string) {
 		cmd.Dir = rep.Replace(cmd.Dir)
 		cmd.Args = replaceAll(rep, cmd.Args)
 		c.Commands[name] = cmd
+	}
+	for name, def := range c.MCP.ExtraServers {
+		if m, ok := substituteAny(rep, def).(map[string]interface{}); ok {
+			c.MCP.ExtraServers[name] = m
+		}
+	}
+}
+
+// substituteAny ersetzt Platzhalter rekursiv in Strings/Maps/Listen (für die
+// roh durchgereichten extraServers-Definitionen).
+func substituteAny(rep *strings.Replacer, v interface{}) interface{} {
+	switch t := v.(type) {
+	case string:
+		return rep.Replace(t)
+	case map[string]interface{}:
+		for k, val := range t {
+			t[k] = substituteAny(rep, val)
+		}
+		return t
+	case []interface{}:
+		for i, val := range t {
+			t[i] = substituteAny(rep, val)
+		}
+		return t
+	default:
+		return v
 	}
 }
 
