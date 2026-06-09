@@ -220,9 +220,10 @@ dazu steht in der MCP-Tool-Beschreibung und ist damit automatisch im Kontext.
 Claude Code ist eine interaktive TUI und braucht ein TTY — als roher
 Hintergrund-Subprozess startet er nicht. Darum drei Wege:
 
-1. **Eigenes Fenster** (`agent.window: true`) — der Agent läuft als interaktive
-   TUI in einer eigenen Konsole (Windows: `CREATE_NEW_CONSOLE`), UE + MCP im
-   Hintergrund. Empfohlen für „mit dem Agenten chatten".
+1. **Eigenes Fenster** (`agent.window`, **Default an**) — der Agent läuft als
+   interaktive TUI in einer eigenen Konsole (Windows: `CREATE_NEW_CONSOLE`),
+   UE + MCP im Hintergrund. Mit `window: false` abschaltbar. Im `-p`-Modus
+   automatisch aus.
 2. **Headless/Task** (`agent.args: ["-p", "<aufgabe>"]`) — einmalige Aufgabe
    ohne Fenster, dann beendet sich der Agent.
 3. **Extern** (`-no-agent`) — Launcher startet keinen Agenten; du verbindest

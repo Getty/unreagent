@@ -139,6 +139,13 @@ func run() error {
 	if cfg.Agent.Enabled {
 		agentArgs := append([]string{}, cfg.Agent.Args...)
 		var agentEnv []string
+
+		// Eigenes Fenster ist Default (interaktive TUI braucht ein TTY); im
+		// headless -p Modus aus, per window: false explizit abschaltbar.
+		agentWindow := !hasPromptArg(cfg.Agent.Args)
+		if cfg.Agent.Window != nil {
+			agentWindow = *cfg.Agent.Window
+		}
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
 			b, _ := json.Marshal(map[string]interface{}{"mcpServers": mcpServers})
 			agentArgs = append(agentArgs, "--mcp-config", string(b))
@@ -163,9 +170,9 @@ func run() error {
 			Restart:      cfg.Agent.Restart,
 			MaxRestarts:  cfg.Agent.MaxRestarts,
 			RestartDelay: secs(cfg.Agent.RestartDelaySeconds),
-			NewConsole:   cfg.Agent.Window,
+			NewConsole:   agentWindow,
 		})
-		if cfg.Agent.Window {
+		if agentWindow {
 			logger("Agent: startet in eigenem Konsolenfenster (interaktiv)")
 		}
 	}
@@ -754,6 +761,10 @@ func hasArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func hasPromptArg(args []string) bool {
+	return hasArg(args, "-p") || hasArg(args, "--print")
 }
 
 // killCrashReporter beendet ein evtl. hängendes Crash-Reporter-Fenster.

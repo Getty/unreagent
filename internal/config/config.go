@@ -85,9 +85,10 @@ type AgentConfig struct {
 	RestartDelaySeconds int      `yaml:"restartDelaySeconds"`
 	ClaudeIntegration   bool     `yaml:"claudeIntegration"`
 	// Window startet den Agenten in einem eigenen Konsolenfenster (Windows:
-	// CREATE_NEW_CONSOLE) — er bekommt damit ein echtes TTY und läuft als
-	// interaktive TUI, getrennt von den Launcher-Logs.
-	Window bool `yaml:"window"`
+	// CREATE_NEW_CONSOLE) — echtes TTY, interaktive TUI, getrennt von den
+	// Launcher-Logs. Default true (außer im headless -p Modus); mit
+	// window: false abschaltbar.
+	Window *bool `yaml:"window"`
 }
 
 // CommandSpec ist ein benannter Einmal-Befehl (z.B. "compile").
