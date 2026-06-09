@@ -14,6 +14,13 @@ windows:
 linux:
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY) $(PKG)
 
+# Windows-Ressource (Icon + Versionsinfo + Manifest) neu erzeugen.
+# Benötigt: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+# Quelle: cmd/launcher/versioninfo.json + cmd/launcher/unreagent.manifest + assets/icon.ico
+resource:
+	goversioninfo -64 -o cmd/launcher/resource_windows_amd64.syso \
+		-manifest cmd/launcher/unreagent.manifest cmd/launcher/versioninfo.json
+
 fmt:
 	gofmt -w .
 

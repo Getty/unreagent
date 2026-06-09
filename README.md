@@ -68,6 +68,21 @@ Oder direkt:
 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/unreagent.exe ./cmd/launcher
 ```
 
+## Windows: Metadaten & „Unknown Publisher"
+
+Die `.exe` trägt Icon + **Versionsinfo** (CompanyName, ProductName, Beschreibung,
+Copyright) und ein `asInvoker`-Manifest (kein UAC-Elevation-Prompt). Das füllt
+`Eigenschaften → Details` und den Programmnamen in Dialogen.
+
+Die SmartScreen-/„Herausgeber konnte nicht verifiziert werden"-Warnung selbst
+verschwindet aber **nur mit einem Code-Signing-Zertifikat** (CA-ausgestellt,
+kostenpflichtig; EV-Cert = sofortige SmartScreen-Reputation). Metadaten allein
+reichen dafür nicht. Mit Zertifikat ließe sich die `.exe` sogar **unter Linux**
+signieren (`osslsigncode`) — kein Windows nötig.
+
+Publisher/Version ändern: `cmd/launcher/versioninfo.json` anpassen, dann
+`make resource` (regeneriert die `.syso`).
+
 ## Sofort ausprobieren (Demo)
 
 Im Release-Zip liegt eine fertige Demo-`unreagent.yaml`, die **ohne UE und ohne
