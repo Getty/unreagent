@@ -9,12 +9,12 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "CompanyName": "Conflict Industries",
+    "CompanyName": "conflict.industries digital GmbH",
     "ProductName": "unreagent",
     "FileDescription": "unreagent — Unreal Engine Launcher & MCP Orchestrator",
     "InternalName": "unreagent",
     "OriginalFilename": "unreagent.exe",
-    "LegalCopyright": "© 2026 Conflict Industries",
+    "LegalCopyright": "© 2026 conflict.industries digital GmbH",
     "FileVersion": "0.0.7",
     "ProductVersion": "0.0.7",
     "Comments": "https://github.com/Getty/unreagent"
