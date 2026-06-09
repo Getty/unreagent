@@ -60,6 +60,11 @@ mcp:
   #     args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
   #     env:
   #       UNREAL_MCP_URL: "http://127.0.0.1:3000"
+  # MCP-Config zusaetzlich als Datei(en) schreiben (fuer externe Clients wie
+  # die eigene Claude-Sitzung, Cursor, VS Code). Auch per Flag: -write-mcp-config
+  # writeConfig:
+  #   - { path: ".mcp.json", format: mcp_json }       # Claude Code / Cursor / Claude Desktop
+  #   - { path: ".vscode/mcp.json", format: vscode }  # VS Code
 
 # ------------------------------------------------------------
 # unreal: und commands: sind OPTIONAL. Editor-Pfad sowie die

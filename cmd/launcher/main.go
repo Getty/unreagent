@@ -41,6 +41,7 @@ func run() error {
 	cfgPath := flag.String("config", "", "Pfad zur unreagent.yaml (Standard: neben der ausführbaren Datei)")
 	noAgent := flag.Bool("no-agent", false, "Agenten nicht starten (nur UE + MCP-Server; externer Agent kann sich verbinden)")
 	filesFlag := flag.Bool("files", false, "Datei-Tools (read/write/list/edit) über den MCP-Server aktivieren")
+	writeMcp := flag.String("write-mcp-config", "", "MCP-Config zusätzlich als .mcp.json an diesen Pfad schreiben")
 	flag.Parse()
 
 	logger := func(line string) {
@@ -72,6 +73,9 @@ func run() error {
 	}
 	if *filesFlag && !cfg.Files.Enabled {
 		cfg.Files.Enabled = true
+	}
+	if *writeMcp != "" {
+		cfg.MCP.WriteConfig = append(cfg.MCP.WriteConfig, config.MCPOutput{Path: *writeMcp, Format: "mcp_json"})
 	}
 
 	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
@@ -128,18 +132,15 @@ func run() error {
 		agentWorkdir = filepath.Dir(cfg.Unreal.Project)
 	}
 	mcpURL := "http://" + cfg.MCP.Address + "/mcp"
+	var mcpServers map[string]interface{}
+	if cfg.MCP.Enabled {
+		mcpServers = buildMCPServers(cfg, mcpURL)
+	}
 	if cfg.Agent.Enabled {
 		agentArgs := append([]string{}, cfg.Agent.Args...)
 		var agentEnv []string
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
-			// Unser Launcher-Server + alle zusätzlichen (In-Editor-)MCP-Server.
-			servers := map[string]interface{}{
-				config.MCPServerName: map[string]interface{}{"type": "http", "url": mcpURL},
-			}
-			for name, def := range cfg.MCP.ExtraServers {
-				servers[name] = def
-			}
-			b, _ := json.Marshal(map[string]interface{}{"mcpServers": servers})
+			b, _ := json.Marshal(map[string]interface{}{"mcpServers": mcpServers})
 			agentArgs = append(agentArgs, "--mcp-config", string(b))
 			if cfg.MCP.Strict {
 				agentArgs = append(agentArgs, "--strict-mcp-config")
@@ -149,7 +150,7 @@ func run() error {
 			}
 			agentEnv = append(agentEnv, "UNREAGENT_MCP_URL="+mcpURL)
 			logger(fmt.Sprintf("Agent: Claude-Integration aktiv (%d MCP-Server%s%s)",
-				len(servers), strictWord(cfg.MCP.Strict), perm(cfg.Permissions.Enabled)))
+				len(mcpServers), strictWord(cfg.MCP.Strict), perm(cfg.Permissions.Enabled)))
 		}
 		sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
@@ -163,6 +164,15 @@ func run() error {
 			MaxRestarts:  cfg.Agent.MaxRestarts,
 			RestartDelay: secs(cfg.Agent.RestartDelaySeconds),
 		})
+	}
+
+	// --- MCP-Config-Dateien schreiben (für externe Clients) ---
+	if cfg.MCP.Enabled && len(cfg.MCP.WriteConfig) > 0 {
+		base := agentWorkdir
+		if base == "" {
+			base = "."
+		}
+		writeMCPConfigs(cfg.MCP.WriteConfig, mcpServers, base, logger)
 	}
 
 	// --- Einmal-Befehle ---
@@ -665,6 +675,73 @@ func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, l
 func secs(n int) time.Duration { return time.Duration(n) * time.Second }
 
 func boolVal(p *bool) bool { return p != nil && *p }
+
+// buildMCPServers stellt die mcpServers-Map zusammen: unser Launcher-Server (HTTP)
+// plus alle zusätzlichen (In-Editor-)MCP-Server aus der Config.
+func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
+	servers := map[string]interface{}{
+		config.MCPServerName: map[string]interface{}{"type": "http", "url": mcpURL},
+	}
+	for name, def := range cfg.MCP.ExtraServers {
+		servers[name] = def
+	}
+	return servers
+}
+
+// writeMCPConfigs schreibt die MCP-Config in die konfigurierten Datei-Ziele.
+func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{}, baseDir string, logger func(string)) {
+	for _, out := range outputs {
+		path := out.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(baseDir, path)
+		}
+		var payload interface{}
+		switch out.Format {
+		case "vscode":
+			payload = map[string]interface{}{"servers": toVSCode(servers), "inputs": []interface{}{}}
+		default: // mcp_json
+			payload = map[string]interface{}{"mcpServers": servers}
+		}
+		b, _ := json.MarshalIndent(payload, "", "  ")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			logger("WARN MCP-Config (" + path + "): " + err.Error())
+			continue
+		}
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+			logger("WARN MCP-Config (" + path + "): " + err.Error())
+			continue
+		}
+		format := out.Format
+		if format == "" {
+			format = "mcp_json"
+		}
+		logger("MCP-Config geschrieben: " + path + " (" + format + ")")
+	}
+}
+
+// toVSCode wandelt die mcpServers-Map ins VS-Code-Format (stdio-Server bekommen
+// type:stdio, falls nicht gesetzt).
+func toVSCode(servers map[string]interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+	for name, def := range servers {
+		m, ok := def.(map[string]interface{})
+		if !ok {
+			out[name] = def
+			continue
+		}
+		cp := map[string]interface{}{}
+		for k, v := range m {
+			cp[k] = v
+		}
+		if _, hasType := cp["type"]; !hasType {
+			if _, hasCmd := cp["command"]; hasCmd {
+				cp["type"] = "stdio"
+			}
+		}
+		out[name] = cp
+	}
+	return out
+}
 
 func hasArg(args []string, want string) bool {
 	for _, a := range args {

@@ -106,6 +106,16 @@ type MCPConfig struct {
 	// Claude-Code-.mcp.json (Felder type/url/command/args/env/headers …).
 	// Platzhalter wie ${PROJECT_DIR} werden in allen String-Werten ersetzt.
 	ExtraServers map[string]map[string]interface{} `yaml:"extraServers"`
+	// WriteConfig schreibt die zusammengebaute MCP-Config zusätzlich als Datei(en)
+	// auf die Platte, damit externe Clients (eigene Claude-Sitzung, Cursor, VS
+	// Code) sie nutzen können.
+	WriteConfig []MCPOutput `yaml:"writeConfig"`
+}
+
+// MCPOutput ist ein Datei-Ziel für die geschriebene MCP-Config.
+type MCPOutput struct {
+	Path   string `yaml:"path"`   // relativ zum Projekt oder absolut
+	Format string `yaml:"format"` // mcp_json (default) | vscode
 }
 
 // Permissions steuert das Permission-Prompt-Tool für den Agenten.
@@ -308,6 +318,9 @@ func (c *Config) substitute(engine, project, projectDir, projectName string) {
 		if m, ok := substituteAny(rep, def).(map[string]interface{}); ok {
 			c.MCP.ExtraServers[name] = m
 		}
+	}
+	for i := range c.MCP.WriteConfig {
+		c.MCP.WriteConfig[i].Path = rep.Replace(c.MCP.WriteConfig[i].Path)
 	}
 }
 

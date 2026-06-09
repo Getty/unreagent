@@ -45,6 +45,12 @@ Zwei MCP-Server bedienen den Agenten:
 Der Launcher gibt dem Agenten beide über `--mcp-config` mit (`mcp.extraServers`
 in der Config). So muss der Agent nichts selbst einrichten.
 
+Dieselbe Config lässt sich zusätzlich als Datei schreiben — für **externe
+Clients** (deine eigene Claude-Sitzung, Cursor, VS Code). Per `mcp.writeConfig`
+(Liste aus `{path, format}`, Format `mcp_json` oder `vscode`) oder per Flag
+`-write-mcp-config <pfad>`. Praktisch mit `-no-agent`: Launcher schreibt die
+`.mcp.json` und hält UE + MCP am Laufen, du verbindest dich extern.
+
 ## Bauen
 
 Voraussetzung: Go (>= 1.19). Dependencies sind vendored (`vendor/`), Builds
@@ -207,6 +213,7 @@ dazu steht in der MCP-Tool-Beschreibung und ist damit automatisch im Kontext.
 | `-config <pfad>` | Alternativer Pfad zur `unreagent.yaml` |
 | `-no-agent` | Agenten **nicht** starten — nur UE + MCP-Server. Ein externer Agent (deine eigene Claude-Code-Sitzung) verbindet sich dann mit dem MCP-Server. |
 | `-files` | Datei-Tools (`read_file`/`write_file`/`list_dir`/`edit_file`) aktivieren, auch wenn in der Config aus. |
+| `-write-mcp-config <pfad>` | Die zusammengebaute MCP-Config zusätzlich als `.mcp.json` an `<pfad>` schreiben (für externe Clients). |
 
 ### Headless / externer Agent
 
