@@ -70,6 +70,9 @@ mcp:
 #   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
 #   restart: on-failure
 #   maxRestarts: 5
+#   unattended: true          # -unattended: kein Crash-Dialog + kein Recovery-Prompt (default an)
+#   killCrashReporter: true   # haengendes CrashReportClientEditor.exe killen (default an)
+#   cleanOnRestart: false     # Saved/Autosaves/PackageRestoreData.json + Saved/Crashes vor Start raeumen
 #
 # commands:
 #   cook:

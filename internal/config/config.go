@@ -60,6 +60,15 @@ type UnrealConfig struct {
 	Restart             string   `yaml:"restart"`
 	MaxRestarts         int      `yaml:"maxRestarts"`
 	RestartDelaySeconds int      `yaml:"restartDelaySeconds"`
+	// Unattended hängt -unattended an (default true): unterdrückt den
+	// Crash-Reporter-Dialog UND beide Recovery-Prompts beim Neustart.
+	Unattended *bool `yaml:"unattended"`
+	// KillCrashReporter killt CrashReportClientEditor.exe vor jedem (Neu-)Start
+	// (default true) — Absicherung, falls doch ein Reporter-Fenster hängt.
+	KillCrashReporter *bool `yaml:"killCrashReporter"`
+	// CleanOnRestart räumt vor jedem Start Saved/Autosaves/PackageRestoreData.json
+	// und Saved/Crashes/* weg (default false) — garantiert sauberer Start.
+	CleanOnRestart bool `yaml:"cleanOnRestart"`
 }
 
 // AgentConfig beschreibt den Agenten-Prozess (z.B. Claude Code).
@@ -184,6 +193,10 @@ func Load(explicitPath string) (*Config, Info, error) {
 	info.Project = project
 	info.ProjectName = projectName
 
+	// Aufgelösten/auto-erkannten Projektpfad zurückschreiben, damit der Editor
+	// mit dem Projekt startet und projektbezogene Features ihn nutzen können.
+	c.Unreal.Project = project
+
 	c.substitute(engine, project, projectDir, projectName)
 
 	if err := c.validate(); err != nil {
@@ -204,6 +217,14 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Unreal.RestartDelaySeconds == 0 {
 		c.Unreal.RestartDelaySeconds = 3
+	}
+	if c.Unreal.Unattended == nil {
+		t := true
+		c.Unreal.Unattended = &t
+	}
+	if c.Unreal.KillCrashReporter == nil {
+		t := true
+		c.Unreal.KillCrashReporter = &t
 	}
 
 	if c.Agent.Command == "" {

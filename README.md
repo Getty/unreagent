@@ -138,6 +138,34 @@ den **kompletten Prozessbaum** (inkl. ShaderCompileWorker etc.). OS-erzwungen,
 ohne externe Abhängigkeit. Auf Linux (Entwicklung) wird nur der direkte
 Kindprozess beendet.
 
+### Crashes & Recovery (unbeaufsichtigt)
+
+Zwei UE-Dialoge blockieren sonst den agent-getriebenen Betrieb: der **Crash
+Reporter** („Send and Restart/Close") und der **Recovery-Prompt** beim Neustart
+(„nicht sauber beendet, wiederherstellen?"). Der Launcher startet den Editor
+darum mit **`-unattended`** — das unterdrückt im UE-5.7-Code **beide** (Crash-
+Dialog und beide Recovery-Systeme: PackageAutoSaver *und* Disaster-Recovery) und
+verwirft den unsauberen Stand statt zu fragen.
+
+| Option (`unreal:`) | Default | Wirkung |
+|---|---|---|
+| `unattended` | `true` | hängt `-unattended` an — kein Crash-Dialog, kein Recovery-Prompt |
+| `killCrashReporter` | `true` | killt `CrashReportClientEditor.exe` vor jedem (Neu-)Start (Absicherung) |
+| `cleanOnRestart` | `false` | räumt `Saved/Autosaves/PackageRestoreData.json` + `Saved/Crashes/*` weg |
+
+Wenn ein **Mensch** parallel interaktiv im Editor arbeitet, `unattended: false`
+setzen. Ergänzend (damit der Reporter gar nicht erst sendet/startet) im Projekt:
+
+```ini
+; Config/DefaultEngine.ini
+[CrashReportClient]
+bAgreeToCrashUpload=false
+bImplicitSend=false
+
+[/Script/DisasterRecoveryClient.DisasterRecoverClientConfig]
+bIsEnabled=false
+```
+
 ### Permission-Layer
 
 Bei `permissions.enabled` + `agent.claudeIntegration` startet der Launcher den

@@ -34,6 +34,9 @@ type ServiceSpec struct {
 	Restart      string // never | on-failure | always
 	MaxRestarts  int    // 0 = unbegrenzt
 	RestartDelay time.Duration
+	// PreStart wird vor jedem (Neu-)Start des Prozesses aufgerufen (z.B. um den
+	// Crash-Reporter zu killen oder Recovery-Dateien aufzuräumen).
+	PreStart func()
 }
 
 // CommandSpec beschreibt einen Einmal-Befehl.
@@ -302,6 +305,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 
 	start := func() {
+		if spec.PreStart != nil {
+			spec.PreStart()
+		}
 		c := exec.Command(spec.Command, spec.Args...)
 		c.Dir = spec.Dir
 		if len(spec.Env) > 0 {

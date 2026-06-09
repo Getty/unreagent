@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -94,6 +95,22 @@ func run() error {
 	if cfg.Unreal.Project != "" {
 		ueArgs = append([]string{cfg.Unreal.Project}, ueArgs...)
 	}
+	if boolVal(cfg.Unreal.Unattended) && !hasArg(ueArgs, "-unattended") {
+		ueArgs = append(ueArgs, "-unattended")
+		logger("Unreal: -unattended aktiv (kein Crash-Dialog, kein Recovery-Prompt)")
+	}
+	ueProjectDir := ""
+	if cfg.Unreal.Project != "" {
+		ueProjectDir = filepath.Dir(cfg.Unreal.Project)
+	}
+	uePreStart := func() {
+		if boolVal(cfg.Unreal.KillCrashReporter) {
+			killCrashReporter()
+		}
+		if cfg.Unreal.CleanOnRestart && ueProjectDir != "" {
+			cleanRecovery(ueProjectDir, logger)
+		}
+	}
 	sup.AddService(supervisor.ServiceSpec{
 		Name:         "ue",
 		Command:      cfg.Unreal.Editor,
@@ -102,6 +119,7 @@ func run() error {
 		Restart:      cfg.Unreal.Restart,
 		MaxRestarts:  cfg.Unreal.MaxRestarts,
 		RestartDelay: secs(cfg.Unreal.RestartDelaySeconds),
+		PreStart:     uePreStart,
 	})
 
 	// --- Agent-Service ---
@@ -645,6 +663,49 @@ func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, l
 // --- Hilfsfunktionen ---
 
 func secs(n int) time.Duration { return time.Duration(n) * time.Second }
+
+func boolVal(p *bool) bool { return p != nil && *p }
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+// killCrashReporter beendet ein evtl. hängendes Crash-Reporter-Fenster.
+func killCrashReporter() {
+	var cmds [][]string
+	if runtime.GOOS == "windows" {
+		cmds = [][]string{
+			{"taskkill", "/F", "/IM", "CrashReportClientEditor.exe"},
+			{"taskkill", "/F", "/IM", "CrashReportClient.exe"},
+		}
+	} else {
+		cmds = [][]string{{"pkill", "-f", "CrashReportClient"}}
+	}
+	for _, c := range cmds {
+		_ = exec.Command(c[0], c[1:]...).Run() // Fehler ignorieren (Prozess evtl. nicht vorhanden)
+	}
+}
+
+// cleanRecovery entfernt Recovery-/Crash-Artefakte für einen sauberen Neustart.
+func cleanRecovery(projectDir string, logger func(string)) {
+	saved := filepath.Join(projectDir, "Saved")
+	restore := filepath.Join(saved, "Autosaves", "PackageRestoreData.json")
+	if err := os.Remove(restore); err == nil {
+		logger("Recovery: PackageRestoreData.json entfernt")
+	}
+	crashes := filepath.Join(saved, "Crashes")
+	if entries, err := os.ReadDir(crashes); err == nil && len(entries) > 0 {
+		for _, e := range entries {
+			_ = os.RemoveAll(filepath.Join(crashes, e.Name()))
+		}
+		logger("Recovery: Saved/Crashes geleert")
+	}
+}
 
 func warnIfMissing(logger func(string), label, path string) {
 	if !fileExists(path) {
