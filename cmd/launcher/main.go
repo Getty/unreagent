@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -44,8 +45,9 @@ func run() error {
 	writeMcp := flag.String("write-mcp-config", "", "MCP-Config zusätzlich als .mcp.json an diesen Pfad schreiben")
 	flag.Parse()
 
+	logOut := io.Writer(os.Stdout)
 	logger := func(line string) {
-		fmt.Printf("%s  %s\n", time.Now().Format("15:04:05"), line)
+		fmt.Fprintf(logOut, "%s  %s\n", time.Now().Format("15:04:05"), line)
 	}
 
 	cfg, info, err := config.Load(*cfgPath)
@@ -76,6 +78,32 @@ func run() error {
 	}
 	if *writeMcp != "" {
 		cfg.MCP.WriteConfig = append(cfg.MCP.WriteConfig, config.MCPOutput{Path: *writeMcp, Format: "mcp_json"})
+	}
+
+	// Interaktiver Agent: er erbt die echte Konsole (TTY). Damit Claude das
+	// Fenster für sich hat, leiten wir die Launcher-Logs in eine Datei um und
+	// lassen den eigenen stdin-Command-Loop weg. Im headless -p Modus aus.
+	agentInteractive := false
+	if cfg.Agent.Enabled {
+		agentInteractive = !hasPromptArg(cfg.Agent.Args)
+		if cfg.Agent.Window != nil {
+			agentInteractive = *cfg.Agent.Window
+		}
+	}
+	if agentInteractive {
+		dir := "."
+		if info.Project != "" {
+			dir = filepath.Dir(info.Project)
+		}
+		logPath := filepath.Join(dir, "unreagent.log")
+		if f, ferr := os.Create(logPath); ferr == nil {
+			logOut = f
+			defer f.Close()
+			fmt.Printf("unreagent %s\n", version)
+			fmt.Printf("Launcher-Logs -> %s   (Unreal läuft im Hintergrund)\n", logPath)
+			fmt.Println("Der Agent (Claude) übernimmt dieses Fenster …")
+			fmt.Println()
+		}
 	}
 
 	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
@@ -140,12 +168,6 @@ func run() error {
 		agentArgs := append([]string{}, cfg.Agent.Args...)
 		var agentEnv []string
 
-		// Eigenes Fenster ist Default (interaktive TUI braucht ein TTY); im
-		// headless -p Modus aus, per window: false explizit abschaltbar.
-		agentWindow := !hasPromptArg(cfg.Agent.Args)
-		if cfg.Agent.Window != nil {
-			agentWindow = *cfg.Agent.Window
-		}
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
 			b, _ := json.Marshal(map[string]interface{}{"mcpServers": mcpServers})
 			agentArgs = append(agentArgs, "--mcp-config", string(b))
@@ -153,7 +175,7 @@ func run() error {
 				agentArgs = append(agentArgs, "--strict-mcp-config")
 			}
 			if cfg.Permissions.Enabled {
-				if agentWindow {
+				if agentInteractive {
 					// Interaktiv: --permission-prompt-tool ist ein Headless-Feature
 					// (-p) und bricht sonst ab. allow_all -> Prompts überspringen;
 					// andere Modi -> Claude fragt im Fenster nach (manuell).
@@ -180,10 +202,10 @@ func run() error {
 			Restart:      cfg.Agent.Restart,
 			MaxRestarts:  cfg.Agent.MaxRestarts,
 			RestartDelay: secs(cfg.Agent.RestartDelaySeconds),
-			NewConsole:   agentWindow,
+			Foreground:   agentInteractive,
 		})
-		if agentWindow {
-			logger("Agent: startet in eigenem Konsolenfenster (interaktiv)")
+		if agentInteractive {
+			logger("Agent: läuft interaktiv im Vordergrund (erbt die Konsole)")
 		}
 	}
 
@@ -229,7 +251,10 @@ func run() error {
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
 	prepareRuntimes(sup, cfg, agentWorkdir, logger)
-	go commandLoop(ctx, stop, sup, logger)
+	// Im interaktiven Modus gehört stdin dem Agenten — kein eigener Command-Loop.
+	if !agentInteractive {
+		go commandLoop(ctx, stop, sup, logger)
+	}
 
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

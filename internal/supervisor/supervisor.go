@@ -38,10 +38,11 @@ type ServiceSpec struct {
 	// PreStart wird vor jedem (Neu-)Start des Prozesses aufgerufen (z.B. um den
 	// Crash-Reporter zu killen oder Recovery-Dateien aufzuräumen).
 	PreStart func()
-	// NewConsole startet den Prozess in einer eigenen Konsole/einem eigenen
-	// Fenster (für interaktive TUIs wie Claude Code, die ein TTY brauchen).
-	// Dann werden stdout/stderr nicht ins Log gespiegelt.
-	NewConsole bool
+	// Foreground gibt dem Prozess die echte Konsole des Launchers (stdin/stdout/
+	// stderr werden geerbt) — nötig für interaktive TUIs wie Claude Code, die ein
+	// TTY brauchen. Dann werden stdout/stderr nicht ins Log gespiegelt, und der
+	// Aufrufer sollte die eigene stdin-Nutzung (Command-Loop) unterlassen.
+	Foreground bool
 }
 
 // CommandSpec beschreibt einen Einmal-Befehl.
@@ -319,8 +320,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			c.Env = append(os.Environ(), spec.Env...)
 		}
 		var stdout, stderr io.ReadCloser
-		if spec.NewConsole {
-			setNewConsole(c) // eigenes Fenster/TTY -> kein Pipe-Capture
+		if spec.Foreground {
+			// Echte Konsole erben -> echtes TTY für interaktive TUIs.
+			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		} else {
 			var err error
 			if stdout, err = c.StdoutPipe(); err != nil {
@@ -352,7 +354,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				s.logf("[%s] WARN Job-Assign: %v", spec.Name, err)
 			}
 		}
-		if !spec.NewConsole {
+		if !spec.Foreground {
 			go s.stream(svc, stdout)
 			go s.stream(svc, stderr)
 		}

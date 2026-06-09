@@ -21,9 +21,9 @@ agent:
   command: claude
   # Hängt --mcp-config (+ --permission-prompt-tool) automatisch an:
   claudeIntegration: true
-  # Eigenes Konsolenfenster (echtes TTY, interaktive Claude-TUI) ist DEFAULT.
-  # Mit window: false abschalten — z.B. fuer headless: args: ["-p", "<aufgabe>"]
-  # (im -p Modus ist window automatisch aus).
+  # Interaktiv im Vordergrund (Agent erbt die Konsole = echtes TTY) ist DEFAULT.
+  # UE laeuft im Hintergrund, Launcher-Logs -> unreagent.log. Mit window: false
+  # abschalten — z.B. fuer headless: args: ["-p", "<aufgabe>"] (dann window aus).
   # window: false
   # args: ["-p", "Starte und arbeite die Aufgaben ab"]   # headless einmalig
 

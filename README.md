@@ -154,7 +154,7 @@ unreagent.local.yaml
 
 | Sektion | Zweck |
 |---|---|
-| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool); `window: true` startet ihn im eigenen Fenster (interaktive TUI mit TTY) |
+| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool); `window` (Default an) = interaktiv im Vordergrund (erbt Konsole/TTY, Launcher-Logs → `unreagent.log`) |
 | `permissions` | Permission-Layer: `allow_all` / `allowlist` / `deny_all`, plus `allow`/`deny`-Regeln |
 | `runtimes` | `python` (via `uv run`) und `node` für `run_python`/`run_node` |
 | `mcp` | MCP-Server an/aus, `address` (Default `127.0.0.1:8765`) |
@@ -247,10 +247,11 @@ dazu steht in der MCP-Tool-Beschreibung und ist damit automatisch im Kontext.
 Claude Code ist eine interaktive TUI und braucht ein TTY — als roher
 Hintergrund-Subprozess startet er nicht. Darum drei Wege:
 
-1. **Eigenes Fenster** (`agent.window`, **Default an**) — der Agent läuft als
-   interaktive TUI in einer eigenen Konsole (Windows: `CREATE_NEW_CONSOLE`),
-   UE + MCP im Hintergrund. Mit `window: false` abschaltbar. Im `-p`-Modus
-   automatisch aus.
+1. **Interaktiv im Vordergrund** (`agent.window`, **Default an**) — der Agent
+   erbt die echte Konsole (TTY) und läuft als interaktive TUI in dem Fenster, in
+   dem du `unreagent` gestartet hast. UE + MCP laufen im Hintergrund, die
+   Launcher-Logs gehen nach `unreagent.log` (neben dem Projekt), damit der Agent
+   das Fenster für sich hat. Mit `window: false` abschaltbar; im `-p`-Modus aus.
 2. **Headless/Task** (`agent.args: ["-p", "<aufgabe>"]`) — einmalige Aufgabe
    ohne Fenster, dann beendet sich der Agent.
 3. **Extern** (`-no-agent`) — Launcher startet keinen Agenten; du verbindest
