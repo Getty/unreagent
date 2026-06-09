@@ -153,12 +153,22 @@ func run() error {
 				agentArgs = append(agentArgs, "--strict-mcp-config")
 			}
 			if cfg.Permissions.Enabled {
-				agentArgs = append(agentArgs, "--permission-prompt-tool", "mcp__"+config.MCPServerName+"__approve")
+				if agentWindow {
+					// Interaktiv: --permission-prompt-tool ist ein Headless-Feature
+					// (-p) und bricht sonst ab. allow_all -> Prompts überspringen;
+					// andere Modi -> Claude fragt im Fenster nach (manuell).
+					if cfg.Permissions.Mode == config.ModeAllowAll {
+						agentArgs = append(agentArgs, "--dangerously-skip-permissions")
+					}
+				} else {
+					agentArgs = append(agentArgs, "--permission-prompt-tool", "mcp__"+config.MCPServerName+"__approve")
+				}
 			}
 			agentEnv = append(agentEnv, "UNREAGENT_MCP_URL="+mcpURL)
-			logger(fmt.Sprintf("Agent: Claude-Integration aktiv (%d MCP-Server%s%s)",
-				len(mcpServers), strictWord(cfg.MCP.Strict), perm(cfg.Permissions.Enabled)))
+			logger(fmt.Sprintf("Agent: Claude-Integration aktiv (%d MCP-Server%s)",
+				len(mcpServers), strictWord(cfg.MCP.Strict)))
 		}
+		logger("Agent-Kommando: " + cfg.Agent.Command + " " + strings.Join(agentArgs, " "))
 		sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
 			Command:      cfg.Agent.Command,
