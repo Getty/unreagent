@@ -167,6 +167,9 @@ func run() error {
 	if cfg.Agent.Enabled {
 		agentArgs := append([]string{}, cfg.Agent.Args...)
 		var agentEnv []string
+		for k, v := range cfg.Agent.Env {
+			agentEnv = append(agentEnv, k+"="+v)
+		}
 
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
 			b, _ := json.Marshal(map[string]interface{}{"mcpServers": mcpServers})

@@ -75,19 +75,19 @@ type UnrealConfig struct {
 
 // AgentConfig beschreibt den Agenten-Prozess (z.B. Claude Code).
 type AgentConfig struct {
-	Enabled             bool     `yaml:"enabled"`
-	Command             string   `yaml:"command"`
-	Args                []string `yaml:"args"`
-	Workdir             string   `yaml:"workdir"`
-	StartDelaySeconds   int      `yaml:"startDelaySeconds"`
-	Restart             string   `yaml:"restart"`
-	MaxRestarts         int      `yaml:"maxRestarts"`
-	RestartDelaySeconds int      `yaml:"restartDelaySeconds"`
-	ClaudeIntegration   bool     `yaml:"claudeIntegration"`
-	// Window startet den Agenten in einem eigenen Konsolenfenster (Windows:
-	// CREATE_NEW_CONSOLE) — echtes TTY, interaktive TUI, getrennt von den
-	// Launcher-Logs. Default true (außer im headless -p Modus); mit
-	// window: false abschaltbar.
+	Enabled             bool              `yaml:"enabled"`
+	Command             string            `yaml:"command"`
+	Args                []string          `yaml:"args"`
+	Env                 map[string]string `yaml:"env"` // zusätzliche Umgebungsvariablen (z.B. HOME/USERPROFILE)
+	Workdir             string            `yaml:"workdir"`
+	StartDelaySeconds   int               `yaml:"startDelaySeconds"`
+	Restart             string            `yaml:"restart"`
+	MaxRestarts         int               `yaml:"maxRestarts"`
+	RestartDelaySeconds int               `yaml:"restartDelaySeconds"`
+	ClaudeIntegration   bool              `yaml:"claudeIntegration"`
+	// Window lässt den Agenten interaktiv im Vordergrund laufen: er erbt die
+	// echte Konsole des Launchers (TTY), die Launcher-Logs gehen nach
+	// unreagent.log. Default true (außer im headless -p Modus); window: false aus.
 	Window *bool `yaml:"window"`
 }
 
