@@ -2,13 +2,17 @@ BINARY := unreagent
 PKG     := ./cmd/launcher
 LDFLAGS := -s -w
 
-.PHONY: all windows linux fmt vet clean
+.PHONY: all windows win-signed linux resource fmt vet clean
 
 all: windows linux
 
 # Cross-Compile Linux -> Windows .exe (das eigentliche Ziel)
 windows:
 	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY).exe $(PKG)
+
+# Windows-.exe bauen und signieren (benoetigt signing/codesign.key + osslsigncode)
+win-signed: windows
+	./scripts/sign-windows.sh dist/$(BINARY).exe
 
 # Native Linux-Binary (für Entwicklung/Tests)
 linux:

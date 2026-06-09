@@ -3,3 +3,7 @@
 unreagent.local.yaml
 unreagent.local.yml
 # vendor/ wird bewusst committed (offline-reproduzierbare Builds)
+
+# Code-Signing: privater Schluessel NIEMALS ins Repo
+signing/*.key
+signing/*.pfx

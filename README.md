@@ -74,14 +74,26 @@ Die `.exe` trägt Icon + **Versionsinfo** (CompanyName, ProductName, Beschreibun
 Copyright) und ein `asInvoker`-Manifest (kein UAC-Elevation-Prompt). Das füllt
 `Eigenschaften → Details` und den Programmnamen in Dialogen.
 
-Die SmartScreen-/„Herausgeber konnte nicht verifiziert werden"-Warnung selbst
-verschwindet aber **nur mit einem Code-Signing-Zertifikat** (CA-ausgestellt,
-kostenpflichtig; EV-Cert = sofortige SmartScreen-Reputation). Metadaten allein
-reichen dafür nicht. Mit Zertifikat ließe sich die `.exe` sogar **unter Linux**
-signieren (`osslsigncode`) — kein Windows nötig.
+Die „Unbekannter Herausgeber"-Warnung selbst kommt von der **Signatur**, nicht
+von Metadaten. Es gibt zwei Wege:
 
-Publisher/Version ändern: `cmd/launcher/versioninfo.json` anpassen, dann
-`make resource` (regeneriert die `.syso`).
+**A) Self-signed (im Repo, für eigenes Team / bekannte Nutzer)** — die `.exe`
+ist mit einem selbst-signierten Zertifikat von „conflict.industries digital
+GmbH" signiert. Nutzer importieren einmalig das öffentliche Zertifikat:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File signing\import-cert.ps1   # als Admin
+```
+
+Danach: keine Herausgeber-Warnung, die GmbH erscheint als Herausgeber. Details
+und Trade-offs: [`signing/`](signing/). (Der private Schlüssel ist **nicht** im
+Repo.)
+
+**B) CA-Zertifikat (für breite Öffentlichkeit)** — ein OV/EV-Code-Signing-Cert
+braucht keinen Import durch Nutzer (EV = sofortige SmartScreen-Reputation). Mit
+so einem Cert signiert man die `.exe` ebenfalls **unter Linux** (`osslsigncode`).
+
+Publisher/Version ändern: `cmd/launcher/versioninfo.json` → `make resource`.
 
 ## Sofort ausprobieren (Demo)
 
