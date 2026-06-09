@@ -21,7 +21,11 @@ agent:
   command: claude
   # Hängt --mcp-config (+ --permission-prompt-tool) automatisch an:
   claudeIntegration: true
-  # args: ["-p", "Starte und arbeite die Aufgaben ab"]   # optional
+  # In eigenem Konsolenfenster starten -> echtes TTY, interaktive Claude-TUI.
+  # OHNE window braucht ein eingebetteter Agent einen Prompt (args: ["-p", "..."]),
+  # weil er sonst ohne TTY im --print-Modus haengt.
+  window: true
+  # args: ["-p", "Starte und arbeite die Aufgaben ab"]   # alternativ: headless einmalig
 
 permissions:
   enabled: true

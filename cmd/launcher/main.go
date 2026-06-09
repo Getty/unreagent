@@ -163,7 +163,11 @@ func run() error {
 			Restart:      cfg.Agent.Restart,
 			MaxRestarts:  cfg.Agent.MaxRestarts,
 			RestartDelay: secs(cfg.Agent.RestartDelaySeconds),
+			NewConsole:   cfg.Agent.Window,
 		})
+		if cfg.Agent.Window {
+			logger("Agent: startet in eigenem Konsolenfenster (interaktiv)")
+		}
 	}
 
 	// --- MCP-Config-Dateien schreiben (für externe Clients) ---

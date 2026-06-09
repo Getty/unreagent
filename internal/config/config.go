@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -82,6 +84,10 @@ type AgentConfig struct {
 	MaxRestarts         int      `yaml:"maxRestarts"`
 	RestartDelaySeconds int      `yaml:"restartDelaySeconds"`
 	ClaudeIntegration   bool     `yaml:"claudeIntegration"`
+	// Window startet den Agenten in einem eigenen Konsolenfenster (Windows:
+	// CREATE_NEW_CONSOLE) — er bekommt damit ein echtes TTY und läuft als
+	// interaktive TUI, getrennt von den Launcher-Logs.
+	Window bool `yaml:"window"`
 }
 
 // CommandSpec ist ein benannter Einmal-Befehl (z.B. "compile").
@@ -392,24 +398,61 @@ func resolveEngine(c *Config) string {
 	return autodetectEngine()
 }
 
-// autodetectEngine durchsucht Standard-Epic-Installationspfade und nimmt die
-// höchste gefundene Version mit einer UnrealEditor-Executable.
+// autodetectEngine sucht die UE-Installation: zuerst in der Windows-Registry
+// (Epic-Launcher-Installs), dann in den Standard-Installationspfaden. Nimmt die
+// höchste Version mit einer UnrealEditor-Executable.
 func autodetectEngine() string {
+	if dir := registryEngine(); dir != "" {
+		return dir
+	}
 	patterns := []string{
 		`C:/Program Files/Epic Games/UE_*`,
 		`D:/Program Files/Epic Games/UE_*`,
+		`E:/Program Files/Epic Games/UE_*`,
 		`C:/Epic Games/UE_*`,
+		`D:/Epic Games/UE_*`,
 	}
 	var candidates []string
 	for _, p := range patterns {
-		matches, _ := filepath.Glob(p)
+		// filepath.Glob nutzt den OS-Separator (\ auf Windows) — Forward-Slash-
+		// Pattern würden dort nicht matchen, darum FromSlash.
+		matches, _ := filepath.Glob(filepath.FromSlash(p))
 		candidates = append(candidates, matches...)
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(candidates))) // höchste Version zuerst
 	for _, dir := range candidates {
-		dir = filepath.ToSlash(dir)
-		if fileExists(dir + "/Engine/Binaries/Win64/UnrealEditor.exe") {
-			return dir
+		if fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe")) {
+			return filepath.ToSlash(dir)
+		}
+	}
+	return ""
+}
+
+// registryEngine liest den UE-Installationspfad aus der Windows-Registry
+// (HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>\InstalledDirectory).
+func registryEngine() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	for _, ver := range []string{"5.7", "5.6", "5.5", "5.4"} {
+		out, err := exec.Command("reg", "query",
+			`HKLM\SOFTWARE\EpicGames\Unreal Engine\`+ver, "/v", "InstalledDirectory").Output()
+		if err != nil {
+			continue
+		}
+		dir := parseRegSZ(string(out))
+		if dir != "" && fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe")) {
+			return filepath.ToSlash(dir)
+		}
+	}
+	return ""
+}
+
+// parseRegSZ extrahiert den Wert hinter "REG_SZ" aus einer `reg query`-Ausgabe.
+func parseRegSZ(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.Index(line, "REG_SZ"); i >= 0 {
+			return strings.TrimSpace(line[i+len("REG_SZ"):])
 		}
 	}
 	return ""

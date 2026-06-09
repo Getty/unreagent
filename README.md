@@ -127,7 +127,7 @@ unreagent.local.yaml
 
 | Sektion | Zweck |
 |---|---|
-| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool) automatisch |
+| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool); `window: true` startet ihn im eigenen Fenster (interaktive TUI mit TTY) |
 | `permissions` | Permission-Layer: `allow_all` / `allowlist` / `deny_all`, plus `allow`/`deny`-Regeln |
 | `runtimes` | `python` (via `uv run`) und `node` für `run_python`/`run_node` |
 | `mcp` | MCP-Server an/aus, `address` (Default `127.0.0.1:8765`) |
@@ -214,6 +214,19 @@ dazu steht in der MCP-Tool-Beschreibung und ist damit automatisch im Kontext.
 | `-no-agent` | Agenten **nicht** starten — nur UE + MCP-Server. Ein externer Agent (deine eigene Claude-Code-Sitzung) verbindet sich dann mit dem MCP-Server. |
 | `-files` | Datei-Tools (`read_file`/`write_file`/`list_dir`/`edit_file`) aktivieren, auch wenn in der Config aus. |
 | `-write-mcp-config <pfad>` | Die zusammengebaute MCP-Config zusätzlich als `.mcp.json` an `<pfad>` schreiben (für externe Clients). |
+
+### Wie der Agent läuft (drei Modi)
+
+Claude Code ist eine interaktive TUI und braucht ein TTY — als roher
+Hintergrund-Subprozess startet er nicht. Darum drei Wege:
+
+1. **Eigenes Fenster** (`agent.window: true`) — der Agent läuft als interaktive
+   TUI in einer eigenen Konsole (Windows: `CREATE_NEW_CONSOLE`), UE + MCP im
+   Hintergrund. Empfohlen für „mit dem Agenten chatten".
+2. **Headless/Task** (`agent.args: ["-p", "<aufgabe>"]`) — einmalige Aufgabe
+   ohne Fenster, dann beendet sich der Agent.
+3. **Extern** (`-no-agent`) — Launcher startet keinen Agenten; du verbindest
+   deine eigene Claude-Sitzung mit der `.mcp.json` / dem MCP-Server.
 
 ### Headless / externer Agent
 

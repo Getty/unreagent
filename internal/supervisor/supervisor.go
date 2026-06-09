@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"sync"
@@ -37,6 +38,10 @@ type ServiceSpec struct {
 	// PreStart wird vor jedem (Neu-)Start des Prozesses aufgerufen (z.B. um den
 	// Crash-Reporter zu killen oder Recovery-Dateien aufzuräumen).
 	PreStart func()
+	// NewConsole startet den Prozess in einer eigenen Konsole/einem eigenen
+	// Fenster (für interaktive TUIs wie Claude Code, die ein TTY brauchen).
+	// Dann werden stdout/stderr nicht ins Log gespiegelt.
+	NewConsole bool
 }
 
 // CommandSpec beschreibt einen Einmal-Befehl.
@@ -313,18 +318,28 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		if len(spec.Env) > 0 {
 			c.Env = append(os.Environ(), spec.Env...)
 		}
-		stdout, err := c.StdoutPipe()
-		if err != nil {
-			s.logf("[%s] StdoutPipe: %v", spec.Name, err)
-			return
-		}
-		stderr, err := c.StderrPipe()
-		if err != nil {
-			s.logf("[%s] StderrPipe: %v", spec.Name, err)
-			return
+		var stdout, stderr io.ReadCloser
+		if spec.NewConsole {
+			setNewConsole(c) // eigenes Fenster/TTY -> kein Pipe-Capture
+		} else {
+			var err error
+			if stdout, err = c.StdoutPipe(); err != nil {
+				s.logf("[%s] StdoutPipe: %v", spec.Name, err)
+				return
+			}
+			if stderr, err = c.StderrPipe(); err != nil {
+				s.logf("[%s] StderrPipe: %v", spec.Name, err)
+				return
+			}
 		}
 		if err := c.Start(); err != nil {
 			s.logf("[%s] Start fehlgeschlagen: %v", spec.Name, err)
+			if isNotFound(err) {
+				// Programm existiert gar nicht — Neustarts wären sinnlos.
+				s.logf("[%s] Programm nicht gefunden — kein weiterer Versuch (Pfad/Installation prüfen)", spec.Name)
+				desired = false
+				return
+			}
 			if desired && shouldRestart(spec, restarts, false) {
 				restarts++
 				backoff = time.After(spec.RestartDelay)
@@ -337,8 +352,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				s.logf("[%s] WARN Job-Assign: %v", spec.Name, err)
 			}
 		}
-		go s.stream(svc, stdout)
-		go s.stream(svc, stderr)
+		if !spec.NewConsole {
+			go s.stream(svc, stdout)
+			go s.stream(svc, stderr)
+		}
 		wc := make(chan error, 1)
 		go func() { wc <- c.Wait() }()
 		cmd, job, waitCh = c, j, wc
@@ -475,6 +492,12 @@ func describeExit(err error) string {
 		return fmt.Sprintf("exit %d", ee.ExitCode())
 	}
 	return err.Error()
+}
+
+// isNotFound erkennt, ob ein Start fehlschlug, weil das Programm nicht existiert
+// (dann sind Neustarts sinnlos).
+func isNotFound(err error) bool {
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist)
 }
 
 func exitCodeOf(err error) int {
