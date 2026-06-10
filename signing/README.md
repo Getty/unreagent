@@ -41,3 +41,18 @@ make win-signed         # baut + signiert dist/unreagent.exe
 Der **private Schlüssel** `signing/codesign.key` ist git-ignoriert und muss
 sicher aufbewahrt werden (Passwort-Manager/Vault). Wer ihn besitzt, kann im
 Namen der GmbH signieren — entsprechend behandeln.
+
+## Für Maintainer: Zertifikat erzeugen/erneuern
+
+```bash
+./scripts/gen-codesign-cert.sh   # nutzt vorhandenen Key, sonst neuer RSA-3072-Key
+```
+
+Schreibt `codesign.pem` (signieren) + `unreagent-codesign.cer` (Import). Der
+Subject enthält **nur den CN** (`conflict.industries digital GmbH`): Windows
+zeigt als „Verifizierter Herausgeber" den kompletten Subject-DN — ein zusätzliches
+`O`/`C` mit demselben Wert ließe den Namen doppelt erscheinen
+(„…GmbH, …GmbH, DE"). Nur-CN = der Name steht genau einmal.
+
+> Nach einer Erneuerung müssen Nutzer das Zertifikat **neu importieren**
+> (`import-cert.ps1`) — der Thumbprint ändert sich.

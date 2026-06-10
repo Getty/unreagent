@@ -25,4 +25,6 @@ osslsigncode sign \
   -in "$EXE" -out "$EXE.signed"
 mv "$EXE.signed" "$EXE"
 echo "signiert: $EXE"
-osslsigncode verify "$EXE" 2>&1 | grep -E "Subject:|Message digest" | head -2
+# Nur Info-Anzeige — verify meldet bei self-signed immer "failed" (keine
+# CA-Kette), das darf den Build nicht abbrechen.
+osslsigncode verify "$EXE" 2>&1 | grep -E "Subject:|Message digest" | head -2 || true
