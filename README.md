@@ -158,6 +158,24 @@ unreagent.exe
 unreagent.local.yaml
 ```
 
+### Wenn der Agent endet (`/quit` oder Crash)
+
+Im Fenster-Modus ist der Agent der Leitprozess — endet er (z.B. `/quit`) und wird
+nicht neugestartet, fragt der Launcher auf der Konsole nach (`agent.onExit: ask`,
+Default):
+
+```
+Agent beendet.
+  [Enter] alles beenden (UE + Launcher)
+  [k]     Editor weiterlaufen lassen, Launcher-Konsole
+  [r]     Agent neu starten
+> _   (30s -> alles beenden)
+```
+
+Ohne TTY (headless `-p`) wird stattdessen sauber heruntergefahren. Alternativen:
+`onExit: shutdown` (immer sofort alles beenden) oder `onExit: leave` (alles läuft
+weiter, nur Warnung — manuelles Ctrl-C nötig).
+
 ## In-Editor-MCP: UE LLM Toolkit einrichten (Windows)
 
 Damit der Agent **im Editor** arbeiten kann (Blueprints, Assets, Level,

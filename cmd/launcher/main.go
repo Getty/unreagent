@@ -158,6 +158,9 @@ func run() error {
 	})
 
 	// --- Agent-Service ---
+	// onAgentExit wird erst gesetzt, wenn ctx/stop existieren (s.u.); der Service
+	// hält nur eine Indirektion darauf.
+	var onAgentExit func(success bool)
 	agentWorkdir := cfg.Agent.Workdir
 	if agentWorkdir == "" && cfg.Unreal.Project != "" {
 		agentWorkdir = filepath.Dir(cfg.Unreal.Project)
@@ -214,6 +217,11 @@ func run() error {
 			MaxRestarts:  cfg.Agent.MaxRestarts,
 			RestartDelay: secs(cfg.Agent.RestartDelaySeconds),
 			Foreground:   agentInteractive,
+			OnExit: func(success bool) {
+				if onAgentExit != nil {
+					onAgentExit(success)
+				}
+			},
 		})
 		if agentInteractive {
 			logger("Agent: läuft interaktiv im Vordergrund (erbt die Konsole)")
@@ -258,6 +266,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.Agent.Enabled {
+		onAgentExit = makeAgentExitHandler(ctx, stop, sup, cfg, logger, agentInteractive)
+	}
 
 	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
 		prepareMCPBridges(sup, cfg, agentWorkdir, logger)
@@ -852,6 +864,95 @@ func waitForEndpoint(name, rawURL string, logger func(string)) {
 }
 
 // commandLoop liest Steuerbefehle von stdin (für manuelle Bedienung).
+// makeAgentExitHandler baut den Callback, der feuert, wenn der Agent endet und
+// nicht von selbst neugestartet wird (siehe ServiceSpec.OnExit). Der Agent ist
+// im Fenster-Modus der Leitprozess — endet er, ist die Session vorbei und der
+// Launcher darf nicht stumm mit laufendem Editor hängenbleiben.
+func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supervisor, cfg *config.Config, logger func(string), interactive bool) func(success bool) {
+	var mu sync.Mutex
+	cmdLoopRunning := false // schon in die Launcher-Konsole gewechselt?
+	return func(success bool) {
+		if success {
+			logger("Agent beendet (exit 0).")
+		} else {
+			logger("Agent abgestürzt / Neustarts erschöpft.")
+		}
+
+		// Läuft bereits die Launcher-Konsole (vorherige 'k'-Wahl), würde ein
+		// zweiter stdin-Prompt mit ihr um die Eingabe konkurrieren — also nur loggen.
+		mu.Lock()
+		busy := cmdLoopRunning
+		mu.Unlock()
+		if busy {
+			logger("Launcher-Konsole aktiv — 'q' beendet alles, 'start agent' startet den Agenten neu.")
+			return
+		}
+
+		switch cfg.Agent.OnExit {
+		case config.OnExitLeave:
+			logger("agent.onExit=leave — Editor/MCP laufen weiter. Ctrl-C beendet den Launcher.")
+		case config.OnExitShutdown:
+			logger("agent.onExit=shutdown — beende alles.")
+			stop()
+		default: // ask
+			if !interactive {
+				// Headless (-p): kein TTY zum Nachfragen — der Command-Loop liest
+				// stdin. Agent-Ende = Auftrag erledigt -> sauber herunterfahren.
+				stop()
+				return
+			}
+			switch promptAgentExit(success) {
+			case "k":
+				fmt.Fprintln(os.Stdout, "Editor läuft weiter. Launcher-Konsole:")
+				mu.Lock()
+				cmdLoopRunning = true
+				mu.Unlock()
+				go commandLoop(ctx, stop, sup, logger)
+			case "r":
+				fmt.Fprintln(os.Stdout, "Starte Agent neu …")
+				if _, err := sup.StartService("agent"); err != nil {
+					logger("Agent-Neustart fehlgeschlagen: " + err.Error() + " — beende alles.")
+					stop()
+				}
+			default: // Enter / q / Timeout / EOF
+				stop()
+			}
+		}
+	}
+}
+
+// promptAgentExit zeigt das Auswahlmenü auf der echten Konsole (os.Stdout/Stdin —
+// die Launcher-Logs gehen im Fenster-Modus in die Datei) und liefert die Wahl.
+// Nach 30s ohne Eingabe gilt "alles beenden" (z.B. Agent über Nacht abgestürzt).
+func promptAgentExit(success bool) string {
+	if success {
+		fmt.Fprintln(os.Stdout, "\nAgent beendet.")
+	} else {
+		fmt.Fprintln(os.Stdout, "\nAgent abgestürzt.")
+	}
+	fmt.Fprintln(os.Stdout, "  [Enter] alles beenden (UE + Launcher)")
+	fmt.Fprintln(os.Stdout, "  [k]     Editor weiterlaufen lassen, Launcher-Konsole")
+	fmt.Fprintln(os.Stdout, "  [r]     Agent neu starten")
+	fmt.Fprint(os.Stdout, "> ")
+
+	ch := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(os.Stdin)
+		if sc.Scan() {
+			ch <- strings.ToLower(strings.TrimSpace(sc.Text()))
+		} else {
+			ch <- "" // EOF (z.B. stdin geschlossen) -> alles beenden
+		}
+	}()
+	select {
+	case s := <-ch:
+		return s
+	case <-time.After(30 * time.Second):
+		fmt.Fprintln(os.Stdout, "\n(Timeout) — beende alles.")
+		return ""
+	}
+}
+
 func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, logger func(string)) {
 	logger("Befehle: 'status' | 'r' (alle neu) | 'r <name>' | 'stop <name>' | 'start <name>' | 'c <name>' | 'q'")
 	sc := bufio.NewScanner(os.Stdin)

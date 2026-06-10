@@ -93,6 +93,15 @@ type AgentConfig struct {
 	// echte Konsole des Launchers (TTY), die Launcher-Logs gehen nach
 	// unreagent.log. Default true (außer im headless -p Modus); window: false aus.
 	Window *bool `yaml:"window"`
+	// OnExit steuert, was passiert, wenn sich der Agent beendet (z.B. /quit) und
+	// NICHT neugestartet wird — der Agent ist im Fenster-Modus der Leitprozess,
+	// also ist die Session dann vorbei:
+	//   ask      (Default) im Fenster-Modus nachfragen: alles beenden / Editor
+	//            weiterlaufen lassen (Launcher-Konsole) / Agent neu starten.
+	//            Timeout 30s -> alles beenden. Headless ohne TTY = shutdown.
+	//   shutdown immer sofort den ganzen Stack (UE + MCP + Launcher) beenden.
+	//   leave    alles weiterlaufen lassen (nur Warnung) — manuelles Ctrl-C nötig.
+	OnExit string `yaml:"onExit"`
 }
 
 // CommandSpec ist ein benannter Einmal-Befehl (z.B. "compile").
@@ -168,6 +177,10 @@ const (
 	ModeAllowAll  = "allow_all"
 	ModeAllowlist = "allowlist"
 	ModeDenyAll   = "deny_all"
+
+	OnExitAsk      = "ask"
+	OnExitShutdown = "shutdown"
+	OnExitLeave    = "leave"
 
 	DefaultMCPAddress = "127.0.0.1:8765"
 	MCPServerName     = "unreagent"
@@ -259,6 +272,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agent.StartDelaySeconds == 0 {
 		c.Agent.StartDelaySeconds = 5
+	}
+	if c.Agent.OnExit == "" {
+		c.Agent.OnExit = OnExitAsk
 	}
 
 	if c.MCP.Address == "" {
@@ -363,6 +379,11 @@ func (c *Config) validate() error {
 	if c.Agent.Enabled {
 		if err := validRestart(c.Agent.Restart); err != nil {
 			return fmt.Errorf("agent.restart: %w", err)
+		}
+		switch c.Agent.OnExit {
+		case OnExitAsk, OnExitShutdown, OnExitLeave:
+		default:
+			return fmt.Errorf("agent.onExit ungültig: %q (erlaubt: ask, shutdown, leave)", c.Agent.OnExit)
 		}
 	}
 	switch c.Permissions.Mode {

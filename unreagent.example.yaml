@@ -29,6 +29,14 @@ agent:
   # Auf Windows wird (bei claudeIntegration) CLAUDE_CODE_USE_POWERSHELL_TOOL=1
   # automatisch gesetzt; mit powershellTool: false abschaltbar.
   # powershellTool: false
+  # Was passiert, wenn der Agent endet (z.B. /quit) und nicht neugestartet wird?
+  # Der Agent ist im Fenster-Modus der Leitprozess — endet er, ist Schluss.
+  #   ask (Default): im Fenster nachfragen (alles beenden / Editor weiterlaufen
+  #     lassen -> Launcher-Konsole / Agent neu starten; 30s Timeout -> beenden;
+  #     headless ohne TTY = shutdown)
+  #   shutdown: immer sofort den ganzen Stack (UE + MCP + Launcher) beenden
+  #   leave: alles weiterlaufen lassen (nur Warnung) — manuelles Ctrl-C noetig
+  # onExit: ask
 
 permissions:
   enabled: true

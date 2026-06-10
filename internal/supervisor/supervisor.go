@@ -43,6 +43,11 @@ type ServiceSpec struct {
 	// TTY brauchen. Dann werden stdout/stderr nicht ins Log gespiegelt, und der
 	// Aufrufer sollte die eigene stdin-Nutzung (Command-Loop) unterlassen.
 	Foreground bool
+	// OnExit feuert, wenn der Prozess endet und NICHT automatisch neugestartet
+	// wird (Policy oder MaxRestarts erschöpft), aber noch "gewünscht" war — also
+	// ein unerwartetes Ende, kein manueller Stop. success = exit 0. Wird in einer
+	// eigenen Goroutine aufgerufen, darf also blockieren / den Supervisor steuern.
+	OnExit func(success bool)
 }
 
 // CommandSpec beschreibt einen Einmal-Befehl.
@@ -408,6 +413,12 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				backoff = time.After(spec.RestartDelay)
 			} else if desired {
 				s.logf("[%s] kein automatischer Neustart (policy=%s)", spec.Name, spec.Restart)
+				if spec.OnExit != nil {
+					// Eigene Goroutine: der Handler darf blockieren (TTY-Prompt) und
+					// uns über svc.ctrl steuern (start/restart) — synchron wäre das
+					// ein Deadlock, weil wir genau diese Schleife sind.
+					go spec.OnExit(success)
+				}
 			}
 
 		case msg := <-svc.ctrl:
