@@ -36,5 +36,8 @@ jobs:
         run: |
           set -e
           go build ./...
-          GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/launcher
+          # Cross-Compile nach Windows ohne CGO: der Runner-gcc ist Linux und
+          # kennt das Windows-Flag -mconsole nicht, das Projekt hat aber keinen
+          # CGO-Code (nur vendored Go-Pakete), also ist CGO_ENABLED=0 sicher.
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/launcher
           GOOS=linux   GOARCH=amd64 go build -o /dev/null ./cmd/launcher
