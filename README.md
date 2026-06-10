@@ -2,131 +2,131 @@
 
 [![ci](https://github.com/Getty/unreagent/actions/workflows/ci.yml/badge.svg)](https://github.com/Getty/unreagent/actions/workflows/ci.yml)
 
-Ein schlanker **Launcher/Orchestrator** für Unreal-Engine-Projekte: startet und
-überwacht den Unreal-Editor **und** einen Agenten (z.B. Claude Code) und bietet
-dem Agenten einen **MCP-Server**, über den er den Editor steuern, Builds
-auslösen, Logs lesen und Python-/Node-Code in vorbereiteten Umgebungen ausführen
-kann.
+A small **launcher / orchestrator for Unreal Engine projects**: it starts and
+supervises the Unreal Editor **and** an agent (e.g. Claude Code), and gives the
+agent an **MCP server** to drive the editor, trigger builds, read logs, and run
+Python/Node code in prepared runtimes.
 
-Eine einzige `.exe` — **von Linux aus nach Windows cross-kompilierbar**. Bis auf
-einen vendored YAML-Parser nur Go-Standardbibliothek; `vendor/` ist eingecheckt,
-Builds sind damit offline-reproduzierbar.
+A single `.exe` — **cross-compilable from Linux to Windows**. Stdlib Go only,
+plus one vendored YAML parser; `vendor/` is checked in, so builds are
+offline-reproducible.
 
-## Architektur
+## Architecture
 
 ```
-┌─────────────────── unreagent.exe ───────────────────┐
-│  Supervisor                 MCP-Server (HTTP :8765)  │
-│  • ue    (Job Object)  ◄───  status / logs           │
-│  • agent (Job Object)        ue_start/stop/restart   │
-│  • Restart-Policy + Backoff  run_command (compile…)  │
-│  • Ring-Buffer-Logs          run_python / run_node   │
-│       │                      approve (Permissions)   │
-│       ▼                          ▲                    │
-│  UnrealEditor.exe                │                    │
-│   └─ In-Editor-MCP-Plugin        │                    │
-│      (z.B. UE LLM Toolkit,       │                    │
-│       HTTP :3000)                │                    │
-│            ▲                     │                    │
-│   Node-Bridge (stdio MCP)        │                    │
-│            ▲                     │                    │
-│  Claude Code ──────────┬─────────┘ unreagent-MCP      │
-│                        └───────────► In-Editor-MCP    │
-│                          (beide via --mcp-config)     │
-└──────────────────────────────────────────────────────┘
++----------------------- unreagent.exe -----------------------+
+|  Supervisor                 MCP server (HTTP :8765)        |
+|  * ue    (Job Object)  <---  status / logs                 |
+|  * agent (Job Object)        ue_start / stop / restart     |
+|  * restart policy + backoff  run_command (compile, ...)    |
+|  * ring-buffer logs          run_python / run_node         |
+|       |                      approve (permissions)         |
+|       v                          ^                         |
+|  UnrealEditor.exe                |                         |
+|   +- in-editor MCP plugin        |                         |
+|      (e.g. UE LLM Toolkit,       |                         |
+|       HTTP :3000)                |                         |
+|            ^                     |                         |
+|   Node bridge (stdio MCP)        |                         |
+|            ^                     |                         |
+|  Claude Code ----------+--------- unreagent-MCP             |
+|                        +----------> in-editor MCP           |
+|                          (both via --mcp-config)           |
++------------------------------------------------------------+
 ```
 
-Zwei MCP-Server bedienen den Agenten:
-- **unreagent-MCP** (dieser Launcher, HTTP) — *Prozess*-Ebene: Editor starten/
-  stoppen/neu starten, compilen, Logs, run_python/run_node, Permissions.
-- **In-Editor-MCP** (z.B. [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit),
-  läuft *in* der Engine) — *Inhalts*-Ebene: Blueprints, Assets, Level, UE-Python.
-  Einrichtung: [In-Editor-MCP einrichten](#in-editor-mcp-ue-llm-toolkit-einrichten-windows).
+Two MCP servers serve the agent:
 
-Der Launcher gibt dem Agenten beide über `--mcp-config` mit (`mcp.extraServers`
-in der Config). So muss der Agent nichts selbst einrichten. Stdio-Bridges
-prüft der Launcher vor dem Start komplett durch und meldet jede Stufe laut im
-Log, statt den Agenten in einen nichtssagenden Connect-Fehler (`-32000`)
-laufen zu lassen: Binary im PATH? Bridge-Skript vorhanden? `node_modules` da
-(sonst `npm install`)? Antwortet die Bridge auf einen echten
-`initialize`-Handshake (Smoke-Test)? Und sobald der In-Editor-Server
-(`UNREAL_MCP_URL`) erreichbar ist, steht auch das im Log — bzw. eine Warnung
-mit den üblichen Verdächtigen, wenn nicht.
+- **unreagent-MCP** (this launcher, HTTP) — *process* layer: start / stop /
+  restart the editor, compile, logs, run_python / run_node, permissions.
+- **In-editor MCP** (e.g. [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit),
+  running *inside* the engine) — *content* layer: blueprints, assets, levels,
+  UE Python. Setup: [In-editor MCP setup](#in-editor-mcp-ue-llm-toolkit-setup-windows).
 
-Dieselbe Config lässt sich zusätzlich als Datei schreiben — für **externe
-Clients** (deine eigene Claude-Sitzung, Cursor, VS Code). Per `mcp.writeConfig`
-(Liste aus `{path, format}`, Format `mcp_json` oder `vscode`) oder per Flag
-`-write-mcp-config <pfad>`. Praktisch mit `-no-agent`: Launcher schreibt die
-`.mcp.json` und hält UE + MCP am Laufen, du verbindest dich extern.
+The launcher hands the agent both via `--mcp-config` (`mcp.extraServers` in
+the config), so the agent does not have to wire anything up itself. Stdio
+bridges are fully checked before the agent starts, with each step logged
+loudly, instead of letting the agent run into a meaningless `-32000`
+connect error: binary on PATH? bridge script present? `node_modules` there
+(or run `npm install`)? does the bridge answer a real `initialize` handshake
+(smoke test)? And once the in-editor server (`UNREAL_MCP_URL`) is reachable,
+that's logged too — or a warning with the usual suspects if it isn't.
 
-## Bauen
+The same config can additionally be written to a file for **external clients**
+(your own Claude session, Cursor, VS Code). Via `mcp.writeConfig` (a list of
+`{path, format}`, format `mcp_json` or `vscode`) or the flag
+`-write-mcp-config <path>`. Handy with `-no-agent`: the launcher writes the
+`.mcp.json` and keeps UE + MCP running, you connect externally.
 
-Voraussetzung: Go (>= 1.19). Dependencies sind vendored (`vendor/`), Builds
-laufen offline.
+## Building
+
+Requirement: Go (>= 1.19). Dependencies are vendored (`vendor/`); builds run
+offline.
 
 ```bash
-make windows   # -> dist/unreagent.exe  (Cross-Compile von Linux aus)
-make linux     # -> dist/unreagent      (für lokale Tests)
+make windows   # -> dist/unreagent.exe  (cross-compile from Linux)
+make linux     # -> dist/unreagent      (for local tests)
 make all
 ```
 
-Oder direkt:
+Or directly:
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/unreagent.exe ./cmd/launcher
 ```
 
-## Windows: Metadaten & „Unknown Publisher"
+## Windows: metadata & "Unknown Publisher"
 
-Die `.exe` trägt Icon + **Versionsinfo** (CompanyName, ProductName, Beschreibung,
-Copyright) und ein `asInvoker`-Manifest (kein UAC-Elevation-Prompt). Das füllt
-`Eigenschaften → Details` und den Programmnamen in Dialogen.
+The `.exe` carries an icon + **version info** (CompanyName, ProductName,
+description, copyright) and an `asInvoker` manifest (no UAC elevation
+prompt). This fills `Properties -> Details` and the program name in dialogs.
 
-Die „Unbekannter Herausgeber"-Warnung selbst kommt von der **Signatur**, nicht
-von Metadaten. Es gibt zwei Wege:
+The "Unknown Publisher" warning itself comes from the **signature**, not
+from metadata. Two paths:
 
-**A) Self-signed (im Repo, für eigenes Team / bekannte Nutzer)** — die `.exe`
-ist mit einem selbst-signierten Zertifikat von „conflict.industries digital
-GmbH" signiert. Nutzer importieren einmalig das öffentliche Zertifikat:
+**A) Self-signed (in the repo, for your own team / known users)** — the
+`.exe` is signed with a self-signed certificate from "conflict.industries
+digital GmbH". Users import the public certificate once:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File signing\import-cert.ps1   # als Admin
+powershell -ExecutionPolicy Bypass -File signing\import-cert.ps1   # as admin
 ```
 
-Danach: keine Herausgeber-Warnung, die GmbH erscheint als Herausgeber. Details
-und Trade-offs: [`signing/`](signing/). (Der private Schlüssel ist **nicht** im
-Repo.)
+After that: no publisher warning, the GmbH appears as publisher. Details
+and trade-offs: [`signing/`](signing/). (The private key is **not** in the
+repo.)
 
-**B) CA-Zertifikat (für breite Öffentlichkeit)** — ein OV/EV-Code-Signing-Cert
-braucht keinen Import durch Nutzer (EV = sofortige SmartScreen-Reputation). Mit
-so einem Cert signiert man die `.exe` ebenfalls **unter Linux** (`osslsigncode`).
+**B) CA certificate (for a wider audience)** — an OV / EV code-signing
+cert does not need user-side import (EV gives immediate SmartScreen
+reputation). With such a cert you also sign the `.exe` **from Linux**
+(`osslsigncode`).
 
-Publisher/Version ändern: `cmd/launcher/versioninfo.json` → `make resource`.
+Change publisher / version: `cmd/launcher/versioninfo.json` -> `make resource`.
 
-## Sofort ausprobieren (Demo)
+## Try it now (demo)
 
-Im Release-Zip liegt eine fertige Demo-`unreagent.yaml`, die **ohne UE und ohne
-Agent** läuft (`ping` als Platzhalter-„Editor"). Einfach das Zip entpacken und
-`unreagent.exe` starten — der MCP-Server läuft dann auf
-`http://127.0.0.1:8765/mcp`. Details: [`example/`](example/). In der Konsole:
+The release zip ships a ready-to-go demo `unreagent.yaml` that runs **without
+UE and without an agent** (`ping` as a placeholder "editor"). Just unpack the
+zip and start `unreagent.exe` — the MCP server will then run on
+`http://127.0.0.1:8765/mcp`. Details: [`example/`](example/). In the console:
 `status`, `logs`, `c hello`, `r ue`, `q`.
 
-> Das „LLM-Ding" (Claude Code) ist nicht enthalten — es ist eine separat zu
-> installierende CLI. Die Demo lässt den Agenten deshalb aus; zum Scharfschalten
-> `agent.enabled: true` setzen (siehe unten).
+> The "LLM thing" (Claude Code) is not included — it is a CLI you install
+> separately. The demo therefore leaves the agent off; to arm it, set
+> `agent.enabled: true` (see below).
 
-## Einrichten
+## Setup
 
-Der Launcher wird **ins UE-Projekt gelegt** und die Config **mit-committed**:
+The launcher is **dropped into the UE project** and the config is **committed**:
 
-1. `unreagent.exe` (aus dem Release) neben die `.uproject` legen — git-ignored.
-2. `unreagent.example.yaml` → **`unreagent.yaml`** umbenennen, neben die
-   `.uproject` legen und **ins Repo committen**. Diese Datei ist portabel.
-3. `unreagent.exe` starten (Doppelklick oder Konsole). Alternativer Config-Pfad
-   via `-config <pfad>`.
+1. Put `unreagent.exe` (from the release) next to the `.uproject` — gitignored.
+2. Rename `unreagent.example.yaml` -> **`unreagent.yaml`**, place it next to
+   the `.uproject` and **commit it to the repo**. This file is portable.
+3. Start `unreagent.exe` (double-click or console). Alternative config path
+   via `-config <path>`.
 
-`unreagent.yaml` enthält **keine Maschinenpfade**. Editor, `compile` und
-`package` werden automatisch abgeleitet. Eine minimale Config genügt:
+`unreagent.yaml` contains **no machine-specific paths**. Editor, `compile` and
+`package` are auto-derived. A minimal config is enough:
 
 ```yaml
 agent:       { enabled: true, command: claude, claudeIntegration: true }
@@ -135,77 +135,77 @@ runtimes:    { python: { enabled: true }, node: { enabled: true } }
 mcp:         { enabled: true }
 ```
 
-### Portabilität: Pfade werden zur Laufzeit aufgelöst
+### Portability: paths are resolved at runtime
 
-| Platzhalter | Auflösung |
+| Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | Env `UE_ROOT` → `engineRoot` (local.yaml) → Auto-Detect der Epic-Standardpfade |
-| `${PROJECT}` / `${PROJECT_DIR}` / `${PROJECT_NAME}` | `.uproject` neben der Config (Auto-Detect) |
+| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> auto-detect of the Epic default paths |
+| `${PROJECT}` / `${PROJECT_DIR}` / `${PROJECT_NAME}` | `.uproject` next to the config (auto-detect) |
 
-Maschinenspezifisches gehört in eine **git-ignorierte `unreagent.local.yaml`**,
-die als Overlay über `unreagent.yaml` gelegt wird:
+Machine-specific overrides go in a **git-ignored `unreagent.local.yaml`**,
+which is overlaid on top of `unreagent.yaml`:
 
 ```yaml
-# unreagent.local.yaml  (NICHT committen)
-engineRoot: "D:/UE/UE_5.7"                 # falls Auto-Detect scheitert
-agent: { command: "C:/.../claude.cmd" }    # falls claude nicht im PATH
+# unreagent.local.yaml  (DO NOT commit)
+engineRoot: "D:/UE/UE_5.7"                 # if auto-detect fails
+agent: { command: "C:/.../claude.cmd" }    # if claude is not on PATH
 ```
 
-Empfohlener `.gitignore`-Eintrag im UE-Projekt:
+Recommended `.gitignore` entry in the UE project:
 
 ```
 unreagent.exe
 unreagent.local.yaml
 ```
 
-### Wenn der Agent endet (`/quit` oder Crash)
+### When the agent ends (`/quit` or crash)
 
-Im Fenster-Modus ist der Agent der Leitprozess — endet er (z.B. `/quit`) und wird
-nicht neugestartet, fragt der Launcher auf der Konsole nach (`agent.onExit: ask`,
-Default):
+In window mode the agent is the lead process — if it ends (e.g. `/quit`) and
+is not restarted, the launcher prompts on the console (`agent.onExit: ask`,
+the default):
 
 ```
-Agent beendet.
-  [Enter] alles beenden (UE + Launcher)
-  [k]     Editor weiterlaufen lassen, Launcher-Konsole
-  [r]     Agent neu starten
-> _   (30s -> alles beenden)
+Agent ended.
+  [Enter] shut down everything (UE + launcher)
+  [k]     keep editor running, drop to launcher console
+  [r]     restart the agent
+> _   (30s -> shut down everything)
 ```
 
-Ohne TTY (headless `-p`) wird stattdessen sauber heruntergefahren. Alternativen:
-`onExit: shutdown` (immer sofort alles beenden) oder `onExit: leave` (alles läuft
-weiter, nur Warnung — manuelles Ctrl-C nötig).
+Without a TTY (headless `-p`), it shuts down cleanly instead. Alternatives:
+`onExit: shutdown` (always shut everything down immediately) or `onExit: leave`
+(everything keeps running, warning only — manual Ctrl-C required).
 
-## In-Editor-MCP: UE LLM Toolkit einrichten (Windows)
+## In-editor MCP: UE LLM Toolkit setup (Windows)
 
-Damit der Agent **im Editor** arbeiten kann (Blueprints, Assets, Level,
-UE-Python), braucht das UE-Projekt das In-Editor-Plugin. Die Kurzfassung:
-**Plugin in den `Plugins/`-Ordner werfen — fertig.** Kein `.uproject`-Patchen,
-kein Aktivieren im Plugin-Browser.
+For the agent to work **inside the editor** (blueprints, assets, levels, UE
+Python), the UE project needs the in-editor plugin. The short version:
+**drop the plugin into the `Plugins/` folder — done.** No `.uproject` patching,
+no enabling in the plugin browser.
 
-### Was auf der Maschine vorhanden sein muss
+### What the machine must have
 
-| Komponente | Wofür | Hinweis |
+| Component | What for | Note |
 |---|---|---|
-| Unreal Engine 5.7 | der Editor selbst | Auto-Detect via Registry/Standardpfade; sonst `engineRoot` in `unreagent.local.yaml` |
-| Visual Studio 2022 (Workload „Game development with C++") | **einmalig** den Plugin-Build | das Plugin kommt als C++-Source; UE fragt beim ersten Start „Rebuild?" |
-| Node.js ≥ 18 | die stdio-Bridge des Plugins | `npm install` der Bridge übernimmt der Launcher automatisch |
-| Claude Code | der Agent | `claude` im PATH; sonst `agent.command` in der local.yaml |
-| `unreagent.exe` + `unreagent.yaml` | dieser Launcher | siehe [Einrichten](#einrichten) |
+| Unreal Engine 5.7 | the editor itself | auto-detect via registry / default paths; otherwise `engineRoot` in `unreagent.local.yaml` |
+| Visual Studio 2022 ("Game development with C++" workload) | **once** to build the plugin | the plugin ships as C++ source; UE asks "rebuild?" on first start |
+| Node.js >= 18 | the plugin's stdio bridge | `npm install` for the bridge is done by the launcher automatically |
+| Claude Code | the agent | `claude` on PATH; otherwise `agent.command` in local.yaml |
+| `unreagent.exe` + `unreagent.yaml` | this launcher | see [Setup](#setup) |
 
-### Schritte
+### Steps
 
-1. **Plugin ins Projekt legen** — Repo/Ordner nach
-   `<Projekt>/Plugins/UELLMToolkit/` kopieren oder klonen. Das `.uplugin` hat
-   `EnabledByDefault: true` und aktiviert seine Engine-Abhängigkeiten
-   (EditorScriptingUtilities, Niagara, ControlRig, IKRig, …) selbst — an der
-   `.uproject` ist **nichts** zu ändern.
-2. **Erster Editor-Start** — UE meldet „Missing Modules … rebuild?" → Ja.
-   Der Build braucht Visual Studio (einmalig; danach liegen die Binaries im
-   Plugin). Alternativ vorab über den Launcher: Konsole → `c compile`.
-3. **Fertig.** Der Plugin-HTTP-Server startet mit dem Editor automatisch auf
-   Port `3000`. Der Launcher reicht die Bridge via `--mcp-config` an den
-   Agenten weiter — dafür in der `unreagent.yaml`:
+1. **Drop the plugin into the project** — copy or clone the repo/folder to
+   `<Project>/Plugins/UELLMToolkit/`. The `.uplugin` has
+   `EnabledByDefault: true` and activates its own engine dependencies
+   (EditorScriptingUtilities, Niagara, ControlRig, IKRig, ...) — **nothing**
+   to change on the `.uproject`.
+2. **First editor start** — UE reports "Missing Modules ... rebuild?" -> Yes.
+   The build needs Visual Studio (once; afterwards the binaries live in the
+   plugin). Alternatively ahead of time via the launcher: console -> `c compile`.
+3. **Done.** The plugin's HTTP server starts with the editor automatically on
+   port `3000`. The launcher forwards the bridge via `--mcp-config` to the
+   agent — for that, in `unreagent.yaml`:
 
    ```yaml
    mcp:
@@ -218,81 +218,83 @@ kein Aktivieren im Plugin-Browser.
            UNREAL_MCP_URL: "http://127.0.0.1:3000"
    ```
 
-4. *Optional:* Für `unreal_execute_script` mit Python-Skripten das UE-Plugin
-   **„Python Editor Script Plugin"** aktivieren (Edit → Plugins) — die übrigen
-   Tools brauchen es nicht.
+4. *Optional:* For `unreal_execute_script` with Python scripts, enable the UE
+   plugin **"Python Editor Script Plugin"** (Edit -> Plugins) — the other
+   tools don't need it.
 
-Was der Launcher beim Start **automatisch** erledigt (siehe oben): Bridge-
-`node_modules` installieren, Binary/Skript prüfen, `initialize`-Smoke-Test,
-Warten auf Port 3000 — jede Stufe mit klarer Meldung in `unreagent.log`.
+What the launcher does **automatically** on startup (see above): install
+bridge `node_modules`, check binary / script, `initialize` smoke test, wait
+for port 3000 — every step with a clear message in `unreagent.log`.
 
-### Zugriff von einem anderen Rechner
+### Access from another machine
 
-Der UE-HTTP-Server bindet per Default nur auf `localhost`. Soll eine entfernte
-Claude-Sitzung direkt auf den In-Editor-Server (Port 3000) zugreifen:
+The UE HTTP server binds to `localhost` by default. If a remote Claude session
+should reach the in-editor server (port 3000) directly:
 
 ```ini
-; Config/DefaultEngine.ini des UE-Projekts
+; Config/DefaultEngine.ini of the UE project
 [HTTPServer.Listeners]
 DefaultBindAddress=any
 ```
 
-Dazu eine Windows-Firewall-Freigabe für Port 3000 — und nur in
-vertrauenswürdigen Netzen, der Server steuert den ganzen Editor. Auf der
-Gegenseite zeigt `UNREAL_MCP_URL` dann auf `http://<windows-ip>:3000`.
+Plus a Windows firewall rule for port 3000 — and only in trusted networks,
+the server controls the entire editor. On the other side `UNREAL_MCP_URL`
+then points to `http://<windows-ip>:3000`.
 
-### Troubleshooting: „Failed to reconnect: -32000"
+### Troubleshooting: "Failed to reconnect: -32000"
 
-`-32000` von Claude Code heißt nur „Bridge-Prozess sofort wieder weg" — die
-echte Ursache steht in `unreagent.log` (Prüfkette) bzw. in den MCP-Logs von
-Claude Code (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<projekt>\mcp-logs-*`).
-Übliche Verdächtige, in dieser Reihenfolge:
+`-32000` from Claude Code just means "bridge process immediately gone again"
+— the real cause is in `unreagent.log` (check chain) or in Claude Code's MCP
+logs (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project>\mcp-logs-*`). Usual
+suspects, in this order:
 
-1. **Bridge-Pfad falsch** (`Cannot find module …`) — Pfad in `extraServers`
-   gegen das echte Plugin-Layout prüfen.
-2. **Node fehlt** oder nicht im PATH der Agenten-Session.
-3. **`node_modules` fehlt** — passiert nicht mehr, der Launcher installiert sie.
-4. **Editor (noch) nicht erreichbar** — Port 3000 kommt erst, wenn der Editor
-   durchgestartet ist; der Launcher meldet, sobald er da ist.
+1. **Bridge path wrong** (`Cannot find module ...`) — check the path in
+   `extraServers` against the real plugin layout.
+2. **Node missing** or not on PATH in the agent's session.
+3. **`node_modules` missing** — this no longer happens, the launcher installs
+   them.
+4. **Editor (not yet) reachable** — port 3000 only appears once the editor
+   is fully up; the launcher logs once it is.
 
-## Konfiguration (Kurzüberblick)
+## Configuration (quick reference)
 
-| Sektion | Zweck |
+| Section | Purpose |
 |---|---|
-| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool); `window` (Default an) = interaktiv im Vordergrund (erbt Konsole/TTY, Launcher-Logs → `unreagent.log`); auf Windows setzt `claudeIntegration` zusätzlich `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` schaltet ab) |
-| `permissions` | Permission-Layer: `allow_all` / `allowlist` / `deny_all`, plus `allow`/`deny`-Regeln |
-| `runtimes` | `python` (via `uv run`) und `node` für `run_python`/`run_node` |
-| `mcp` | MCP-Server an/aus, `address` (Default `127.0.0.1:8765`) |
-| `unreal` | *optional* — Editor-Args, Restart-Policy (`never`/`on-failure`/`always`) |
-| `commands` | *optional* — eigene Einmal-Befehle (compile/package sind eingebaut) |
-| `engineRoot` | *meist nur in local.yaml* — Engine-Pfad-Override |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable) |
+| `permissions` | permission layer: `allow_all` / `allowlist` / `deny_all`, plus `allow` / `deny` rules |
+| `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`) |
+| `unreal` | *optional* — editor args, restart policy (`never` / `on-failure` / `always`) |
+| `commands` | *optional* — your own one-shot commands (compile / package are built-in) |
+| `engineRoot` | *usually only in local.yaml* — engine path override |
 
-### Keine Prozess-Leichen (Windows)
+### No process zombies (Windows)
 
-Jede laufende Instanz steckt in einem **Windows-Job-Object** mit
-`KILL_ON_JOB_CLOSE`. Schließt sich das Handle — durch sauberes Stoppen,
-Neustart **oder Absturz/Hard-Kill des Launchers** — beendet das Betriebssystem
-den **kompletten Prozessbaum** (inkl. ShaderCompileWorker etc.). OS-erzwungen,
-ohne externe Abhängigkeit. Auf Linux (Entwicklung) wird nur der direkte
-Kindprozess beendet.
+Every running instance is attached to a **Windows Job Object** with
+`KILL_ON_JOB_CLOSE`. If the handle closes — by clean stop, restart,
+**or crash / hard-kill of the launcher** — the operating system terminates
+the **entire process tree** (including ShaderCompileWorker etc.). OS-enforced,
+no external dependency. On Linux (development) only the direct child is
+killed.
 
-### Crashes & Recovery (unbeaufsichtigt)
+### Crashes & recovery (unattended)
 
-Zwei UE-Dialoge blockieren sonst den agent-getriebenen Betrieb: der **Crash
-Reporter** („Send and Restart/Close") und der **Recovery-Prompt** beim Neustart
-(„nicht sauber beendet, wiederherstellen?"). Der Launcher startet den Editor
-darum mit **`-unattended`** — das unterdrückt im UE-5.7-Code **beide** (Crash-
-Dialog und beide Recovery-Systeme: PackageAutoSaver *und* Disaster-Recovery) und
-verwirft den unsauberen Stand statt zu fragen.
+Two UE dialogs otherwise block agent-driven operation: the **crash reporter**
+("Send and Restart / Close") and the **recovery prompt** on restart
+("not closed cleanly, restore?"). The launcher therefore starts the editor
+with **`-unattended`** — this suppresses **both** in UE 5.7 code (crash
+dialog and both recovery systems: PackageAutoSaver *and* disaster recovery)
+and discards the unclean state instead of asking.
 
-| Option (`unreal:`) | Default | Wirkung |
+| Option (`unreal:`) | Default | Effect |
 |---|---|---|
-| `unattended` | `true` | hängt `-unattended` an — kein Crash-Dialog, kein Recovery-Prompt |
-| `killCrashReporter` | `true` | killt `CrashReportClientEditor.exe` vor jedem (Neu-)Start (Absicherung) |
-| `cleanOnRestart` | `false` | räumt `Saved/Autosaves/PackageRestoreData.json` + `Saved/Crashes/*` weg |
+| `unattended` | `true` | appends `-unattended` — no crash dialog, no recovery prompt |
+| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` before every (re)start (belt and suspenders) |
+| `cleanOnRestart` | `false` | cleans `Saved/Autosaves/PackageRestoreData.json` + `Saved/Crashes/*` |
 
-Wenn ein **Mensch** parallel interaktiv im Editor arbeitet, `unattended: false`
-setzen. Ergänzend (damit der Reporter gar nicht erst sendet/startet) im Projekt:
+If a **human** is working interactively in the editor in parallel, set
+`unattended: false`. In addition (so the reporter never even sends/starts)
+in the project:
 
 ```ini
 ; Config/DefaultEngine.ini
@@ -304,85 +306,86 @@ bImplicitSend=false
 bIsEnabled=false
 ```
 
-### Permission-Layer
+### Permission layer
 
-Bei `permissions.enabled` + `agent.claudeIntegration` startet der Launcher den
-Agenten mit `--permission-prompt-tool mcp__unreagent__approve`. Jede
-Permission-Abfrage von Claude Code läuft dann über das `approve`-Tool, das nach
-der konfigurierten Policy entscheidet. `mode: "allow_all"` = „alles automatisch
-freigeben" (mit `deny`-Ausnahmen wie `Bash(rm -rf *)`).
+With `permissions.enabled` + `agent.claudeIntegration` the launcher starts
+the agent with `--permission-prompt-tool mcp__unreagent__approve`. Every
+permission prompt from Claude Code then goes through the `approve` tool,
+which decides per the configured policy. `mode: "allow_all"` = "auto-approve
+everything" (with `deny` exceptions like `Bash(rm -rf *)`).
 
-> Hinweis: Das exakte **Input**-Schema von `--permission-prompt-tool` ist von
-> Anthropic nicht offiziell dokumentiert. Der `approve`-Handler liest die
-> Tool-Felder defensiv (`tool_name`/`toolName`/`name`, `tool_input`/`input`/
-> `arguments`). Sollte ein Claude-Code-Update das Format ändern, ist nur dieser
-> eine Handler in `cmd/launcher/main.go` anzupassen.
+> Note: the exact **input** schema of `--permission-prompt-tool` is not
+> officially documented by Anthropic. The `approve` handler reads the tool
+> fields defensively (`tool_name` / `toolName` / `name`,
+> `tool_input` / `input` / `arguments`). If a Claude Code update changes the
+> format, only that one handler in `cmd/launcher/main.go` needs adapting.
 
-### Runtimes für den Agenten
+### Runtimes for the agent
 
-`run_python` führt Code über `uv run python` aus — uv baut/synct das venv
-automatisch aus `pyproject.toml`/`requirements` und installiert bei Bedarf die
-richtige Python-Version. `run_node` führt JS im Projektkontext aus. Der Agent
-muss die Umgebung **nicht selbst analysieren oder einrichten**; die Anleitung
-dazu steht in der MCP-Tool-Beschreibung und ist damit automatisch im Kontext.
+`run_python` executes code via `uv run python` — uv builds / syncs the venv
+automatically from `pyproject.toml` / `requirements` and installs the right
+Python version on demand. `run_node` runs JS in the project context. The
+agent does **not** have to analyse or set up the environment itself; the
+instructions are in the MCP tool description and are therefore automatically
+in context.
 
-## MCP-Tools
+## MCP tools
 
-| Tool | Funktion |
+| Tool | Function |
 |---|---|
-| `status` | Prozess-Status + verfügbare Befehle |
-| `ue_start` / `ue_stop` / `ue_restart` | Editor-Lifecycle |
-| `run_command` | vorkonfigurierten Befehl ausführen (compile, package) |
-| `logs` | letzte Ausgabezeilen eines Service |
-| `run_python` / `run_node` | Code in vorbereiteter Umgebung ausführen |
-| `read_file` / `list_dir` / `write_file` / `edit_file` | Datei-Zugriff auf das Projekt (nur bei `files.enabled`/`-files`, auf `root` beschränkt) |
-| `approve` | Permission-Prompt-Tool für Claude Code |
+| `status` | process status + available commands |
+| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle |
+| `run_command` | run a preconfigured command (compile, package) |
+| `logs` | last output lines of a service |
+| `run_python` / `run_node` | run code in a prepared environment |
+| `read_file` / `list_dir` / `write_file` / `edit_file` | file access on the project (only with `files.enabled` / `-files`, scoped to `root`) |
+| `approve` | permission prompt tool for Claude Code |
 
-## CLI-Flags
+## CLI flags
 
-| Flag | Wirkung |
+| Flag | Effect |
 |---|---|
-| `-config <pfad>` | Alternativer Pfad zur `unreagent.yaml` |
-| `-no-agent` | Agenten **nicht** starten — nur UE + MCP-Server. Ein externer Agent (deine eigene Claude-Code-Sitzung) verbindet sich dann mit dem MCP-Server. |
-| `-files` | Datei-Tools (`read_file`/`write_file`/`list_dir`/`edit_file`) aktivieren, auch wenn in der Config aus. |
-| `-write-mcp-config <pfad>` | Die zusammengebaute MCP-Config zusätzlich als `.mcp.json` an `<pfad>` schreiben (für externe Clients). |
+| `-config <path>` | alternative path to `unreagent.yaml` |
+| `-no-agent` | **do not** start the agent — only UE + MCP server. An external agent (your own Claude Code session) then connects to the MCP server. |
+| `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. |
+| `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). |
 
-### Wie der Agent läuft (drei Modi)
+### How the agent runs (three modes)
 
-Claude Code ist eine interaktive TUI und braucht ein TTY — als roher
-Hintergrund-Subprozess startet er nicht. Darum drei Wege:
+Claude Code is an interactive TUI and needs a TTY — as a raw background
+subprocess it won't start. Hence three ways:
 
-1. **Interaktiv im Vordergrund** (`agent.window`, **Default an**) — der Agent
-   erbt die echte Konsole (TTY) und läuft als interaktive TUI in dem Fenster, in
-   dem du `unreagent` gestartet hast. UE + MCP laufen im Hintergrund, die
-   Launcher-Logs gehen nach `unreagent.log` (neben dem Projekt), damit der Agent
-   das Fenster für sich hat. Mit `window: false` abschaltbar; im `-p`-Modus aus.
-2. **Headless/Task** (`agent.args: ["-p", "<aufgabe>"]`) — einmalige Aufgabe
-   ohne Fenster, dann beendet sich der Agent.
-3. **Extern** (`-no-agent`) — Launcher startet keinen Agenten; du verbindest
-   deine eigene Claude-Sitzung mit der `.mcp.json` / dem MCP-Server.
+1. **Interactive in the foreground** (`agent.window`, **on by default**) — the
+   agent inherits the real console (TTY) and runs as an interactive TUI in
+   the window you started `unreagent` in. UE + MCP run in the background,
+   launcher logs go to `unreagent.log` (next to the project) so the agent
+   has the window to itself. Disable with `window: false`; off in `-p` mode.
+2. **Headless / task** (`agent.args: ["-p", "<task>"]`) — one-shot task
+   without a window, then the agent exits.
+3. **External** (`-no-agent`) — the launcher does not start an agent; you
+   connect your own Claude session with the `.mcp.json` / the MCP server.
 
-### Headless / externer Agent
+### Headless / external agent
 
-Mit `-no-agent` läuft alles ohne eingebetteten Agenten — UE + MCP-Server. So
-hängst du deinen eigenen Claude Code an, um „ohne dass jemand lokal anwesend ist"
-am Projekt zu arbeiten:
+With `-no-agent` everything runs without an embedded agent — UE + MCP server.
+That's how you hook up your own Claude Code to work on the project "without
+anyone being present locally":
 
 ```bash
-unreagent.exe -no-agent -files          # UE + MCP + Datei-Tools, kein eigener Agent
-# in deiner Claude-Code-Sitzung:
+unreagent.exe -no-agent -files          # UE + MCP + file tools, no embedded agent
+# in your Claude Code session:
 claude --mcp-config '{"mcpServers":{"unreagent":{"type":"http","url":"http://127.0.0.1:8765/mcp"}}}'
 ```
 
-Für Zugriff von einem anderen Rechner `mcp.address` auf `0.0.0.0:8765` setzen
-(nur in vertrauenswürdigen Netzen — der Server hat dann Datei-Schreibzugriff).
+For access from another machine set `mcp.address` to `0.0.0.0:8765` (only
+in trusted networks — the server then has file-write access).
 
-## Manuelle Bedienung (stdin)
+## Manual control (stdin)
 
-`status` · `r [name]` (neu starten) · `start <name>` · `stop <name>` ·
-`c <name>` (Befehl ausführen) · `q` (beenden)
+`status` · `r [name]` (restart) · `start <name>` · `stop <name>` ·
+`c <name>` (run command) · `q` (quit)
 
-## Manueller MCP-Test
+## Manual MCP test
 
 ```bash
 curl -s -X POST http://127.0.0.1:8765/mcp -H 'Content-Type: application/json' \
