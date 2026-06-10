@@ -26,6 +26,9 @@ agent:
   # abschalten — z.B. fuer headless: args: ["-p", "<aufgabe>"] (dann window aus).
   # window: false
   # args: ["-p", "Starte und arbeite die Aufgaben ab"]   # headless einmalig
+  # Auf Windows wird (bei claudeIntegration) CLAUDE_CODE_USE_POWERSHELL_TOOL=1
+  # automatisch gesetzt; mit powershellTool: false abschaltbar.
+  # powershellTool: false
 
 permissions:
   enabled: true
@@ -57,6 +60,10 @@ mcp:
   # Zusätzliche In-Editor-MCP-Server, über die der Agent IN der Engine arbeitet
   # (z.B. UE LLM Toolkit: Node-Bridge -> HTTP-Server im Editor auf Port 3000).
   # Werden zusammen mit dem unreagent-Server in --mcp-config gegeben.
+  # Stdio-Server werden vor dem Start komplett durchgeprüft — jede Stufe
+  # beschwert sich laut im Log statt stumm zu scheitern:
+  #   Binary im PATH? -> Node: Skript da? node_modules da? (sonst npm install)
+  #   -> Smoke-Test (initialize-Handshake) -> UNREAL_MCP_URL erreichbar?
   # strict: false   # true = NUR diese Server (projekt-eigene .mcp.json ignorieren)
   # extraServers:
   #   ue-llm-toolkit:

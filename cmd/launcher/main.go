@@ -7,12 +7,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -170,6 +173,11 @@ func run() error {
 		for k, v := range cfg.Agent.Env {
 			agentEnv = append(agentEnv, k+"="+v)
 		}
+		if runtime.GOOS == "windows" && cfg.Agent.ClaudeIntegration && (cfg.Agent.PowershellTool == nil || *cfg.Agent.PowershellTool) {
+			if _, ok := cfg.Agent.Env["CLAUDE_CODE_USE_POWERSHELL_TOOL"]; !ok {
+				agentEnv = append(agentEnv, "CLAUDE_CODE_USE_POWERSHELL_TOOL=1")
+			}
+		}
 
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
 			b, _ := json.Marshal(map[string]interface{}{"mcpServers": mcpServers})
@@ -250,6 +258,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
+		prepareMCPBridges(sup, cfg, agentWorkdir, logger)
+	}
 
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
@@ -664,6 +676,179 @@ func prepareRuntimes(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdi
 			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Node.Npm, []string{"install"}, dir, nil, "prepare:node") }()
 		}
 	}
+}
+
+// prepareMCPBridges prüft alle stdio-extraServers (z.B. die UE-LLM-Toolkit-
+// Bridge) VOR dem Service-Start einmal komplett durch und beschwert sich bei
+// jedem Glied der Kette laut, statt den Agenten in einen nichtssagenden
+// MCP-Connect-Fehler (-32000) laufen zu lassen:
+//  1. Binary auffindbar (node etc. im PATH)?
+//  2. Node-Bridges: Skript vorhanden? node_modules da? (sonst npm install)
+//  3. Smoke-Test: Server starten, MCP-initialize senden, Antwort abwarten.
+//  4. UNREAL_MCP_URL: asynchron melden, sobald der In-Editor-Server erreichbar
+//     ist — oder warnen, wenn nicht.
+func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
+	for name, def := range cfg.MCP.ExtraServers {
+		command, _ := def["command"].(string)
+		if command == "" {
+			continue // http/sse-Server — startet kein Prozess, nichts zu prüfen
+		}
+		var args []string
+		if raw, ok := def["args"].([]interface{}); ok {
+			for _, a := range raw {
+				if s, ok := a.(string); ok {
+					args = append(args, s)
+				}
+			}
+		}
+		var env []string
+		envMap := map[string]string{}
+		if raw, ok := def["env"].(map[string]interface{}); ok {
+			for k, v := range raw {
+				if s, ok := v.(string); ok {
+					env = append(env, k+"="+s)
+					envMap[k] = s
+				}
+			}
+		}
+
+		if _, err := exec.LookPath(command); err != nil {
+			logger("WARN MCP-Server '" + name + "': Befehl '" + command + "' nicht gefunden (PATH) — Bridge kann nicht starten. Installieren oder vollen Pfad in der Config eintragen.")
+			continue
+		}
+
+		if strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe") == "node" {
+			if !prepareNodeBridge(sup, cfg, name, args, agentWorkdir, logger) {
+				continue
+			}
+		}
+
+		smokeTestMCP(name, command, args, env, agentWorkdir, logger)
+
+		if u := envMap["UNREAL_MCP_URL"]; u != "" {
+			go waitForEndpoint(name, u, logger)
+		}
+	}
+}
+
+// prepareNodeBridge stellt sicher, dass Skript und node_modules einer Node-
+// Bridge vorhanden sind (npm install bei Bedarf). false = Bridge unbrauchbar.
+func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name string, args []string, agentWorkdir string, logger func(string)) bool {
+	var script string
+	for _, a := range args {
+		if strings.HasSuffix(a, ".js") || strings.HasSuffix(a, ".mjs") || strings.HasSuffix(a, ".cjs") {
+			script = a
+			break
+		}
+	}
+	if script == "" {
+		return true // kein Skript erkennbar — Smoke-Test entscheidet
+	}
+	if !filepath.IsAbs(script) {
+		script = filepath.Join(agentWorkdir, script)
+	}
+	if !fileExists(script) {
+		logger("WARN MCP-Server '" + name + "': Skript nicht gefunden: " + script + " — ist das Plugin installiert?")
+		return false
+	}
+	dir := filepath.Dir(script)
+	if !fileExists(filepath.Join(dir, "package.json")) || fileExists(filepath.Join(dir, "node_modules")) {
+		return true
+	}
+	npm := cfg.Runtimes.Node.Npm
+	if npm == "" {
+		npm = "npm"
+	}
+	logger("MCP-Server '" + name + "': node_modules fehlt — installiere Abhängigkeiten (npm install) in " + dir + " …")
+	res, err := sup.RunOnce(npm, []string{"install"}, dir, nil, "prepare:mcp:"+name)
+	if err != nil {
+		logger("WARN MCP-Server '" + name + "': npm install fehlgeschlagen: " + err.Error() + " — Bridge wird nicht starten")
+		return false
+	}
+	if res.ExitCode != 0 {
+		logger(fmt.Sprintf("WARN MCP-Server '%s': npm install exit %d — Bridge wird nicht starten\n%s",
+			name, res.ExitCode, tailLines(res.Output, 20)))
+		return false
+	}
+	logger("MCP-Server '" + name + "': Abhängigkeiten installiert.")
+	return true
+}
+
+// smokeTestMCP startet den stdio-Server einmal probeweise, schickt ein echtes
+// MCP-initialize und wartet auf die Antwort. Scheitert der Start, steht die
+// echte Ursache (stderr) im Log statt nur ein Connect-Fehler beim Agenten.
+func smokeTestMCP(name, command string, args, env []string, dir string, logger func(string)) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdin, err1 := cmd.StdinPipe()
+	stdout, err2 := cmd.StdoutPipe()
+	if err1 != nil || err2 != nil {
+		logger("WARN MCP-Server '" + name + "': Smoke-Test konnte Pipes nicht öffnen")
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		logger("WARN MCP-Server '" + name + "': Smoke-Test-Start fehlgeschlagen: " + err.Error())
+		return
+	}
+	_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unreagent-smoketest","version":"`+version+`"}}}`+"\n")
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	ok := false
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.Contains(line, `"serverInfo"`) || (strings.Contains(line, `"result"`) && strings.Contains(line, `"id":1`)) {
+			ok = true
+			break
+		}
+	}
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if ok {
+		logger("MCP-Server '" + name + "': Smoke-Test OK — Bridge antwortet auf initialize.")
+		return
+	}
+	detail := strings.TrimSpace(stderr.String())
+	reason := "keine initialize-Antwort"
+	if ctx.Err() == context.DeadlineExceeded {
+		reason = "Timeout nach 20s"
+	}
+	if detail != "" {
+		logger(fmt.Sprintf("WARN MCP-Server '%s': Smoke-Test fehlgeschlagen (%s):\n%s", name, reason, tailLines(detail, 15)))
+	} else {
+		logger("WARN MCP-Server '" + name + "': Smoke-Test fehlgeschlagen (" + reason + ", kein stderr)")
+	}
+}
+
+// waitForEndpoint meldet, sobald der In-Editor-HTTP-Server (UNREAL_MCP_URL)
+// erreichbar ist — der Editor braucht beim Start Zeit. Kommt binnen 5 Minuten
+// keine Verbindung zustande, gibt es eine deutliche Warnung mit Verdächtigen.
+func waitForEndpoint(name, rawURL string, logger func(string)) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		logger("WARN MCP-Server '" + name + "': UNREAL_MCP_URL unverständlich: " + rawURL)
+		return
+	}
+	addr := u.Host
+	if u.Port() == "" {
+		addr += ":80"
+	}
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+		if err == nil {
+			_ = conn.Close()
+			logger("MCP-Server '" + name + "': In-Editor-Server " + rawURL + " ist erreichbar.")
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+	logger("WARN MCP-Server '" + name + "': In-Editor-Server " + rawURL + " nach 5 Minuten nicht erreichbar — läuft der Editor mit dem Plugin? Firewall? Lauscht der Server nur auf localhost?")
 }
 
 // commandLoop liest Steuerbefehle von stdin (für manuelle Bedienung).

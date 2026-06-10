@@ -41,9 +41,17 @@ Zwei MCP-Server bedienen den Agenten:
   stoppen/neu starten, compilen, Logs, run_python/run_node, Permissions.
 - **In-Editor-MCP** (z.B. [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit),
   läuft *in* der Engine) — *Inhalts*-Ebene: Blueprints, Assets, Level, UE-Python.
+  Einrichtung: [In-Editor-MCP einrichten](#in-editor-mcp-ue-llm-toolkit-einrichten-windows).
 
 Der Launcher gibt dem Agenten beide über `--mcp-config` mit (`mcp.extraServers`
-in der Config). So muss der Agent nichts selbst einrichten.
+in der Config). So muss der Agent nichts selbst einrichten. Stdio-Bridges
+prüft der Launcher vor dem Start komplett durch und meldet jede Stufe laut im
+Log, statt den Agenten in einen nichtssagenden Connect-Fehler (`-32000`)
+laufen zu lassen: Binary im PATH? Bridge-Skript vorhanden? `node_modules` da
+(sonst `npm install`)? Antwortet die Bridge auf einen echten
+`initialize`-Handshake (Smoke-Test)? Und sobald der In-Editor-Server
+(`UNREAL_MCP_URL`) erreichbar ist, steht auch das im Log — bzw. eine Warnung
+mit den üblichen Verdächtigen, wenn nicht.
 
 Dieselbe Config lässt sich zusätzlich als Datei schreiben — für **externe
 Clients** (deine eigene Claude-Sitzung, Cursor, VS Code). Per `mcp.writeConfig`
@@ -150,11 +158,90 @@ unreagent.exe
 unreagent.local.yaml
 ```
 
+## In-Editor-MCP: UE LLM Toolkit einrichten (Windows)
+
+Damit der Agent **im Editor** arbeiten kann (Blueprints, Assets, Level,
+UE-Python), braucht das UE-Projekt das In-Editor-Plugin. Die Kurzfassung:
+**Plugin in den `Plugins/`-Ordner werfen — fertig.** Kein `.uproject`-Patchen,
+kein Aktivieren im Plugin-Browser.
+
+### Was auf der Maschine vorhanden sein muss
+
+| Komponente | Wofür | Hinweis |
+|---|---|---|
+| Unreal Engine 5.7 | der Editor selbst | Auto-Detect via Registry/Standardpfade; sonst `engineRoot` in `unreagent.local.yaml` |
+| Visual Studio 2022 (Workload „Game development with C++") | **einmalig** den Plugin-Build | das Plugin kommt als C++-Source; UE fragt beim ersten Start „Rebuild?" |
+| Node.js ≥ 18 | die stdio-Bridge des Plugins | `npm install` der Bridge übernimmt der Launcher automatisch |
+| Claude Code | der Agent | `claude` im PATH; sonst `agent.command` in der local.yaml |
+| `unreagent.exe` + `unreagent.yaml` | dieser Launcher | siehe [Einrichten](#einrichten) |
+
+### Schritte
+
+1. **Plugin ins Projekt legen** — Repo/Ordner nach
+   `<Projekt>/Plugins/UELLMToolkit/` kopieren oder klonen. Das `.uplugin` hat
+   `EnabledByDefault: true` und aktiviert seine Engine-Abhängigkeiten
+   (EditorScriptingUtilities, Niagara, ControlRig, IKRig, …) selbst — an der
+   `.uproject` ist **nichts** zu ändern.
+2. **Erster Editor-Start** — UE meldet „Missing Modules … rebuild?" → Ja.
+   Der Build braucht Visual Studio (einmalig; danach liegen die Binaries im
+   Plugin). Alternativ vorab über den Launcher: Konsole → `c compile`.
+3. **Fertig.** Der Plugin-HTTP-Server startet mit dem Editor automatisch auf
+   Port `3000`. Der Launcher reicht die Bridge via `--mcp-config` an den
+   Agenten weiter — dafür in der `unreagent.yaml`:
+
+   ```yaml
+   mcp:
+     enabled: true
+     extraServers:
+       ue-llm-toolkit:
+         command: node
+         args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
+         env:
+           UNREAL_MCP_URL: "http://127.0.0.1:3000"
+   ```
+
+4. *Optional:* Für `unreal_execute_script` mit Python-Skripten das UE-Plugin
+   **„Python Editor Script Plugin"** aktivieren (Edit → Plugins) — die übrigen
+   Tools brauchen es nicht.
+
+Was der Launcher beim Start **automatisch** erledigt (siehe oben): Bridge-
+`node_modules` installieren, Binary/Skript prüfen, `initialize`-Smoke-Test,
+Warten auf Port 3000 — jede Stufe mit klarer Meldung in `unreagent.log`.
+
+### Zugriff von einem anderen Rechner
+
+Der UE-HTTP-Server bindet per Default nur auf `localhost`. Soll eine entfernte
+Claude-Sitzung direkt auf den In-Editor-Server (Port 3000) zugreifen:
+
+```ini
+; Config/DefaultEngine.ini des UE-Projekts
+[HTTPServer.Listeners]
+DefaultBindAddress=any
+```
+
+Dazu eine Windows-Firewall-Freigabe für Port 3000 — und nur in
+vertrauenswürdigen Netzen, der Server steuert den ganzen Editor. Auf der
+Gegenseite zeigt `UNREAL_MCP_URL` dann auf `http://<windows-ip>:3000`.
+
+### Troubleshooting: „Failed to reconnect: -32000"
+
+`-32000` von Claude Code heißt nur „Bridge-Prozess sofort wieder weg" — die
+echte Ursache steht in `unreagent.log` (Prüfkette) bzw. in den MCP-Logs von
+Claude Code (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<projekt>\mcp-logs-*`).
+Übliche Verdächtige, in dieser Reihenfolge:
+
+1. **Bridge-Pfad falsch** (`Cannot find module …`) — Pfad in `extraServers`
+   gegen das echte Plugin-Layout prüfen.
+2. **Node fehlt** oder nicht im PATH der Agenten-Session.
+3. **`node_modules` fehlt** — passiert nicht mehr, der Launcher installiert sie.
+4. **Editor (noch) nicht erreichbar** — Port 3000 kommt erst, wenn der Editor
+   durchgestartet ist; der Launcher meldet, sobald er da ist.
+
 ## Konfiguration (Kurzüberblick)
 
 | Sektion | Zweck |
 |---|---|
-| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool); `window` (Default an) = interaktiv im Vordergrund (erbt Konsole/TTY, Launcher-Logs → `unreagent.log`) |
+| `agent` | Agent-Command + Args; `claudeIntegration` injiziert `--mcp-config` (+ Permission-Tool); `window` (Default an) = interaktiv im Vordergrund (erbt Konsole/TTY, Launcher-Logs → `unreagent.log`); auf Windows setzt `claudeIntegration` zusätzlich `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` schaltet ab) |
 | `permissions` | Permission-Layer: `allow_all` / `allowlist` / `deny_all`, plus `allow`/`deny`-Regeln |
 | `runtimes` | `python` (via `uv run`) und `node` für `run_python`/`run_node` |
 | `mcp` | MCP-Server an/aus, `address` (Default `127.0.0.1:8765`) |

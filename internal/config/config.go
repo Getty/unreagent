@@ -85,6 +85,10 @@ type AgentConfig struct {
 	MaxRestarts         int               `yaml:"maxRestarts"`
 	RestartDelaySeconds int               `yaml:"restartDelaySeconds"`
 	ClaudeIntegration   bool              `yaml:"claudeIntegration"`
+	// PowershellTool setzt auf Windows (bei claudeIntegration) die Variable
+	// CLAUDE_CODE_USE_POWERSHELL_TOOL=1 im Agent-Env. Default true; mit
+	// powershellTool: false abschaltbar.
+	PowershellTool *bool `yaml:"powershellTool"`
 	// Window lässt den Agenten interaktiv im Vordergrund laufen: er erbt die
 	// echte Konsole des Launchers (TTY), die Launcher-Logs gehen nach
 	// unreagent.log. Default true (außer im headless -p Modus); window: false aus.
