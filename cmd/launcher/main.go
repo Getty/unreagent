@@ -42,6 +42,13 @@ func main() {
 }
 
 func run() error {
+	// Sub-command dispatch must run before flag.Parse so a stray `-x` after
+	// `unreagent flash` doesn't trip the flag parser. The flash sub-command
+	// is self-contained — no config, no supervisor, no agent.
+	if len(os.Args) >= 2 && os.Args[1] == "flash" {
+		return runFlashCommand()
+	}
+
 	cfgPath := flag.String("config", "", "Pfad zur unreagent.yaml (Standard: neben der ausführbaren Datei)")
 	noAgent := flag.Bool("no-agent", false, "Agenten nicht starten (nur UE + MCP-Server; externer Agent kann sich verbinden)")
 	filesFlag := flag.Bool("files", false, "Datei-Tools (read/write/list/edit) über den MCP-Server aktivieren")
@@ -123,6 +130,21 @@ func run() error {
 		logger(fmt.Sprintf("Datei-Tools aktiv (%s) unter: %s", mode, cfg.Files.Root))
 	}
 
+	// Eigenen Pfad für den Stop-Hook merken. os.Executable() liefert den vollen
+	// Pfad zur laufenden unreagent.exe — den hängen wir später an den Agent als
+	// <launcher> flash, damit der Flash auch dann klappt, wenn unreagent nicht
+	// auf dessen PATH liegt (typisch: unreagent.exe neben der .uproject, der
+	// Agent erbt das Working-Dir aber nicht unser bin-Verzeichnis).
+	launcherPath, err := os.Executable()
+	if err != nil || launcherPath == "" {
+		// Fallback: bloßer Name, funktioniert nur wenn unreagent auf dem PATH
+		// des Agent-Prozesses liegt. Besser als nichts.
+		launcherPath = filepath.Base(os.Args[0])
+		if launcherPath == "" || launcherPath == "." {
+			launcherPath = "unreagent"
+		}
+	}
+
 	sup := supervisor.New(logger)
 
 	// --- Unreal-Service ---
@@ -200,6 +222,12 @@ func run() error {
 					agentArgs = append(agentArgs, "--permission-prompt-tool", "mcp__"+config.MCPServerName+"__approve")
 				}
 			}
+			// Auto-install a Stop hook so the agent's terminal taskbar icon flashes
+			// when the turn ends. The hook runs "<unreagent.exe> flash" which
+			// POSTs to our MCP server; we use os.Executable() so the command works
+			// even when unreagent isn't on the agent's PATH. On Windows the path
+			// is wrapped in double quotes for the CreateProcess / cmd /c layer.
+			agentArgs = append(agentArgs, "--settings", buildStopHookSettings(launcherPath))
 			agentEnv = append(agentEnv, "UNREAGENT_MCP_URL="+mcpURL)
 			logger(fmt.Sprintf("Agent: Claude-Integration aktiv (%d MCP-Server%s)",
 				len(mcpServers), strictWord(cfg.MCP.Strict)))
@@ -464,6 +492,29 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 			},
 		})
 	}
+
+	// --- Taskbar flash (Windows only) ---
+	// Always register so the tool is visible to the agent on every platform —
+	// the actual call is a no-op on non-Windows (see flash_other.go).
+	srv.AddTool(mcp.Tool{
+		Name: "flash_task",
+		Description: "Flashes the unreagent terminal in the Windows taskbar " +
+			"(no-op on other platforms). Call this at the end of a turn that " +
+			"needs the user's attention — a question, a decision, a completed " +
+			"piece of work the user should review. The flash keeps going until " +
+			"the user activates the terminal window, so one call is enough.",
+		InputSchema: noArgs,
+		Handler: func(map[string]interface{}) mcp.ToolResult {
+			if err := supervisor.FlashConsoleWindow(); err != nil {
+				return mcp.ToolResult{
+					Text:    "flash failed: " + err.Error(),
+					IsError: true,
+				}
+			}
+			logger("[flash] console window flashing")
+			return mcp.ToolResult{Text: "ok"}
+		},
+	})
 }
 
 // serviceAction baut einen Handler für eine Lifecycle-Aktion.
@@ -1203,4 +1254,111 @@ func strictWord(strict bool) string {
 		return ", strict"
 	}
 	return ""
+}
+
+// buildStopHookSettings builds the inline JSON string passed via
+// `claude --settings <json>` so the agent auto-runs "<launcherPath> flash"
+// when its turn ends. The hook reaches the running launcher's MCP server and
+// flashes the taskbar icon of the unreagent console until the user clicks it.
+//
+// We embed the hook via --settings (rather than expecting the user to write
+// .claude/settings.json) because we already programmatically attach
+// --mcp-config and --permission-prompt-tool — this is the same shape, one
+// more string passed to claude. No file in the project repo, no cleanup on
+// exit, no user setup.
+//
+// On Windows the path is wrapped in double quotes; the hook command ends up
+// being run through cmd /c (or CreateProcess) and we don't want a space in
+// "C:\Program Files\..." to break the argv split.
+func buildStopHookSettings(launcherPath string) string {
+	hookCmd := launcherPath + " flash"
+	if runtime.GOOS == "windows" {
+		hookCmd = `"` + launcherPath + `" flash`
+	}
+	// map-based marshalling lets encoding/json handle the JSON-string escaping
+	// (backslashes on Windows paths, embedded quotes, etc.) for us.
+	cfg := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Stop": []map[string]interface{}{
+				{
+					"hooks": []map[string]interface{}{
+						{"type": "command", "command": hookCmd},
+					},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(cfg)
+	return string(b)
+}
+
+// runFlashCommand is the entry point for `unreagent flash`. It POSTs a
+// tools/call flash_task request to the running launcher's MCP server so the
+// console window starts flashing in the taskbar. Used by the Claude Code
+// Stop hook (see README "Notifying the user: taskbar flash") and as a manual
+// test affordance.
+//
+// The MCP URL is read from UNREAGENT_MCP_URL — the launcher already exports
+// it to the agent's environment, and the hook subprocess inherits that env.
+func runFlashCommand() error {
+	mcpURL := os.Getenv("UNREAGENT_MCP_URL")
+	if mcpURL == "" {
+		// Fallback for manual invocation outside an agent context. The
+		// default MCP address in unreagent.example.yaml is 127.0.0.1:8765.
+		addr := os.Getenv("MCP_ADDRESS")
+		if addr == "" {
+			addr = "127.0.0.1:8765"
+		}
+		mcpURL = "http://" + addr + "/mcp"
+	}
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call",` +
+		`"params":{"name":"flash_task","arguments":{}}}`)
+
+	req, err := http.NewRequest(http.MethodPost, mcpURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("unreagent flash: request build: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("unreagent flash: POST %s: %w (is the launcher running with mcp.enabled?)", mcpURL, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unreagent flash: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	// Surface a structured-error response from the MCP server so the user can
+	// see what went wrong (e.g. isError=true from the tool handler).
+	var rpc struct {
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &rpc); err == nil {
+		if rpc.Error != nil {
+			return fmt.Errorf("unreagent flash: MCP error %d: %s", rpc.Error.Code, rpc.Error.Message)
+		}
+		if rpc.Result.IsError {
+			text := ""
+			if len(rpc.Result.Content) > 0 {
+				text = rpc.Result.Content[0].Text
+			}
+			return fmt.Errorf("unreagent flash: tool reported error: %s", text)
+		}
+	}
+	return nil
 }

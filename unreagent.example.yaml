@@ -19,7 +19,11 @@
 agent:
   enabled: true
   command: claude
-  # Hängt --mcp-config (+ --permission-prompt-tool) automatisch an:
+  # Hängt --mcp-config (+ --permission-prompt-tool) UND einen Stop-Hook
+  # (--settings) automatisch an, der bei jedem Turn-Ende das Taskbar-Icon
+  # der unreagent-Konsole blinken lässt (Windows; siehe README "Notifying
+  # the user: taskbar flash"). Pfad zum Hook-Command ist os.Executable()
+  # der unreagent.exe — kein PATH-Eintrag nötig.
   claudeIntegration: true
   # Interaktiv im Vordergrund (Agent erbt die Konsole = echtes TTY) ist DEFAULT.
   # UE laeuft im Hintergrund, Launcher-Logs -> unreagent.log. Mit window: false
@@ -65,6 +69,10 @@ files:
 mcp:
   enabled: true
   address: 127.0.0.1:8765
+  # Diese Adresse ist auch der Endpunkt, an den `unreagent flash` postet
+  # (siehe README "Notifying the user: taskbar flash"). Der Default reicht
+  # dafür; nur ändern wenn man den MCP-Port aus irgendwelchen Gründen
+  # verlegt — dann MCP_ADDRESS als Fallback für den sub-command setzen.
   # Zusätzliche In-Editor-MCP-Server, über die der Agent IN der Engine arbeitet
   # (z.B. UE LLM Toolkit: Node-Bridge -> HTTP-Server im Editor auf Port 3000).
   # Werden zusammen mit dem unreagent-Server in --mcp-config gegeben.

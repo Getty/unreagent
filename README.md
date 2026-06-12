@@ -320,6 +320,53 @@ everything" (with `deny` exceptions like `Bash(rm -rf *)`).
 > `tool_input` / `input` / `arguments`). If a Claude Code update changes the
 > format, only that one handler in `cmd/launcher/main.go` needs adapting.
 
+### Notifying the user: taskbar flash (Windows)
+
+When Claude Code stops a turn — finished working, or about to ask a
+question — the terminal is often buried under other windows. On Windows,
+`unreagent` can flash its console entry in the taskbar so the user notices.
+
+**No setup needed.** When `agent.claudeIntegration: true` (the default in
+`unreagent.example.yaml`), the launcher already passes the right flag to
+Claude Code:
+
+```text
+claude --mcp-config '<…>' --settings '{"hooks":{"Stop":[{"hooks":[
+  {"type":"command","command":"\"<unreagent.exe>\" flash"}
+]}]}}'
+```
+
+The `--settings` JSON is built by the launcher from
+`os.Executable()` — so the hook command is a full, quoted path to
+the running `unreagent.exe` and works even when `unreagent` is not on
+the agent's `PATH`. It fires on every turn end, which is what we want:
+the user gets feedback every time the agent yields, whether it's a
+question, a decision point, or just "done".
+
+What happens on `Stop`:
+
+1. Claude Code spawns the hook command — `<unreagent.exe> flash`.
+2. `unreagent flash` POSTs a `tools/call flash_task` request to the
+   running launcher (URL from `UNREAGENT_MCP_URL`, which the launcher
+   exports to the agent's env — the hook subprocess inherits it).
+3. The launcher's `flash_task` MCP tool calls
+   `FlashWindowEx(FLASHW_TRAY | FLASHW_TIMERNOFG)` on the console HWND.
+4. The taskbar entry flashes until the user clicks it — one call is
+   enough, the flash self-stops on activation.
+
+The agent can also call `flash_task` **explicitly** via MCP when it
+knows it's about to yield to the user (a question, a decision, a
+completed piece of work the user should review). On non-Windows, the
+call is a no-op.
+
+To turn it off, disable `agent.claudeIntegration` (or wrap your own
+`claude` invocation via `agent.command` + `agent.args` and skip the
+auto-attached `--settings`). Manual test from a second shell:
+
+```bash
+unreagent flash   # should start the flash; "[flash] console window flashing" appears in unreagent.log
+```
+
 ### Runtimes for the agent
 
 `run_python` executes code via `uv run python` — uv builds / syncs the venv
@@ -340,6 +387,7 @@ in context.
 | `run_python` / `run_node` | run code in a prepared environment |
 | `read_file` / `list_dir` / `write_file` / `edit_file` | file access on the project (only with `files.enabled` / `-files`, scoped to `root`) |
 | `approve` | permission prompt tool for Claude Code |
+| `flash_task` | flashes the unreagent terminal in the Windows taskbar (no-op on other platforms) |
 
 ## CLI flags
 
