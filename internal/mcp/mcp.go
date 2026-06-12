@@ -11,6 +11,7 @@
 package mcp
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -43,6 +44,10 @@ type Server struct {
 	name    string
 	version string
 	log     func(string)
+	// token, if set, requires an "Authorization: Bearer <token>" header on
+	// every POST request. Empty = open (compatible with the prior behavior
+	// that targets 127.0.0.1 only).
+	token string
 
 	mu    sync.RWMutex
 	tools []Tool
@@ -55,6 +60,13 @@ func NewServer(name, version string, log func(string)) *Server {
 		log = func(string) {}
 	}
 	return &Server{name: name, version: version, log: log, index: map[string]int{}}
+}
+
+// SetToken enables bearer authentication. An empty string disables it (open
+// server, default). Header comparison uses subtle.ConstantTimeCompare to
+// thwart timing attacks.
+func (s *Server) SetToken(token string) {
+	s.token = token
 }
 
 // AddTool registriert ein Tool (vor dem Start aufrufen).
@@ -113,6 +125,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Optional bearer authentication. When no token is set, the server is
+	// open (the default for 127.0.0.1). When a token is set, the header MUST
+	// match exactly — otherwise 401, so external clients (e.g. Hermes) cannot
+	// reach the toolset through an open server.
+	if s.token != "" {
+		const prefix = "Bearer "
+		hdr := r.Header.Get("Authorization")
+		if !strings.HasPrefix(hdr, prefix) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="unreagent"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		got := hdr[len(prefix):]
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="unreagent"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))

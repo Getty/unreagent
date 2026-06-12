@@ -102,6 +102,29 @@ type AgentConfig struct {
 	//   shutdown immer sofort den ganzen Stack (UE + MCP + Launcher) beenden.
 	//   leave    alles weiterlaufen lassen (nur Warnung) — manuelles Ctrl-C nötig.
 	OnExit string `yaml:"onExit"`
+	// Hermes registers the unreagent MCP server with Hermes Agent (Nous
+	// Research) as an alternative agent. It is NOT auto-merged on launcher
+	// start — the user runs
+	//   unreagent hermes-setup
+	// once to merge the Hermes config (backup, token generation). Subsequent
+	// runs are idempotent. See README "Hermes Agent".
+	Hermes HermesConfig `yaml:"hermes"`
+}
+
+// HermesConfig controls the Hermes Agent (Nous Research) integration. We
+// inject the unreagent MCP server into Hermes' YAML config so Hermes can use
+// the same toolset as Claude Code.
+type HermesConfig struct {
+	// Enabled is a precondition for `unreagent hermes-setup` to do anything
+	// (otherwise: "not configured, skipping" and exit 0). It does NOT enable
+	// an auto-merge.
+	Enabled bool `yaml:"enabled"`
+	// ServerName is the name Hermes uses for the unreagent server (key under
+	// "mcp_servers:"). Default: "unreagent".
+	ServerName string `yaml:"serverName"`
+	// ConfigPath is the Hermes config file. Default: $HERMES_HOME/config.yaml
+	// (typically ~/.hermes/config.yaml). Empty = default.
+	ConfigPath string `yaml:"configPath"`
 }
 
 // CommandSpec ist ein benannter Einmal-Befehl (z.B. "compile").
@@ -122,6 +145,11 @@ type MCPConfig struct {
 	// Launcher definierten Server werden genutzt (projekt-eigene .mcp.json wird
 	// ignoriert). Default false = additiv.
 	Strict bool `yaml:"strict"`
+	// Token, if set, requires an "Authorization: Bearer <token>" header on
+	// every MCP request. Empty = open (default — compatible with prior
+	// behavior and local-only setups). Recommended as soon as the MCP server
+	// listens on an address other than 127.0.0.1.
+	Token string `yaml:"token"`
 	// ExtraServers sind roh durchgereichte MCP-Server-Definitionen im Format der
 	// Claude-Code-.mcp.json (Felder type/url/command/args/env/headers …).
 	// Platzhalter wie ${PROJECT_DIR} werden in allen String-Werten ersetzt.
@@ -279,6 +307,9 @@ func (c *Config) applyDefaults() {
 
 	if c.MCP.Address == "" {
 		c.MCP.Address = DefaultMCPAddress
+	}
+	if c.Agent.Hermes.ServerName == "" {
+		c.Agent.Hermes.ServerName = MCPServerName
 	}
 	if c.Permissions.Mode == "" {
 		c.Permissions.Mode = ModeAllowlist

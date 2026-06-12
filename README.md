@@ -263,7 +263,7 @@ suspects, in this order:
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable) |
 | `permissions` | permission layer: `allow_all` / `allowlist` / `deny_all`, plus `allow` / `deny` rules |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`) |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`) |
 | `unreal` | *optional* — editor args, restart policy (`never` / `on-failure` / `always`) |
 | `commands` | *optional* — your own one-shot commands (compile / package are built-in) |
 | `engineRoot` | *usually only in local.yaml* — engine path override |
@@ -367,6 +367,49 @@ auto-attached `--settings`). Manual test from a second shell:
 unreagent flash   # should start the flash; "[flash] console window flashing" appears in unreagent.log
 ```
 
+### Hermes Agent (alternative agent)
+
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research)
+is an autonomous agent with its own MCP client — useful as an alternative to
+Claude Code. `unreagent` plugs in by registering the same MCP server
+(`ue_start` / `ue_stop` / `logs` / `run_command` / `run_python` / …) under
+Hermes' `mcp_servers:` block. The launcher does **not** auto-merge on
+normal runs; you opt in once with a sub-command:
+
+```yaml
+# unreagent.yaml
+agent:
+  hermes:
+    enabled: true
+```
+
+```bash
+unreagent hermes-setup      # merges MCP entry into ~/.hermes/config.yaml
+```
+
+What `hermes-setup` does, in order:
+
+1. Resolves the target config: explicit `agent.hermes.configPath` →
+   `$HERMES_HOME/config.yaml` → `~/.hermes/config.yaml`.
+2. If `mcp.token` is empty, generates 32 random bytes (hex) and writes
+   `mcp.token:` into `unreagent.local.yaml` (git-ignored). The launcher
+   reads it back on the next start, so the token survives restarts.
+3. Backs up an existing Hermes config to `<path>.bak` (once; never
+   overwrites a previous backup).
+4. Sets `mcp_servers.unreagent: { url, headers: { Authorization: Bearer } }`
+   in the Hermes config. A second run **overwrites** the entry rather than
+   duplicating it — the operation is idempotent.
+5. Writes the file atomically (temp + rename) so a crash mid-write cannot
+   leave a half-written config.
+
+The MCP server enforces `Authorization: Bearer <token>` whenever
+`mcp.token` is set — including for the embedded Claude Code agent, which
+gets the matching `headers:` block in its `--mcp-config` automatically.
+The token check uses `crypto/subtle.ConstantTimeCompare`; the empty-token
+default (the historic behaviour) keeps the server open on 127.0.0.1.
+
+Restart Hermes after running `hermes-setup` so it picks up the new entry.
+
 ### Runtimes for the agent
 
 `run_python` executes code via `uv run python` — uv builds / syncs the venv
@@ -397,6 +440,13 @@ in context.
 | `-no-agent` | **do not** start the agent — only UE + MCP server. An external agent (your own Claude Code session) then connects to the MCP server. |
 | `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. |
 | `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). |
+
+## Sub-commands
+
+| Sub-command | Purpose |
+|---|---|
+| `unreagent flash` | POSTs a `tools/call flash_task` to the running launcher so the console window starts flashing in the taskbar. Used by the Claude Code Stop hook; also runnable by hand. |
+| `unreagent hermes-setup` | One-shot merge of the unreagent MCP server into Hermes Agent's `config.yaml` (idempotent; auto-generates `mcp.token` if missing). See "Hermes Agent" above. |
 
 ### How the agent runs (three modes)
 

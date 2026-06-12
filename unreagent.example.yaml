@@ -73,6 +73,14 @@ mcp:
   # (siehe README "Notifying the user: taskbar flash"). Der Default reicht
   # dafür; nur ändern wenn man den MCP-Port aus irgendwelchen Gründen
   # verlegt — dann MCP_ADDRESS als Fallback für den sub-command setzen.
+  # Optional bearer token: when set, the MCP server requires an
+  # "Authorization: Bearer <token>" header on every request. Default empty
+  # (= open), compatible with prior behavior and local-only setups.
+  # Recommendation: set it as soon as the MCP server listens on an address
+  # other than 127.0.0.1. The launcher writes the token into the Hermes MCP
+  # entry (`unreagent hermes-setup`) and into the embedded agent (Claude
+  # Code) automatically — no manual copy needed.
+  # token: "changeme-please-rotate"
   # Zusätzliche In-Editor-MCP-Server, über die der Agent IN der Engine arbeitet
   # (z.B. UE LLM Toolkit: Node-Bridge -> HTTP-Server im Editor auf Port 3000).
   # Werden zusammen mit dem unreagent-Server in --mcp-config gegeben.
@@ -92,6 +100,16 @@ mcp:
   # writeConfig:
   #   - { path: ".mcp.json", format: mcp_json }       # Claude Code / Cursor / Claude Desktop
   #   - { path: ".vscode/mcp.json", format: vscode }  # VS Code
+
+# Hermes Agent (Nous Research) as an alternative agent. Activation is
+# explicit via the sub-command `unreagent hermes-setup` — no auto-merge on
+# normal start. Setup writes our MCP server (with bearer token) into
+# $HERMES_HOME/config.yaml (default ~/.hermes/config.yaml).
+# agent:
+#   hermes:
+#     enabled: true
+#     # serverName: unreagent     # key under mcp_servers
+#     # configPath: ""            # empty = $HERMES_HOME/config.yaml or ~/.hermes/config.yaml
 
 # ------------------------------------------------------------
 # unreal: und commands: sind OPTIONAL. Editor-Pfad sowie die

@@ -1,7 +1,7 @@
 {
   "FixedFileInfo": {
-    "FileVersion": { "Major": 0, "Minor": 0, "Patch": 7, "Build": 0 },
-    "ProductVersion": { "Major": 0, "Minor": 0, "Patch": 7, "Build": 0 },
+    "FileVersion": { "Major": 0, "Minor": 0, "Patch": 8, "Build": 0 },
+    "ProductVersion": { "Major": 0, "Minor": 0, "Patch": 8, "Build": 0 },
     "FileFlagsMask": "3f",
     "FileFlags": "00",
     "FileOS": "040004",
@@ -15,8 +15,8 @@
     "InternalName": "unreagent",
     "OriginalFilename": "unreagent.exe",
     "LegalCopyright": "© 2026 conflict.industries digital GmbH",
-    "FileVersion": "0.0.7",
-    "ProductVersion": "0.0.7",
+    "FileVersion": "0.0.8",
+    "ProductVersion": "0.0.8",
     "Comments": "https://github.com/Getty/unreagent"
   },
   "VarFileInfo": {
