@@ -11,6 +11,7 @@ package supervisor
 
 import (
 	"errors"
+	"fmt"
 	"syscall"
 	"unsafe"
 )
@@ -20,11 +21,14 @@ var (
 	procFlashWindowEx = user32.NewProc("FlashWindowEx")
 
 	// kernel32 is already lazily loaded by job_windows.go, but we re-bind
-	// GetConsoleWindow here so this file stays self-contained and build-order
-	// independent (the lazy handles from job_windows.go would work too, but
-	// referencing them across files would force an awkward coupling).
+	// GetConsoleWindow + AllocConsole here so this file stays self-contained
+	// and build-order independent (the lazy handles from job_windows.go would
+	// work too, but referencing them across files would force an awkward
+	// coupling).
 	kernel32Flash        = syscall.NewLazyDLL("kernel32.dll")
 	procGetConsoleWindow = kernel32Flash.NewProc("GetConsoleWindow")
+	procAllocConsole     = kernel32Flash.NewProc("AllocConsole")
+	procGetLastError     = kernel32Flash.NewProc("GetLastError")
 )
 
 const (
@@ -48,18 +52,40 @@ type flashWInfo struct {
 }
 
 // FlashConsoleWindow flashes the console window (the one attached to this
-// process) in the taskbar until the user activates it. Returns nil if the
-// process has no console (e.g. launched detached) — callers don't need to
-// special-case that.
+// process) in the taskbar until the user activates it.
+//
+// If the process has no console attached (e.g. launched detached, via
+// Task-Scheduler, or from the Explorer with `CreateProcess` flags that hide
+// the console), the function tries to allocate one with AllocConsole as a
+// fallback — useful for the "unreagent started in background, agent needs
+// to flash the taskbar" workflow. If AllocConsole also fails (e.g. the
+// process is a Windows service with no interactive session), a non-nil
+// error is returned so the caller can surface the failure instead of
+// silently doing nothing — the previous behavior reported "ok" to the MCP
+// tool even when nothing was flashed, which made diagnosis painful.
 func FlashConsoleWindow() error {
-	hwnd, _, err := procGetConsoleWindow.Call()
+	hwnd, _, _ := procGetConsoleWindow.Call()
 	if hwnd == 0 {
-		// No console (e.g. running under `nohup` or as a Windows service).
-		// Treat as a no-op so the MCP tool still returns success.
-		if err != nil && !errors.Is(err, syscall.Errno(0)) {
-			return nil
+		// No console attached. Try AllocConsole as a fallback — it creates a
+		// new console for this process if the parent didn't pass one down
+		// (common when unreagent is started from Task-Scheduler, Service, or
+		// Explorer). Returns non-zero on success. We deliberately ignore the
+		// underlying errno: AllocConsole failure modes (no station, no
+		// desktop, etc.) are surfaced via the final GetConsoleWindow == 0
+		// check below.
+		ok, _, _ := procAllocConsole.Call()
+		if ok != 0 {
+			hwnd, _, _ = procGetConsoleWindow.Call()
 		}
-		return nil
+	}
+	if hwnd == 0 {
+		// Still no console after AllocConsole attempt. Return a clear error
+		// so the MCP tool reports "flash failed: ..." instead of silently
+		// claiming success. Operators see this in the unreagent log and
+		// know the launcher needs a real terminal session.
+		return fmt.Errorf("no console window attached to unreagent process " +
+			"(GetConsoleWindow returned 0, AllocConsole fallback failed) — " +
+			"start unreagent from a visible terminal to enable taskbar flash")
 	}
 	info := flashWInfo{
 		cbSize:    uint32(unsafe.Sizeof(flashWInfo{})),
@@ -70,10 +96,18 @@ func FlashConsoleWindow() error {
 	}
 	ret, _, callErr := procFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
 	if ret == 0 {
+		// FlashWindowEx returns 0 on failure. syscall.Proc.Call always reports
+		// Errno(0) for "no error" — the actual Win32 error lives in thread-local
+		// storage and we read it via GetLastError. The hex form is convenient
+		// for cross-referencing against WINERROR.H (e.g. 0x0578 = 1400 =
+		// ERROR_INVALID_WINDOW_HANDLE → window lives on another desktop/
+		// session-station; 0x0005 = ERROR_ACCESS_DENIED → UAC/IL boundary).
 		if callErr != nil && !errors.Is(callErr, syscall.Errno(0)) {
 			return callErr
 		}
-		return errors.New("FlashWindowEx returned 0")
+		lastErr, _, _ := procGetLastError.Call()
+		return fmt.Errorf("FlashWindowEx returned 0, GetLastError=%d (0x%x)",
+			uint32(lastErr), uint32(lastErr))
 	}
 	return nil
 }
