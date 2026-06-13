@@ -28,7 +28,6 @@ var (
 	kernel32Flash        = syscall.NewLazyDLL("kernel32.dll")
 	procGetConsoleWindow = kernel32Flash.NewProc("GetConsoleWindow")
 	procAllocConsole     = kernel32Flash.NewProc("AllocConsole")
-	procGetLastError     = kernel32Flash.NewProc("GetLastError")
 )
 
 const (
@@ -96,18 +95,21 @@ func FlashConsoleWindow() error {
 	}
 	ret, _, callErr := procFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
 	if ret == 0 {
-		// FlashWindowEx returns 0 on failure. syscall.Proc.Call always reports
-		// Errno(0) for "no error" — the actual Win32 error lives in thread-local
-		// storage and we read it via GetLastError. The hex form is convenient
-		// for cross-referencing against WINERROR.H (e.g. 0x0578 = 1400 =
-		// ERROR_INVALID_WINDOW_HANDLE → window lives on another desktop/
-		// session-station; 0x0005 = ERROR_ACCESS_DENIED → UAC/IL boundary).
-		if callErr != nil && !errors.Is(callErr, syscall.Errno(0)) {
-			return callErr
+		// FlashWindowEx returned 0 (the window was not previously in the
+		// foreground-flash state). syscall.Proc.Call captures GetLastError for
+		// us on the same OS thread immediately after the call — a separate
+		// GetLastError syscall would race the Go runtime, which may overwrite
+		// the thread-local error before we read it. So use callErr directly.
+		// The hex form is convenient for cross-referencing against WINERROR.H
+		// (e.g. 0x0578 = 1400 = ERROR_INVALID_WINDOW_HANDLE → window lives on
+		// another desktop/session-station; 0x0005 = ERROR_ACCESS_DENIED →
+		// UAC/IL boundary).
+		if errno, ok := callErr.(syscall.Errno); ok && errno != 0 {
+			return fmt.Errorf("FlashWindowEx returned 0: %w (GetLastError=%d, 0x%x)",
+				callErr, uint32(errno), uint32(errno))
 		}
-		lastErr, _, _ := procGetLastError.Call()
-		return fmt.Errorf("FlashWindowEx returned 0, GetLastError=%d (0x%x)",
-			uint32(lastErr), uint32(lastErr))
+		return errors.New("FlashWindowEx returned 0 with no Win32 error set " +
+			"(window may already be flashing, or lives on another desktop/session)")
 	}
 	return nil
 }
