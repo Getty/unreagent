@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-21T22:13:16Z
+id: 5
+priority: low
+status: backlog
+tags:
+- skills
+- decision
+title: 'Decide: fold Class C into the offline-writable batch?'
+updated: 2026-08-21T22:13:16Z
+---
+
+Open decision flagged in spec section 7: character, character_data, lighting, game_framework, control_rig, sequencer, retarget were deferred with Class B, but by the criterion actually used (a dedicated tool with an in-repo documented schema) they qualify for offline authoring exactly as Class A does. ~7 skills, no editor needed. Maintainer call.
