@@ -1,0 +1,30 @@
+---
+class: standard
+created: 2026-08-21T22:13:10Z
+id: 4
+priority: medium
+status: backlog
+tags:
+- skills
+- epic
+title: 'Epic: Class A skills -- 19 documents from the toolkit headers'
+updated: 2026-08-21T23:28:18Z
+---
+
+Nineteen skills for plugin tools whose operations are documented in an in-repo C++ header, split into seven domain batches so each is one reviewable authoring run.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Toolkit: ../ue-llm-toolkit (43 MCPTool_*.h headers + MCPToolRegistry.cpp), override via UE_LLM_TOOLKIT.
+
+Children:
+- #20 Blueprints, Widgets & Enhanced Input (3)
+- #21 Animation (4)
+- #22 Materials & Niagara (2)
+- #23 Audio & MetaSounds (2)
+- #24 World & Assets (3)
+- #25 Viewport & PIE testing (2)
+- #26 Python, Tasks & Context (3)
+
+Risk carried by all of them (spec section 9): written against headers, not against a running editor. Keep to documented operations; revisit once unreal_status reports a connection.
+
+Container ticket -- do not claim it. Children move backlog -> todo as their dependencies close.
