@@ -1,0 +1,29 @@
+---
+class: standard
+created: 2026-08-21T23:23:15Z
+depends_on:
+- 9
+id: 18
+priority: high
+status: backlog
+tags:
+- skills
+- tests
+title: 'Test: toolkit-registry lint for toolkit_tools'
+updated: 2026-08-21T23:25:22Z
+---
+
+A Go test, not a separate binary: every tool named in any skill's toolkit_tools must exist in the plugin's MCPToolRegistry.cpp. This is what catches upstream drift when the toolkit is updated.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 8.
+Agent: unreagent-test-writer.
+
+Toolkit checkout: ../ue-llm-toolkit (Plugin/UELLMToolkit/Source/UELLMToolkit/Private/MCP/MCPToolRegistry.cpp), overridable via the UE_LLM_TOOLKIT environment variable.
+
+Acceptance:
+- resolves the checkout via UE_LLM_TOOLKIT, falling back to the sibling path
+- t.Skip with a clear reason when the checkout is absent, so CI without it stays green
+- failure message names the offending skill AND the unknown tool
+- passes against the current 43-tool registry
+
+Depends on #9.
