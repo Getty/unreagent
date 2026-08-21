@@ -1,0 +1,33 @@
+---
+class: standard
+created: 2026-08-21T23:22:28Z
+depends_on:
+- 8
+id: 9
+priority: high
+status: backlog
+tags:
+- skills
+- subsystem
+title: 'internal/skills: embed, parse, Load, DescribeAll'
+updated: 2026-08-21T23:53:48Z
+---
+
+Create the internal/skills package: the embedded FS and the only component that parses skill files. Depends on nothing but embed and the vendored YAML parser; testable without a launcher, an editor or a network.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 6.1.
+Agent: unreagent-worker.
+
+Acceptance:
+- go:embed of skills/<name>/SKILL.md plus sub-documents skills/<name>/<section>.md
+- Skill{Name, Description, ToolkitTools, UnrealClasses, Body, Files}
+- Load() ([]Skill, error) -- parses all embedded skills once at startup and returns an error on malformed frontmatter, so a broken skill fails loudly at build/test time instead of vanishing
+- DescribeAll([]Skill) string -- renders the name/description table used as the MCP tool description
+- no new dependency; stdlib + the existing YAML parser only
+
+Blocked until #8 lands at least one skill under skills/ -- go:embed fails on an empty pattern.
+
+--- Note from #8 (2026-08-22) ---
+Two skills now exist under skills/ (unreagent-files, unreagent-runtimes), so go:embed has something to match. Both use frontmatter with only name and description -- no toolkit_tools, no unreal_classes -- so the parser must treat those two as optional and absent, not empty-but-present.
+
+Descriptions are ~265 characters each. At 23 skills that is roughly 6 KB of generated tool description sitting permanently in the agent's context via DescribeAll. That is the intended trade (spec section 3.1), but check the rendered size once more skills land.
