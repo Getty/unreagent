@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-08-21T23:23:05Z
+depends_on:
+- 11
+id: 16
+priority: high
+status: backlog
+tags:
+- skills
+- tests
+title: 'Tests: skills MCP tool dispatch'
+updated: 2026-08-21T23:25:12Z
+---
+
+Exercise the tool through the MCP dispatch path, not by calling the handler in isolation where that would skip argument handling.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 8.
+Agent: unreagent-test-writer.
+
+Acceptance:
+- a known name returns that skill's body
+- an unknown name returns an error result that lists the available skills
+- section resolves a sub-document; an unknown section errors informatively
+- the tool is absent from the registry when skills.mcp is off
+
+Depends on #11.
