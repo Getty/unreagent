@@ -1,0 +1,29 @@
+---
+class: standard
+created: 2026-08-21T23:22:49Z
+depends_on:
+- 8
+id: 13
+priority: high
+status: backlog
+tags:
+- skills
+- class-d
+title: 'Skills: unreagent-iterate + unreagent-build (Class D, editor loop)'
+updated: 2026-08-21T23:24:56Z
+---
+
+Author the two Class D skills that describe driving the editor and the build from the agent side. No external source covers these -- only this project can supply them.
+
+- skills/unreagent-iterate/SKILL.md -- ue_restart, logs, status: the edit -> compile -> restart -> read-logs loop
+- skills/unreagent-build/SKILL.md -- run_command (compile/package), logs
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class D).
+Agent: unreagent-skill-author.
+
+Acceptance:
+- same frontmatter conventions as #8
+- describes the actual restart/log semantics implemented in internal/supervisor and cmd/launcher, including what a Job Object teardown means for in-flight child processes
+- agent-agnostic prose
+
+Depends on #8 for the format precedent.
