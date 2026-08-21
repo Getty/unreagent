@@ -1,0 +1,28 @@
+---
+class: standard
+created: 2026-08-21T23:23:10Z
+depends_on:
+- 12
+id: 17
+priority: high
+status: backlog
+tags:
+- skills
+- tests
+title: 'Tests: materialization prefix rules'
+updated: 2026-08-21T23:25:17Z
+---
+
+The prefix rule is the only thing standing between the launcher and a user's own skills directory -- test it as such, against a temp dir.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 6.3 and 8.
+Agent: unreagent-test-writer.
+
+Acceptance:
+- creates unreagent-<name>/ directories for the whole embedded set
+- a rerun replaces its own directories (including stale file removal inside them)
+- a prefixed directory no longer in the set is removed
+- an unprefixed sibling directory and its contents survive untouched
+- sub-documents land next to their SKILL.md
+
+Depends on #12.
