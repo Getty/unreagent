@@ -1,0 +1,34 @@
+---
+class: standard
+created: 2026-08-21T23:22:44Z
+depends_on:
+- 9
+- 10
+id: 12
+priority: high
+status: backlog
+tags:
+- skills
+- subsystem
+title: 'Materialization: write skills to <dir>/unreagent-<name>/'
+updated: 2026-08-21T23:53:42Z
+---
+
+Write each embedded skill to disk when skills.materialize is on, so any agent can consume the documents directly off the filesystem.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 6.3.
+Agent: unreagent-worker.
+
+Acceptance:
+- writes <dir>/unreagent-<name>/SKILL.md plus its sub-documents
+- the unreagent- prefix is load-bearing: on each start, prefixed directories are REPLACED, unprefixed sibling directories are left completely alone
+- a prefixed directory not in the current embedded set is REMOVED, so renamed or dropped skills do not linger
+- runs when skills.enabled && skills.materialize; errors surface, they do not get swallowed
+- writes under the project directory -- keep the path from escaping <dir>
+
+Depends on #9 and #10.
+
+--- Note from #8 (2026-08-22) ---
+NAMING COLLISION, decide before implementing. Spec section 6.3 writes each skill to <dir>/unreagent-<name>/, but the Class D skill names in spec section 7 already begin with unreagent-. The first two now exist on disk as skills/unreagent-files/ and skills/unreagent-runtimes/, so the rule as written produces <dir>/unreagent-unreagent-files/.
+
+Options: strip-or-skip the prefix when the name already carries it (keeps the guarantee that every managed directory starts with unreagent-, which is what the replace/remove logic keys on), or rename the four Class D skills. The prefix logic is load-bearing for 'replace my own, never touch foreign directories' -- whichever way this goes, the rule must stay a single unambiguous predicate.
