@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-08-21T23:22:59Z
+depends_on:
+- 10
+id: 15
+priority: high
+status: backlog
+tags:
+- skills
+- tests
+title: 'Tests: skills config defaults, flag override, both-paths-off error'
+updated: 2026-08-21T23:25:06Z
+---
+
+Config-level tests for the new section.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 5 and 8.
+Agent: unreagent-test-writer.
+
+Acceptance:
+- defaults: enabled true, mcp true, materialize false, dir substituted
+- --no-skills-mcp yields mcp:false + materialize:true, and wins over a local.yaml overlay
+- mcp:false + materialize:false is rejected at load time with a message that says which knob to turn
+- enabled:false leaves both paths off without an error
+
+Depends on #10.
