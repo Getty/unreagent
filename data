@@ -1,0 +1,33 @@
+---
+class: standard
+created: 2026-08-21T23:23:58Z
+depends_on:
+- 8
+id: 26
+priority: medium
+status: backlog
+tags:
+- skills
+- class-a
+title: 'Skills: Python, Tasks & Context (Class A)'
+updated: 2026-08-21T23:26:00Z
+---
+
+- ue-python -- execute_script, cleanup_scripts, get_script_history (UE-side Python; contrast with unreagent-runtimes, which is host-side)
+- ue-tasks -- task_submit, task_status, task_result, task_list, task_cancel
+- ue-context -- get_ue_context; this one points AT the plugin's own contexts/domains rather than replacing them
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
