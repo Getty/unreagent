@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-08-21T23:22:33Z
+id: 10
+priority: high
+status: todo
+tags:
+- skills
+- config
+title: 'config: skills: section + --no-skills-mcp override'
+updated: 2026-08-21T23:22:33Z
+---
+
+Add the skills: section to internal/config, following the conventions of the existing files: and runtimes: sections.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 5.
+Agent: unreagent-worker.
+
+Acceptance:
+- fields enabled (default true), mcp (default true), materialize (default false), dir (default ${PROJECT_DIR}/.claude/skills)
+- dir runs through the existing ${ENGINE}/${PROJECT} substitution
+- enabled:false disables both paths; mcp:false + materialize:false is a config ERROR reported at load time, not a silent no-op
+- both mcp and materialize true is legal
+- CLI flag --no-skills-mcp in cmd/launcher sets mcp:false AND materialize:true; check the ordering against the unreagent.local.yaml overlay so the flag wins
+- unreagent.example.yaml gains the section with comments
+
+Note: the local.yaml overlay replaces maps by YAML decode rather than deep-merging -- say so if the section grows list-valued options.
