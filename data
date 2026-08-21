@@ -1,0 +1,24 @@
+---
+class: standard
+created: 2026-08-21T23:23:21Z
+id: 19
+priority: medium
+status: todo
+tags:
+- skills
+- legal
+title: 'NOTICE: MIT attribution for skill text adapted from VibeUE'
+updated: 2026-08-21T23:23:21Z
+---
+
+VibeUE (kevinpbuckley/VibeUE) is MIT-licensed, so its skill documents may be copied and modified with the copyright notice preserved. It is a quarry for text, never a runtime dependency -- the plugin itself was rejected in June 2026 over its remote API-key validation, and that decision is not revisited.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 1 and 4.
+Agent: unreagent-doc-writer.
+
+Acceptance:
+- a NOTICE file at the repo root carrying the collected attribution
+- the per-skill convention documented: skills adapted from VibeUE carry an MIT attribution line in the document
+- the convention is stated where skill authors will actually read it (.claude/skills/unreagent-skill-authoring)
+
+Do this before the Class A batches start adapting text.
