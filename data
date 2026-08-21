@@ -1,0 +1,31 @@
+---
+class: standard
+created: 2026-08-21T23:22:39Z
+depends_on:
+- 9
+- 10
+id: 11
+priority: high
+status: backlog
+tags:
+- skills
+- mcp
+title: 'MCP tool: skills (load by name, description generated from the set)'
+updated: 2026-08-21T23:24:45Z
+---
+
+Register the skills tool in cmd/launcher/main.go alongside the existing tools, following the mcp.Tool shape in internal/mcp/mcp.go.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 3.1 and 6.2.
+Agent: unreagent-worker.
+
+Acceptance:
+- Description generated via DescribeAll so every skill name + one-line description is resident in the agent's context -- this is what makes one load call sufficient and is the reason MCP can be the default path
+- parameters: name (required), section (optional sub-document)
+- result: the skill body as text
+- unknown name returns an error result that NAMES the available skills
+- no list action -- the description already carries the list
+- registered only when skills.enabled && skills.mcp
+- defensive argument reading via the existing getString/firstString/errResult helpers
+
+Depends on #9 and #10.
