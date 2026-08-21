@@ -1,5 +1,5 @@
 ---
-name: karr
+name: kanban-issues-karr-cli
 description: Use when managing Git-native kanban tasks or shared helper refs with the karr CLI in agent workflows.
 ---
 

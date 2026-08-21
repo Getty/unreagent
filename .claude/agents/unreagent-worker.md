@@ -9,7 +9,7 @@ briefing:
     - unreagent-mcp-tools
     - unreagent-config
     - unreagent-windows
-    - karr
+    - kanban-issues-karr-cli
 ---
 
 You are the unreagent-worker for **unreagent**, the single-binary launcher that

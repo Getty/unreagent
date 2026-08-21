@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - unreagent-core
-    - karr
+    - kanban-issues-karr-cli
 ---
 
 You are the unreagent-test-writer.

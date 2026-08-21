@@ -7,7 +7,7 @@ briefing:
   skills:
     - unreagent-core
     - unreagent-windows
-    - karr
+    - kanban-issues-karr-cli
 ---
 
 You are the unreagent-release-checker for **unreagent**. Conventions from the

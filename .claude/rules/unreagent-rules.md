@@ -49,7 +49,8 @@ platform-guarded code, error handling, tests. Prose docs are not.
 ## Coordination — karr board (always in scope)
 
 Ticket coordination is the orchestrating agent's job, so `karr` is always in scope —
-don't invoke the `karr` skill first, just use it. State lives in `refs/karr/*`.
+don't invoke the `kanban-issues-karr-cli` skill first, just use it. State lives in
+`refs/karr/*`.
 
 `karr list --compact` / `karr board` · `karr show ID` · `karr create "Title" --priority
 high --tags a,b` · `karr move ID in-progress --claim NAME` · `karr handoff ID --note "…"`
