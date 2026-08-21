@@ -7,3 +7,10 @@ unreagent.local.yml
 # Code-Signing: privater Schluessel NIEMALS ins Repo
 signing/*.key
 signing/*.pfx
+
+# karr materialized task view -- never commit
+tasks/
+config.yml
+
+# Per-machine Claude Code permissions/MCP selection -- never commit
+.claude/settings.local.json

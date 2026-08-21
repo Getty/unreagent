@@ -72,6 +72,26 @@ needed at build time. CI is in `.github/workflows/ci.yml` and
   enabled. Bridge smoke-tests run before the agent starts (initialize
   handshake, port-3000 readiness for the in-editor plugin).
 
+## Delegation
+
+Delegate behavior-relevant code to the right agent instead of touching it yourself —
+the principle and the lanes are in `.claude/rules/unreagent-rules.md`.
+
+| Task | Agent |
+|---|---|
+| Implement / refactor / debug Go code | `unreagent-worker` (default) |
+| Write/extend tests | `unreagent-test-writer` |
+| Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
+| Pre-release audit | `unreagent-release-checker` |
+| README / example config / docs | `unreagent-doc-writer` |
+
+The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the
+main agent delegates rather than loading them. Skill sources live under
+`.claude/skills/` — `unreagent-core`, `-mcp-tools`, `-config`, `-windows`,
+`-skill-authoring`, plus the shared `karr` and `git-commit-style`.
+
+Work is coordinated on the repo's own `karr` board (`karr board`).
+
 ## Out of scope here
 
 This repo does **not** contain the UE project itself. `unreagent.exe` +
