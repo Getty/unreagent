@@ -1,0 +1,22 @@
+---
+class: standard
+created: 2026-08-21T22:13:05Z
+id: 3
+priority: high
+status: backlog
+tags:
+- skills
+- epic
+title: 'Epic: Class D skills -- unreagent''s own tools'
+updated: 2026-08-21T23:28:13Z
+---
+
+Four skills covering the tools unreagent itself exposes. No external source covers these -- only this project can supply them.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class D).
+
+Children:
+- #8  unreagent-files + unreagent-runtimes (host-side; also seeds the embedded set)
+- #13 unreagent-iterate + unreagent-build (editor loop)
+
+Container ticket -- do not claim it. Children move backlog -> todo as their dependencies close.
