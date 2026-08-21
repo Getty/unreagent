@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-08-21T23:22:54Z
+depends_on:
+- 9
+id: 14
+priority: high
+status: backlog
+tags:
+- skills
+- tests
+title: 'Tests: internal/skills parsing, Load, DescribeAll'
+updated: 2026-08-21T23:25:01Z
+---
+
+Go tests in the style of internal/supervisor/supervisor_test.go, stdlib testing only.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 8.
+Agent: unreagent-test-writer.
+
+Acceptance:
+- every embedded skill parses; name and description present and non-empty
+- malformed frontmatter makes Load() return an error rather than dropping the skill
+- DescribeAll output contains every skill name
+- sub-documents are discovered and attached to the right skill
+
+Depends on #9.
