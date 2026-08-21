@@ -1,0 +1,30 @@
+---
+class: standard
+created: 2026-08-21T23:24:04Z
+depends_on:
+- 10
+- 11
+- 12
+id: 27
+priority: medium
+status: backlog
+tags:
+- skills
+- docs
+title: 'Docs: skills section in README and unreagent.example.yaml'
+updated: 2026-08-21T23:26:05Z
+---
+
+Document the subsystem for users once it works.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 3, 5 and 6.3.
+Agent: unreagent-doc-writer.
+
+Acceptance:
+- README explains the two delivery paths and why MCP is the default (the generated tool description carries the skill list, so selection costs no extra round trip)
+- --no-skills-mcp documented as the file-based-skills switch
+- the materialization path, the unreagent- prefix guarantee and the removal of dropped skills are stated plainly -- users need to know what the launcher will and will not touch under <Project>/.claude/skills
+- unreagent.example.yaml comments match the shipped defaults
+- English throughout
+
+Depends on #10, #11, #12.
