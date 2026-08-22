@@ -6,6 +6,10 @@
 //   - POST mit JSON-RPC-Notification → 202 Accepted, leerer Body
 //   - GET                         → 405 Method Not Allowed
 //
+// Every POST must carry "Content-Type: application/json"; a POST that carries
+// an Origin header must carry an allowlisted one (see SetAllowedOrigins).
+// Both are browser defences — a regular MCP client sends no Origin at all.
+//
 // Implementierte Methoden: initialize, notifications/initialized, ping,
 // tools/list, tools/call. Sessions werden bewusst weggelassen (stateless).
 package mcp
@@ -14,7 +18,9 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 )
@@ -48,6 +54,8 @@ type Server struct {
 	// every POST request. Empty = open (compatible with the prior behavior
 	// that targets 127.0.0.1 only).
 	token string
+	// allowedOrigins, if non-empty, replaces the default loopback allowlist.
+	allowedOrigins []string
 
 	mu    sync.RWMutex
 	tools []Tool
@@ -67,6 +75,16 @@ func NewServer(name, version string, log func(string)) *Server {
 // thwart timing attacks.
 func (s *Server) SetToken(token string) {
 	s.token = token
+}
+
+// SetAllowedOrigins replaces the built-in Origin allowlist. Entries are matched
+// case-insensitively against the complete Origin header ("https://host:port").
+// An empty slice restores the default: loopback origins (http/https on
+// localhost, 127.0.0.1 or ::1, any port). Requests without an Origin header are
+// always accepted — that is what a non-browser MCP client sends. Call before
+// serving.
+func (s *Server) SetAllowedOrigins(origins []string) {
+	s.allowedOrigins = append([]string(nil), origins...)
 }
 
 // AddTool registriert ein Tool (vor dem Start aufrufen).
@@ -124,6 +142,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Browser defence (DNS rebinding / cross-site request forgery). A browser
+	// attaches Origin to every cross-site POST, including the "simple
+	// requests" that skip the CORS preflight — without this check any web page
+	// the user visits could drive the toolset of an open localhost server. A
+	// regular MCP client sends no Origin at all; that case stays allowed.
+	if origin := r.Header.Get("Origin"); origin != "" && !s.originAllowed(origin) {
+		s.log("MCP: rejected request from disallowed Origin " + origin)
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	// Demanding application/json takes the request out of the CORS "simple
+	// request" set: a cross-site page cannot set that header without a
+	// preflight, and the preflight (OPTIONS) is answered with 405 above.
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		http.Error(w, "unsupported media type: expected application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -282,6 +318,51 @@ func (s *Server) handle(method string, params json.RawMessage) (interface{}, *rp
 	default:
 		return nil, &rpcError{Code: errMethodNotFound, Message: "unbekannte Methode: " + method}
 	}
+}
+
+// originAllowed reports whether a browser Origin may drive this server.
+func (s *Server) originAllowed(origin string) bool {
+	if len(s.allowedOrigins) > 0 {
+		for _, allowed := range s.allowedOrigins {
+			if strings.EqualFold(strings.TrimSpace(allowed), origin) {
+				return true
+			}
+		}
+		return false
+	}
+	return isLoopbackOrigin(origin)
+}
+
+// isLoopbackOrigin is the default allowlist: http/https on a loopback host,
+// any port. Everything else — including the literal "null" of a sandboxed
+// document — is refused.
+func isLoopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// isJSONContentType accepts application/json with optional parameters.
+func isJSONContentType(v string) bool {
+	if v == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(v)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json"
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
