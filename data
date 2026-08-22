@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-22T04:38:42Z
+id: 46
+priority: low
+status: backlog
+tags:
+- config
+- bug
+title: permissions.enabled without claudeIntegration is accepted and does nothing
+updated: 2026-08-22T04:38:47Z
+---
+
+config.go:425: validate only couples permissions to mcp.enabled. With agent.claudeIntegration false no --permission-prompt-tool is ever passed (main.go:207), so the whole allow/deny policy is dead config that loads without complaint. Verified: permissions enabled with mode deny_all and claudeIntegration false returns no error. Acceptance: extend the existing check so enabled permissions plus an enabled agent without claudeIntegration is a load-time error.
