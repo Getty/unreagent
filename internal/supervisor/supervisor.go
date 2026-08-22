@@ -297,10 +297,19 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		cmd      *exec.Cmd
 		job      *Job
 		waitCh   chan error
+		streams  *streamSet
 		restarts int
 		backoff  <-chan time.Time
 		desired  = spec.Autostart
 	)
+
+	// releaseStreams flushes what the finished process left in its pipes into
+	// the log buffer before the exit is reported, then drops the read ends.
+	releaseStreams := func() {
+		streams.wait(streamDrainTimeout)
+		streams.close()
+		streams = nil
+	}
 
 	stop := func() {
 		if cmd == nil {
@@ -315,6 +324,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		if waitCh != nil {
 			<-waitCh
 		}
+		releaseStreams()
 		cmd, job, waitCh = nil, nil, nil
 	}
 
@@ -340,24 +350,27 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		if len(spec.Env) > 0 {
 			c.Env = append(os.Environ(), spec.Env...)
 		}
-		var stdout, stderr io.ReadCloser
+		var ss *streamSet
 		if spec.Foreground {
 			// Echte Konsole erben -> echtes TTY für interaktive TUIs.
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		} else {
+			// Own pipes instead of c.StdoutPipe(): Wait() closes the pipes it
+			// created itself as soon as the process is gone, throwing away
+			// whatever is still buffered — which is exactly the crash output.
 			var err error
-			if stdout, err = c.StdoutPipe(); err != nil {
-				s.logf("[%s] StdoutPipe: %v", spec.Name, err)
-				startFailed()
-				return
-			}
-			if stderr, err = c.StderrPipe(); err != nil {
-				s.logf("[%s] StderrPipe: %v", spec.Name, err)
+			if ss, err = newStreamSet(c); err != nil {
+				s.logf("[%s] output pipe: %v", spec.Name, err)
 				startFailed()
 				return
 			}
 		}
-		if err := c.Start(); err != nil {
+		err := c.Start()
+		// The child holds its own copies of the write ends; ours have to go or
+		// the readers never see EOF.
+		ss.closeWriteEnds()
+		if err != nil {
+			ss.close()
 			s.logf("[%s] start failed: %v", spec.Name, err)
 			if isNotFound(err) {
 				// The program does not exist at all — retries would be pointless.
@@ -383,13 +396,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				s.logf("[%s] WARN job assign failed: %v — the process runs unsupervised", spec.Name, err)
 			}
 		}
-		if !spec.Foreground {
-			go s.stream(svc, stdout)
-			go s.stream(svc, stderr)
-		}
+		ss.startDrain(func(r io.Reader) { s.stream(svc, r) })
 		wc := make(chan error, 1)
 		go func() { wc <- c.Wait() }()
-		cmd, job, waitCh = c, j, wc
+		cmd, job, waitCh, streams = c, j, wc, ss
 		s.logf("[%s] gestartet (pid %d)", spec.Name, c.Process.Pid)
 	}
 
@@ -428,6 +438,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			if job != nil {
 				job.Close()
 			}
+			// Flush the trailing output first: the lines a crashing process
+			// wrote last are the ones the user needs.
+			releaseStreams()
 			cmd, job, waitCh = nil, nil, nil
 			success := err == nil
 			s.logf("[%s] beendet (%s)", spec.Name, describeExit(err))
@@ -484,14 +497,149 @@ func waitChOrNil(ch chan error) <-chan error {
 	return ch
 }
 
-func (s *Supervisor) stream(svc *service, r io.Reader) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		svc.logbuf.add(line)
-		s.log(fmt.Sprintf("[%s] %s", svc.spec.Name, line))
+const (
+	// streamReadBuffer is the read chunk size for a process's output.
+	streamReadBuffer = 64 * 1024
+	// maxLogLine caps a single log line. Longer output is split across several
+	// entries — dropping it (what bufio.Scanner did on a too-long token) ended
+	// the whole stream, and the child then blocked forever on the full pipe.
+	maxLogLine = 1 << 20
+	// streamDrainTimeout bounds how long a finished process's pipes are drained
+	// before its exit is reported. Grandchildren inherit the write end
+	// (ShaderCompileWorker!) and can hold the pipe open long after the direct
+	// child is gone, so this may never be an unbounded wait.
+	streamDrainTimeout = 2 * time.Second
+)
+
+// streamSet owns the pipes of one process instance: the read ends this package
+// drains and — until Start returned — the parent's copies of the write ends.
+// Unlike cmd.StdoutPipe(), these are not known to exec.Cmd, so Wait() cannot
+// close them under the readers and discard buffered output.
+type streamSet struct {
+	read  []*os.File
+	write []*os.File
+	done  chan struct{}
+}
+
+// newStreamSet points stdout and stderr of c at fresh pipes.
+func newStreamSet(c *exec.Cmd) (*streamSet, error) {
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		return nil, err
 	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		_ = outR.Close()
+		_ = outW.Close()
+		return nil, err
+	}
+	c.Stdout, c.Stderr = outW, errW
+	return &streamSet{
+		read:  []*os.File{outR, errR},
+		write: []*os.File{outW, errW},
+		done:  make(chan struct{}),
+	}, nil
+}
+
+// startDrain runs drain on every read end; done is closed once all of them
+// returned, i.e. once the pipes are at EOF.
+func (ss *streamSet) startDrain(drain func(io.Reader)) {
+	if ss == nil {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, f := range ss.read {
+		wg.Add(1)
+		go func(f *os.File) {
+			defer wg.Done()
+			defer f.Close()
+			drain(f)
+		}(f)
+	}
+	go func() {
+		wg.Wait()
+		close(ss.done)
+	}()
+}
+
+// closeWriteEnds drops the parent's copies of the write ends right after Start;
+// without that the readers would never see EOF.
+func (ss *streamSet) closeWriteEnds() {
+	if ss == nil {
+		return
+	}
+	for _, f := range ss.write {
+		_ = f.Close()
+	}
+	ss.write = nil
+}
+
+// wait blocks until the drain goroutines are done, at most d.
+func (ss *streamSet) wait(d time.Duration) {
+	if ss == nil {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ss.done:
+	case <-t.C:
+	}
+}
+
+// close releases the read ends. A goroutine still stuck in Read is woken by it
+// (and reports os.ErrClosed, which stream treats as a normal end).
+func (ss *streamSet) close() {
+	if ss == nil {
+		return
+	}
+	for _, f := range ss.read {
+		_ = f.Close()
+	}
+}
+
+// stream copies one output pipe into the service's log buffer, line by line,
+// until EOF. It never gives up on the pipe: an over-long line is split, and a
+// read error is reported instead of being swallowed.
+func (s *Supervisor) stream(svc *service, r io.Reader) {
+	br := bufio.NewReaderSize(r, streamReadBuffer)
+	var pending []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		pending = append(pending, chunk...)
+		switch {
+		case err == nil:
+			s.emit(svc, trimEOL(pending))
+			pending = pending[:0]
+		case errors.Is(err, bufio.ErrBufferFull):
+			// No line break yet — emit in pieces rather than buffering without
+			// bound or dropping the rest of the stream.
+			if len(pending) >= maxLogLine {
+				s.emit(svc, pending)
+				pending = pending[:0]
+			}
+		default:
+			if len(pending) > 0 {
+				s.emit(svc, trimEOL(pending))
+			}
+			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
+				s.logf("[%s] output stream ended: %v", svc.spec.Name, err)
+			}
+			return
+		}
+	}
+}
+
+func (s *Supervisor) emit(svc *service, line []byte) {
+	text := string(line)
+	svc.logbuf.add(text)
+	s.log(fmt.Sprintf("[%s] %s", svc.spec.Name, text))
+}
+
+// trimEOL strips the line terminator, CRLF included (Windows).
+func trimEOL(b []byte) []byte {
+	b = bytes.TrimSuffix(b, []byte("\n"))
+	return bytes.TrimSuffix(b, []byte("\r"))
 }
 
 func shouldRestart(spec ServiceSpec, restarts int, success bool) bool {
