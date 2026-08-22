@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-08-22T04:36:24Z
+id: 38
+priority: high
+status: backlog
+tags:
+- config
+- security
+- bug
+title: Permission policy is inert in the default configuration
+updated: 2026-08-22T04:36:39Z
+---
+
+main.go:213-224: with agent.window unset (the default) and no -p in agent.args, agentInteractive is true, so the launcher never passes --permission-prompt-tool. For mode allow_all it passes the skip-permissions flag instead. The approve tool is registered but Permissions.Decide is never called and the deny list is never consulted.
+Trigger: exactly the config the README quick start at line 133 and unreagent.example.yaml:42-46 ship -- permissions enabled, mode allow_all, a deny entry for a destructive shell command. The agent runs that command with no prompt and no deny check, and nothing is logged about it. README:309-315 documents the prompt-tool path unconditionally: the code is right about the CLI constraint, the docs are wrong, and together they promise a safety net that does not exist.
+Acceptance: in interactive mode with permissions.enabled, either refuse allow_all at load time or log a loud warning that permissions are not enforced in window mode -- never silently upgrade to the skip-permissions flag. README and the example config are corrected in the same pass. This is a decision for the maintainer: refuse or warn.
