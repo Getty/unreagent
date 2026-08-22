@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-22T04:37:23Z
+id: 41
+priority: medium
+status: backlog
+tags:
+- config
+- bug
+title: A placeholder in unreal.project silently discards the setting
+updated: 2026-08-22T04:37:33Z
+---
+
+config.go:522: resolveProject skips the explicit branch when the value contains a placeholder, falls through to globbing next to the config file, and Load at :260 then overwrites Unreal.Project with that possibly empty result. Verified: unreal.project set to a PROJECT_DIR-prefixed path with the uproject in a subdirectory yields an empty project, an editor path starting at /Engine, compile args carrying an empty -Project= and an empty files.root. Load succeeds.
+Acceptance: PROJECT_DIR and PROJECT_NAME, which do not depend on unreal.project, are substituted before resolveProject runs -- or a placeholder in that field is a load-time error.
