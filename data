@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-08-22T04:17:14Z
+created: 2026-08-21T23:22:01Z
+id: 8
+priority: high
+started: 2026-08-22T04:17:14Z
+status: done
+tags:
+- skills
+- class-d
+title: 'Skills: unreagent-files + unreagent-runtimes (Class D, host-side)'
+updated: 2026-08-22T04:17:14Z
+---
+
+Author the two Class D skills covering unreagent's host-side tools. These are the first two documents under skills/, so they also establish the on-disk layout and frontmatter conventions every later skill follows.
+
+- skills/unreagent-files/SKILL.md -- read_file, list_dir, write_file, edit_file
+- skills/unreagent-runtimes/SKILL.md -- run_python, run_node; state explicitly that these are HOST-side runtimes, not UE Python (that is ue-python via execute_script)
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 4 and 7 (Class D).
+Agent: unreagent-skill-author.
+
+Acceptance:
+- YAML frontmatter with name + description; description states WHEN to use the skill
+- no toolkit_tools entries (these are unreagent tools, not plugin tools)
+- agent-agnostic prose: no Claude-Code-specific constructs
+- written against the actual tool handlers in cmd/launcher/main.go, not guessed
+2026-08-21 23:54 Both documents written and cross-checked against the Go source by the orchestrating agent. skills/unreagent-files/SKILL.md and skills/unreagent-runtimes/SKILL.md, 195 lines each, untracked in the working tree, no git operations performed. Frontmatter parses; name + description only, no invented fields. Every documented string, cap, default and error message verified against cmd/launcher/main.go, internal/config/config.go, internal/mcp/mcp.go and internal/supervisor/supervisor.go. Two review findings fixed: an over-generalised empty-path rule that contradicted the document's own failure table, and a Linux PATH error string quoted where the shipped Windows .exe emits the %PATH% form. Ten code findings routed: #28 (write_file data loss on a typo), #29 (run_node description contradicts behaviour), plus notes on #6, #9 and #12. Unblocks #9 (go:embed now has a non-empty pattern) and sets the format precedent for the remaining 21 skill documents.
