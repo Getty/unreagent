@@ -1,0 +1,51 @@
+---
+class: standard
+completed: 2026-08-22T04:17:09Z
+created: 2026-08-21T23:52:55Z
+id: 29
+priority: medium
+started: 2026-08-22T04:17:09Z
+status: done
+tags:
+- mcp
+- runtimes
+- bug
+title: 'run_node: description contradicts behaviour (ESM + node_modules)'
+updated: 2026-08-22T04:17:09Z
+---
+
+The run_node tool description at cmd/launcher/main.go:439 makes two claims that the implementation does not honour. Found while authoring unreagent-runtimes (#8), verified against the code.
+
+Claimed: 'node_modules des Projekts werden aufgeloest' and 'CommonJS oder ESM je nach package.json'.
+
+Actual: scriptAction (:446) writes the temp file with the extension 'mjs', so Node treats it as an ES module regardless of package.json -- require is undefined. And os.CreateTemp("") (:511) puts that file in the SYSTEM temp directory, so Node resolves bare specifiers by walking up from there and never reaches the project's node_modules: import x from 'lodash' fails with ERR_MODULE_NOT_FOUND even when installed.
+
+Two ways out, and this is the decision the ticket carries:
+(a) write the temp file into the runtime's working directory (runtimes.node.project, else the agent workdir). Bare imports then resolve, the description becomes true, and the tool gets materially more useful. Costs: a stray file inside the project if cleanup fails, and the same question then arises for run_python.
+(b) correct the description and keep the current isolation.
+
+Whichever is chosen, skills/unreagent-runtimes/SKILL.md documents the current behaviour plus the createRequire workaround and must be updated in the same change (unreagent-skill-author).
+
+Related: #6 translates these descriptions to English -- translating this one as-is would carry the false claim over. Sequence accordingly.
+
+--- Decision by the maintainer, 2026-08-22 ---
+Option (a): write the temp file into the runtime's working directory (runtimes.<lang>.project, else the agent workdir) instead of the system temp dir. Symmetric for BOTH run_python and run_node -- for Python this additionally makes sys.path[0] the project, so loose .py modules beside the pyproject.toml become importable, which is the same class of fix as node_modules resolution.
+
+Consequences that are part of this ticket, not follow-ups:
+- A hard kill leaves an unreagent-*.mjs / unreagent-*.py behind in the project. The defer os.Remove in scriptAction (main.go:516) does not run when the process is killed. Needs a .gitignore entry for the pattern, and consider sweeping stale matches at launcher start.
+- The file becomes visible to anything watching the project directory. Decide where exactly inside the workdir it lands.
+- The tool descriptions at main.go:420 and :439 must end up telling the truth about what now works. Keep them German; #6 sweeps the file.
+- skills/unreagent-runtimes/SKILL.md documents the current behaviour in detail: the 'Execution model' table, the 'sys.path[0] is the temp directory' bullet, the whole 'run_node specifics' section including the createRequire workaround, and two failure-mode rows. All of that changes with this fix and must be updated in the same change (unreagent-skill-author) -- otherwise the shipped skill actively teaches a workaround for a problem that no longer exists.
+2026-08-22 01:16 Implemented per the maintainer's option (a) and cross-checked by the orchestrating agent. Files: cmd/launcher/main.go, .gitignore, skills/unreagent-runtimes/SKILL.md (rewritten), cmd/launcher/scriptaction_test.go (new, 9 tests).
+
+Behaviour: scriptAction now calls os.CreateTemp(dir, ...) with the runtime working directory instead of the system temp dir, so run_python and run_node are both fixed by one change. Proven end to end against a running launcher over real JSON-RPC, with a hand-built node_modules/demopkg (no network): before, ERR_MODULE_NOT_FOUND for a bare import from /tmp; after, the package resolves. Python equivalent with a loose module beside pyproject.toml. Both tool descriptions rewritten to match, still German -- #6 sweeps the file.
+
+Supporting work: runtimeDir() is the single place deciding the directory, used by scriptAction, sweepStaleScripts AND prepareRuntimes (the third call site was pulled in during review -- otherwise uv sync would prepare one directory while scripts run in another). No fallback to the system temp dir: a create failure returns an error naming the directory and the config key, because a fallback would silently restore the resolution bug. sweepStaleScripts removes leftovers at startup, matching only prefix + decimal digits + a known extension, so a hand-written unreagent-helper.py is safe.
+
+Review findings, both fixed: every new comment was German where CLAUDE.md requires English (user-visible strings correctly stayed German); and a test gap where all 'must match' rows were hand-written literals, coupling the sweep to os.CreateTemp's alphabet by assumption rather than by test -- if the stdlib changed it, the sweep would stop recognising its own files and the suite would stay green. Closed by TestIsStaleScriptNameRecognizesRealCreateTempOutput, which feeds real CreateTemp output through isStaleScriptName.
+
+Verified: 22 tests in cmd/launcher, all pass with -count=1; go vet and gofmt clean; make linux and make windows both build.
+
+UNVERIFIED ON WINDOWS. Everything ran on Linux. os.CreateTemp into the project directory is portable Go, but a UE project root on Windows can be locked by antivirus, a Perforce or Git file watcher, or sit on a network share -- none reachable from here, and this change writes into that directory on every single run. This is the one part of the ticket that wants a real Windows smoke test before release.
+
+Doc follow-ups left open deliberately: unreagent.example.yaml does not show runtimes.<lang>.project at all, and that key now decides where files get written into a user's repository (#27 / doc-writer). The .gitignore entries added here cover this repo only; the skill document tells the agent to offer the same entries in the user's project.
