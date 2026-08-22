@@ -14,3 +14,8 @@ config.yml
 
 # Per-machine Claude Code permissions/MCP selection -- never commit
 .claude/settings.local.json
+
+# run_python/run_node script files left behind by a hard kill; the digit prefix
+# keeps hand-written files like unreagent-helper.py out of the pattern
+unreagent-[0-9]*.py
+unreagent-[0-9]*.mjs

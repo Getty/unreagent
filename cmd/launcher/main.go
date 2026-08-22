@@ -184,6 +184,9 @@ func run() error {
 	if agentWorkdir == "" && cfg.Unreal.Project != "" {
 		agentWorkdir = filepath.Dir(cfg.Unreal.Project)
 	}
+	// Remove leftover script files before the MCP server can write new ones
+	// (see scriptAction).
+	sweepStaleScripts(cfg, agentWorkdir, logger)
 	mcpURL := "http://" + cfg.MCP.Address + "/mcp"
 	var mcpServers map[string]interface{}
 	if cfg.MCP.Enabled {
@@ -411,14 +414,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	// --- Runtime-Tools ---
 	if cfg.Runtimes.Python.Enabled {
-		dir := cfg.Runtimes.Python.Project
-		if dir == "" {
-			dir = agentWorkdir
-		}
+		dir := runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir)
 		uv := cfg.Runtimes.Python.UV
 		srv.AddTool(mcp.Tool{
 			Name:        "run_python",
-			Description: "Führt Python-Code in einer sauberen, uv-verwalteten Umgebung aus und gibt stdout/stderr + Exit-Code zurück. Die Umgebung (venv, Abhängigkeiten aus pyproject.toml/requirements, passende Python-Version) wird automatisch von uv bereitgestellt — du musst KEIN venv anlegen, nichts installieren und die Umgebung nicht analysieren. Übergib einfach den Code. Für zusätzliche Pakete nutze in pyproject.toml deklarierte Deps; ad-hoc geht 'import' nur für bereits vorhandene.",
+			Description: "Führt Python-Code in einer sauberen, uv-verwalteten Umgebung aus und gibt stdout/stderr + Exit-Code zurück. Die Umgebung (venv, Abhängigkeiten aus pyproject.toml/requirements, passende Python-Version) wird automatisch von uv bereitgestellt — du musst KEIN venv anlegen, nichts installieren und die Umgebung nicht analysieren. Übergib einfach den Code. Das Skript wird im Projektverzeichnis abgelegt und dort ausgeführt, deshalb sind Module, die neben der pyproject.toml liegen, direkt per Name importierbar. Für zusätzliche Pakete nutze in pyproject.toml deklarierte Deps; ad-hoc geht 'import' nur für bereits vorhandene.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -430,14 +430,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		})
 	}
 	if cfg.Runtimes.Node.Enabled {
-		dir := cfg.Runtimes.Node.Project
-		if dir == "" {
-			dir = agentWorkdir
-		}
+		dir := runtimeDir(cfg.Runtimes.Node.Project, agentWorkdir)
 		node := cfg.Runtimes.Node.Node
 		srv.AddTool(mcp.Tool{
 			Name:        "run_node",
-			Description: "Führt Node.js-Code im Projektkontext aus und gibt stdout/stderr + Exit-Code zurück. node_modules des Projekts werden aufgelöst — du musst die Umgebung nicht selbst einrichten oder analysieren. Übergib einfach den Code (CommonJS oder ESM je nach package.json).",
+			Description: "Führt Node.js-Code im Projektkontext aus und gibt stdout/stderr + Exit-Code zurück. Das Skript wird im Projektverzeichnis abgelegt und dort ausgeführt, deshalb werden bare Imports über die node_modules des Projekts aufgelöst — du musst die Umgebung nicht selbst einrichten oder analysieren. Der Code läuft IMMER als ES-Modul, unabhängig von der package.json: import/export und top-level await funktionieren, require ist nicht definiert. CommonJS-Pakete erreichst du per dynamischem import() oder per createRequire aus 'node:module'.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -500,17 +497,50 @@ func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (sup
 	}
 }
 
-// scriptAction baut einen Handler, der Code in eine temporäre Datei schreibt und
-// per command (pre-args + Datei) ausführt.
+// scriptPrefix is the name prefix of the script files scriptAction creates.
+const scriptPrefix = "unreagent-"
+
+// scriptExts are the extensions scriptAction assigns (run_python, run_node).
+var scriptExts = []string{"py", "mjs"}
+
+// runtimeDir returns the working directory of a runtime: the configured project
+// directory, otherwise the agent workdir, otherwise the current directory.
+// Storing the script (scriptAction) and sweeping it up (sweepStaleScripts) must
+// agree on the very same directory — which is why the decision is made here and
+// nowhere else.
+func runtimeDir(project, agentWorkdir string) string {
+	if project != "" {
+		return project
+	}
+	if agentWorkdir != "" {
+		return agentWorkdir
+	}
+	return "."
+}
+
+// scriptAction builds a handler that writes code to a temporary file and runs it
+// via command (pre-args + file).
+//
+// The file deliberately lands IN the working directory of the runtime and not in
+// the system temp directory: only there does Node resolve bare specifiers via the
+// project's node_modules, and only there is sys.path[0] the project directory for
+// Python (so modules sitting next to it become importable). There is deliberately
+// no fallback to the system temp directory — it would silently break exactly that
+// resolution again.
 func scriptAction(sup *supervisor.Supervisor, command string, pre []string, dir, ext, label string) mcp.ToolHandler {
 	return func(args map[string]interface{}) mcp.ToolResult {
 		code := getString(args, "code", "")
 		if code == "" {
 			return mcp.ToolResult{Text: "Fehler: 'code' fehlt", IsError: true}
 		}
-		f, err := os.CreateTemp("", "unreagent-*."+ext)
+		f, err := os.CreateTemp(dir, scriptPrefix+"*."+ext)
 		if err != nil {
-			return errResult(err)
+			return mcp.ToolResult{
+				Text: fmt.Sprintf("Fehler: Skriptdatei konnte nicht im Arbeitsverzeichnis der %s-Runtime angelegt werden (%s): %v"+
+					"\nDas Verzeichnis muss existieren und beschreibbar sein — prüfe runtimes.%s.project bzw. agent.workdir.",
+					label, dir, err, label),
+				IsError: true,
+			}
 		}
 		name := f.Name()
 		defer os.Remove(name)
@@ -709,24 +739,89 @@ func optionalPathSchema(name, desc string) map[string]interface{} {
 	}
 }
 
+// sweepStaleScripts removes script files that a hard kill of the launcher left
+// behind in the working directories of the runtimes: the defer os.Remove in
+// scriptAction no longer runs in that case, and ever since scripts are stored
+// there, the file sits in the user's project instead of the system temp
+// directory. Called at startup, before the MCP server can write new scripts.
+func sweepStaleScripts(cfg *config.Config, agentWorkdir string, logger func(string)) {
+	var dirs []string
+	add := func(d string) {
+		for _, seen := range dirs {
+			if seen == d {
+				return
+			}
+		}
+		dirs = append(dirs, d)
+	}
+	if cfg.Runtimes.Python.Enabled {
+		add(runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir))
+	}
+	if cfg.Runtimes.Node.Enabled {
+		add(runtimeDir(cfg.Runtimes.Node.Project, agentWorkdir))
+	}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // missing/unreadable: scriptAction reports that loudly enough
+		}
+		for _, e := range entries {
+			if e.IsDir() || !isStaleScriptName(e.Name()) {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			if err := os.Remove(path); err != nil {
+				logger("WARN liegengebliebene Skriptdatei nicht entfernbar: " + path + ": " + err.Error())
+				continue
+			}
+			logger("Liegengebliebene Skriptdatei entfernt: " + path)
+		}
+	}
+}
+
+// isStaleScriptName matches exactly the names os.CreateTemp generates from
+// "unreagent-*.<ext>": the prefix, then decimal digits only (the replacement for
+// '*'), then one of the script extensions. The user's own files such as
+// "unreagent-helper.py" therefore deliberately do not match.
+func isStaleScriptName(name string) bool {
+	if !strings.HasPrefix(name, scriptPrefix) {
+		return false
+	}
+	rest := name[len(scriptPrefix):]
+	dot := strings.LastIndexByte(rest, '.')
+	if dot < 1 { // at least one digit before the extension
+		return false
+	}
+	var known bool
+	for _, ext := range scriptExts {
+		if rest[dot+1:] == ext {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return false
+	}
+	for i := 0; i < dot; i++ {
+		if rest[i] < '0' || rest[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // prepareRuntimes wärmt die Umgebungen vor (uv sync / npm install), falls
 // konfiguriert und ein Manifest vorhanden ist. Läuft asynchron.
 func prepareRuntimes(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
 	if cfg.Runtimes.Python.Enabled && cfg.Runtimes.Python.PrepareOnStart {
-		dir := cfg.Runtimes.Python.Project
-		if dir == "" {
-			dir = agentWorkdir
-		}
+		dir := runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir)
 		if fileExists(filepath.Join(dir, "pyproject.toml")) {
 			logger("Runtime: bereite Python vor (uv sync) …")
 			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Python.UV, []string{"sync"}, dir, nil, "prepare:python") }()
 		}
 	}
 	if cfg.Runtimes.Node.Enabled && cfg.Runtimes.Node.PrepareOnStart {
-		dir := cfg.Runtimes.Node.Project
-		if dir == "" {
-			dir = agentWorkdir
-		}
+		dir := runtimeDir(cfg.Runtimes.Node.Project, agentWorkdir)
 		if fileExists(filepath.Join(dir, "package.json")) {
 			logger("Runtime: bereite Node vor (npm install) …")
 			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Node.Npm, []string{"install"}, dir, nil, "prepare:node") }()
