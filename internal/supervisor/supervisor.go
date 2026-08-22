@@ -76,8 +76,9 @@ type CommandResult struct {
 	ExitCode int    `json:"exitCode"`
 }
 
-// ctrlTimeout is how long a control message waits for the service's loop.
-const ctrlTimeout = 10 * time.Second
+// defaultCtrlTimeout is how long a control message waits for the service's
+// loop before the service counts as unresponsive.
+const defaultCtrlTimeout = 10 * time.Second
 
 // Supervisor hält alle Services und Befehle.
 type Supervisor struct {
@@ -97,7 +98,7 @@ func New(log Logger) *Supervisor {
 	}
 	return &Supervisor{
 		log:         log,
-		ctrlTimeout: ctrlTimeout,
+		ctrlTimeout: defaultCtrlTimeout,
 		services:    map[string]*service{},
 		commands:    map[string]CommandSpec{},
 	}
