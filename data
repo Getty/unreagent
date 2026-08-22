@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-22T04:38:52Z
+id: 47
+priority: low
+status: backlog
+tags:
+- config
+- docs
+title: 'Config validation and overlay documentation: seven smaller findings'
+updated: 2026-08-22T04:39:09Z
+---
+
+1) The house rules say a list or map in unreagent.local.yaml replaces the base one. Verified: lists do replace and map VALUES replace -- overriding commands.compile with only a command key silently drops its description and args -- but map KEYS merge, so agent.env and mcp.extraServers accumulate. Bools are fine, a false in the overlay does turn a base true off. The doc sentence needs splitting, the code is right.
+2) config.go:280,298,301: a zero restartDelaySeconds or startDelaySeconds cannot be expressed, it is coerced to the default and this is documented nowhere. 3) config.go:274: unreal.args set to null in the overlay restores the built-in default instead of clearing; an empty list works. 4) config.go:406-434: mcp.writeConfig format is unvalidated, a typo falls through to mcp_json and the log then reports the typo as the format.
+5) config.go:479: engine autodetect sorts lexicographically, so once UE_5.10 exists it sorts below UE_5.9 and the 'highest version first' comment becomes false. 6) config.go:494: registryEngine hardcodes 5.7 down to 5.4, so a 5.8 install is missed. Both Windows-only, unverified from Linux. 7) config.go:520-539: an explicit unreal.project is never checked for existence, so a stale path loads cleanly and fails later as a UE startup error.
