@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-22T04:39:26Z
+id: 49
+priority: low
+status: backlog
+tags:
+- mcp
+- security
+title: resolve() does not follow symlinks, so a link escapes files.root
+updated: 2026-08-22T04:39:31Z
+---
+
+main.go:571-583: dot-dot traversal and absolute inputs are correctly contained because filepath.Join cleans them, but a symlink inside files.root pointing outside is followed for both read and write. Low priority on Windows where creating symlinks is privileged, real on the Linux dev box. Acceptance: EvalSymlinks on the resolved path before the prefix check, with a test for a link pointing out of the root.
