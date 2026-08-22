@@ -555,7 +555,7 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 	srv.AddTool(mcp.Tool{
 		Name:        "read_file",
 		Description: "Liest eine Textdatei aus dem UE-Projekt (Pfad relativ zum Projekt-Root). Damit kann ein Agent Quellcode/Config/Logs lesen, ohne lokal anwesend zu sein. Große Dateien werden gekürzt.",
-		InputSchema: pathSchema("path", "Pfad zur Datei, relativ zum Projekt-Root"),
+		InputSchema: requiredPathSchema("path", "Pfad zur Datei, relativ zum Projekt-Root"),
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			path := getString(args, "path", "")
 			if path == "" {
@@ -580,7 +580,7 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 	srv.AddTool(mcp.Tool{
 		Name:        "list_dir",
 		Description: "Listet Einträge eines Verzeichnisses im UE-Projekt (Pfad relativ zum Root, leer = Root). Verzeichnisse enden mit /.",
-		InputSchema: pathSchema("path", "Verzeichnis relativ zum Root (leer = Root)"),
+		InputSchema: optionalPathSchema("path", "Verzeichnis relativ zum Root (leer = Root)"),
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			abs, err := resolve(getString(args, "path", "."))
 			if err != nil {
@@ -627,7 +627,10 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			if err != nil {
 				return errResult(err)
 			}
-			content := getString(args, "content", "")
+			content, ok := stringArg(args, "content")
+			if !ok {
+				return mcp.ToolResult{Text: "Fehler: 'content' fehlt", IsError: true}
+			}
 			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 				return errResult(err)
 			}
@@ -652,6 +655,9 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			path := getString(args, "path", "")
+			if path == "" {
+				return mcp.ToolResult{Text: "Fehler: 'path' fehlt", IsError: true}
+			}
 			abs, err := resolve(path)
 			if err != nil {
 				return errResult(err)
@@ -659,6 +665,10 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			oldS := getString(args, "old_string", "")
 			if oldS == "" {
 				return mcp.ToolResult{Text: "Fehler: 'old_string' fehlt", IsError: true}
+			}
+			newS, ok := stringArg(args, "new_string")
+			if !ok {
+				return mcp.ToolResult{Text: "Fehler: 'new_string' fehlt", IsError: true}
 			}
 			b, err := os.ReadFile(abs)
 			if err != nil {
@@ -669,7 +679,7 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			if n == 0 {
 				return mcp.ToolResult{Text: "Fehler: 'old_string' nicht gefunden", IsError: true}
 			}
-			content = strings.ReplaceAll(content, oldS, getString(args, "new_string", ""))
+			content = strings.ReplaceAll(content, oldS, newS)
 			if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 				return errResult(err)
 			}
@@ -678,7 +688,19 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 	})
 }
 
-func pathSchema(name, desc string) map[string]interface{} {
+// requiredPathSchema describes a single string path argument that the tool
+// refuses to run without. The "required" key lets a schema-validating client
+// reject the call before it ever reaches the handler.
+func requiredPathSchema(name, desc string) map[string]interface{} {
+	schema := optionalPathSchema(name, desc)
+	schema["required"] = []string{name}
+	return schema
+}
+
+// optionalPathSchema describes a single string path argument the tool may be
+// called without, because the handler substitutes a default. It deliberately
+// carries no "required" key: omitting the argument must stay a legal call.
+func optionalPathSchema(name, desc string) map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -1184,6 +1206,15 @@ func getString(args map[string]interface{}, key, def string) string {
 		return v
 	}
 	return def
+}
+
+// stringArg reads a string argument and reports whether the key was actually
+// present and held a string. Unlike getString it tells a missing key apart from
+// an empty value, which matters wherever "" is a legal payload but a typo in the
+// key name would otherwise silently destroy data.
+func stringArg(args map[string]interface{}, key string) (string, bool) {
+	v, ok := args[key].(string)
+	return v, ok
 }
 
 func getInt(args map[string]interface{}, key string, def int) int {
