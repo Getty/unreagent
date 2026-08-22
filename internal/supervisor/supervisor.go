@@ -65,6 +65,9 @@ type ServiceStatus struct {
 	PID      int    `json:"pid"`
 	Restarts int    `json:"restarts"`
 	Desired  bool   `json:"desired"`
+	// Unresponsive is set when the service's control loop did not answer in
+	// time. The other fields are then unknown — not "stopped".
+	Unresponsive bool `json:"unresponsive,omitempty"`
 }
 
 // CommandResult ist das Ergebnis eines Einmal-Befehls.
@@ -73,13 +76,18 @@ type CommandResult struct {
 	ExitCode int    `json:"exitCode"`
 }
 
+// ctrlTimeout is how long a control message waits for the service's loop.
+const ctrlTimeout = 10 * time.Second
+
 // Supervisor hält alle Services und Befehle.
 type Supervisor struct {
-	log      Logger
-	mu       sync.Mutex
-	services map[string]*service
-	order    []string
-	commands map[string]CommandSpec
+	log Logger
+	// ctrlTimeout is a field so tests can shorten it; New sets the default.
+	ctrlTimeout time.Duration
+	mu          sync.Mutex
+	services    map[string]*service
+	order       []string
+	commands    map[string]CommandSpec
 }
 
 // New erzeugt einen Supervisor mit der angegebenen Log-Senke.
@@ -88,9 +96,10 @@ func New(log Logger) *Supervisor {
 		log = func(string) {}
 	}
 	return &Supervisor{
-		log:      log,
-		services: map[string]*service{},
-		commands: map[string]CommandSpec{},
+		log:         log,
+		ctrlTimeout: ctrlTimeout,
+		services:    map[string]*service{},
+		commands:    map[string]CommandSpec{},
 	}
 }
 
@@ -160,8 +169,8 @@ func (s *Supervisor) send(name string, kind ctrlKind) (ServiceStatus, error) {
 	reply := make(chan ServiceStatus, 1)
 	select {
 	case svc.ctrl <- ctrlMsg{kind: kind, reply: reply}:
-	case <-time.After(10 * time.Second):
-		return ServiceStatus{}, fmt.Errorf("Service %q reagiert nicht", name)
+	case <-time.After(s.ctrlTimeout):
+		return ServiceStatus{}, fmt.Errorf("service %q is not responding", name)
 	}
 	return <-reply, nil
 }
@@ -182,16 +191,30 @@ func (s *Supervisor) RestartService(name string) (ServiceStatus, error) {
 }
 
 // Status liefert Momentaufnahmen aller Services in Registrierungsreihenfolge.
+//
+// A service whose control loop does not answer is reported as unresponsive
+// rather than dropped: the caller has to be able to tell "no such service" from
+// "the loop is blocked". The services are queried concurrently, so one blocked
+// loop does not add its timeout to every other one.
 func (s *Supervisor) Status() []ServiceStatus {
 	s.mu.Lock()
 	names := append([]string(nil), s.order...)
 	s.mu.Unlock()
-	out := make([]ServiceStatus, 0, len(names))
-	for _, name := range names {
-		if st, err := s.send(name, ctrlStatus); err == nil {
-			out = append(out, st)
-		}
+	out := make([]ServiceStatus, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			st, err := s.send(name, ctrlStatus)
+			if err != nil {
+				s.logf("[%s] status: %v", name, err)
+				st = ServiceStatus{Name: name, Unresponsive: true}
+			}
+			out[i] = st
+		}(i, name)
 	}
+	wg.Wait()
 	return out
 }
 
