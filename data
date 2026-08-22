@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-22T04:34:40Z
+id: 37
+priority: low
+status: backlog
+tags:
+- supervisor
+title: 'Supervisor robustness: exit/stop race, PreStart on the loop, reply timeout'
+updated: 2026-08-22T04:35:02Z
+---
+
+Five smaller findings from the same audit. 1) supervisor.go:403 vs 424: waitCh and svc.ctrl can both be ready and Go picks at random, so a natural exit racing a manual stop can fire OnExit for a stop the user asked for -- in headless mode that shuts the whole launcher down instead of just the agent. Window is microseconds, derived rather than observed.
+2) supervisor.go:319-321: PreStart runs synchronously inside the control loop, so the service accepts no control messages while uePreStart shells out twice and clears Saved/Crashes. Past 10s callers get 'service does not respond'. 3) supervisor.go:153-167: send guards the send with 10s but then waits for the reply with a bare channel receive and no timeout, so a blocked loop hangs the MCP handler forever.
+4) supervisor.go:352,384,413: a negative restartDelaySeconds makes time.After fire immediately, giving an unthrottled respawn loop. config.go:280-281,298-299 only coerces 0 to 3, so a negative value passes validation. 5) supervisor.go:102-111: AddService overwrites the map entry but appends to s.order unconditionally, so a duplicate name runs two loops on one service struct. Not reachable from the current config.
+Also from the audit, worth a comment rather than a rewrite: job_windows.go:94-107 assigns the process to the job after Start returns, so anything the child spawns in that sub-millisecond window escapes KILL_ON_JOB_CLOSE. The clean fix needs CREATE_SUSPENDED or PROC_THREAD_ATTRIBUTE_JOB_LIST, neither of which os/exec exposes. PID reuse is not a hazard, Go holds the process handle.
