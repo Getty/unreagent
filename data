@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-22T04:39:14Z
+id: 48
+priority: low
+status: backlog
+tags:
+- cli
+- bug
+title: extractSubcommand misses the sub-command after a flag
+updated: 2026-08-22T04:39:20Z
+---
+
+main.go:1376-1390: a config flag written with an equals sign, or a boolean flag, makes extractSubcommand return empty, so the launcher starts the full stack -- editor and agent -- instead of running the one-shot setup the user asked for. An unknown sub-command also falls through to launching rather than erroring. Acceptance: recognise a fixed set of sub-command words positionally and reject unknown positionals.
