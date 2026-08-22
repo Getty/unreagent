@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-22T04:37:39Z
+id: 42
+priority: medium
+status: backlog
+tags:
+- config
+- docs
+title: Placeholder substitution covers only half the string fields
+updated: 2026-08-22T04:37:50Z
+---
+
+config.go:355-383. Substituted: unreal.editor, project, args; agent.workdir; runtimes project paths; files.root; commands; mcp.extraServers; mcp.writeConfig paths. Not substituted, verified literal: agent.command, agent.args, agent.env values, agent.hermes.configPath, permissions allow and deny, runtimes.python.uv, runtimes.node.node and npm, mcp.address.
+unreagent.example.yaml:8-13 and README:142-143 present placeholders as a general config feature with no field list. Concretely a permission rule containing PROJECT_DIR silently never matches, and hermes.configPath with a placeholder is made absolute into a literal directory under the CWD. Acceptance: the replacer runs over at least agent.command/args/env, permissions entries and hermes.configPath, and the supported field list is documented.
