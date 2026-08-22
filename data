@@ -1,0 +1,53 @@
+---
+class: standard
+completed: 2026-08-22T04:17:04Z
+created: 2026-08-21T23:52:50Z
+id: 28
+priority: high
+started: 2026-08-22T04:17:04Z
+status: done
+tags:
+- files
+- mcp
+- bug
+title: Harden file-tool argument handling (data loss on a typo)
+updated: 2026-08-22T04:17:04Z
+---
+
+Three argument-handling asymmetries in registerFileTools, found while authoring the unreagent-files skill (#8) and verified against the code. The first one destroys data.
+
+1. write_file silently truncates on a misspelled content argument.
+   cmd/launcher/main.go:626 reads content via getString(args, "content", ""), which returns the default for a missing OR empty value, and there is no presence check -- unlike path at :620. A call with 'contents' instead of 'content' writes zero bytes over the target and REPORTS SUCCESS ('geschrieben: <path> (0 Bytes)'). The InputSchema at :619 does declare content required, so a schema-validating client is protected; a client that does not validate is not, and MCP clients frequently do not.
+   Note that an intentional empty write is legitimate, so the fix is a presence check on the key, not a rejection of the empty string.
+
+2. edit_file has no path check.
+   main.go:645 goes straight to resolve(getString(args,"path","")). read_file (:560) and write_file (:620) both guard. An omitted path resolves to the root directory and fails with the OS 'is a directory' error instead of 'Fehler: path fehlt'.
+
+3. pathSchema emits no required array.
+   main.go:684-688 builds the schema for read_file and list_dir without a required key, so read_file's schema advertises path as optional while its handler rejects an empty one. Schema and handler disagree.
+
+Agent: unreagent-worker. Regression tests belong with it (unreagent-test-writer) -- at minimum: a write_file call carrying a misspelled content key must not modify the target file.
+
+--- Amended 2026-08-22, found while scoping the fix ---
+4. edit_file has the SAME data-loss bug as write_file, and it is worse there.
+   main.go:672: strings.ReplaceAll(content, oldS, getString(args, "new_string", "")). A misspelled new_string key resolves to the empty string, so every occurrence of old_string is DELETED and the call reports '<n> Vorkommen ersetzt'. This hits the one tool whose purpose is a non-destructive change, and unlike write_file there is not even a byte count to notice it by.
+
+Target semantics for all four points -- decided, do not re-litigate:
+- Add one presence-aware helper next to getString (main.go:1182), e.g. stringArg(args, key) (string, bool) returning ok only when the key EXISTS and holds a string. getString stays as it is; other call sites keep using it.
+- write_file: 'content' must be present. An empty string stays legal -- deliberately emptying a file is a valid operation. Missing key -> 'Fehler: content fehlt'.
+- edit_file: 'path' present and non-empty, matching read_file and write_file -> 'Fehler: path fehlt'. 'new_string' must be present; empty stays legal, since deleting every occurrence is a valid operation. Missing key -> 'Fehler: new_string fehlt'.
+- old_string keeps its current behaviour: empty is an error, because there is no such thing as replacing an empty match.
+- pathSchema (main.go:684): add required: []string{name}.
+
+Language: keep the new messages GERMAN, in the exact style of their neighbours ('Fehler: path fehlt'). Do not translate this block -- #6 sweeps the whole file at once, and the failure-mode tables in skills/unreagent-files/SKILL.md quote these strings verbatim. A half-translated function is worse than a consistent one.
+2026-08-22 00:47 Implemented and cross-checked by the orchestrating agent. cmd/launcher/main.go +36/-5, cmd/launcher/filetools_test.go new (11 tests, stdlib only).
+
+Fix: stringArg helper next to getString tells a missing key from an empty value. write_file validates 'content' before MkdirAll/WriteFile; edit_file validates 'path' and 'new_string' before os.ReadFile, so every argument is checked before the file is touched at all. Empty string stays legal in both -- emptying a file and deleting every occurrence are valid operations. Verified before/after through real JSON-RPC: write_file with a misspelled content key went from 'geschrieben: target.txt (0 Bytes)' with isError false and a destroyed file, to 'Fehler: content fehlt' with the file intact.
+
+Point 3 as originally specified caused a regression: pathSchema fed both read_file and list_dir, so list_dir began advertising path as required while its handler defaults to '.' and skills/unreagent-files/SKILL.md documents it as optional in three places. Ruled back into scope and fixed by splitting into requiredPathSchema / optionalPathSchema, the required variant defined in terms of the optional one so their properties blocks cannot drift. Confirmed over a live tools/list round trip: read_file required [path], list_dir no required key, write_file [path content], edit_file [path old_string new_string].
+
+The original schema test called pathSchema() directly and could not see the regression; replaced by TestFileToolSchemasRequiredParamsMatchHandlers, which reads every tool's schema over tools/list. It was red when written and turned green on the fix, not by being weakened.
+
+Verified: go test ./... green, go vet and gofmt clean, make linux and make windows both build. Caveat per house rules: the tools/list round trip ran the Linux binary; the Windows .exe was compiled here, not executed. The change is pure argument validation and a schema literal, with no platform-guarded code.
+
+Left out of scope deliberately: getString's conflation still exists at main.go:397 and :374, but neither carries a destructive payload and both have sane defaults; the only other payload-shaped call site, 'code' in scriptAction, already guards on empty and fails loudly.
