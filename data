@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-22T04:38:14Z
+id: 44
+priority: medium
+status: backlog
+tags:
+- config
+- security
+title: Generated MCP config is world-readable and the token is logged verbatim
+updated: 2026-08-22T04:38:25Z
+---
+
+main.go:1192: writeMCPConfigs writes the bearer token into the generated config with mode 0644. The example target is a dotfile in the project root that users routinely commit. persistGeneratedToken at main.go:1568 gets this right with 0600; this path does not.
+main.go:228: the startup line logs the full agent command including the --mcp-config JSON, so the bearer token and any secrets in extraServers env values land verbatim in unreagent.log. In window mode that file sits in the project directory, and the gitignore snippet the README recommends at :155-158 does not list it. Acceptance: 0600 on the generated config, the mcp-config value redacted in the log line, unreagent.log added to the recommended ignore list, and a warning when a write target inside the project tree carries a token.
