@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-22T04:36:45Z
+id: 39
+priority: high
+status: backlog
+tags:
+- config
+- bug
+- data-loss
+title: hermes-setup wipes the user's Hermes config
+updated: 2026-08-22T04:36:56Z
+---
+
+main.go:1466 renames the existing config to .bak, and loadHermesYAML at :1475 is called after that rename, so it hits ENOENT and returns an empty map. The written file then contains only the unreagent MCP server entry. Verified by the audit: an input with api_key, model and another mcp_servers entry produced a file holding only the unreagent entry.
+The .bak guard makes the second run skip the rename, so the damage is silent and one-shot -- precisely when the user has a real config. It contradicts mergeHermesServer's own doc comment and README:353-355. Acceptance: the document is read before the rename (or copied rather than moved), a regression test covers a config with foreign keys, and the CLI path is exercised once on a real binary since the audit could only call the function from a test.
