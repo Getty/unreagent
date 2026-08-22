@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-22T04:38:31Z
+id: 45
+priority: medium
+status: backlog
+tags:
+- mcp
+- bug
+title: A failed MCP bind is only a log line; the agent talks to another instance
+updated: 2026-08-22T04:38:36Z
+---
+
+main.go:283-289: ListenAndServe runs in a goroutine and its error is only logged -- into the redirected log file in window mode -- while the next statement unconditionally reports that the MCP server is running on the URL. Trigger: a second unreagent instance, or anything else already on the configured port. The agent's tool calls are then routed to the other instance's editor. A malformed mcp.address behaves the same, and it survives load because that field is not substituted (see the placeholder ticket). Acceptance: net.Listen up front and return the error from run().
