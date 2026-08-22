@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-22T04:37:58Z
+id: 43
+priority: medium
+status: backlog
+tags:
+- config
+- bug
+title: Unresolved engine or project produces garbage paths instead of an error
+updated: 2026-08-22T04:38:08Z
+---
+
+config.go:262: resolveEngine and resolveProject return an empty string on failure and the replacer substitutes it, so unreal.editor becomes /Engine/Binaries/Win64/UnrealEditor.exe, the compile command becomes /Engine/Build/BatchFiles/Build.bat and package args carry an empty -project=. main.go:131 warns once and the launcher proceeds into a restart loop against a non-existent binary.
+Same root cause downstream: main.go:451-455 and 566-570 let the file tools root themselves at the launcher CWD when files.root resolves empty, and the startup line at :142 prints the root as an empty path. main.go:137-143 also logs that the file tools are active when mcp.enabled is false, although registerTools is never called. Acceptance: an unresolved placeholder that some field still needs is a load-time error; the file tools refuse to register on an empty root; the log line is gated on mcp.enabled.
