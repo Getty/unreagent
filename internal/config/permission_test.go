@@ -35,6 +35,8 @@ func TestDenyRuleEvasions(t *testing.T) {
 		{"sudo", "sudo rm -rf /tmp/x"},
 		{"sudo with flags", "sudo -u root rm -rf /tmp/x"},
 		{"env wrapper", "env FOO=1 rm -rf /tmp/x"},
+		{"eval wrapper", `eval "rm -rf /tmp/x"`},
+		{"xargs wrapper", "xargs rm -rf /tmp/x"},
 		{"absolute path", "/bin/rm -rf /tmp/x"},
 		{"and chain", "cd /tmp && rm -rf /tmp/x"},
 		{"semicolon chain", "echo hi; rm -rf /tmp/x"},

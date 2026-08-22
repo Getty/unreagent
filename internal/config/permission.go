@@ -392,7 +392,7 @@ func isScriptFlag(token string) bool {
 func isWrapper(word string) bool {
 	switch word {
 	case "sudo", "doas", "runuser", "env", "nohup", "nice", "ionice", "setsid",
-		"time", "timeout", "command", "builtin", "exec", "xargs", "stdbuf", "start":
+		"time", "timeout", "command", "builtin", "exec", "eval", "xargs", "stdbuf", "start":
 		return true
 	}
 	return false
