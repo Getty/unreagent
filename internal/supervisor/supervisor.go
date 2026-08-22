@@ -259,7 +259,10 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 
-	job, _ := NewJob()
+	job, err := NewJob()
+	if err != nil {
+		s.logf("[%s] WARN job object could not be created: %v — the process runs unsupervised (a launcher crash leaves it behind)", label, err)
+	}
 	s.logf("[%s] starte: %s %v", label, command, args)
 	if err := cmd.Start(); err != nil {
 		job.Close()
@@ -267,10 +270,10 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	}
 	if cmd.Process != nil {
 		if err := job.Assign(cmd.Process.Pid); err != nil {
-			s.logf("[%s] WARN Job-Assign: %v", label, err)
+			s.logf("[%s] WARN job assign failed: %v — the process runs unsupervised", label, err)
 		}
 	}
-	err := cmd.Wait()
+	err = cmd.Wait()
 	job.Close()
 	res := CommandResult{Output: buf.String(), ExitCode: exitCodeOf(err)}
 	s.logf("[%s] fertig (exit %d)", label, res.ExitCode)
@@ -353,10 +356,13 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			}
 			return
 		}
-		j, _ := NewJob()
+		j, jerr := NewJob()
+		if jerr != nil {
+			s.logf("[%s] WARN job object could not be created: %v — the process runs unsupervised (a launcher crash leaves it behind)", spec.Name, jerr)
+		}
 		if c.Process != nil {
 			if err := j.Assign(c.Process.Pid); err != nil {
-				s.logf("[%s] WARN Job-Assign: %v", spec.Name, err)
+				s.logf("[%s] WARN job assign failed: %v — the process runs unsupervised", spec.Name, err)
 			}
 		}
 		if !spec.Foreground {

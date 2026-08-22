@@ -89,9 +89,16 @@ func NewJob() (*Job, error) {
 	return &Job{handle: h}, nil
 }
 
-// Assign hängt einen Prozess (per PID) an das Job-Object. Vom Prozess danach
-// gestartete Kindprozesse erben die Job-Mitgliedschaft.
+// Assign attaches a process (by PID) to the job object. Child processes it
+// spawns afterwards inherit the job membership.
+//
+// A nil receiver is refused with an error instead of panicking: NewJob returns
+// nil on failure, and a process running outside any job silently voids the
+// KILL_ON_JOB_CLOSE no-zombie guarantee — the caller has to log that.
 func (j *Job) Assign(pid int) error {
+	if j == nil || j.handle == 0 {
+		return fmt.Errorf("no job object for pid %d", pid)
+	}
 	r, _, err := procOpenProcess.Call(processSetQuota|processTerminate, 0, uintptr(pid))
 	if r == 0 {
 		return fmt.Errorf("OpenProcess(%d): %w", pid, err)

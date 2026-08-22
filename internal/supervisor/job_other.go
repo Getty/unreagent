@@ -6,14 +6,22 @@
 // das eigentliche Ziel Windows ist.
 package supervisor
 
+import "fmt"
+
 // Job ist auf Nicht-Windows ein No-Op-Platzhalter.
 type Job struct{}
 
 // NewJob liefert einen No-Op-Job.
 func NewJob() (*Job, error) { return &Job{}, nil }
 
-// Assign tut nichts.
-func (j *Job) Assign(pid int) error { return nil }
+// Assign does nothing — except refuse a nil job, mirroring the Windows
+// implementation so callers cannot silently skip the assignment.
+func (j *Job) Assign(pid int) error {
+	if j == nil {
+		return fmt.Errorf("no job object for pid %d", pid)
+	}
+	return nil
+}
 
-// Close tut nichts.
+// Close does nothing.
 func (j *Job) Close() error { return nil }
