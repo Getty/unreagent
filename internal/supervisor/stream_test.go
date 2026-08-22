@@ -15,8 +15,10 @@ import (
 const (
 	helperEnv        = "UNREAGENT_TEST_HELPER"
 	helperTailMarker = "TAIL-MARKER"
+	helperHeadMarker = "HEAD-MARKER"
 	helperLongLine   = 3 << 20 // three times the per-line cap
 	helperBurstLines = 5000
+	helperFloodBytes = 3 << 20 // more than head + tail of a command's output
 )
 
 // helperSpec builds a ServiceSpec that re-executes this test binary in the
@@ -56,6 +58,14 @@ func TestSupervisorHelperProcess(t *testing.T) {
 		for i := 0; i < helperBurstLines; i++ {
 			fmt.Fprintf(out, "line-%04d %s\n", i, strings.Repeat("y", 180))
 		}
+	case "flood":
+		// A build log too large to keep in memory, bracketed by markers.
+		fmt.Fprintln(out, helperHeadMarker)
+		line := strings.Repeat("z", 1023) + "\n"
+		for i := 0; i < helperFloodBytes/1024; i++ {
+			out.WriteString(line)
+		}
+		fmt.Fprintln(out, helperTailMarker)
 	}
 	out.Flush()
 	os.Exit(0)

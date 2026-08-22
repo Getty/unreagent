@@ -278,9 +278,11 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	// Bounded on purpose: a full UE package log is tens to hundreds of MB and
+	// the callers only ever show the tail of it.
+	buf := newHeadTailBuffer(commandOutputLimit)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 
 	job, err := NewJob()
 	if err != nil {
