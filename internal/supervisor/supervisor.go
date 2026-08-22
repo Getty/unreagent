@@ -318,9 +318,22 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		cmd, job, waitCh = nil, nil, nil
 	}
 
+	// start is only ever called while the service is desired (initial start,
+	// backoff, ctrlStart, ctrlRestart).
 	start := func() {
 		if spec.PreStart != nil {
 			spec.PreStart()
+		}
+		// startFailed reports a start that will not be retried. The service was
+		// desired and is not coming back, which is exactly what OnExit is for —
+		// without it a missing agent.command leaves the user with a dead console
+		// while the editor keeps running in the background.
+		startFailed := func() {
+			if spec.OnExit != nil {
+				// Own goroutine, same reason as in the exit branch below: the
+				// handler may block and steer us via svc.ctrl.
+				go spec.OnExit(false)
+			}
 		}
 		c := exec.Command(spec.Command, spec.Args...)
 		c.Dir = spec.Dir
@@ -335,25 +348,30 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			var err error
 			if stdout, err = c.StdoutPipe(); err != nil {
 				s.logf("[%s] StdoutPipe: %v", spec.Name, err)
+				startFailed()
 				return
 			}
 			if stderr, err = c.StderrPipe(); err != nil {
 				s.logf("[%s] StderrPipe: %v", spec.Name, err)
+				startFailed()
 				return
 			}
 		}
 		if err := c.Start(); err != nil {
-			s.logf("[%s] Start fehlgeschlagen: %v", spec.Name, err)
+			s.logf("[%s] start failed: %v", spec.Name, err)
 			if isNotFound(err) {
-				// Programm existiert gar nicht — Neustarts wären sinnlos.
-				s.logf("[%s] Programm nicht gefunden — kein weiterer Versuch (Pfad/Installation prüfen)", spec.Name)
+				// The program does not exist at all — retries would be pointless.
+				s.logf("[%s] program not found — no further attempt (check path / installation)", spec.Name)
+				startFailed()
 				desired = false
 				return
 			}
 			if desired && shouldRestart(spec, restarts, false) {
 				restarts++
 				backoff = time.After(spec.RestartDelay)
+				return
 			}
+			startFailed()
 			return
 		}
 		j, jerr := NewJob()
