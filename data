@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-08-24T23:38:06Z
+created: 2026-08-24T23:25:26Z
+id: 51
+priority: high
+started: 2026-08-24T23:38:06Z
+status: done
+tags:
+- mcp
+- security
+title: MCP HTTP server has no timeouts
+updated: 2026-08-24T23:38:06Z
+---
+
+main.go:283 constructs http.Server with only Addr and Handler, so ReadTimeout, ReadHeaderTimeout, WriteTimeout and IdleTimeout are infinite. Audit held 20 half-open connections (headers only, then silence) for 8s, 20/20 still pinned a goroutine and a socket. With mcp.address 0.0.0.0:8765, which README recommends for remote access, this is a trivial slowloris; locally a wedged agent leaks a connection for the launcher's lifetime.
+Acceptance: all four timeouts set; WriteTimeout must outlast the slowest tool call (run_command can drive a UE build for hours), so it is a backstop against a wedged connection, not a request budget.
+main.go:283 constructs the http.Server with only Addr and Handler, so ReadTimeout, ReadHeaderTimeout, WriteTimeout and IdleTimeout are all infinite. The audit verified with a replica: 20 half-open connections that sent a request line and then nothing were still held 8 seconds later, each pinning a goroutine and a socket.
+With the wildcard listen address the README recommends at line 429 for remote access this is a trivial slowloris; locally a wedged agent leaks a connection for the lifetime of the launcher. Acceptance: all four timeouts set, with a value that does not break a legitimately slow tool call.
