@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-24T23:26:28Z
+created: 2026-08-22T04:21:57Z
+id: 30
+priority: high
+started: 2026-08-24T23:26:28Z
+status: done
+tags:
+- ci
+title: CI gate runs no tests
+updated: 2026-08-24T23:26:28Z
+---
+
+ci.yml runs gofmt, vet and builds but never the test suite; release.yml has no test step either.
+Real tests exist (file tools, script placement, MCP handshake, supervisor lifecycle) and none of them gate a merge to main.
+Acceptance: ci.yml runs the suite with -count=1; release.yml runs it before the build so a tag cannot ship an untested binary; both stay offline on vendored deps.
