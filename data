@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-08-24T23:38:12Z
+created: 2026-08-24T23:25:32Z
+id: 52
+priority: medium
+started: 2026-08-24T23:38:12Z
+status: done
+tags:
+- mcp
+- bug
+title: 'JSON-RPC conformance in internal/mcp: null id, protocol version, jsonrpc field,
+  batches, Bearer case, body limit, handler panic'
+updated: 2026-08-24T23:38:12Z
+---
+
+All verified by the audit against a live server. mcp.go:199 treats an explicit id: null as a notification (202, empty body, client hangs); only an absent id is a notification. mcp.go:222 echoes any protocolVersion back, so a client asking for an unsupported version is told it is supported. mcp.go:198 never checks the jsonrpc field. mcp.go:164 decodes a batch in one go, so one malformed element fails every valid request beside it with -32700 instead of a per-element -32600; an empty batch returns 202 instead of -32600. mcp.go:232-233 answers a notifications/* method carrying an id with a response holding neither result nor error. mcp.go:137 matches the Bearer scheme case-sensitively (RFC 7235: case-insensitive). mcp.go:150 uses io.LimitReader, so an oversized body becomes a misleading parse error. mcp.go:276 has no recover around the tool handler; a panic reaches the client as a transport error and dumps a Go stack trace into the agent's TUI because os.Stderr is not redirected in window mode.
+Acceptance: each item fixed and covered by a table-driven test in a new internal/mcp test file; the good behaviour the audit confirmed (arguments absent/null/non-object, unknown tool, ConstantTimeCompare, RLock released before the handler) is pinned by tests too.
+1) mcp.go:199 treats an explicit null id as a notification, so a request with id null gets HTTP 202 and an empty body and the client waits for a response that never comes. Per JSON-RPC 2.0 a null id is a request and must be answered. Only an absent id field is a notification. 2) mcp.go:222 echoes back any protocolVersion, so a client asking for a version the server does not implement is told it is supported and may then assume a transport this server does not speak.
+3) mcp.go:198 never checks the jsonrpc field: a request declaring version 1.0, or omitting the field, is served normally instead of being rejected. 4) mcp.go:164 decodes a batch in one go, so one malformed element fails every valid request beside it with a parse error instead of a per-element invalid-request error; an empty batch returns 202 instead of an invalid-request error. 5) mcp.go:232-233 returns a response object carrying neither result nor error when a notification method arrives with an id.
+6) mcp.go:137 matches the Bearer scheme case-sensitively although RFC 7235 defines it case-insensitively. 7) mcp.go:150 uses io.LimitReader, so an oversized body is silently truncated and reported as invalid JSON rather than as too large; http.MaxBytesReader gives a distinguishable error. 8) mcp.go:276 has no recover around the tool handler: no registered handler can panic today, but a panic would reach the client as a transport error and dump a stack trace into the agent TUI, because os.Stderr is not redirected in window mode.
