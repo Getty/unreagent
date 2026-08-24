@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-24T23:26:16Z
+id: 60
+priority: low
+status: backlog
+tags:
+- config
+- mcp
+title: Make the MCP Origin allowlist configurable
+updated: 2026-08-24T23:26:16Z
+---
+
+Follow-up to the Origin check: the server has a built-in allowlist (loopback origins on any port) and a SetAllowedOrigins hook, but no config field. Anyone serving a browser-based MCP client from a non-loopback origin has no way to allow it. Acceptance: an mcp.allowedOrigins list in the config, wired through main.go to SetAllowedOrigins, documented in README and unreagent.example.yaml, covered by a config test; internal/config territory, which is why the worker deferred it.
