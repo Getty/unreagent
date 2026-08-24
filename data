@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-08-24T23:25:48Z
+id: 55
+priority: medium
+status: backlog
+tags:
+- mcp
+- windows
+- bug
+title: Smoke-test bridge process bypasses the Job Object and is killed without its
+  tree
+updated: 2026-08-24T23:36:03Z
+---
+
+smokeTestMCP at main.go:934 uses a raw exec.CommandContext instead of the supervisor, so unlike supervisor.runOnce (NewJob + Assign) the bridge process is never attached to a Job Object with KILL_ON_JOB_CLOSE. cmd.Process.Kill at :961 terminates only the direct child. A node bridge that spawns workers leaks grandchildren on every launcher start, and a launcher crash during the smoke test leaves the bridge running -- the no-zombie guarantee CLAUDE.md calls load-bearing. Unverified on Windows (reasoning from job_windows.go and the missing call site).
+Acceptance: the smoke test runs through the supervisor or inside its own Job Object; Windows behaviour labelled unverified unless smoke-tested there.
