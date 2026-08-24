@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-24T23:44:34Z
+id: 80
+priority: low
+status: backlog
+tags:
+- supervisor
+title: 'Restart hygiene: pkill -f CrashReportClient matches unrelated processes, unreagent.log
+  is truncated on every start'
+updated: 2026-08-24T23:44:34Z
+---
+
+main.go:1262: killCrashReporter on non-Windows runs pkill -f CrashReportClient (default on) before every editor (re)start; -f matches any command line containing the string, e.g. an editor open on CrashReportClient.cpp from the ue5_7 source in this workspace, and it runs in the ping demo on Linux too. Fix: Windows-only, or pkill -x. main.go:121: unreagent.log is truncated on every start, so after a crash and relaunch the previous session's log is gone; a create failure silently falls back to the console the agent is taking over. Fix: append or rotate; WARN on create failure.
