@@ -1,40 +1,42 @@
 name: release
 
-# Ausgelöst durch das Pushen eines Version-Tags, z.B. v0.0.1.
+# Triggered by pushing a version tag, e.g. v0.0.1.
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write # nötig, um ein Release zu erstellen
+  contents: write # required to create the release
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          lfs: true # Binaerassets (icon.*, resource_windows_amd64.syso) liegen in LFS
+          lfs: true # binary assets (icon.*, resource_windows_amd64.syso) live in LFS
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.22"
-          cache: false # Projekt hat keine Dependencies (kein go.sum)
+          cache: false # dependencies are vendored, the build never fetches modules
 
       - name: Build (Windows + Linux)
         run: |
           set -e
           VERSION="${GITHUB_REF_NAME}"
           mkdir -p dist
-          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.version=${VERSION}" -o dist/unreagent.exe ./cmd/launcher
+          # Same CGO_ENABLED=0 as in ci.yml: the runner's gcc is a Linux one and
+          # rejects the Windows -mconsole flag. The project has no cgo code.
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o dist/unreagent.exe ./cmd/launcher
           GOOS=linux   GOARCH=amd64 go build -ldflags "-s -w -X main.version=${VERSION}" -o dist/unreagent     ./cmd/launcher
 
       - name: Package
         run: |
           set -e
           cp unreagent.example.yaml README.md dist/
-          # Demo-Config als unreagent.yaml -> exe ist sofort lauffaehig.
+          # demo config as unreagent.yaml -> the exe runs straight out of the archive
           cp example/unreagent.yaml dist/unreagent.yaml
           cd dist
           zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe unreagent.yaml unreagent.example.yaml README.md

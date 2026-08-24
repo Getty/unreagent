@@ -1,6 +1,6 @@
 name: ci
 
-# Qualitäts-Gate: läuft bei jedem Push auf main und bei jedem Pull Request.
+# Quality gate: runs on every push to main and on every pull request.
 on:
   push:
     branches: [main]
@@ -12,19 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          lfs: true # Binaerassets (icon.*, resource_windows_amd64.syso) liegen in LFS
+          lfs: true # binary assets (icon.*, resource_windows_amd64.syso) live in LFS
 
       - uses: actions/setup-go@v6
         with:
           go-version: "1.22"
-          cache: false # Projekt hat keine Dependencies (kein go.sum)
+          cache: false # dependencies are vendored, the build never fetches modules
 
-      - name: gofmt prüfen
+      - name: gofmt
         run: |
-          # vendor/ ist Fremdcode und wird nicht geprüft.
+          # vendor/ is third-party code and is not checked.
           unformatted="$(gofmt -l cmd internal)"
           if [ -n "$unformatted" ]; then
-            echo "Folgende Dateien sind nicht gofmt-konform:"
+            echo "These files are not gofmt-clean:"
             echo "$unformatted"
             exit 1
           fi
@@ -36,8 +36,8 @@ jobs:
         run: |
           set -e
           go build ./...
-          # Cross-Compile nach Windows ohne CGO: der Runner-gcc ist Linux und
-          # kennt das Windows-Flag -mconsole nicht, das Projekt hat aber keinen
-          # CGO-Code (nur vendored Go-Pakete), also ist CGO_ENABLED=0 sicher.
+          # Cross-compile to Windows without cgo: the runner's gcc is a Linux one
+          # and does not know the Windows -mconsole flag. The project has no cgo
+          # code (only vendored Go packages), so CGO_ENABLED=0 is safe.
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/launcher
           GOOS=linux   GOARCH=amd64 go build -o /dev/null ./cmd/launcher
