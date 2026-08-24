@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-08-24T23:37:32Z
+created: 2026-08-22T04:31:34Z
+id: 31
+priority: high
+started: 2026-08-24T23:37:32Z
+status: done
+tags:
+- supervisor
+- bug
+title: 'stream(): lost output at exit, one long line stalls the child'
+updated: 2026-08-24T23:37:32Z
+---
+
+supervisor.go:463-471 stream(): sc.Buffer caps a token at 1 MiB. On a longer line sc.Scan returns false, sc.Err is never checked, the goroutine returns and the pipe is never drained again. The child then blocks on its next write once the OS pipe buffer fills. On Windows that buffer is about 4 KiB, so the editor logging thread stalls within a few KiB while the supervisor still reports Running.
+supervisor.go:362-367: cmd.Wait closes the parent pipe ends after the process exits, so whatever is still buffered is discarded under the stream goroutines. Audit reproduced 20 of 20 runs losing 40-80 percent of the trailing lines, error 'file already closed'. Those are exactly the crash lines, and they are missing from both the log ring buffer and unreagent.log.
+Acceptance: sc.Err is handled and the pipe keeps being drained; over-long lines are split, not dropped; the two stream goroutines are tracked in a WaitGroup and joined before Wait returns; a regression test covers a long line and output written immediately before exit.
