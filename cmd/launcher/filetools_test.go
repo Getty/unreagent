@@ -36,11 +36,29 @@ type toolCallResult struct {
 	IsError bool
 }
 
+// postJSONRPC posts a JSON-RPC request body to srv exactly as a real MCP
+// client does: as a POST carrying "Content-Type: application/json". Without
+// that header, the server's CSRF hardening (commit 039cd8a) rejects the
+// request with HTTP 415 before it ever reaches JSON-RPC dispatch — no real
+// MCP client omits the header, so the test helpers must not either.
+func postJSONRPC(t *testing.T, srv *mcp.Server, body map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
 // callTool invokes a registered tool through the server's JSON-RPC
 // tools/call, exactly as an MCP client would.
 func callTool(t *testing.T, srv *mcp.Server, name string, args map[string]interface{}) toolCallResult {
 	t.Helper()
-	reqBody, err := json.Marshal(map[string]interface{}{
+	rec := postJSONRPC(t, srv, map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/call",
@@ -49,13 +67,6 @@ func callTool(t *testing.T, srv *mcp.Server, name string, args map[string]interf
 			"arguments": args,
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("tools/call %q: HTTP %d: %s", name, rec.Code, rec.Body.String())
 	}
@@ -88,17 +99,11 @@ func callTool(t *testing.T, srv *mcp.Server, name string, args map[string]interf
 // inputSchema, keyed by name.
 func listTools(t *testing.T, srv *mcp.Server) map[string]map[string]interface{} {
 	t.Helper()
-	reqBody, err := json.Marshal(map[string]interface{}{
+	rec := postJSONRPC(t, srv, map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/list",
 	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(reqBody))
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("tools/list: HTTP %d: %s", rec.Code, rec.Body.String())
 	}
