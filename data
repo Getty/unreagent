@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-24T23:43:58Z
+id: 74
+priority: medium
+status: backlog
+tags:
+- mcp
+- bug
+title: 'Tool output truncation is silent: run_* keep the last 300 lines, logs clips
+  to a 500-line buffer'
+updated: 2026-08-24T23:43:58Z
+---
+
+main.go:421, :570: tailLines(res.Output, 300) leaves no marker; the agent gets exit 0 plus lines 101..400 and cannot know that 100 lines vanished (compile errors above the tail). Observed: 400-line command -> 302 lines returned starting at 101. main.go:391 + supervisor.go:118: logs has a hard 500-line ring buffer and a larger lines argument is clipped without a marker (observed lines=1000 on a 600-line producer -> 500 lines).
+Acceptance: a '[... N lines omitted]' prefix when cut, optionally a lines argument and a byte cap for run_*; logs says 'last 500 of buffer' or the buffer size is configurable; tests.
