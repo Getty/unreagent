@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-24T23:44:29Z
+id: 79
+priority: low
+status: backlog
+tags:
+- bug
+title: 'Dropped errors: prepareRuntimes discards uv sync / npm install failures, commandLoop
+  drops r/stop/start errors'
+updated: 2026-08-24T23:44:29Z
+---
+
+main.go:832, :839: prepareRuntimes discards error and output of uv sync / npm install -- a missing uv yields only '[prepare:python] starte: uv [sync]' and nothing else; a failing sync only 'fertig (exit 1)' with stderr thrown away. Fix: WARN with err and tailLines(res.Output, 20). main.go:1128-1143: commandLoop ignores the errors returned by r/stop/start, so a typo like 'stop eu' is silent. Fix: log the returned error.
