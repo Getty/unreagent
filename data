@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:43:23Z
+id: 68
+priority: medium
+status: backlog
+tags:
+- bug
+title: Ctrl-C is dead during bridge preparation; the editor is then started only to
+  be killed
+updated: 2026-08-24T23:43:23Z
+---
+
+main.go:304-312: signal.NotifyContext is installed at :304, but prepareMCPBridges (:312, up to 20s smoke test per bridge plus the un-timed npm install, see #54) never sees ctx; the signal only cancels ctx and nothing looks at it until sup.Start, whose initial start() runs even with a cancelled ctx. Observed: SIGINT 3s into a 20s smoke test -> launcher exits 17s later; log shows 'Signal empfangen', then '[ue] gestartet', then '[ue] stoppe'.
+Acceptance: ctx is handed into prepareMCPBridges/smokeTestMCP/prepareNodeBridge (CommandContext), they return early on ctx.Err(), and sup.Start is skipped when ctx is already cancelled; regression test with a cancelled context.
