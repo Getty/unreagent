@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:44:40Z
+id: 81
+priority: high
+status: backlog
+tags:
+- windows
+- release
+title: Windows smoke-test checklist before the v0.0.9 tag
+updated: 2026-08-24T23:44:40Z
+---
+
+Everything since v0.0.8 was verified on Linux only; these are the Windows-specific claims that need one real run on the Windows box before tagging. 1) #29: run_python/run_node write the script into the UE project directory -- check a project under Defender/Perforce/network share does not reject the temp file. 2) #31: supervisor streams via parent-owned os.Pipe ends; confirm the editor's last log lines before a forced exit land in logs/unreagent.log and that a >1 MiB line does not stall the editor. 3) #33: NewJob failure path only compile-checked. 4) #50: confirm Claude Code's HTTP client sends no Origin (or a loopback one) -- otherwise every MCP call is 403 and the launcher log says 'rejected request from disallowed Origin'. 5) UE log encoding: 'logs service=ue' after start and read_file Saved/Logs/<Project>.log (expect UTF-8 with a 3-byte BOM, readable while the editor holds it). 6) Ctrl-C inside Claude Code in window mode must not tear down UE. 7) The documented claude.cmd shim in unreagent.local.yaml passes --mcp-config JSON through intact. 8) read_file path=CON must be rejected (see the reserved-device ticket). 9) The signed exe shows publisher and version 0.0.9 in the properties dialog.
+Acceptance: each item ticked with a one-line result in this ticket; failures become their own tickets before the tag is pushed.
