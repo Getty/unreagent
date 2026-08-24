@@ -91,7 +91,7 @@ mcp:
   # Stdio-Server werden vor dem Start komplett durchgeprüft — jede Stufe
   # beschwert sich laut im Log statt stumm zu scheitern:
   #   Binary im PATH? -> Node: Skript da? node_modules da? (sonst npm install)
-  #   -> Smoke-Test (initialize-Handshake) -> UNREAL_MCP_URL erreichbar?
+  #   -> smoke test (initialize handshake) -> is UNREAL_MCP_URL reachable?
   # strict: false   # true = NUR diese Server (projekt-eigene .mcp.json ignorieren)
   # extraServers:
   #   ue-llm-toolkit:
