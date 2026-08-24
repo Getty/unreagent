@@ -280,7 +280,19 @@ func run() error {
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", srv)
 		mux.Handle("/", srv)
-		httpSrv = &http.Server{Addr: cfg.MCP.Address, Handler: mux}
+		// Without timeouts a half-open connection pins a goroutine and a socket
+		// forever — a trivial slowloris as soon as mcp.address is not loopback.
+		// WriteTimeout covers the handler as well, so it must outlast the
+		// slowest tool call: run_command can drive a full UE build for hours.
+		// It is a backstop against a wedged connection, not a request budget.
+		httpSrv = &http.Server{
+			Addr:              cfg.MCP.Address,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      4 * time.Hour,
+			IdleTimeout:       120 * time.Second,
+		}
 		go func() {
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger("MCP-Server Fehler: " + err.Error())
