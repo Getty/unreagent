@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-24T23:37:54Z
+created: 2026-08-22T04:34:29Z
+id: 36
+priority: medium
+started: 2026-08-24T23:37:54Z
+status: done
+tags:
+- supervisor
+- bug
+title: runOnce() buffers an entire build log in memory, twice
+updated: 2026-08-24T23:37:54Z
+---
+
+supervisor.go:258-260 and 275: one bytes.Buffer collects stdout plus stderr with no cap and is returned as a string, doubling it. A full UE package log is tens to hundreds of MB. Callers only ever show the tail -- main.go:409 does tailLines(res.Output, 300) -- so the peak is paid for nothing. Acceptance: the buffer is bounded, for instance by reusing ringBuffer or a head-plus-tail writer.
