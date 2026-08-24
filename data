@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-08-24T23:37:49Z
+created: 2026-08-22T04:34:12Z
+id: 35
+priority: medium
+started: 2026-08-24T23:37:49Z
+status: done
+tags:
+- supervisor
+- mcp
+- bug
+title: Status() silently drops a service that does not answer
+updated: 2026-08-24T23:37:49Z
+---
+
+supervisor.go:185-196: the status of each service is only appended when send returns no error, so on the 10s timeout the service just vanishes from the result. The agent sees an empty services list and cannot tell 'no editor configured' from 'the editor control loop is blocked' -- and acts on it, for instance by calling ue_start. The loop is also sequential, so N blocked services cost N times 10s in one MCP call.
+Acceptance: an unresponsive service is reported as unresponsive instead of omitted; services are queried concurrently.
