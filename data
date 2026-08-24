@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-24T23:43:52Z
+id: 73
+priority: medium
+status: backlog
+tags:
+- mcp
+- bug
+title: 'read_file loads the whole file and returns the first 256 KiB: no offset/limit,
+  tail unreachable'
+updated: 2026-08-24T23:43:52Z
+---
+
+main.go:610-617: os.ReadFile, then the first 256 KiB with a '[gekuerzt]' marker, no total size, no byte range, no offset or limit argument. The tail of any large file is unreachable -- exactly Saved/Logs/<Project>.log (tens of MB, crash at the end) and UBT/UAT logs. Observed: 1 MiB file -> 262155 chars ending in the marker, no total.
+Acceptance: optional offset/limit (and a tail convenience), os.Open + Seek + io.LimitReader instead of ReadFile, a trailer 'bytes X-Y of Z'; tool description updated; tests for head, tail and out-of-range offsets.
