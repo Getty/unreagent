@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-24T23:25:54Z
+id: 56
+priority: low
+status: backlog
+tags:
+- mcp
+title: 'MCP bridge preparation: warnings invisible in window mode, smoke test matches
+  a substring, waitForEndpoint assumes port 80'
+updated: 2026-08-24T23:25:54Z
+---
+
+1) main.go:120-124 + :300: logOut is redirected to unreagent.log whenever agentInteractive is true, and prepareMCPBridges reports every failure through that logger, so the user sees the agent complain about a broken MCP server while the explanation sits in a file they were never told to open. Fix: mirror WARN lines from bridge preparation to os.Stderr when logs are redirected. 2) main.go:955: success is strings.Contains(line, serverInfo); a bridge that prints a debug line containing serverInfo is reported OK without answering initialize, and an error response with the right id keeps scanning until the 20s deadline. Fix: JSON-decode each line and check for a result object on id 1. 3) main.go:990: waitForEndpoint appends :80 for portless URLs, including https://, so an UNREAL_MCP_URL of https://host/mcp is probed on port 80 and reported unreachable after five minutes. Fix: default to 443 for https.
