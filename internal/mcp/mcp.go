@@ -1,43 +1,56 @@
-// Package mcp implementiert einen minimalen, spec-konformen MCP-Server über den
-// Streamable-HTTP-Transport — nur mit der Go-Standardbibliothek.
+// Package mcp implements a minimal, spec-conformant MCP server over the
+// Streamable-HTTP transport — using only the Go standard library.
 //
-// Es wird ausschließlich POST→application/json bedient (kein SSE):
-//   - POST mit JSON-RPC-Request  → 200 + JSON-RPC-Response
-//   - POST mit JSON-RPC-Notification → 202 Accepted, leerer Body
-//   - GET                         → 405 Method Not Allowed
+// Only POST with a JSON body is served (no SSE):
+//   - POST with a JSON-RPC request      → 200 + JSON-RPC response
+//   - POST with a JSON-RPC notification → 202 Accepted, empty body
+//   - GET / DELETE / anything else      → 405 Method Not Allowed
 //
 // Every POST must carry "Content-Type: application/json"; a POST that carries
 // an Origin header must carry an allowlisted one (see SetAllowedOrigins).
 // Both are browser defences — a regular MCP client sends no Origin at all.
 //
-// Implementierte Methoden: initialize, notifications/initialized, ping,
-// tools/list, tools/call. Sessions werden bewusst weggelassen (stateless).
+// Implemented methods: initialize, notifications/initialized, ping,
+// tools/list, tools/call. Sessions are deliberately omitted (stateless).
 package mcp
 
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 )
 
 const defaultProtocolVersion = "2025-06-18"
 
-// ToolResult ist das Ergebnis eines Tool-Aufrufs.
+// supportedProtocolVersions are the MCP revisions this server actually speaks.
+// All of them use the Streamable-HTTP transport (POST + JSON body). 2024-11-05
+// is deliberately absent: it mandates the HTTP+SSE transport, which this server
+// does not implement. A client asking for anything else is answered with
+// defaultProtocolVersion and can then decide whether to continue or disconnect.
+var supportedProtocolVersions = []string{"2025-06-18", "2025-03-26"}
+
+// maxRequestBody caps an accepted POST body.
+const maxRequestBody = 16 << 20
+
+// ToolResult is the result of a tool call.
 type ToolResult struct {
 	Text    string
 	IsError bool
 }
 
-// ToolHandler führt einen Tool-Aufruf aus.
+// ToolHandler executes a tool call.
 type ToolHandler func(args map[string]interface{}) ToolResult
 
-// Tool ist eine registrierte MCP-Tool-Definition. Description wird dem Agenten
-// als Kontext geliefert — hier gehört die "Bedienungsanleitung" des Tools rein.
+// Tool is a registered MCP tool definition. Description is delivered to the
+// agent as context — this is where the tool's "manual" belongs.
 type Tool struct {
 	Name        string
 	Description string
@@ -45,7 +58,7 @@ type Tool struct {
 	Handler     ToolHandler
 }
 
-// Server ist ein minimaler MCP-Server (http.Handler).
+// Server is a minimal MCP server (http.Handler).
 type Server struct {
 	name    string
 	version string
@@ -62,7 +75,7 @@ type Server struct {
 	index map[string]int
 }
 
-// NewServer erzeugt einen MCP-Server.
+// NewServer creates an MCP server.
 func NewServer(name, version string, log func(string)) *Server {
 	if log == nil {
 		log = func(string) {}
@@ -72,7 +85,7 @@ func NewServer(name, version string, log func(string)) *Server {
 
 // SetToken enables bearer authentication. An empty string disables it (open
 // server, default). Header comparison uses subtle.ConstantTimeCompare to
-// thwart timing attacks.
+// thwart timing attacks. Call before serving.
 func (s *Server) SetToken(token string) {
 	s.token = token
 }
@@ -87,7 +100,7 @@ func (s *Server) SetAllowedOrigins(origins []string) {
 	s.allowedOrigins = append([]string(nil), origins...)
 }
 
-// AddTool registriert ein Tool (vor dem Start aufrufen).
+// AddTool registers a tool (safe to call while serving).
 func (s *Server) AddTool(t Tool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,7 +112,7 @@ func (s *Server) AddTool(t Tool) {
 	s.tools = append(s.tools, t)
 }
 
-// --- JSON-RPC-Typen ---
+// --- JSON-RPC types ---
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -110,7 +123,7 @@ type rpcRequest struct {
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
+	ID      json.RawMessage `json:"id"`
 	Result  interface{}     `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 }
@@ -129,17 +142,17 @@ const (
 	errInternal       = -32603
 )
 
-// ServeHTTP bedient den MCP-Endpoint.
+// nullID is the id of a response to a message whose id could not be
+// determined; JSON-RPC 2.0 requires an explicit null there.
+var nullID = json.RawMessage("null")
+
+// ServeHTTP serves the MCP endpoint.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet, http.MethodDelete:
-		// Kein SSE/Session-Support.
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	case http.MethodPost:
-		// weiter unten
+		// handled below
 	default:
+		// No SSE/session support, so GET and DELETE are refused as well.
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -164,88 +177,137 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Optional bearer authentication. When no token is set, the server is
-	// open (the default for 127.0.0.1). When a token is set, the header MUST
-	// match exactly — otherwise 401, so external clients (e.g. Hermes) cannot
-	// reach the toolset through an open server.
+	// open (the default for 127.0.0.1). When a token is set, the credentials
+	// MUST match — otherwise 401, so external clients (e.g. Hermes) cannot
+	// reach the toolset through an open server. The scheme name is compared
+	// case-insensitively (RFC 7235), the token in constant time.
 	if s.token != "" {
-		const prefix = "Bearer "
-		hdr := r.Header.Get("Authorization")
-		if !strings.HasPrefix(hdr, prefix) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="unreagent"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		got := hdr[len(prefix):]
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
+		if !s.authorized(r.Header.Get("Authorization")) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="unreagent"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	if err != nil {
-		writeError(w, nil, errParse, "Body konnte nicht gelesen werden")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			// Distinguishable from a syntax error: truncating the body and
+			// reporting "invalid JSON" would send the client hunting for a bug
+			// in its own serialization.
+			writeErrorStatus(w, http.StatusRequestEntityTooLarge, nil, errInvalidRequest,
+				fmt.Sprintf("request body exceeds %d bytes", maxRequestBody))
+			return
+		}
+		writeError(w, nil, errParse, "could not read request body")
 		return
 	}
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
-		writeError(w, nil, errInvalidRequest, "leerer Request")
+		writeError(w, nil, errInvalidRequest, "empty request")
 		return
 	}
 
-	// Batch (Array) vs. Einzelnachricht.
+	// Batch (array) vs. single message.
 	if trimmed[0] == '[' {
-		var batch []rpcRequest
-		if err := json.Unmarshal(body, &batch); err != nil {
-			writeError(w, nil, errParse, "ungültiges JSON")
-			return
-		}
-		var responses []rpcResponse
-		for _, req := range batch {
-			if resp, ok := s.dispatch(req); ok {
-				responses = append(responses, resp)
-			}
-		}
-		if len(responses) == 0 {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		writeJSON(w, responses)
+		s.serveBatch(w, body)
 		return
 	}
+	s.serveSingle(w, body)
+}
 
-	var req rpcRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, nil, errParse, "ungültiges JSON")
+// serveBatch answers a JSON-RPC batch. Elements are parsed and validated
+// independently: one malformed element must not fail the valid requests
+// beside it.
+func (s *Server) serveBatch(w http.ResponseWriter, body []byte) {
+	var batch []json.RawMessage
+	if err := json.Unmarshal(body, &batch); err != nil {
+		writeError(w, nil, errParse, "invalid JSON")
 		return
 	}
-	resp, ok := s.dispatch(req)
-	if !ok {
-		// Notification → kein Body.
+	if len(batch) == 0 {
+		writeError(w, nil, errInvalidRequest, "empty batch")
+		return
+	}
+	responses := make([]rpcResponse, 0, len(batch))
+	for _, raw := range batch {
+		if resp, ok := s.dispatch(raw); ok {
+			responses = append(responses, resp)
+		}
+	}
+	if len(responses) == 0 {
+		// Notifications only → no body.
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	writeJSON(w, resp)
+	writeJSON(w, responses)
 }
 
-// dispatch verarbeitet eine Nachricht. ok=false bedeutet Notification (keine
-// Antwort).
-func (s *Server) dispatch(req rpcRequest) (rpcResponse, bool) {
-	isNotification := len(req.ID) == 0 || string(req.ID) == "null"
+// serveSingle answers a single JSON-RPC message.
+func (s *Server) serveSingle(w http.ResponseWriter, body []byte) {
+	resp, ok := s.dispatch(body)
+	if !ok {
+		// Notification → no body.
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	status := http.StatusOK
+	if resp.Error != nil && (resp.Error.Code == errParse || resp.Error.Code == errInvalidRequest) {
+		// Malformed at the transport level, not a failed method call.
+		status = http.StatusBadRequest
+	}
+	writeJSONStatus(w, status, resp)
+}
 
-	result, rerr := s.handle(req.Method, req.Params)
+// dispatch processes one JSON-RPC message. ok=false means notification (no
+// response).
+func (s *Server) dispatch(raw json.RawMessage) (rpcResponse, bool) {
+	req, rerr := parseMessage(raw)
+	if rerr != nil {
+		return rpcResponse{JSONRPC: "2.0", ID: nullID, Error: rerr}, true
+	}
 
-	if isNotification {
+	// Only an ABSENT id makes a message a notification. An explicit
+	// "id": null is a (discouraged, but legal) request and must be answered —
+	// treating it as a notification leaves the client waiting forever.
+	if len(req.ID) == 0 {
+		_, _ = s.handle(req.Method, req.Params)
 		return rpcResponse{}, false
 	}
+
+	result, rerr := s.handle(req.Method, req.Params)
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	if rerr != nil {
 		resp.Error = rerr
-	} else {
-		resp.Result = result
+		return resp, true
 	}
+	if result == nil {
+		// Notification-only methods (notifications/*) produce no payload. A
+		// response object needs one of result/error, otherwise the client gets
+		// a message it cannot interpret.
+		result = map[string]interface{}{}
+	}
+	resp.Result = result
 	return resp, true
+}
+
+// parseMessage decodes and validates one JSON-RPC 2.0 message.
+func parseMessage(raw json.RawMessage) (rpcRequest, *rpcError) {
+	if !json.Valid(raw) {
+		return rpcRequest{}, &rpcError{Code: errParse, Message: "invalid JSON"}
+	}
+	var req rpcRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return rpcRequest{}, &rpcError{Code: errInvalidRequest, Message: "not a JSON-RPC request object"}
+	}
+	if req.JSONRPC != "2.0" {
+		return rpcRequest{}, &rpcError{Code: errInvalidRequest, Message: `"jsonrpc" must be "2.0"`}
+	}
+	if req.Method == "" {
+		return rpcRequest{}, &rpcError{Code: errInvalidRequest, Message: `"method" is missing`}
+	}
+	return req, nil
 }
 
 func (s *Server) handle(method string, params json.RawMessage) (interface{}, *rpcError) {
@@ -255,9 +317,14 @@ func (s *Server) handle(method string, params json.RawMessage) (interface{}, *rp
 			ProtocolVersion string `json:"protocolVersion"`
 		}
 		_ = json.Unmarshal(params, &p)
-		ver := p.ProtocolVersion
-		if ver == "" {
-			ver = defaultProtocolVersion
+		// Never echo a version we do not implement: the client would assume a
+		// transport this server does not speak.
+		ver := defaultProtocolVersion
+		for _, v := range supportedProtocolVersions {
+			if p.ProtocolVersion == v {
+				ver = v
+				break
+			}
 		}
 		return map[string]interface{}{
 			"protocolVersion": ver,
@@ -294,7 +361,7 @@ func (s *Server) handle(method string, params json.RawMessage) (interface{}, *rp
 			Arguments map[string]interface{} `json:"arguments"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpcError{Code: errInvalidParams, Message: "ungültige params"}
+			return nil, &rpcError{Code: errInvalidParams, Message: "invalid params"}
 		}
 		s.mu.RLock()
 		idx, ok := s.index[p.Name]
@@ -304,20 +371,52 @@ func (s *Server) handle(method string, params json.RawMessage) (interface{}, *rp
 		}
 		s.mu.RUnlock()
 		if !ok || handler == nil {
-			return nil, &rpcError{Code: errInvalidParams, Message: "unbekanntes Tool: " + p.Name}
+			return nil, &rpcError{Code: errInvalidParams, Message: "unknown tool: " + p.Name}
 		}
 		if p.Arguments == nil {
 			p.Arguments = map[string]interface{}{}
 		}
-		res := handler(p.Arguments)
+		res := s.callTool(p.Name, handler, p.Arguments)
 		return map[string]interface{}{
 			"content": []map[string]interface{}{{"type": "text", "text": res.Text}},
 			"isError": res.IsError,
 		}, nil
 
 	default:
-		return nil, &rpcError{Code: errMethodNotFound, Message: "unbekannte Methode: " + method}
+		return nil, &rpcError{Code: errMethodNotFound, Message: "unknown method: " + method}
 	}
+}
+
+// callTool runs a tool handler and turns a panic into a tool error. Without
+// this the panic reaches the client as a transport error and the Go stack
+// trace lands in the agent's TUI (stderr is not redirected in window mode).
+func (s *Server) callTool(name string, handler ToolHandler, args map[string]interface{}) (res ToolResult) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.log(fmt.Sprintf("MCP: tool %q panicked: %v\n%s", name, rec, debug.Stack()))
+			res = ToolResult{Text: fmt.Sprintf("tool %q panicked: %v", name, rec), IsError: true}
+		}
+	}()
+	return handler(args)
+}
+
+// authorized checks an Authorization header against the configured token.
+func (s *Server) authorized(hdr string) bool {
+	scheme, credentials, ok := cutSpace(hdr)
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(credentials), []byte(s.token)) == 1
+}
+
+// cutSpace splits "<scheme> <credentials>" at the first space and trims the
+// extra spaces RFC 7235 permits between the two.
+func cutSpace(s string) (string, string, bool) {
+	i := strings.IndexByte(s, ' ')
+	if i < 0 {
+		return "", "", false
+	}
+	return s[:i], strings.TrimSpace(s[i+1:]), true
 }
 
 // originAllowed reports whether a browser Origin may drive this server.
@@ -366,13 +465,19 @@ func isJSONContentType(v string) bool {
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}})
+	writeErrorStatus(w, http.StatusBadRequest, id, code, msg)
+}
+
+func writeErrorStatus(w http.ResponseWriter, status int, id json.RawMessage, code int, msg string) {
+	writeJSONStatus(w, status, rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: msg}})
 }
