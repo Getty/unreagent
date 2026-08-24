@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-08-24T23:47:21Z
+claimed_by: unreagent-bf
+class: standard
+completed: 2026-08-24T23:47:21Z
+created: 2026-08-22T04:37:01Z
+id: 40
+priority: high
+started: 2026-08-24T23:38:18Z
+status: done
+tags:
+- config
+- security
+- bug
+title: Bracket permission rules are a raw prefix match on the command line
+updated: 2026-08-24T23:47:21Z
+---
+
+permission.go:52-87: globMatch does a prefix comparison against the untokenized command string. Verified by the audit with mode allow_all and a deny entry for a destructive command: the bare command is denied, but the same command behind sudo, behind a directory change, behind a shell -c wrapper, or with a doubled space all return allow. With mode allowlist and the Bash(git *) rule from unreagent.example.yaml:48, a git command followed by a second, unrelated command in the same line returns allow.
+permission.go:64: matchRule only ever reads toolInput command, so bracket rules for every tool other than Bash never match. Verified: a deny rule for a Write pattern against a matching file_path returns allow, same for a Read rule. Under allow_all the deny list is the only guard, so these fail open. Nothing rejects such a rule at load time.
+Acceptance: the command is split on shell operators and every segment must match, or bracket rules are documented as advisory only and the docs stop implying they are a boundary. Non-Bash rules match the relevant input key (file_path, path, pattern) or are rejected at load time. Tests cover each evasion the audit demonstrated.
