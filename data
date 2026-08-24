@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-08-24T23:44:09Z
+id: 76
+priority: medium
+status: backlog
+tags:
+- mcp
+- windows
+- security
+title: resolve() accepts Windows reserved device names (CON, NUL, AUX, COM1) under
+  files.root
+updated: 2026-08-24T23:44:09Z
+---
+
+main.go:583-595: lexical containment holds, but C:\proj\CON, NUL, AUX, PRN, COM1 (and aux.h-style names on Win10) are device paths; CreateFileW opens them regardless of the directory prefix and Go's os package does nothing about them. read_file path=CON blocks on console input and steals the agent's keystrokes in window mode; write_file path=NUL 'succeeds' and writes nothing; write_file path=Source/aux.h targets a serial device. Windows-only, unverified from Linux. Related: #49 (symlinks).
+Acceptance: reject !filepath.IsLocal(rel) before joining (Go >= 1.20, CI uses 1.22) -- it also covers .. and absolute paths in one place; settle by trying read_file path=CON on Windows; test on both platforms.
