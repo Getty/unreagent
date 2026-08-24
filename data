@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-24T23:43:34Z
+id: 70
+priority: medium
+status: backlog
+tags:
+- config
+- bug
+title: 'Agent restart loop is unbounded by default: a failing agent respawns every
+  3s forever'
+updated: 2026-08-24T23:43:34Z
+---
+
+main.go:238 + config default: agent.restart defaults to on-failure and MaxRestarts to 0 = unlimited (supervisor.go:36); OnExit fires only when restarts are exhausted, so the onExit prompt is unreachable and a headless run never terminates. Trigger: claude exits 1 at startup (not logged in, bad flag -- e.g. --permission-prompt-tool without -p, the case the comment at :215 warns about -- or an invalid --mcp-config) -> respawn every 3s; interactive: the error flashes in the console until Ctrl-C; headless: hangs. Same for an editor that exits non-zero immediately (bad project). Reasoned from code, not observed. Not covered by #34/#37/#47.
+Acceptance: maxRestarts defaults to a small number, or an exit within N seconds of start counts as terminal; documented in unreagent.example.yaml; test.
