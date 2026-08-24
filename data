@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:26:11Z
+id: 59
+priority: low
+status: backlog
+tags:
+- config
+- security
+title: 'Permission matcher follow-ups: redirections, tool-native escapes, Windows
+  path case, README guard-rail note'
+updated: 2026-08-24T23:26:11Z
+---
+
+Follow-up to #40, left open deliberately by the worker. 1) Redirection is not a segment break, so under allowlist + Bash(git *) a git log > /etc/cron.d/x is allowed; splitting on > would deny ordinary git log > out.txt -- policy call. 2) Tool-native escapes such as git -c core.pager=/bin/sh log cannot be seen by any command-line matcher; document or accept. 3) globEqual compares paths case-sensitively, so Write(C:\Proj\*) does not match c:\proj\... on Windows -- pre-existing. 4) README should state that a prefix-glob deny list under allow_all is a guard rail, not a security boundary, and that allowlist mode is the only mode that fails closed by construction (the matchCommand doc comment says this; the README does not). Also: variable indirection, data piped into an interpreter and python -c remain unmatchable by design.
