@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:25:38Z
+id: 53
+priority: medium
+status: backlog
+tags:
+- bug
+title: hermes-setup panics on a token shorter than 8 characters
+updated: 2026-08-24T23:31:05Z
+---
+
+main.go:1492 prints token[:8] plus the text '64 hex chars'. token is cfg.MCP.Token when the user set one; nothing validates its length and the text is wrong for any user-set value. Trigger: mcp.token: short in unreagent.yaml, then unreagent hermes-setup -> verified panic: slice bounds out of range [:8] with length 5. The panic happens after the Hermes config was written, so the command dies with a stack trace on a half-completed operation. Related: #39.
+Acceptance: guard the slice; only claim 64 hex chars for tokens this command generated; regression test.
+main.go:1492 slices the token to eight characters for the summary line. When the user configured mcp.token themselves nothing validates its length. Verified: a five-character token makes the command die with a slice-bounds panic -- after the Hermes config has already been written, so it dies with a stack trace on a half-completed operation. The same line also claims 64 hex characters, which is untrue for any user-set token. Acceptance: guard the slice and only make the length claim for tokens this command generated.
