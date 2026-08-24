@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-08-22T04:33:16Z
+id: 32
+priority: high
+status: backlog
+tags:
+- supervisor
+- bug
+title: 'runOnce(): Wait() hangs on an inherited handle, job closed too late'
+updated: 2026-08-24T23:36:09Z
+---
+
+supervisor.go:273: cmd.Stdout and Stderr are a bytes.Buffer, so os/exec inserts a copying goroutine and Wait blocks until every holder of the pipe write end closes it, not until the command exits. A grandchild that inherited the handle keeps Wait open, and job.Close at line 274, the thing that would kill it, only runs after Wait returns.
+Trigger: run_command with compile or package, where UBT or MSBuild leaves a node-reuse process behind. MSBuild nodeReuse is on by default and lingers about 15 minutes. The MCP handler goroutine hangs for that whole time. Audit reproduced it: child exits at 0.2s, Wait returns at 10.0s, gated entirely by the grandchild.
+Acceptance: a command whose grandchild outlives it returns within a bounded time; the job object is closed on that path too. Note cmd.WaitDelay needs a go directive bump in go.mod, currently go 1.19 -- that is a decision, not a side effect. Alternative: hand the command explicit os.Pipe ends the parent closes itself.
+Review note (2026-08-25): the #31 fix introduced streamSet -- parent-owned os.Pipe ends that exec.Cmd never learns about, a bounded drain (streamDrainTimeout) joined after the exit, job closed before the drain. That is exactly the alternative fix this ticket describes, so runOnce can now reuse it; runOnce itself is unchanged (cmd.Stdout is still an io.Writer, Wait still blocks on an inherited handle, job.Close still runs after Wait). Verified: RunOnce(sh -c 'sleep 3 & echo hi; exit 0') returns after 3.00s.
