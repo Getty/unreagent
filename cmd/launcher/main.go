@@ -40,7 +40,7 @@ var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Fehler:", err)
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
@@ -78,22 +78,22 @@ func run() error {
 	}
 	logger(fmt.Sprintf("unreagent %s — Config: %s", version, info.ConfigPath))
 	if info.LocalPath != "" {
-		logger("Lokales Overlay: " + info.LocalPath)
+		logger("Local overlay: " + info.LocalPath)
 	}
 	if info.EngineRoot != "" {
 		logger("Engine: " + info.EngineRoot)
 	} else {
-		logger("WARN Engine nicht gefunden — UE_ROOT oder engineRoot in unreagent.local.yaml setzen")
+		logger("WARN engine not found — set UE_ROOT or engineRoot in unreagent.local.yaml")
 	}
 	if info.Project != "" {
-		logger("Projekt: " + info.Project)
+		logger("Project: " + info.Project)
 	} else {
-		logger("WARN keine .uproject neben der Config gefunden — unreal.project setzen")
+		logger("WARN no .uproject found next to the config — set unreal.project")
 	}
 	// CLI-Overrides.
 	if *noAgent && cfg.Agent.Enabled {
 		cfg.Agent.Enabled = false
-		logger("Flag -no-agent: Agent wird nicht gestartet (MCP-Server bleibt verfügbar)")
+		logger("Flag -no-agent: agent will not be started (MCP server stays available)")
 	}
 	if *filesFlag && !cfg.Files.Enabled {
 		cfg.Files.Enabled = true
@@ -122,8 +122,8 @@ func run() error {
 			logOut = f
 			defer f.Close()
 			fmt.Printf("unreagent %s\n", version)
-			fmt.Printf("Launcher-Logs -> %s   (Unreal läuft im Hintergrund)\n", logPath)
-			fmt.Println("Der Agent (Claude) übernimmt dieses Fenster …")
+			fmt.Printf("Launcher logs -> %s   (Unreal runs in the background)\n", logPath)
+			fmt.Println("The agent (Claude) takes over this window …")
 			fmt.Println()
 		}
 	}
@@ -131,7 +131,7 @@ func run() error {
 	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
 	if cfg.Agent.Enabled {
 		if _, lookErr := exec.LookPath(cfg.Agent.Command); lookErr != nil {
-			logger("WARN Agent-Command nicht im PATH: " + cfg.Agent.Command + " (vollen Pfad in unreagent.local.yaml setzen)")
+			logger("WARN agent command not in PATH: " + cfg.Agent.Command + " (set the full path in unreagent.local.yaml)")
 		}
 	}
 	if cfg.Files.Enabled {
@@ -139,7 +139,7 @@ func run() error {
 		if cfg.Files.ReadOnly {
 			mode = "read-only"
 		}
-		logger(fmt.Sprintf("Datei-Tools aktiv (%s) unter: %s", mode, cfg.Files.Root))
+		logger(fmt.Sprintf("File tools active (%s) under: %s", mode, cfg.Files.Root))
 	}
 
 	sup := supervisor.New(logger)
@@ -151,7 +151,7 @@ func run() error {
 	}
 	if boolVal(cfg.Unreal.Unattended) && !hasArg(ueArgs, "-unattended") {
 		ueArgs = append(ueArgs, "-unattended")
-		logger("Unreal: -unattended aktiv (kein Crash-Dialog, kein Recovery-Prompt)")
+		logger("Unreal: -unattended active (no crash dialog, no recovery prompt)")
 	}
 	ueProjectDir := ""
 	if cfg.Unreal.Project != "" {
@@ -222,10 +222,10 @@ func run() error {
 					agentArgs = append(agentArgs, "--permission-prompt-tool", "mcp__"+config.MCPServerName+"__approve")
 				}
 			}
-			logger(fmt.Sprintf("Agent: Claude-Integration aktiv (%d MCP-Server%s)",
+			logger(fmt.Sprintf("Agent: Claude integration active (%d MCP server(s)%s)",
 				len(mcpServers), strictWord(cfg.MCP.Strict)))
 		}
-		logger("Agent-Kommando: " + cfg.Agent.Command + " " + strings.Join(agentArgs, " "))
+		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(agentArgs, " "))
 		sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
 			Command:      cfg.Agent.Command,
@@ -245,7 +245,7 @@ func run() error {
 			},
 		})
 		if agentInteractive {
-			logger("Agent: läuft interaktiv im Vordergrund (erbt die Konsole)")
+			logger("Agent: runs interactively in the foreground (inherits the console)")
 		}
 	}
 
@@ -295,10 +295,10 @@ func run() error {
 		}
 		go func() {
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger("MCP-Server Fehler: " + err.Error())
+				logger("MCP server error: " + err.Error())
 			}
 		}()
-		logger("MCP-Server läuft auf " + mcpURL)
+		logger("MCP server listening on " + mcpURL)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -324,16 +324,16 @@ func run() error {
 	go func() { wg.Wait(); close(done) }()
 	select {
 	case <-ctx.Done():
-		logger("Signal empfangen — beende alle Prozesse …")
+		logger("Signal received — stopping all processes …")
 	case <-done:
-		logger("Alle Services beendet.")
+		logger("All services stopped.")
 	}
 	stop()
 	wg.Wait()
 	if httpSrv != nil {
 		_ = httpSrv.Close()
 	}
-	logger("Tschüss.")
+	logger("Bye.")
 	return nil
 }
 
@@ -344,7 +344,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "status",
-		Description: "Liefert den Status aller verwalteten Prozesse (Unreal-Editor, Agent): laufend/gestoppt, PID, Anzahl Neustarts. Außerdem die Liste der verfügbaren Einmal-Befehle für run_command. Nutze dies, um zu prüfen, ob der Editor läuft, bevor du ihn steuerst.",
+		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count. Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
 		InputSchema: noArgs,
 		Handler: func(map[string]interface{}) mcp.ToolResult {
 			payload := map[string]interface{}{
@@ -358,31 +358,31 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_start",
-		Description: "Startet den Unreal-Editor, falls er nicht läuft. No-op, wenn er bereits läuft.",
+		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running.",
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StartService),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_stop",
-		Description: "Stoppt den Unreal-Editor und verhindert Auto-Restart, bis er wieder explizit gestartet wird. Beendet den gesamten Prozessbaum (keine Waisenprozesse).",
+		Description: "Stops the Unreal Editor and prevents auto-restart until it is explicitly started again. Terminates the whole process tree (no orphan processes).",
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StopService),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_restart",
-		Description: "Startet den Unreal-Editor neu (stop + start). Nutze dies nach einem C++-Build, damit der Editor die neuen Module lädt, oder wenn der Editor hängt.",
+		Description: "Restarts the Unreal Editor (stop + start). Use this after a C++ build so the editor loads the new modules, or when the editor hangs.",
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.RestartService),
 	})
 
 	srv.AddTool(mcp.Tool{
 		Name:        "logs",
-		Description: "Liefert die letzten Ausgabezeilen eines Service (stdout+stderr). Nutze service='ue' für Editor-/Build-Ausgaben, service='agent' für den Agenten. Praktisch, um Compile-Fehler oder Crash-Meldungen zu lesen.",
+		Description: "Returns the last output lines of a service (stdout+stderr). Use service='ue' for editor/build output, service='agent' for the agent. Handy for reading compile errors or crash messages.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"service": map[string]interface{}{"type": "string", "description": "Service-Name (ue, agent). Default: ue"},
-				"lines":   map[string]interface{}{"type": "integer", "description": "Anzahl Zeilen (Default 50)"},
+				"service": map[string]interface{}{"type": "string", "description": "Service name (ue, agent). Default: ue"},
+				"lines":   map[string]interface{}{"type": "integer", "description": "Number of lines (default 50)"},
 			},
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
@@ -399,19 +399,19 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	cmdNames := sup.CommandNames()
 	srv.AddTool(mcp.Tool{
 		Name: "run_command",
-		Description: "Führt einen vorkonfigurierten Einmal-Befehl synchron aus und gibt dessen Ausgabe + Exit-Code zurück. Typische Befehle: compile (C++-Module bauen), package (Build erstellen). Verfügbare Befehle: " +
-			strings.Join(cmdNames, ", ") + ". Nach 'compile' empfiehlt sich ue_restart.",
+		Description: "Runs a preconfigured one-off command synchronously and returns its output + exit code. Typical commands: compile (build the C++ modules), package (create a build). Available commands: " +
+			strings.Join(cmdNames, ", ") + ". After 'compile', ue_restart is recommended.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name": map[string]interface{}{"type": "string", "description": "Name des Befehls (siehe status.commands)"},
+				"name": map[string]interface{}{"type": "string", "description": "Name of the command (see status.commands)"},
 			},
 			"required": []string{"name"},
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			name := getString(args, "name", "")
 			if name == "" {
-				return mcp.ToolResult{Text: "Fehler: 'name' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'name' missing", IsError: true}
 			}
 			res, err := sup.RunCommand(name)
 			if err != nil {
@@ -430,11 +430,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		uv := cfg.Runtimes.Python.UV
 		srv.AddTool(mcp.Tool{
 			Name:        "run_python",
-			Description: "Führt Python-Code in einer sauberen, uv-verwalteten Umgebung aus und gibt stdout/stderr + Exit-Code zurück. Die Umgebung (venv, Abhängigkeiten aus pyproject.toml/requirements, passende Python-Version) wird automatisch von uv bereitgestellt — du musst KEIN venv anlegen, nichts installieren und die Umgebung nicht analysieren. Übergib einfach den Code. Das Skript wird im Projektverzeichnis abgelegt und dort ausgeführt, deshalb sind Module, die neben der pyproject.toml liegen, direkt per Name importierbar. Für zusätzliche Pakete nutze in pyproject.toml deklarierte Deps; ad-hoc geht 'import' nur für bereits vorhandene.",
+			Description: "Runs Python code in a clean, uv-managed environment and returns stdout/stderr + exit code. The environment (venv, dependencies from pyproject.toml/requirements, matching Python version) is provided automatically by uv — you do NOT need to create a venv, install anything or analyse the environment. Just pass the code. The script is stored in the project directory and executed there, so modules sitting next to the pyproject.toml are importable directly by name. For additional packages use dependencies declared in pyproject.toml; an ad-hoc 'import' only works for packages that are already present.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"code": map[string]interface{}{"type": "string", "description": "Auszuführender Python-Code"},
+					"code": map[string]interface{}{"type": "string", "description": "Python code to execute"},
 				},
 				"required": []string{"code"},
 			},
@@ -446,11 +446,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		node := cfg.Runtimes.Node.Node
 		srv.AddTool(mcp.Tool{
 			Name:        "run_node",
-			Description: "Führt Node.js-Code im Projektkontext aus und gibt stdout/stderr + Exit-Code zurück. Das Skript wird im Projektverzeichnis abgelegt und dort ausgeführt, deshalb werden bare Imports über die node_modules des Projekts aufgelöst — du musst die Umgebung nicht selbst einrichten oder analysieren. Der Code läuft IMMER als ES-Modul, unabhängig von der package.json: import/export und top-level await funktionieren, require ist nicht definiert. CommonJS-Pakete erreichst du per dynamischem import() oder per createRequire aus 'node:module'.",
+			Description: "Runs Node.js code in the project context and returns stdout/stderr + exit code. The script is stored in the project directory and executed there, so bare imports are resolved via the project's node_modules — you do not need to set up or analyse the environment yourself. The code ALWAYS runs as an ES module, regardless of package.json: import/export and top-level await work, require is not defined. Reach CommonJS packages via a dynamic import() or via createRequire from 'node:module'.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"code": map[string]interface{}{"type": "string", "description": "Auszuführender JavaScript-Code"},
+					"code": map[string]interface{}{"type": "string", "description": "JavaScript code to execute"},
 				},
 				"required": []string{"code"},
 			},
@@ -471,7 +471,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	if cfg.Permissions.Enabled {
 		srv.AddTool(mcp.Tool{
 			Name:        "approve",
-			Description: "Permission-Prompt-Tool für die Claude-Code-CLI (--permission-prompt-tool). Wird vom Harness aufgerufen, nicht direkt vom Modell. Entscheidet anhand der Launcher-Policy, ob ein Tool-Aufruf erlaubt wird.",
+			Description: "Permission prompt tool for the Claude Code CLI (--permission-prompt-tool). Called by the harness, not directly by the model. Decides based on the launcher policy whether a tool call is allowed.",
 			InputSchema: map[string]interface{}{
 				"type":                 "object",
 				"additionalProperties": true,
@@ -543,13 +543,13 @@ func scriptAction(sup *supervisor.Supervisor, command string, pre []string, dir,
 	return func(args map[string]interface{}) mcp.ToolResult {
 		code := getString(args, "code", "")
 		if code == "" {
-			return mcp.ToolResult{Text: "Fehler: 'code' fehlt", IsError: true}
+			return mcp.ToolResult{Text: "Error: 'code' missing", IsError: true}
 		}
 		f, err := os.CreateTemp(dir, scriptPrefix+"*."+ext)
 		if err != nil {
 			return mcp.ToolResult{
-				Text: fmt.Sprintf("Fehler: Skriptdatei konnte nicht im Arbeitsverzeichnis der %s-Runtime angelegt werden (%s): %v"+
-					"\nDas Verzeichnis muss existieren und beschreibbar sein — prüfe runtimes.%s.project bzw. agent.workdir.",
+				Text: fmt.Sprintf("Error: could not create the script file in the working directory of the %s runtime (%s): %v"+
+					"\nThe directory must exist and be writable — check runtimes.%s.project or agent.workdir.",
 					label, dir, err, label),
 				IsError: true,
 			}
@@ -589,19 +589,19 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			return "", err
 		}
 		if abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(os.PathSeparator)) {
-			return "", fmt.Errorf("Pfad außerhalb des erlaubten Roots")
+			return "", fmt.Errorf("path outside the allowed root")
 		}
 		return abs, nil
 	}
 
 	srv.AddTool(mcp.Tool{
 		Name:        "read_file",
-		Description: "Liest eine Textdatei aus dem UE-Projekt (Pfad relativ zum Projekt-Root). Damit kann ein Agent Quellcode/Config/Logs lesen, ohne lokal anwesend zu sein. Große Dateien werden gekürzt.",
-		InputSchema: requiredPathSchema("path", "Pfad zur Datei, relativ zum Projekt-Root"),
+		Description: "Reads a text file from the UE project (path relative to the project root). Lets an agent read source code/config/logs without being present locally. Large files are truncated to their head (first 256 KiB), marked with …[truncated]; the tail is unreachable.",
+		InputSchema: requiredPathSchema("path", "Path to the file, relative to the project root"),
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			path := getString(args, "path", "")
 			if path == "" {
-				return mcp.ToolResult{Text: "Fehler: 'path' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'path' missing", IsError: true}
 			}
 			abs, err := resolve(path)
 			if err != nil {
@@ -613,7 +613,7 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			}
 			const max = 256 * 1024
 			if len(b) > max {
-				return mcp.ToolResult{Text: string(b[:max]) + "\n…[gekürzt]"}
+				return mcp.ToolResult{Text: string(b[:max]) + "\n…[truncated]"}
 			}
 			return mcp.ToolResult{Text: string(b)}
 		},
@@ -621,8 +621,8 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 
 	srv.AddTool(mcp.Tool{
 		Name:        "list_dir",
-		Description: "Listet Einträge eines Verzeichnisses im UE-Projekt (Pfad relativ zum Root, leer = Root). Verzeichnisse enden mit /.",
-		InputSchema: optionalPathSchema("path", "Verzeichnis relativ zum Root (leer = Root)"),
+		Description: "Lists the entries of a directory in the UE project (path relative to the root, empty = root). Directories end with /.",
+		InputSchema: optionalPathSchema("path", "Directory relative to the root (empty = root)"),
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			abs, err := resolve(getString(args, "path", "."))
 			if err != nil {
@@ -651,19 +651,19 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 
 	srv.AddTool(mcp.Tool{
 		Name:        "write_file",
-		Description: "Schreibt/überschreibt eine Textdatei im UE-Projekt (Pfad relativ zum Root). Fehlende Verzeichnisse werden angelegt. Damit kann ein Agent Dateien erstellen/ändern, ohne lokal anwesend zu sein.",
+		Description: "Writes/overwrites a text file in the UE project (path relative to the root). Missing directories are created. Lets an agent create/modify files without being present locally.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":    map[string]interface{}{"type": "string", "description": "Pfad relativ zum Root"},
-				"content": map[string]interface{}{"type": "string", "description": "Neuer Dateiinhalt"},
+				"path":    map[string]interface{}{"type": "string", "description": "Path relative to the root"},
+				"content": map[string]interface{}{"type": "string", "description": "New file content"},
 			},
 			"required": []string{"path", "content"},
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			path := getString(args, "path", "")
 			if path == "" {
-				return mcp.ToolResult{Text: "Fehler: 'path' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'path' missing", IsError: true}
 			}
 			abs, err := resolve(path)
 			if err != nil {
@@ -671,7 +671,7 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			}
 			content, ok := stringArg(args, "content")
 			if !ok {
-				return mcp.ToolResult{Text: "Fehler: 'content' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'content' missing", IsError: true}
 			}
 			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 				return errResult(err)
@@ -679,26 +679,26 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 				return errResult(err)
 			}
-			return mcp.ToolResult{Text: fmt.Sprintf("geschrieben: %s (%d Bytes)", path, len(content))}
+			return mcp.ToolResult{Text: fmt.Sprintf("written: %s (%d bytes)", path, len(content))}
 		},
 	})
 
 	srv.AddTool(mcp.Tool{
 		Name:        "edit_file",
-		Description: "Ersetzt in einer Textdatei alle Vorkommen von old_string durch new_string (Pfad relativ zum Root). Fehler, wenn old_string nicht vorkommt.",
+		Description: "Replaces all occurrences of old_string with new_string in a text file (path relative to the root). Error if old_string does not occur.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":       map[string]interface{}{"type": "string", "description": "Pfad relativ zum Root"},
-				"old_string": map[string]interface{}{"type": "string", "description": "zu ersetzender Text"},
-				"new_string": map[string]interface{}{"type": "string", "description": "Ersatztext"},
+				"path":       map[string]interface{}{"type": "string", "description": "Path relative to the root"},
+				"old_string": map[string]interface{}{"type": "string", "description": "Text to replace"},
+				"new_string": map[string]interface{}{"type": "string", "description": "Replacement text"},
 			},
 			"required": []string{"path", "old_string", "new_string"},
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			path := getString(args, "path", "")
 			if path == "" {
-				return mcp.ToolResult{Text: "Fehler: 'path' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'path' missing", IsError: true}
 			}
 			abs, err := resolve(path)
 			if err != nil {
@@ -706,11 +706,11 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			}
 			oldS := getString(args, "old_string", "")
 			if oldS == "" {
-				return mcp.ToolResult{Text: "Fehler: 'old_string' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'old_string' missing", IsError: true}
 			}
 			newS, ok := stringArg(args, "new_string")
 			if !ok {
-				return mcp.ToolResult{Text: "Fehler: 'new_string' fehlt", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'new_string' missing", IsError: true}
 			}
 			b, err := os.ReadFile(abs)
 			if err != nil {
@@ -719,13 +719,13 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			content := string(b)
 			n := strings.Count(content, oldS)
 			if n == 0 {
-				return mcp.ToolResult{Text: "Fehler: 'old_string' nicht gefunden", IsError: true}
+				return mcp.ToolResult{Text: "Error: 'old_string' not found", IsError: true}
 			}
 			content = strings.ReplaceAll(content, oldS, newS)
 			if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 				return errResult(err)
 			}
-			return mcp.ToolResult{Text: fmt.Sprintf("%d Vorkommen ersetzt in %s", n, path)}
+			return mcp.ToolResult{Text: fmt.Sprintf("%d occurrence(s) replaced in %s", n, path)}
 		},
 	})
 }
@@ -783,10 +783,10 @@ func sweepStaleScripts(cfg *config.Config, agentWorkdir string, logger func(stri
 			}
 			path := filepath.Join(dir, e.Name())
 			if err := os.Remove(path); err != nil {
-				logger("WARN liegengebliebene Skriptdatei nicht entfernbar: " + path + ": " + err.Error())
+				logger("WARN could not remove stale script file " + path + ": " + err.Error())
 				continue
 			}
-			logger("Liegengebliebene Skriptdatei entfernt: " + path)
+			logger("Stale script file removed: " + path)
 		}
 	}
 }
@@ -828,14 +828,14 @@ func prepareRuntimes(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdi
 	if cfg.Runtimes.Python.Enabled && cfg.Runtimes.Python.PrepareOnStart {
 		dir := runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir)
 		if fileExists(filepath.Join(dir, "pyproject.toml")) {
-			logger("Runtime: bereite Python vor (uv sync) …")
+			logger("Runtime: preparing Python (uv sync) …")
 			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Python.UV, []string{"sync"}, dir, nil, "prepare:python") }()
 		}
 	}
 	if cfg.Runtimes.Node.Enabled && cfg.Runtimes.Node.PrepareOnStart {
 		dir := runtimeDir(cfg.Runtimes.Node.Project, agentWorkdir)
 		if fileExists(filepath.Join(dir, "package.json")) {
-			logger("Runtime: bereite Node vor (npm install) …")
+			logger("Runtime: preparing Node (npm install) …")
 			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Node.Npm, []string{"install"}, dir, nil, "prepare:node") }()
 		}
 	}
@@ -876,7 +876,7 @@ func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWork
 		}
 
 		if _, err := exec.LookPath(command); err != nil {
-			logger("WARN MCP-Server '" + name + "': Befehl '" + command + "' nicht gefunden (PATH) — Bridge kann nicht starten. Installieren oder vollen Pfad in der Config eintragen.")
+			logger("WARN MCP server '" + name + "': command '" + command + "' not found (PATH) — bridge cannot start. Install it or put the full path in the config.")
 			continue
 		}
 
@@ -911,7 +911,7 @@ func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name stri
 		script = filepath.Join(agentWorkdir, script)
 	}
 	if !fileExists(script) {
-		logger("WARN MCP-Server '" + name + "': Skript nicht gefunden: " + script + " — ist das Plugin installiert?")
+		logger("WARN MCP server '" + name + "': script not found: " + script + " — is the plugin installed?")
 		return false
 	}
 	dir := filepath.Dir(script)
@@ -922,18 +922,18 @@ func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name stri
 	if npm == "" {
 		npm = "npm"
 	}
-	logger("MCP-Server '" + name + "': node_modules fehlt — installiere Abhängigkeiten (npm install) in " + dir + " …")
+	logger("MCP server '" + name + "': node_modules missing — installing dependencies (npm install) in " + dir + " …")
 	res, err := sup.RunOnce(npm, []string{"install"}, dir, nil, "prepare:mcp:"+name)
 	if err != nil {
-		logger("WARN MCP-Server '" + name + "': npm install fehlgeschlagen: " + err.Error() + " — Bridge wird nicht starten")
+		logger("WARN MCP server '" + name + "': npm install failed: " + err.Error() + " — bridge will not start")
 		return false
 	}
 	if res.ExitCode != 0 {
-		logger(fmt.Sprintf("WARN MCP-Server '%s': npm install exit %d — Bridge wird nicht starten\n%s",
+		logger(fmt.Sprintf("WARN MCP server '%s': npm install exit %d — bridge will not start\n%s",
 			name, res.ExitCode, tailLines(res.Output, 20)))
 		return false
 	}
-	logger("MCP-Server '" + name + "': Abhängigkeiten installiert.")
+	logger("MCP server '" + name + "': dependencies installed.")
 	return true
 }
 
@@ -951,11 +951,11 @@ func smokeTestMCP(name, command string, args, env []string, dir string, logger f
 	stdin, err1 := cmd.StdinPipe()
 	stdout, err2 := cmd.StdoutPipe()
 	if err1 != nil || err2 != nil {
-		logger("WARN MCP-Server '" + name + "': Smoke-Test konnte Pipes nicht öffnen")
+		logger("WARN MCP server '" + name + "': smoke test could not open pipes")
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		logger("WARN MCP-Server '" + name + "': Smoke-Test-Start fehlgeschlagen: " + err.Error())
+		logger("WARN MCP server '" + name + "': smoke test failed to start: " + err.Error())
 		return
 	}
 	_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unreagent-smoketest","version":"`+version+`"}}}`+"\n")
@@ -973,18 +973,18 @@ func smokeTestMCP(name, command string, args, env []string, dir string, logger f
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 	if ok {
-		logger("MCP-Server '" + name + "': Smoke-Test OK — Bridge antwortet auf initialize.")
+		logger("MCP server '" + name + "': smoke test OK — bridge answers initialize.")
 		return
 	}
 	detail := strings.TrimSpace(stderr.String())
-	reason := "keine initialize-Antwort"
+	reason := "no initialize response"
 	if ctx.Err() == context.DeadlineExceeded {
-		reason = "Timeout nach 20s"
+		reason = "timeout after 20s"
 	}
 	if detail != "" {
-		logger(fmt.Sprintf("WARN MCP-Server '%s': Smoke-Test fehlgeschlagen (%s):\n%s", name, reason, tailLines(detail, 15)))
+		logger(fmt.Sprintf("WARN MCP server '%s': smoke test failed (%s):\n%s", name, reason, tailLines(detail, 15)))
 	} else {
-		logger("WARN MCP-Server '" + name + "': Smoke-Test fehlgeschlagen (" + reason + ", kein stderr)")
+		logger("WARN MCP server '" + name + "': smoke test failed (" + reason + ", no stderr)")
 	}
 }
 
@@ -994,7 +994,7 @@ func smokeTestMCP(name, command string, args, env []string, dir string, logger f
 func waitForEndpoint(name, rawURL string, logger func(string)) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
-		logger("WARN MCP-Server '" + name + "': UNREAL_MCP_URL unverständlich: " + rawURL)
+		logger("WARN MCP server '" + name + "': UNREAL_MCP_URL not parseable: " + rawURL)
 		return
 	}
 	addr := u.Host
@@ -1006,12 +1006,12 @@ func waitForEndpoint(name, rawURL string, logger func(string)) {
 		conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
 		if err == nil {
 			_ = conn.Close()
-			logger("MCP-Server '" + name + "': In-Editor-Server " + rawURL + " ist erreichbar.")
+			logger("MCP server '" + name + "': in-editor server " + rawURL + " is reachable.")
 			return
 		}
 		time.Sleep(5 * time.Second)
 	}
-	logger("WARN MCP-Server '" + name + "': In-Editor-Server " + rawURL + " nach 5 Minuten nicht erreichbar — läuft der Editor mit dem Plugin? Firewall? Lauscht der Server nur auf localhost?")
+	logger("WARN MCP server '" + name + "': in-editor server " + rawURL + " not reachable after 5 minutes — is the editor running with the plugin? Firewall? Is the server listening on localhost only?")
 }
 
 // commandLoop liest Steuerbefehle von stdin (für manuelle Bedienung).
@@ -1024,9 +1024,9 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 	cmdLoopRunning := false // schon in die Launcher-Konsole gewechselt?
 	return func(success bool) {
 		if success {
-			logger("Agent beendet (exit 0).")
+			logger("Agent exited (exit 0).")
 		} else {
-			logger("Agent abgestürzt / Neustarts erschöpft.")
+			logger("Agent crashed / restarts exhausted.")
 		}
 
 		// Läuft bereits die Launcher-Konsole (vorherige 'k'-Wahl), würde ein
@@ -1035,15 +1035,15 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 		busy := cmdLoopRunning
 		mu.Unlock()
 		if busy {
-			logger("Launcher-Konsole aktiv — 'q' beendet alles, 'start agent' startet den Agenten neu.")
+			logger("Launcher console active — 'q' stops everything, 'start agent' restarts the agent.")
 			return
 		}
 
 		switch cfg.Agent.OnExit {
 		case config.OnExitLeave:
-			logger("agent.onExit=leave — Editor/MCP laufen weiter. Ctrl-C beendet den Launcher.")
+			logger("agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher.")
 		case config.OnExitShutdown:
-			logger("agent.onExit=shutdown — beende alles.")
+			logger("agent.onExit=shutdown — stopping everything.")
 			stop()
 		default: // ask
 			if !interactive {
@@ -1054,15 +1054,15 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 			}
 			switch promptAgentExit(success) {
 			case "k":
-				fmt.Fprintln(os.Stdout, "Editor läuft weiter. Launcher-Konsole:")
+				fmt.Fprintln(os.Stdout, "Editor keeps running. Launcher console:")
 				mu.Lock()
 				cmdLoopRunning = true
 				mu.Unlock()
 				go commandLoop(ctx, stop, sup, logger)
 			case "r":
-				fmt.Fprintln(os.Stdout, "Starte Agent neu …")
+				fmt.Fprintln(os.Stdout, "Restarting agent …")
 				if _, err := sup.StartService("agent"); err != nil {
-					logger("Agent-Neustart fehlgeschlagen: " + err.Error() + " — beende alles.")
+					logger("Agent restart failed: " + err.Error() + " — stopping everything.")
 					stop()
 				}
 			default: // Enter / q / Timeout / EOF
@@ -1077,13 +1077,13 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 // Nach 30s ohne Eingabe gilt "alles beenden" (z.B. Agent über Nacht abgestürzt).
 func promptAgentExit(success bool) string {
 	if success {
-		fmt.Fprintln(os.Stdout, "\nAgent beendet.")
+		fmt.Fprintln(os.Stdout, "\nAgent exited.")
 	} else {
-		fmt.Fprintln(os.Stdout, "\nAgent abgestürzt.")
+		fmt.Fprintln(os.Stdout, "\nAgent crashed.")
 	}
-	fmt.Fprintln(os.Stdout, "  [Enter] alles beenden (UE + Launcher)")
-	fmt.Fprintln(os.Stdout, "  [k]     Editor weiterlaufen lassen, Launcher-Konsole")
-	fmt.Fprintln(os.Stdout, "  [r]     Agent neu starten")
+	fmt.Fprintln(os.Stdout, "  [Enter] stop everything (UE + launcher)")
+	fmt.Fprintln(os.Stdout, "  [k]     keep the editor running, launcher console")
+	fmt.Fprintln(os.Stdout, "  [r]     restart the agent")
 	fmt.Fprint(os.Stdout, "> ")
 
 	ch := make(chan string, 1)
@@ -1099,13 +1099,13 @@ func promptAgentExit(success bool) string {
 	case s := <-ch:
 		return s
 	case <-time.After(30 * time.Second):
-		fmt.Fprintln(os.Stdout, "\n(Timeout) — beende alles.")
+		fmt.Fprintln(os.Stdout, "\n(Timeout) — stopping everything.")
 		return ""
 	}
 }
 
 func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, logger func(string)) {
-	logger("Befehle: 'status' | 'r' (alle neu) | 'r <name>' | 'stop <name>' | 'start <name>' | 'c <name>' | 'q'")
+	logger("Commands: 'status' | 'r' (restart all) | 'r <name>' | 'stop <name>' | 'start <name>' | 'c <name>' | 'q'")
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		select {
@@ -1119,7 +1119,7 @@ func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, l
 		}
 		switch fields[0] {
 		case "q", "quit", "exit":
-			logger("Beende …")
+			logger("Stopping …")
 			stop()
 			return
 		case "status", "s":
@@ -1145,13 +1145,13 @@ func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, l
 			if len(fields) > 1 {
 				res, err := sup.RunCommand(fields[1])
 				if err != nil {
-					logger("Fehler: " + err.Error())
+					logger("Error: " + err.Error())
 				} else {
 					logger(fmt.Sprintf("exit %d\n%s", res.ExitCode, tailLines(res.Output, 100)))
 				}
 			}
 		default:
-			logger("Unbekannter Befehl: " + fields[0])
+			logger("Unknown command: " + fields[0])
 		}
 	}
 }
@@ -1198,18 +1198,18 @@ func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{},
 		}
 		b, _ := json.MarshalIndent(payload, "", "  ")
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			logger("WARN MCP-Config (" + path + "): " + err.Error())
+			logger("WARN MCP config (" + path + "): " + err.Error())
 			continue
 		}
 		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
-			logger("WARN MCP-Config (" + path + "): " + err.Error())
+			logger("WARN MCP config (" + path + "): " + err.Error())
 			continue
 		}
 		format := out.Format
 		if format == "" {
 			format = "mcp_json"
 		}
-		logger("MCP-Config geschrieben: " + path + " (" + format + ")")
+		logger("MCP config written: " + path + " (" + format + ")")
 	}
 }
 
@@ -1271,20 +1271,20 @@ func cleanRecovery(projectDir string, logger func(string)) {
 	saved := filepath.Join(projectDir, "Saved")
 	restore := filepath.Join(saved, "Autosaves", "PackageRestoreData.json")
 	if err := os.Remove(restore); err == nil {
-		logger("Recovery: PackageRestoreData.json entfernt")
+		logger("Recovery: PackageRestoreData.json removed")
 	}
 	crashes := filepath.Join(saved, "Crashes")
 	if entries, err := os.ReadDir(crashes); err == nil && len(entries) > 0 {
 		for _, e := range entries {
 			_ = os.RemoveAll(filepath.Join(crashes, e.Name()))
 		}
-		logger("Recovery: Saved/Crashes geleert")
+		logger("Recovery: Saved/Crashes emptied")
 	}
 }
 
 func warnIfMissing(logger func(string), label, path string) {
 	if !fileExists(path) {
-		logger(fmt.Sprintf("WARN %s: Pfad nicht gefunden: %s", label, path))
+		logger(fmt.Sprintf("WARN %s: path not found: %s", label, path))
 	}
 }
 
@@ -1297,7 +1297,7 @@ func fileExists(path string) bool {
 }
 
 func errResult(err error) mcp.ToolResult {
-	return mcp.ToolResult{Text: "Fehler: " + err.Error(), IsError: true}
+	return mcp.ToolResult{Text: "Error: " + err.Error(), IsError: true}
 }
 
 func tailLines(s string, n int) string {

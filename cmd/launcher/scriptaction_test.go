@@ -264,7 +264,7 @@ func TestSweepStaleScriptsDedupsSameDirectory(t *testing.T) {
 	}
 	var removals int
 	for _, line := range *logs {
-		if strings.Contains(line, "entfernt") {
+		if strings.Contains(line, "removed") {
 			removals++
 		}
 		if strings.Contains(line, "WARN") {

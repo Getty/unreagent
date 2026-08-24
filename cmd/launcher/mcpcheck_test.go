@@ -14,8 +14,8 @@ func TestSmokeTestMCPOk(t *testing.T) {
 		script := `process.stdin.on('data', d => { process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:1,result:{serverInfo:{name:"fake",version:"0"}}}) + "\n"); });`
 		smokeTestMCP("fake", "node", []string{"-e", script}, nil, t.TempDir(), logger)
 	})
-	if !strings.Contains(logs, "Smoke-Test OK") {
-		t.Fatalf("erwartet 'Smoke-Test OK', bekam:\n%s", logs)
+	if !strings.Contains(logs, "smoke test OK") {
+		t.Fatalf("expected 'smoke test OK', got:\n%s", logs)
 	}
 }
 

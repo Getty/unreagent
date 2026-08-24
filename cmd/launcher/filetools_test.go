@@ -164,8 +164,8 @@ func TestWriteFileMissingContentKeyLeavesFileUntouched(t *testing.T) {
 	if !res.IsError {
 		t.Errorf("write_file with misspelled 'content' key: IsError = false, want true (text: %q)", res.Text)
 	}
-	if res.Text != "Fehler: 'content' fehlt" {
-		t.Errorf("write_file with misspelled 'content' key: text = %q, want %q", res.Text, "Fehler: 'content' fehlt")
+	if res.Text != "Error: 'content' missing" {
+		t.Errorf("write_file with misspelled 'content' key: text = %q, want %q", res.Text, "Error: 'content' missing")
 	}
 	if got := mustReadFile(t, target); got != original {
 		t.Errorf("write_file with misspelled 'content' key TRUNCATED THE FILE: got %q, want unchanged %q", got, original)
@@ -231,8 +231,8 @@ func TestEditFileMissingNewStringLeavesFileUntouched(t *testing.T) {
 	if !res.IsError {
 		t.Errorf("edit_file with misspelled 'new_string' key: IsError = false, want true (text: %q)", res.Text)
 	}
-	if res.Text != "Fehler: 'new_string' fehlt" {
-		t.Errorf("edit_file with misspelled 'new_string' key: text = %q, want %q", res.Text, "Fehler: 'new_string' fehlt")
+	if res.Text != "Error: 'new_string' missing" {
+		t.Errorf("edit_file with misspelled 'new_string' key: text = %q, want %q", res.Text, "Error: 'new_string' missing")
 	}
 	if got := mustReadFile(t, target); got != original {
 		t.Errorf("edit_file with misspelled 'new_string' key DELETED old_string OCCURRENCES: got %q, want unchanged %q", got, original)
@@ -276,8 +276,8 @@ func TestEditFileMissingPathReturnsError(t *testing.T) {
 	if !res.IsError {
 		t.Errorf("edit_file with no 'path' key: IsError = false, want true (text: %q)", res.Text)
 	}
-	if res.Text != "Fehler: 'path' fehlt" {
-		t.Errorf("edit_file with no 'path' key: text = %q, want %q", res.Text, "Fehler: 'path' fehlt")
+	if res.Text != "Error: 'path' missing" {
+		t.Errorf("edit_file with no 'path' key: text = %q, want %q", res.Text, "Error: 'path' missing")
 	}
 }
 
@@ -299,8 +299,8 @@ func TestEditFileOldStringNotFoundLeavesFileUntouched(t *testing.T) {
 	if !res.IsError {
 		t.Errorf("edit_file with absent old_string: IsError = false, want true (text: %q)", res.Text)
 	}
-	if res.Text != "Fehler: 'old_string' nicht gefunden" {
-		t.Errorf("edit_file with absent old_string: text = %q, want %q", res.Text, "Fehler: 'old_string' nicht gefunden")
+	if res.Text != "Error: 'old_string' not found" {
+		t.Errorf("edit_file with absent old_string: text = %q, want %q", res.Text, "Error: 'old_string' not found")
 	}
 	if got := mustReadFile(t, target); got != original {
 		t.Errorf("edit_file with absent old_string modified the file: got %q, want unchanged %q", got, original)
@@ -323,7 +323,7 @@ func TestEditFileReplacesAllOccurrences(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("edit_file replace-all returned an error: %q", res.Text)
 	}
-	want := "3 Vorkommen ersetzt in a.txt"
+	want := "3 occurrence(s) replaced in a.txt"
 	if res.Text != want {
 		t.Errorf("edit_file replace-all: text = %q, want %q", res.Text, want)
 	}
@@ -349,7 +349,7 @@ func TestWriteFileRejectsPathEscapeAndCreatesNothingOutsideRoot(t *testing.T) {
 	if !res.IsError {
 		t.Errorf("write_file with '..' escape: IsError = false, want true (text: %q)", res.Text)
 	}
-	want := "Fehler: Pfad außerhalb des erlaubten Roots"
+	want := "Error: path outside the allowed root"
 	if res.Text != want {
 		t.Errorf("write_file with '..' escape: text = %q, want %q", res.Text, want)
 	}
