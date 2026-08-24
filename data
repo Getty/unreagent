@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-08-24T23:55:54Z
+claimed_by: unreagent-bf
+class: standard
+completed: 2026-08-24T23:55:54Z
+created: 2026-08-21T22:13:21Z
+id: 6
+priority: medium
+started: 2026-08-24T23:55:54Z
+status: done
+tags:
+- i18n
+title: Translate remaining German MCP tool descriptions in main.go
+updated: 2026-08-24T23:55:54Z
+---
+
+Spec section 10: tool descriptions in cmd/launcher/main.go are still German ('Liest eine Textdatei aus dem UE-Projekt...'), contradicting the English-only rule in CLAUDE.md -- commit 4b3ff55 missed them. These descriptions are prompt surface shipped to every agent.
+
+--- Note from #8 (2026-08-22) ---
+Two of these descriptions are not merely German, they are wrong -- translating them as-is would carry the false claim into English:
+- run_node (main.go:439) claims node_modules resolution and CommonJS-or-ESM. Neither holds. Tracked separately as #29; sequence that one first or translate around it.
+- read_file (main.go:556) says 'Grosse Dateien werden gekuerzt' without saying the HEAD is kept, so the tail of a large file is unreachable. Worth stating in the English version.
+
+Also: the agent-visible error strings ('Fehler: path fehlt', 'Pfad ausserhalb des erlaubten Roots', 'geschrieben: %s (%d Bytes)', '%d Vorkommen ersetzt in %s', 'Fehler: old_string nicht gefunden', 'exit %d') are quoted verbatim in the failure-mode tables of skills/unreagent-files/SKILL.md and skills/unreagent-runtimes/SKILL.md. Translating them requires the same pass over those two documents (unreagent-skill-author).
+
+Also translate the new argument-check messages that #28 adds to write_file and edit_file ('Fehler: content fehlt', 'Fehler: new_string fehlt'). They are deliberately left German by that ticket so this file stays internally consistent until this sweep runs.
