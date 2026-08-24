@@ -22,6 +22,11 @@ jobs:
           go-version: "1.22"
           cache: false # dependencies are vendored, the build never fetches modules
 
+      - name: go test
+        # A tag must not publish a binary that was never tested: ci.yml only
+        # gates main and pull requests, not the tag push that lands here.
+        run: go test ./... -count=1
+
       - name: Build (Windows + Linux)
         run: |
           set -e

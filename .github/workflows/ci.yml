@@ -32,6 +32,11 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: go test
+        # -race needs cgo, which is fine here: this runs natively on the Linux
+        # runner, unlike the Windows cross-compile below.
+        run: go test ./... -count=1 -race
+
       - name: Build (Linux + Windows)
         run: |
           set -e
