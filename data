@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:43:46Z
+id: 72
+priority: medium
+status: backlog
+tags:
+- mcp
+- bug
+title: ue_start / ue_restart report success when the editor failed to start
+updated: 2026-08-24T23:43:46Z
+---
+
+main.go:501-510: serviceAction returns the status snapshot with IsError=false; the spawn error only reaches the launcher log (the log file in window mode). Observed: nonexistent editor -> {running:false, desired:false}, isError:false, log says 'neugestartet (manuell)'. Trigger: wrong unreal.editor, unresolved engine (#43), any spawn error.
+Acceptance: IsError is set when a start/restart leaves st.Running false, carrying the last start error (the supervisor exposes it in ServiceStatus); test.
