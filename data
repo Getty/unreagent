@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-24T23:43:29Z
+id: 69
+priority: medium
+status: backlog
+tags:
+- bug
+title: Launcher exit code is always 0 after startup
+updated: 2026-08-24T23:43:29Z
+---
+
+main.go:44, :336: run() returns nil regardless of why the session ended. Observed: headless (-p) agent exits 3 -> onExit -> stop() -> launcher exit code 0. Also 0 when the agent or editor binary could not start (OnExit now fires via #34). Trigger: any scripted or CI headless run.
+Acceptance: makeAgentExitHandler records the agent's outcome; run() returns an error (exit 1) for agent failure or a terminal start failure; a signal-driven shutdown stays 0; test covers the headless non-zero case.
