@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:44:04Z
+id: 75
+priority: medium
+status: backlog
+tags:
+- mcp
+- bug
+title: run_command / run_python / run_node have no timeout and no cancellation
+updated: 2026-08-24T23:44:04Z
+---
+
+main.go:565, :416: sup.RunOnce blocks the handler until the child exits; nothing cancels when the client gives up (ToolHandler carries no ctx; the 4h WriteTimeout from #51 only closes the socket). Trigger: run_python with while True: pass or a script that starts a server, run_command waiting on a UBT mutex -> the process lives until launcher exit (Windows: killed by the job then; Linux: orphaned), the handler goroutine leaks, each retry spawns another.
+Acceptance: optional timeoutSeconds (default for run_python/run_node, generous for run_command) that closes the job on expiry, and r.Context() plumbed into ToolHandler so a disconnect cancels -- needs an internal/mcp signature change, coordinate with #52's tests; tests.
