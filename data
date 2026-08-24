@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:25:59Z
+id: 57
+priority: low
+status: backlog
+tags:
+- config
+- mcp
+title: mcp.address with an empty or wildcard host is pasted into the client URL
+updated: 2026-08-24T23:25:59Z
+---
+
+main.go:190 builds mcpURL as http:// + cfg.MCP.Address + /mcp and Config.validate never touches MCP.Address. mcp.address: :8765 -- an ordinary Go listen address -- yields http://:8765/mcp, which is handed to the agent via --mcp-config and written into every writeConfig target. 0.0.0.0:8765, which README recommends at line 429, yields http://0.0.0.0:8765/mcp; whether that is dialable is platform-dependent and untested on Windows. Related: #45 (listen error handling), #42 (field not substituted).
+Acceptance: split host/port and substitute 127.0.0.1 for an empty or wildcard host when building the client-facing URL; validate the address at load time.
