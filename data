@@ -1,0 +1,19 @@
+---
+claimed_at: 2026-08-24T23:56:00Z
+claimed_by: unreagent-bf
+class: standard
+completed: 2026-08-24T23:56:00Z
+created: 2026-08-24T23:26:05Z
+id: 58
+priority: low
+started: 2026-08-24T23:46:47Z
+status: done
+tags:
+- mcp
+title: Render ServiceStatus.Unresponsive in the status tool output
+updated: 2026-08-24T23:56:00Z
+---
+
+Follow-up to #35: the supervisor now reports an unresponsive service with an Unresponsive flag (omitempty) instead of dropping it, and Running/PID stay zero for such a service. No caller in main.go renders the flag, so the agent reading the status tool sees a service that looks stopped rather than stuck.
+Acceptance: the status tool text/JSON makes 'unresponsive' visible and distinguishable from 'stopped'.
+Concrete spot: the status tool description at cmd/launcher/main.go:332 still says laufend/gestoppt, PID, Anzahl Neustarts and never mentions unresponsive, while the JSON now carries running:false, unresponsive:true. An agent reads that as stopped and calls ue_start, which blocks 10s and fails with 'service is not responding'. Ticket #6 (translate the remaining German tool descriptions) touches the same string.
