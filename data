@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-08-24T23:37:37Z
+created: 2026-08-22T04:33:38Z
+id: 33
+priority: high
+started: 2026-08-24T23:37:37Z
+status: done
+tags:
+- supervisor
+- windows
+- bug
+title: NewJob() error discarded, Assign() dereferences the nil job (Windows)
+updated: 2026-08-24T23:37:37Z
+---
+
+supervisor.go:262+269 and 356+358 both do job, _ := NewJob(). On Windows NewJob returns nil plus an error if CreateJobObjectW or SetInformationJobObject fails. Close has a nil guard at job_windows.go:112, Assign does not: it reaches uintptr(j.handle) at job_windows.go:102 and panics, taking the launcher down.
+The naive fix is worse than the panic: with the nil check added but the error still swallowed, the process runs with no job object and no log line saying so, which silently voids the KILL_ON_JOB_CLOSE no-zombie guarantee. Acceptance: the error is checked, Assign refuses a nil receiver, and a failure is logged loudly as 'process runs unsupervised'. Windows-only, not reproducible on Linux.
