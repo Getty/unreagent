@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-24T23:37:43Z
+created: 2026-08-22T04:33:56Z
+id: 34
+priority: medium
+started: 2026-08-24T23:37:43Z
+status: done
+tags:
+- supervisor
+- bug
+title: A failed start() never fires OnExit, leaving the launcher dead
+updated: 2026-08-24T23:37:43Z
+---
+
+supervisor.go:342-355: when c.Start fails the function logs and returns without calling spec.OnExit, although the service was desired and is not coming back. That is the exact condition OnExit exists for, see the comment at line 47.
+Trigger: agent.command is not on PATH on Windows. Interactive mode has already redirected logs to unreagent.log and printed that the agent takes over the window, and commandLoop is deliberately not started. The user is left with a dead console while the editor keeps running in the background; only Ctrl-C ends it. The startup LookPath warning went to the log file too. Acceptance: OnExit(false) fires on the terminal start-failure paths.
