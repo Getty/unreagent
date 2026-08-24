@@ -1,0 +1,15 @@
+---
+class: standard
+completed: 2026-08-24T23:26:22Z
+created: 2026-08-21T22:13:27Z
+id: 7
+priority: low
+started: 2026-08-24T23:26:22Z
+status: done
+tags:
+- ci
+title: Align GitHub Action pins between ci.yml and release.yml
+updated: 2026-08-24T23:26:22Z
+---
+
+ci.yml uses actions/checkout@v6 + setup-go@v6 (commit 77f3d87); release.yml still on v4/v5. Also: the 'kein go.sum' comment in both workflows is stale -- go.sum exists (yaml.v3). Cosmetic drift, but the release path is the one that is least often exercised.
