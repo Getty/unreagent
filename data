@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-08-24T23:44:16Z
+id: 77
+priority: medium
+status: backlog
+tags:
+- supervisor
+- bug
+title: cleanOnRestart wipes Saved/Crashes on the automatic restart that follows a
+  crash
+updated: 2026-08-24T23:44:16Z
+---
+
+main.go:1270-1283: with restart: on-failure the PreStart hook runs 3s after the crash and RemoveAll's the minidump and CrashContext the agent would need to diagnose it. Opt-in and documented, so borderline by-design, but the documented purpose (a clean editor start) does not need the crash dumps gone.
+Acceptance: clean only on manual/explicit starts, or move the crash directories aside instead of deleting them; README wording adjusted.
