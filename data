@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-08-24T23:44:23Z
+id: 78
+priority: low
+status: backlog
+tags:
+- mcp
+title: 'MCP tool handlers: approve fails open on an unknown payload shape, getInt
+  ignores numeric strings, logs for the foreground agent is always empty'
+updated: 2026-08-24T23:44:23Z
+---
+
+1) main.go:480-490: with no tool name under the four aliases the approve tool calls Decide('', {}) -> deny rules cannot match -> allow with updatedInput {}. Unreachable with Claude Code's current tool_name/input payload, but fragile; deny with a message when toolName is empty. 2) main.go:1327: getInt silently returns the default for a numeric string (observed lines:'3' -> 50); strconv.Atoi on strings, else an error. 3) main.go:240, :380: logs service=agent is always empty in the default interactive config because Foreground services stream nothing into the buffer while the description promises agent output; say so in the description or the result text.
