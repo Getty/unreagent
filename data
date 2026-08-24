@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-08-24T23:38:00Z
+created: 2026-08-24T23:25:21Z
+id: 50
+priority: high
+started: 2026-08-24T23:38:00Z
+status: done
+tags:
+- mcp
+- security
+- bug
+title: MCP endpoint accepts cross-origin browser requests (no Origin or Content-Type
+  check)
+updated: 2026-08-24T23:38:00Z
+---
+
+mcp.go:115-148 ServeHTTP checks the HTTP method and, when configured, the bearer token. Nothing else. mcp.token is commented out in unreagent.example.yaml:76, so the shipped configuration is an unauthenticated JSON-RPC endpoint on 127.0.0.1:8765. A page on any origin can POST with Content-Type: text/plain -- a CORS simple request, no preflight -- and the tool runs; the attacker cannot read the reply but the side effect has happened. Audit confirmed the handler executes exactly that request with a foreign Origin. With the example config both runtimes are enabled, so this is code execution as the user; with file tools it is arbitrary file write; even the demo config exposes ue_stop/ue_restart/run_command. The MCP specification mandates Origin validation for local HTTP servers.
+Acceptance: a POST whose Origin header is present and not allowlisted is rejected (403); Content-Type must be application/json (415); an absent Origin keeps working because non-browser MCP clients send none; loopback origins on any port are the built-in allowlist; tests assert the tool did not run.
+mcp.go:115-148: ServeHTTP validates the HTTP method and, when configured, the bearer token. There is no Origin check, no Referer check and no request Content-Type check. mcp.token is commented out in unreagent.example.yaml:76, so the shipped configuration is an unauthenticated JSON-RPC endpoint on a loopback port.
+Trigger: a page on any origin issues a POST to the endpoint with Content-Type text/plain, which makes it a CORS simple request needing no preflight. The attacker cannot read the reply, but the tool has already run. The audit confirmed the handler accepts and executes exactly that request with a foreign Origin. The example config enables both runtimes, so this is code execution as the user; with the file tools enabled it is also arbitrary file write. Even the minimal demo config exposes ue_stop, ue_restart and run_command.
+The MCP specification mandates Origin validation for local HTTP servers for exactly this reason. Acceptance: a POST carrying an Origin header that is not allowlisted is rejected; Content-Type must be application/json; tests cover the foreign-origin request the audit used, and the no-Origin case a normal MCP client sends.
