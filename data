@@ -1,0 +1,17 @@
+---
+class: standard
+created: 2026-08-24T23:25:43Z
+id: 54
+priority: medium
+status: backlog
+tags:
+- mcp
+- bug
+title: Bridge npm install has no timeout and blocks launcher startup forever
+updated: 2026-08-24T23:31:23Z
+---
+
+prepareMCPBridges runs synchronously at main.go:300 before sup.Start at :304. prepareNodeBridge calls sup.RunOnce(npm, [install]) and supervisor.runOnce uses a plain exec.Command + Wait with no context and no timeout, while smokeTestMCP right next to it uses a 20s context. Trigger: an extraServers node bridge with a package.json but no node_modules on a machine without network or with a stalled registry: the editor is never started, no MCP server listens, the only exit is Ctrl-C.
+Acceptance: the bridge npm install runs under a context timeout like the smoke test; the failure is reported and the launcher continues or exits deliberately.
+main.go:914 via main.go:300: prepareMCPBridges runs synchronously before sup.Start, and prepareNodeBridge calls RunOnce for npm install, which supervisor.runOnce executes with a plain exec.Command and no context and no timeout. smokeTestMCP right next to it correctly uses a 20 second context, so the inconsistency looks accidental.
+Trigger: an extraServers node bridge whose directory has a package.json but no node_modules, on a machine with no network or a stalled registry. The editor is never started, no MCP server listens, and the only way out is Ctrl-C. Acceptance: the bridge install gets a context timeout like the smoke test, and a timeout is reported as a bridge warning rather than a silent hang.
