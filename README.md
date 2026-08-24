@@ -261,9 +261,9 @@ suspects, in this order:
 | Section | Purpose |
 |---|---|
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable) |
-| `permissions` | permission layer: `allow_all` / `allowlist` / `deny_all`, plus `allow` / `deny` rules |
+| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`) |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below |
 | `unreal` | *optional* — editor args, restart policy (`never` / `on-failure` / `always`) |
 | `commands` | *optional* — your own one-shot commands (compile / package are built-in) |
 | `engineRoot` | *usually only in local.yaml* — engine path override |
@@ -309,10 +309,50 @@ bIsEnabled=false
 ### Permission layer
 
 With `permissions.enabled` + `agent.claudeIntegration` the launcher starts
-the agent with `--permission-prompt-tool mcp__unreagent__approve`. Every
-permission prompt from Claude Code then goes through the `approve` tool,
-which decides per the configured policy. `mode: "allow_all"` = "auto-approve
-everything" (with `deny` exceptions like `Bash(rm -rf *)`).
+the agent with `--permission-prompt-tool mcp__unreagent__approve` — but
+**only in headless mode** (`agent.args` contains `-p`/`--print`, or
+`agent.window: false`). Every permission prompt from Claude Code then goes
+through the `approve` tool, which decides per the configured policy.
+
+> **Interactive window mode (the default) does not enforce the policy this
+> way.** With `mode: allow_all` the launcher passes
+> `--dangerously-skip-permissions` instead (Claude Code's own prompting is
+> skipped entirely); with any other mode no flag is added and Claude Code
+> prompts the user directly in the window, same as without unreagent. To have
+> the policy actually enforced, run headless or drive Claude Code externally
+> against the MCP server (`-no-agent`).
+
+Modes: `allow_all` = auto-approve everything, `deny` rules still apply (e.g.
+`Bash(rm -rf *)`); `allowlist` (the default when `mode` is unset) = deny
+everything except what an `allow` rule matches — the only mode that fails
+closed by construction; `deny_all` = reject everything.
+
+`Bash(...)` rules are matched **per shell segment**, not against the whole
+command line: the command is split on `;`, `&&`, `||`, `|`, newlines, on
+`$(...)`/backtick bodies, `{ ... }` groups, and on the script handed to a
+nested `bash -c`/`sh -c`. A **deny** rule matches if *any* segment matches
+(so `cd /tmp && rm -rf /` cannot walk past a deny rule for `Bash(rm -rf *)`);
+an **allow** rule requires *every* segment to be covered by some allow rule
+(so `git status | head` needs both `Bash(git *)` and `Bash(head *)`, and
+`cd /proj && git status` needs both `Bash(cd *)` and `Bash(git *)`). Deny
+matching additionally normalizes whitespace/quotes/escapes, reduces a
+path-qualified command to its base name (`/bin/rm` -> `rm`), and looks
+through wrapper commands (`sudo`, `env`, `eval`, `xargs`, ...) at what they
+wrap. This is a **heuristic, not a shell parser** — it cannot follow variable
+indirection, aliases, or data piped into an interpreter (`python -c ...`). A
+deny list under `allow_all` is a guard rail, not a security boundary.
+
+Bracket rules also work on non-Bash tools, matched against the tool's
+path-like input — `Write(/etc/*)`, `Read(/secrets/*)`,
+`mcp__unreagent__write_file(/etc/*)`. A rule whose tool carries no evaluable
+input field fails closed: a deny rule still blocks, an allow rule still does
+not grant.
+
+**Windows:** `claudeIntegration` sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` by
+default (see the `agent` row above), so Claude Code's shell tool is named
+`PowerShell`, not `Bash` — write rules as `PowerShell(...)` there (e.g.
+`deny: ["PowerShell(Remove-Item *)"]`). The segment splitter above is
+POSIX-shaped; there is no PowerShell-specific tokenizer yet.
 
 > Note: the exact **input** schema of `--permission-prompt-tool` is not
 > officially documented by Anthropic. The `approve` handler reads the tool
@@ -367,22 +407,48 @@ Restart Hermes after running `hermes-setup` so it picks up the new entry.
 
 `run_python` executes code via `uv run python` — uv builds / syncs the venv
 automatically from `pyproject.toml` / `requirements` and installs the right
-Python version on demand. `run_node` runs JS in the project context. The
-agent does **not** have to analyse or set up the environment itself; the
-instructions are in the MCP tool description and are therefore automatically
-in context.
+Python version on demand. `run_node` runs JS in the project context. Both
+tools write the script into the runtime's working directory (not a system
+temp directory) and run it from there, so `run_python` can import modules
+that sit next to `pyproject.toml` and `run_node` resolves bare imports
+through the project's `node_modules`. The agent does **not** have to analyse
+or set up the environment itself; the instructions are in the MCP tool
+description and are therefore automatically in context.
 
 ## MCP tools
 
 | Tool | Function |
 |---|---|
-| `status` | process status + available commands |
+| `status` | process status + available commands — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list |
 | `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle |
 | `run_command` | run a preconfigured command (compile, package) |
 | `logs` | last output lines of a service |
 | `run_python` / `run_node` | run code in a prepared environment |
 | `read_file` / `list_dir` / `write_file` / `edit_file` | file access on the project (only with `files.enabled` / `-files`, scoped to `root`) |
 | `approve` | permission prompt tool for Claude Code |
+
+### MCP server hardening
+
+The `/mcp` HTTP endpoint rejects malformed or unexpected requests instead of
+guessing:
+
+- Every POST must carry `Content-Type: application/json` — anything else
+  gets `415 Unsupported Media Type` (the manual test below already sets it).
+- A request that carries an `Origin` header is rejected with `403 Forbidden`
+  unless the origin is loopback (`http`/`https` on `localhost`, `127.0.0.1`
+  or `::1`, any port) — a defence against a web page in the user's browser
+  driving the launcher (CSRF/DNS-rebinding). Requests without an `Origin`
+  header — every non-browser MCP client, including Claude Code and `curl` —
+  are unaffected. The allowlist is not yet configurable, so a browser-hosted
+  client on another origin cannot be pointed at unreagent today.
+- `initialize` negotiates `protocolVersion` against `2025-06-18` (default)
+  and `2025-03-26`; any other value is answered with the default rather than
+  echoed back, since this server implements only the Streamable-HTTP
+  transport (no SSE, no sessions).
+- Connection timeouts guard against a wedged socket: `ReadHeaderTimeout` 10s,
+  `ReadTimeout` 60s, `IdleTimeout` 120s. `WriteTimeout` is 4h — the ceiling
+  for a single tool call, so a long-running `run_command` (e.g. a full UE
+  build) has room; it is a backstop, not a request budget.
 
 ## CLI flags
 

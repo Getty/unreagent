@@ -41,10 +41,21 @@ agent:
 
 permissions:
   enabled: true
-  mode: allow_all            # allow_all | allowlist | deny_all
+  mode: allow_all            # allow_all | allowlist | deny_all (default if unset: allowlist)
   deny:
     - "Bash(rm -rf *)"
-  # Bei mode: allowlist greift stattdessen diese Liste:
+  # `Bash(...)` rules match per shell segment, not the whole command line: the
+  # command is split on ; && || | newlines, $(...)/backtick bodies, and a
+  # script handed to a nested `bash -c`/`sh -c`. A deny rule blocks if ANY
+  # segment matches; an allow rule below only grants if EVERY segment is
+  # covered by some allow rule — e.g. "git status | head" needs BOTH
+  # "Bash(git *)" and "Bash(head *)". Bracket rules also work on non-Bash
+  # tools, matched against their path-like input, e.g. "Write(/etc/*)". On
+  # Windows use "PowerShell(...)" instead of "Bash(...)". Full details +
+  # caveats: README "### Permission layer".
+  #
+  # Under mode: allowlist this list is consulted instead — everything not
+  # matched by an allow rule is rejected:
   # allow: ["Read", "Edit", "Write", "Bash(git *)", "mcp__unreagent__*"]
 
 runtimes:
