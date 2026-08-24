@@ -1,0 +1,15 @@
+---
+class: standard
+created: 2026-08-24T23:43:40Z
+id: 71
+priority: medium
+status: backlog
+tags:
+- bug
+title: After k + start agent the launcher console and the foreground agent both read
+  stdin
+updated: 2026-08-24T23:43:40Z
+---
+
+main.go:1056-1061, :1109: the k path starts commandLoop (a stdin reader); the loop's own hint (:1038) advertises start agent; that spawns the Foreground agent on the same stdin while commandLoop keeps scanning. Observed with piped stdin: 'hello' went to commandLoop ('Unbekannter Befehl: hello'), 'q' went to the agent, launcher then unreachable until SIGTERM. Two readers on a Windows console behave the same (unverified).
+Acceptance: start agent in the loop returns from commandLoop and clears cmdLoopRunning so the exit prompt takes over again, or the loop refuses start agent and only the prompt's r path starts the agent; test.
