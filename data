@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-08-25T00:06:31Z
+claimed_by: unreagent-bf
+class: standard
+completed: 2026-08-25T00:06:31Z
+created: 2026-08-24T23:56:05Z
+id: 82
+priority: low
+started: 2026-08-25T00:02:57Z
+status: done
+tags:
+- supervisor
+title: Supervisor errors and log lines still German, and they reach the agent through
+  errResult
+updated: 2026-08-25T00:06:31Z
+---
+
+After #6 translated cmd/launcher/main.go, the supervisor still emits German that reaches the agent mixed-language via errResult: internal/supervisor/supervisor.go:168 and :228 'unbekannter Service %q', :266 'unbekannter Befehl %q', :295 'Start fehlgeschlagen: %w' -- e.g. the agent sees 'Error: Start fehlgeschlagen: exec: uv: ...'. The user-facing log lines '[ue] gestartet (pid %d)', 'beendet', 'starte:', 'stoppe', 'neugestartet (manuell)' and the package doc comment are German too.
+Acceptance: every string the supervisor returns as an error or logs is English; translate the comments on the lines touched; no behaviour change; the existing supervisor tests keep passing (update any assertion on the old text).
+Dependency: skills/unreagent-runtimes/SKILL.md quotes 'Error: Start fehlgeschlagen: exec: "uv": ...' (table row ~L241) and carries a note at ~L250-252 that this one string is still German. When supervisor.go:295 is translated, update both spots in the same commit (unreagent-skill-author lane).
+Scope extended by the pre-release audit (2026-08-25): internal/config/config.go also returns German validation errors to the user -- :417 'agent.onExit ungueltig', :423 'permissions.mode ungueltig', :426 'permissions.enabled erfordert mcp.enabled', :441 'ungueltige Policy', :546 'Config nicht lesbar' -- translate them in the same pass. Supervisor lines to translate: supervisor.go:293 'starte:', :295 'Start fehlgeschlagen', :429 'gestartet (pid)', :453 'stoppe', :472 'beendet', :475 'Neustart', :478 'kein automatischer Neustart', :507 'neugestartet (manuell)', :168/:228 'unbekannter Service', :266 'unbekannter Befehl'.
