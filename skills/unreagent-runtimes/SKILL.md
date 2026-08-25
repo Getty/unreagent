@@ -41,7 +41,7 @@ work.
 
 Each runtime is registered only when it is enabled in the launcher's config, and
 each defaults to off. A disabled runtime is not a refused call: the tool is
-absent from `tools/list`, and calling it returns `-32602 unbekanntes Tool:
+absent from `tools/list`, and calling it returns `-32602 unknown tool:
 run_python`. There is no command-line flag for these — enabling them is a config
 edit by the user.
 
@@ -132,8 +132,8 @@ Two side effects follow from the script being a real file in the project:
   the runtime directories and logs one line per file it finds:
 
   ```
-  Liegengebliebene Skriptdatei entfernt: <path>
-  WARN liegengebliebene Skriptdatei nicht entfernbar: <path>: <error>
+  Stale script file removed: <path>
+  WARN could not remove stale script file <path>: <error>
   ```
 
   The sweep matches only the generated shape — the prefix, then decimal digits,
@@ -190,7 +190,7 @@ there is nothing for you to install.
   want to.
 
 With `prepareOnStart: true` the launcher runs `uv sync` once at startup when the
-working directory has a `pyproject.toml`, and logs `Runtime: bereite Python vor
+working directory has a `pyproject.toml`, and logs `Runtime: preparing Python
 (uv sync) …`. It is fire-and-forget in the background, so an early `run_python`
 can overlap it; that is harmless, because `uv run` resolves the environment
 anyway. A first call may simply take longer while dependencies are fetched.
@@ -226,7 +226,7 @@ anyway. A first call may simply take longer while dependencies are fetched.
   module works too and hands you its `default`.
 
 With `prepareOnStart: true` the launcher runs `npm install` once at startup when
-the working directory has a `package.json`, logging `Runtime: bereite Node vor
+the working directory has a `package.json`, logging `Runtime: preparing Node
 (npm install) …`. `runtimes.node.npm` is used for that step only — there is no
 tool that runs npm on demand. A package script belongs in the launcher's
 `commands:` section and is then reachable through `run_command`.
@@ -235,10 +235,10 @@ tool that runs npm on demand. A package script belongs in the launcher's
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `-32602 unbekanntes Tool: run_python` | the runtime is disabled in this project | the user enables `runtimes.python.enabled` |
-| `Fehler: 'code' fehlt` | `code` missing or empty | pass the source as `code` |
-| `Fehler: Skriptdatei konnte nicht im Arbeitsverzeichnis der python-Runtime angelegt werden (<dir>): <error>`, second line `Das Verzeichnis muss existieren und beschreibbar sein — prüfe runtimes.python.project bzw. agent.workdir.` | the runtime's directory is missing or not writable, so no script could be written and nothing was started (`node-Runtime` / `runtimes.node.project` in the `run_node` wording) | fix `runtimes.<lang>.project` or `agent.workdir`; there is no fallback location, so retrying unchanged fails identically |
-| `Fehler: Start fehlgeschlagen: exec: "uv": executable file not found in %PATH%` | `uv` / `node` not installed or not on the launcher's PATH (a Linux dev build of the launcher says `$PATH` instead) | install it, or set an absolute path in `unreagent.local.yaml` |
+| `-32602 unknown tool: run_python` | the runtime is disabled in this project | the user enables `runtimes.python.enabled` |
+| `Error: 'code' missing` | `code` missing or empty | pass the source as `code` |
+| `Error: could not create the script file in the working directory of the python runtime (<dir>): <error>`, second line `The directory must exist and be writable — check runtimes.python.project or agent.workdir.` | the runtime's directory is missing or not writable, so no script could be written and nothing was started (`node runtime` / `runtimes.node.project` in the `run_node` wording) | fix `runtimes.<lang>.project` or `agent.workdir`; there is no fallback location, so retrying unchanged fails identically |
+| `Error: Start fehlgeschlagen: exec: "uv": executable file not found in %PATH%` | `uv` / `node` not installed or not on the launcher's PATH (a Linux dev build of the launcher says `$PATH` instead) | install it, or set an absolute path in `unreagent.local.yaml` |
 | `ModuleNotFoundError: No module named 'unreal'` | you tried to reach the editor from the host | use the plugin's `execute_script` instead |
 | `ModuleNotFoundError` for a project dependency | not declared in `pyproject.toml` | the dependency has to be added there; the script cannot install it |
 | `ERR_MODULE_NOT_FOUND` for a bare specifier | the package is not installed in the project | `npm install` it in the project (or via `prepareOnStart`) |
@@ -247,9 +247,9 @@ tool that runs npm on demand. A package script belongs in the launcher's
 | exit non-zero with a traceback | the script itself failed | the traceback is in the output; fix and rerun |
 | the call never returns | no timeout exists | the script is blocking; it has to be killed on the host |
 
-Launcher-side error messages and tool descriptions currently come back in
-German. Match them loosely; the wording is expected to change to English, the
-behaviour is not.
+One launcher-side string is still German: the `Start fehlgeschlagen:` prefix the
+supervisor puts on a process it could not start. Match it loosely; the wording
+is expected to change to English, the behaviour is not.
 
 ## See also
 

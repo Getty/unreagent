@@ -27,7 +27,7 @@ see Do not hand-edit assets.
 
 The four tools are registered only when file access is enabled. When it is not,
 they are not registered at all: they are absent from `tools/list`, and a call
-returns the JSON-RPC error `-32602 unbekanntes Tool: read_file`. That message
+returns the JSON-RPC error `-32602 unknown tool: read_file`. That message
 means the feature is switched off in this project's configuration — not that
 the path was rejected, and not that permission was denied.
 
@@ -58,7 +58,7 @@ launcher from starting its own agent so an external one can connect. The two are
 often used together (`-no-agent -files`), which is why they are easy to confuse.
 
 When file tools come up, the launcher logs
-`Datei-Tools aktiv (read/write | read-only) unter: <root>`. That line is the
+`File tools active (read/write | read-only) under: <root>`. That line is the
 authoritative statement of the root and the mode in effect.
 
 ## Root confinement
@@ -80,11 +80,11 @@ these tools can read or write outside the root. What it costs you:
   error rather than the file you asked for. If a result makes no sense, check
   first whether you passed an absolute path.
 - **Escaping with `..` is detected** after the path is cleaned, and produces
-  `Fehler: Pfad außerhalb des erlaubten Roots`.
+  `Error: path outside the allowed root`.
 - **An empty or omitted path is not a shortcut to the root** — that holds per
   tool, not in general. `list_dir` defaults to the root. `read_file` and
   `write_file` reject an absent or empty `path` up front with
-  `Fehler: 'path' fehlt`. `edit_file` is the odd one out: it is the only one
+  `Error: 'path' missing`. `edit_file` is the odd one out: it is the only one
   of the four without that check, so an omitted `path` resolves to the root
   directory and the call fails later, when reading it, with an "is a
   directory" message that names neither the parameter nor the root. Pass
@@ -99,8 +99,8 @@ these tools can read or write outside the root. What it costs you:
 |---|---|---|
 | `read_file` | `path` | file content as text, truncated at 256 KiB |
 | `list_dir` | `path` (optional) | one entry per line, directories with a trailing `/` |
-| `write_file` | `path`, `content` | `geschrieben: <path> (<n> Bytes)` |
-| `edit_file` | `path`, `old_string`, `new_string` | `<n> Vorkommen ersetzt in <path>` |
+| `write_file` | `path`, `content` | `written: <path> (<n> bytes)` |
+| `edit_file` | `path`, `old_string`, `new_string` | `<n> occurrence(s) replaced in <path>` |
 
 ### read_file
 
@@ -108,7 +108,7 @@ these tools can read or write outside the root. What it costs you:
 
 Returns the raw file content, nothing else: no line numbers, no ranges, no
 offset or limit parameter. Files larger than 256 KiB (262144 bytes) come back as
-the first 256 KiB followed by `\n…[gekürzt]`; the cut is by byte count and can
+the first 256 KiB followed by `\n…[truncated]`; the cut is by byte count and can
 split a multi-byte character. Truncation takes the head, so the end of a long
 file is unreachable through this tool.
 
@@ -150,7 +150,7 @@ you mean to change one site.
 
 Matching is literal and exact: no regex, no whitespace normalisation, no
 case-insensitivity. If `old_string` does not occur, the call fails with
-`Fehler: 'old_string' nicht gefunden` and the file is untouched — a clean,
+`Error: 'old_string' not found` and the file is untouched — a clean,
 non-destructive failure you can retry against. If `new_string` is empty or
 omitted, every occurrence is deleted. The result reports how many occurrences
 were replaced; a count higher than you expected means you hit more sites than
@@ -163,18 +163,14 @@ back.
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `-32602 unbekanntes Tool: read_file` | file tools disabled | user sets `files.enabled: true`, or runs with `-files` |
-| `-32602 unbekanntes Tool: write_file` while `read_file` works | `files.readOnly: true` | user clears `readOnly`; do not retry |
-| `Fehler: Pfad außerhalb des erlaubten Roots` | the path escaped the root | make it relative to the project root |
-| `Fehler: 'path' fehlt` | `path` absent or empty | supply it; for `list_dir`, empty means the root |
-| `Fehler: 'old_string' nicht gefunden` | no literal match | re-read the file; check whitespace and line endings |
-| `Fehler: 'old_string' fehlt` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
-| content ends in `…[gekürzt]` | file exceeds 256 KiB | you have the head only; the tail is unreachable |
+| `-32602 unknown tool: read_file` | file tools disabled | user sets `files.enabled: true`, or runs with `-files` |
+| `-32602 unknown tool: write_file` while `read_file` works | `files.readOnly: true` | user clears `readOnly`; do not retry |
+| `Error: path outside the allowed root` | the path escaped the root | make it relative to the project root |
+| `Error: 'path' missing` | `path` absent or empty | supply it; for `list_dir`, empty means the root |
+| `Error: 'old_string' not found` | no literal match | re-read the file; check whitespace and line endings |
+| `Error: 'old_string' missing` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
+| content ends in `…[truncated]` | file exceeds 256 KiB | you have the head only; the tail is unreachable |
 | file appears empty after a write | `content` was missing or misspelled | rewrite with the correct parameter name |
-
-Error messages currently come back in German (the launcher's remaining
-untranslated strings). Match them loosely; the wording is expected to change to
-English, the behaviour is not.
 
 ## Do not hand-edit assets
 
