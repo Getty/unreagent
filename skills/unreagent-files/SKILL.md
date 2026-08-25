@@ -82,13 +82,9 @@ these tools can read or write outside the root. What it costs you:
 - **Escaping with `..` is detected** after the path is cleaned, and produces
   `Error: path outside the allowed root`.
 - **An empty or omitted path is not a shortcut to the root** — that holds per
-  tool, not in general. `list_dir` defaults to the root. `read_file` and
-  `write_file` reject an absent or empty `path` up front with
-  `Error: 'path' missing`. `edit_file` is the odd one out: it is the only one
-  of the four without that check, so an omitted `path` resolves to the root
-  directory and the call fails later, when reading it, with an "is a
-  directory" message that names neither the parameter nor the root. Pass
-  `path` explicitly to all three writing and reading tools.
+  tool, not in general. `list_dir` defaults to the root. `read_file`,
+  `write_file` and `edit_file` reject an absent or empty `path` up front with
+  `Error: 'path' missing`. Pass `path` explicitly to all three.
 - The check is lexical; symlinks are not resolved. A symlink inside the root
   pointing outside it is followed. Treat the confinement as a guard against path
   mistakes, not as a security boundary around a hostile project tree.
@@ -133,10 +129,10 @@ Creates missing parent directories, then truncates and overwrites. There is no
 backup, no existence check and no confirmation — an existing file is replaced
 outright. Read before you write when you mean to preserve anything.
 
-One sharp edge: `content` is read defensively, and a missing or misspelled
-`content` argument is treated as the empty string. `write_file` with a typo in
-that parameter name silently truncates the target to zero bytes. The byte count
-in the result is your check that the payload arrived.
+A missing or misspelled `content` argument is rejected with
+`Error: 'content' missing` and nothing is written. An explicit empty string is
+accepted, though, and truncates the target to zero bytes. The byte count in the
+result is your check that the payload arrived.
 
 ### edit_file
 
@@ -151,10 +147,11 @@ you mean to change one site.
 Matching is literal and exact: no regex, no whitespace normalisation, no
 case-insensitivity. If `old_string` does not occur, the call fails with
 `Error: 'old_string' not found` and the file is untouched — a clean,
-non-destructive failure you can retry against. If `new_string` is empty or
-omitted, every occurrence is deleted. The result reports how many occurrences
-were replaced; a count higher than you expected means you hit more sites than
-intended, and the previous content is gone.
+non-destructive failure you can retry against. An omitted `new_string` is
+rejected with `Error: 'new_string' missing`; an explicit empty string deletes
+every occurrence. The result reports how many occurrences were replaced; a
+count higher than you expected means you hit more sites than intended, and the
+previous content is gone.
 
 The rewrite is not atomic: the file is read, replaced in memory and written
 back.
@@ -170,7 +167,7 @@ back.
 | `Error: 'old_string' not found` | no literal match | re-read the file; check whitespace and line endings |
 | `Error: 'old_string' missing` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
 | content ends in `…[truncated]` | file exceeds 256 KiB | you have the head only; the tail is unreachable |
-| file appears empty after a write | `content` was missing or misspelled | rewrite with the correct parameter name |
+| `Error: 'content' missing` | `content` absent or not a string — typically a misspelled parameter name | rewrite with the correct parameter name; nothing was written |
 
 ## Do not hand-edit assets
 
