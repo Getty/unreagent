@@ -414,20 +414,20 @@ func (c *Config) validate() error {
 		switch c.Agent.OnExit {
 		case OnExitAsk, OnExitShutdown, OnExitLeave:
 		default:
-			return fmt.Errorf("agent.onExit ungültig: %q (erlaubt: ask, shutdown, leave)", c.Agent.OnExit)
+			return fmt.Errorf("agent.onExit invalid: %q (allowed: ask, shutdown, leave)", c.Agent.OnExit)
 		}
 	}
 	switch c.Permissions.Mode {
 	case ModeAllowAll, ModeAllowlist, ModeDenyAll:
 	default:
-		return fmt.Errorf("permissions.mode ungültig: %q (erlaubt: allow_all, allowlist, deny_all)", c.Permissions.Mode)
+		return fmt.Errorf("permissions.mode invalid: %q (allowed: allow_all, allowlist, deny_all)", c.Permissions.Mode)
 	}
 	if c.Permissions.Enabled && !c.MCP.Enabled {
-		return fmt.Errorf("permissions.enabled erfordert mcp.enabled (das approve-Tool läuft über den MCP-Server)")
+		return fmt.Errorf("permissions.enabled requires mcp.enabled (the approve tool is served by the MCP server)")
 	}
 	for name, cmd := range c.Commands {
 		if cmd.Command == "" {
-			return fmt.Errorf("commands.%s.command fehlt", name)
+			return fmt.Errorf("commands.%s.command is missing", name)
 		}
 	}
 	return nil
@@ -438,7 +438,7 @@ func validRestart(p string) error {
 	case RestartNever, RestartOnFailure, RestartAlways:
 		return nil
 	default:
-		return fmt.Errorf("ungültige Policy %q (erlaubt: never, on-failure, always)", p)
+		return fmt.Errorf("invalid policy %q (allowed: never, on-failure, always)", p)
 	}
 }
 
@@ -543,7 +543,7 @@ func resolveProject(c *Config, baseDir string) (project, dir, name string) {
 func decodeYAML(path string, c *Config) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("Config nicht lesbar (%s): %w", path, err)
+		return fmt.Errorf("config not readable (%s): %w", path, err)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true) // unbekannte Felder = Fehler (Tippfehler-Schutz)

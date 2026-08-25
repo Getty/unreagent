@@ -1,9 +1,9 @@
-// Package supervisor verwaltet langlebige Prozesse (Unreal-Editor, Agent) mit
-// Auto-Restart-Policy und führt benannte Einmal-Befehle (z.B. Compile) aus.
+// Package supervisor manages long-lived processes (Unreal Editor, agent) with
+// an auto-restart policy and runs named one-off commands (e.g. compile).
 //
-// Jede laufende Prozess-Instanz steckt in einem Windows-Job-Object, sodass beim
-// Stoppen, Neustarten oder Absturz des Launchers keine Waisenprozesse
-// zurückbleiben (siehe job_windows.go).
+// Every running process instance lives in a Windows job object, so stopping,
+// restarting or crashing the launcher leaves no orphan processes behind
+// (see job_windows.go).
 package supervisor
 
 import (
@@ -165,7 +165,7 @@ func (s *Supervisor) send(name string, kind ctrlKind) (ServiceStatus, error) {
 	svc := s.services[name]
 	s.mu.Unlock()
 	if svc == nil {
-		return ServiceStatus{}, fmt.Errorf("unbekannter Service %q", name)
+		return ServiceStatus{}, fmt.Errorf("unknown service %q", name)
 	}
 	reply := make(chan ServiceStatus, 1)
 	select {
@@ -225,7 +225,7 @@ func (s *Supervisor) Logs(name string, n int) ([]string, error) {
 	svc := s.services[name]
 	s.mu.Unlock()
 	if svc == nil {
-		return nil, fmt.Errorf("unbekannter Service %q", name)
+		return nil, fmt.Errorf("unknown service %q", name)
 	}
 	return svc.logbuf.tail(n), nil
 }
@@ -263,7 +263,7 @@ func (s *Supervisor) RunCommand(name string) (CommandResult, error) {
 	spec, ok := s.commands[name]
 	s.mu.Unlock()
 	if !ok {
-		return CommandResult{}, fmt.Errorf("unbekannter Befehl %q", name)
+		return CommandResult{}, fmt.Errorf("unknown command %q", name)
 	}
 	return s.runOnce(spec.Command, spec.Args, spec.Dir, nil, fmt.Sprintf("cmd:%s", name))
 }
@@ -289,10 +289,10 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	if err != nil {
 		s.logf("[%s] WARN job object could not be created: %v — the process runs unsupervised (a launcher crash leaves it behind)", label, err)
 	}
-	s.logf("[%s] starte: %s %v", label, command, args)
+	s.logf("[%s] starting: %s %v", label, command, args)
 	if err := cmd.Start(); err != nil {
 		job.Close()
-		return CommandResult{}, fmt.Errorf("Start fehlgeschlagen: %w", err)
+		return CommandResult{}, fmt.Errorf("start failed: %w", err)
 	}
 	if cmd.Process != nil {
 		if err := job.Assign(cmd.Process.Pid); err != nil {
@@ -302,7 +302,7 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	err = cmd.Wait()
 	job.Close()
 	res := CommandResult{Output: buf.String(), ExitCode: exitCodeOf(err)}
-	s.logf("[%s] fertig (exit %d)", label, res.ExitCode)
+	s.logf("[%s] done (exit %d)", label, res.ExitCode)
 	return res, nil
 }
 
@@ -426,7 +426,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		wc := make(chan error, 1)
 		go func() { wc <- c.Wait() }()
 		cmd, job, waitCh, streams = c, j, wc, ss
-		s.logf("[%s] gestartet (pid %d)", spec.Name, c.Process.Pid)
+		s.logf("[%s] started (pid %d)", spec.Name, c.Process.Pid)
 	}
 
 	snapshot := func() ServiceStatus {
@@ -450,7 +450,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logf("[%s] stoppe …", spec.Name)
+			s.logf("[%s] stopping …", spec.Name)
 			stop()
 			return
 
@@ -469,13 +469,13 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			releaseStreams()
 			cmd, job, waitCh = nil, nil, nil
 			success := err == nil
-			s.logf("[%s] beendet (%s)", spec.Name, describeExit(err))
+			s.logf("[%s] exited (%s)", spec.Name, describeExit(err))
 			if desired && shouldRestart(spec, restarts, success) {
 				restarts++
-				s.logf("[%s] Neustart %d%s in %s", spec.Name, restarts, maxStr(spec), spec.RestartDelay)
+				s.logf("[%s] restart %d%s in %s", spec.Name, restarts, maxStr(spec), spec.RestartDelay)
 				backoff = time.After(spec.RestartDelay)
 			} else if desired {
-				s.logf("[%s] kein automatischer Neustart (policy=%s)", spec.Name, spec.Restart)
+				s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
 				if spec.OnExit != nil {
 					// Eigene Goroutine: der Handler darf blockieren (TTY-Prompt) und
 					// uns über svc.ctrl steuern (start/restart) — synchron wäre das
@@ -497,14 +497,14 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				desired = false
 				backoff = nil
 				stop()
-				s.logf("[%s] gestoppt (manuell)", spec.Name)
+				s.logf("[%s] stopped (manual)", spec.Name)
 			case ctrlRestart:
 				desired = true
 				restarts = 0
 				backoff = nil
 				stop()
 				start()
-				s.logf("[%s] neugestartet (manuell)", spec.Name)
+				s.logf("[%s] restarted (manual)", spec.Name)
 			case ctrlStatus:
 				// nur Snapshot
 			}
