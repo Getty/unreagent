@@ -238,7 +238,7 @@ tool that runs npm on demand. A package script belongs in the launcher's
 | `-32602 unknown tool: run_python` | the runtime is disabled in this project | the user enables `runtimes.python.enabled` |
 | `Error: 'code' missing` | `code` missing or empty | pass the source as `code` |
 | `Error: could not create the script file in the working directory of the python runtime (<dir>): <error>`, second line `The directory must exist and be writable — check runtimes.python.project or agent.workdir.` | the runtime's directory is missing or not writable, so no script could be written and nothing was started (`node runtime` / `runtimes.node.project` in the `run_node` wording) | fix `runtimes.<lang>.project` or `agent.workdir`; there is no fallback location, so retrying unchanged fails identically |
-| `Error: Start fehlgeschlagen: exec: "uv": executable file not found in %PATH%` | `uv` / `node` not installed or not on the launcher's PATH (a Linux dev build of the launcher says `$PATH` instead) | install it, or set an absolute path in `unreagent.local.yaml` |
+| `Error: start failed: exec: "uv": executable file not found in %PATH%` | `uv` / `node` not installed or not on the launcher's PATH (a Linux dev build of the launcher says `$PATH` instead) | install it, or set an absolute path in `unreagent.local.yaml` |
 | `ModuleNotFoundError: No module named 'unreal'` | you tried to reach the editor from the host | use the plugin's `execute_script` instead |
 | `ModuleNotFoundError` for a project dependency | not declared in `pyproject.toml` | the dependency has to be added there; the script cannot install it |
 | `ERR_MODULE_NOT_FOUND` for a bare specifier | the package is not installed in the project | `npm install` it in the project (or via `prepareOnStart`) |
@@ -246,10 +246,6 @@ tool that runs npm on demand. A package script belongs in the launcher's
 | `ReferenceError: require is not defined` | the script is ESM | use `import`, or `createRequire` |
 | exit non-zero with a traceback | the script itself failed | the traceback is in the output; fix and rerun |
 | the call never returns | no timeout exists | the script is blocking; it has to be killed on the host |
-
-One launcher-side string is still German: the `Start fehlgeschlagen:` prefix the
-supervisor puts on a process it could not start. Match it loosely; the wording
-is expected to change to English, the behaviour is not.
 
 ## See also
 
