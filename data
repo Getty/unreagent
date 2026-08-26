@@ -1,0 +1,20 @@
+---
+class: standard
+created: 2026-08-26T19:17:54Z
+id: 83
+priority: low
+status: backlog
+tags:
+- cleanup
+- docs
+title: 'main.go: orphaned commandLoop doc comment sits on makeAgentExitHandler'
+updated: 2026-08-26T19:18:23Z
+---
+
+Found while translating German comments to English (release prep).
+
+cmd/launcher/main.go: the doc comment for commandLoop sits directly above the doc comment of makeAgentExitHandler (around line 1016), so the two merge into one block attached to the WRONG function. commandLoop itself (around line 1106) ends up with no doc comment at all.
+
+The translation pass deliberately left it in place -- moving a doc comment changes godoc output, which is a behavior change and was out of scope for a comments-only commit.
+
+Fix: move the commandLoop doc comment up to commandLoop. Check godoc output before/after.
