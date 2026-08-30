@@ -1,28 +1,29 @@
 # ============================================================
-#  unreagent — DEMO-Konfiguration (sofort ausprobieren)
+#  unreagent — DEMO configuration (try it right away)
 #
-#  Laeuft OHNE Unreal Engine und OHNE Agent. Als Platzhalter-"Editor"
-#  dient "ping" (ein langlebiger Prozess, der Log-Zeilen erzeugt).
-#  Zweck: Launcher + MCP-Server auf Windows in 30 Sekunden testen.
+#  Runs WITHOUT Unreal Engine and WITHOUT an agent. "ping" (a
+#  long-running process that produces log lines) serves as a
+#  placeholder "editor".
+#  Purpose: test the launcher + MCP server on Windows in 30 seconds.
 #
-#  Fuer den echten Betrieb: siehe unreagent.example.yaml.
+#  For real use: see unreagent.example.yaml.
 # ============================================================
 
 unreal:
-  # Platzhalter statt echtem UnrealEditor.exe:
+  # Placeholder instead of a real UnrealEditor.exe:
   editor: ping
   args: ["-n", "999999", "127.0.0.1"]
   restart: on-failure
 
 agent:
-  enabled: false          # "LLM-Ding" (Claude Code) ist extern -> in der Demo aus
+  enabled: false          # the "LLM thing" (Claude Code) is external -> off in the demo
 
 mcp:
   enabled: true
   address: 127.0.0.1:8765
 
 permissions:
-  enabled: false          # ohne Agent nicht noetig
+  enabled: false          # not needed without an agent
 
 runtimes:
   python: { enabled: false }
@@ -30,6 +31,6 @@ runtimes:
 
 commands:
   hello:
-    description: "Demo-Befehl, der nur etwas ausgibt"
+    description: "Demo command that just prints something"
     command: cmd
-    args: ["/c", "echo", "Hallo von unreagent run_command!"]
+    args: ["/c", "echo", "Hello from unreagent run_command!"]

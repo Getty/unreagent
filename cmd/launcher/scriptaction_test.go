@@ -278,8 +278,8 @@ func TestSweepStaleScriptsDedupsSameDirectory(t *testing.T) {
 
 // TestSweepStaleScriptsSilentOnMissingDirectory points a runtime at a
 // directory that doesn't exist. The code deliberately stays quiet there
-// (comment at main.go: "scriptAction meldet das laut genug") — no panic, no
-// log line of any kind.
+// (comment at main.go: "scriptAction reports that loudly enough") — no panic,
+// no log line of any kind.
 func TestSweepStaleScriptsSilentOnMissingDirectory(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	cfg := &config.Config{Runtimes: config.Runtimes{

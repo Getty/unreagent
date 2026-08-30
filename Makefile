@@ -6,21 +6,21 @@ LDFLAGS := -s -w
 
 all: windows linux
 
-# Cross-Compile Linux -> Windows .exe (das eigentliche Ziel)
+# Cross-compile Linux -> Windows .exe (the actual target)
 windows:
 	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY).exe $(PKG)
 
-# Windows-.exe bauen und signieren (benoetigt signing/codesign.key + osslsigncode)
+# Build and sign the Windows .exe (needs signing/codesign.key + osslsigncode)
 win-signed: windows
 	./scripts/sign-windows.sh dist/$(BINARY).exe
 
-# Native Linux-Binary (für Entwicklung/Tests)
+# Native Linux binary (for development/tests)
 linux:
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY) $(PKG)
 
-# Windows-Ressource (Icon + Versionsinfo + Manifest) neu erzeugen.
-# Benötigt: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
-# Quelle: cmd/launcher/versioninfo.json + cmd/launcher/unreagent.manifest + assets/icon.ico
+# Regenerate the Windows resource (icon + version info + manifest).
+# Needs: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+# Source: cmd/launcher/versioninfo.json + cmd/launcher/unreagent.manifest + assets/icon.ico
 resource:
 	goversioninfo -64 -o cmd/launcher/resource_windows_amd64.syso \
 		-manifest cmd/launcher/unreagent.manifest cmd/launcher/versioninfo.json

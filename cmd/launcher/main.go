@@ -1,8 +1,7 @@
-// Command launcher (unreagent) startet und überwacht den Unreal-Editor und
-// einen Agenten (z.B. Claude Code) und bietet dem Agenten einen MCP-Server, mit
-// dem er den Editor steuern (start/stop/restart), Befehle ausführen (compile,
-// package), Logs lesen und Python-/Node-Code in vorbereiteten Umgebungen
-// ausführen kann.
+// Command launcher (unreagent) starts and supervises the Unreal Editor and an
+// agent (e.g. Claude Code) and offers the agent an MCP server through which it
+// can control the editor (start/stop/restart), run commands (compile, package),
+// read logs and execute Python/Node code in prepared environments.
 package main
 
 import (
@@ -35,7 +34,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// version wird beim Release-Build per -ldflags "-X main.version=<tag>" gesetzt.
+// version is set in the release build via -ldflags "-X main.version=<tag>".
 var version = "dev"
 
 func main() {
@@ -90,7 +89,7 @@ func run() error {
 	} else {
 		logger("WARN no .uproject found next to the config — set unreal.project")
 	}
-	// CLI-Overrides.
+	// CLI overrides.
 	if *noAgent && cfg.Agent.Enabled {
 		cfg.Agent.Enabled = false
 		logger("Flag -no-agent: agent will not be started (MCP server stays available)")
@@ -102,9 +101,9 @@ func run() error {
 		cfg.MCP.WriteConfig = append(cfg.MCP.WriteConfig, config.MCPOutput{Path: *writeMcp, Format: "mcp_json"})
 	}
 
-	// Interaktiver Agent: er erbt die echte Konsole (TTY). Damit Claude das
-	// Fenster für sich hat, leiten wir die Launcher-Logs in eine Datei um und
-	// lassen den eigenen stdin-Command-Loop weg. Im headless -p Modus aus.
+	// Interactive agent: it inherits the real console (TTY). So that Claude has
+	// the window to itself, we redirect the launcher logs into a file and skip
+	// our own stdin command loop. Off in headless -p mode.
 	agentInteractive := false
 	if cfg.Agent.Enabled {
 		agentInteractive = !hasPromptArg(cfg.Agent.Args)
@@ -144,7 +143,7 @@ func run() error {
 
 	sup := supervisor.New(logger)
 
-	// --- Unreal-Service ---
+	// --- unreal service ---
 	ueArgs := append([]string{}, cfg.Unreal.Args...)
 	if cfg.Unreal.Project != "" {
 		ueArgs = append([]string{cfg.Unreal.Project}, ueArgs...)
@@ -176,9 +175,9 @@ func run() error {
 		PreStart:     uePreStart,
 	})
 
-	// --- Agent-Service ---
-	// onAgentExit wird erst gesetzt, wenn ctx/stop existieren (s.u.); der Service
-	// hält nur eine Indirektion darauf.
+	// --- agent service ---
+	// onAgentExit is only set once ctx/stop exist (see below); the service holds
+	// nothing but an indirection to it.
 	var onAgentExit func(success bool)
 	agentWorkdir := cfg.Agent.Workdir
 	if agentWorkdir == "" && cfg.Unreal.Project != "" {
@@ -212,9 +211,9 @@ func run() error {
 			}
 			if cfg.Permissions.Enabled {
 				if agentInteractive {
-					// Interaktiv: --permission-prompt-tool ist ein Headless-Feature
-					// (-p) und bricht sonst ab. allow_all -> Prompts überspringen;
-					// andere Modi -> Claude fragt im Fenster nach (manuell).
+					// Interactive: --permission-prompt-tool is a headless feature
+					// (-p) and aborts otherwise. allow_all -> skip prompts; other
+					// modes -> Claude asks in the window (manually).
 					if cfg.Permissions.Mode == config.ModeAllowAll {
 						agentArgs = append(agentArgs, "--dangerously-skip-permissions")
 					}
@@ -249,7 +248,7 @@ func run() error {
 		}
 	}
 
-	// --- MCP-Config-Dateien schreiben (für externe Clients) ---
+	// --- write MCP config files (for external clients) ---
 	if cfg.MCP.Enabled && len(cfg.MCP.WriteConfig) > 0 {
 		base := agentWorkdir
 		if base == "" {
@@ -258,7 +257,7 @@ func run() error {
 		writeMCPConfigs(cfg.MCP.WriteConfig, mcpServers, base, logger)
 	}
 
-	// --- Einmal-Befehle ---
+	// --- one-off commands ---
 	for name, c := range cfg.Commands {
 		sup.AddCommand(name, supervisor.CommandSpec{
 			Description: c.Description,
@@ -268,7 +267,7 @@ func run() error {
 		})
 	}
 
-	// --- MCP-Server ---
+	// --- MCP server ---
 	var httpSrv *http.Server
 	if cfg.MCP.Enabled {
 		srv := mcp.NewServer(config.MCPServerName, version, logger)
@@ -315,7 +314,7 @@ func run() error {
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
 	prepareRuntimes(sup, cfg, agentWorkdir, logger)
-	// Im interaktiven Modus gehört stdin dem Agenten — kein eigener Command-Loop.
+	// In interactive mode stdin belongs to the agent — no command loop of our own.
 	if !agentInteractive {
 		go commandLoop(ctx, stop, sup, logger)
 	}
@@ -337,8 +336,8 @@ func run() error {
 	return nil
 }
 
-// registerTools registriert alle MCP-Tools. Die Description-Texte sind bewusst
-// ausführlich — sie sind die "Anleitung", die der Agent automatisch sieht.
+// registerTools registers all MCP tools. The description texts are deliberately
+// verbose — they are the "manual" the agent sees automatically.
 func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
 	noArgs := map[string]interface{}{"type": "object", "additionalProperties": false}
 
@@ -424,7 +423,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		},
 	})
 
-	// --- Runtime-Tools ---
+	// --- runtime tools ---
 	if cfg.Runtimes.Python.Enabled {
 		dir := runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir)
 		uv := cfg.Runtimes.Python.UV
@@ -458,7 +457,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		})
 	}
 
-	// --- Datei-Tools (auf cfg.Files.Root beschränkt) ---
+	// --- file tools (restricted to cfg.Files.Root) ---
 	if cfg.Files.Enabled {
 		root := cfg.Files.Root
 		if root == "" {
@@ -467,7 +466,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		registerFileTools(srv, root, cfg.Files.ReadOnly)
 	}
 
-	// --- Permission-Tool ---
+	// --- permission tool ---
 	if cfg.Permissions.Enabled {
 		srv.AddTool(mcp.Tool{
 			Name:        "approve",
@@ -497,7 +496,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	}
 }
 
-// serviceAction baut einen Handler für eine Lifecycle-Aktion.
+// serviceAction builds a handler for a lifecycle action.
 func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (supervisor.ServiceStatus, error)) mcp.ToolHandler {
 	return func(map[string]interface{}) mcp.ToolResult {
 		st, err := fn(name)
@@ -573,8 +572,8 @@ func scriptAction(sup *supervisor.Supervisor, command string, pre []string, dir,
 	}
 }
 
-// registerFileTools registriert read/list (+ write/edit, falls nicht readOnly)
-// auf dem MCP-Server, alle Pfade strikt auf root beschränkt.
+// registerFileTools registers read/list (+ write/edit, unless readOnly) on the
+// MCP server, all paths strictly restricted to root.
 func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil || root == "" {
@@ -822,8 +821,8 @@ func isStaleScriptName(name string) bool {
 	return true
 }
 
-// prepareRuntimes wärmt die Umgebungen vor (uv sync / npm install), falls
-// konfiguriert und ein Manifest vorhanden ist. Läuft asynchron.
+// prepareRuntimes warms up the environments (uv sync / npm install) if they are
+// configured and a manifest is present. Runs asynchronously.
 func prepareRuntimes(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
 	if cfg.Runtimes.Python.Enabled && cfg.Runtimes.Python.PrepareOnStart {
 		dir := runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir)
@@ -841,20 +840,20 @@ func prepareRuntimes(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdi
 	}
 }
 
-// prepareMCPBridges prüft alle stdio-extraServers (z.B. die UE-LLM-Toolkit-
-// Bridge) VOR dem Service-Start einmal komplett durch und beschwert sich bei
-// jedem Glied der Kette laut, statt den Agenten in einen nichtssagenden
-// MCP-Connect-Fehler (-32000) laufen zu lassen:
-//  1. Binary auffindbar (node etc. im PATH)?
-//  2. Node-Bridges: Skript vorhanden? node_modules da? (sonst npm install)
-//  3. Smoke-Test: Server starten, MCP-initialize senden, Antwort abwarten.
-//  4. UNREAL_MCP_URL: asynchron melden, sobald der In-Editor-Server erreichbar
-//     ist — oder warnen, wenn nicht.
+// prepareMCPBridges checks all stdio extraServers (e.g. the UE LLM Toolkit
+// bridge) completely once BEFORE the services start and complains loudly about
+// every link in the chain, instead of letting the agent run into a meaningless
+// MCP connect error (-32000):
+//  1. Binary findable (node etc. on PATH)?
+//  2. Node bridges: script present? node_modules there? (otherwise npm install)
+//  3. Smoke test: start the server, send MCP initialize, wait for the answer.
+//  4. UNREAL_MCP_URL: report asynchronously as soon as the in-editor server is
+//     reachable — or warn if it is not.
 func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
 	for name, def := range cfg.MCP.ExtraServers {
 		command, _ := def["command"].(string)
 		if command == "" {
-			continue // http/sse-Server — startet kein Prozess, nichts zu prüfen
+			continue // http/sse server — starts no process, nothing to check
 		}
 		var args []string
 		if raw, ok := def["args"].([]interface{}); ok {
@@ -894,8 +893,8 @@ func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWork
 	}
 }
 
-// prepareNodeBridge stellt sicher, dass Skript und node_modules einer Node-
-// Bridge vorhanden sind (npm install bei Bedarf). false = Bridge unbrauchbar.
+// prepareNodeBridge makes sure the script and node_modules of a Node bridge are
+// present (npm install if needed). false = the bridge is unusable.
 func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name string, args []string, agentWorkdir string, logger func(string)) bool {
 	var script string
 	for _, a := range args {
@@ -905,7 +904,7 @@ func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name stri
 		}
 	}
 	if script == "" {
-		return true // kein Skript erkennbar — Smoke-Test entscheidet
+		return true // no script recognisable — the smoke test decides
 	}
 	if !filepath.IsAbs(script) {
 		script = filepath.Join(agentWorkdir, script)
@@ -937,9 +936,9 @@ func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name stri
 	return true
 }
 
-// smokeTestMCP startet den stdio-Server einmal probeweise, schickt ein echtes
-// MCP-initialize und wartet auf die Antwort. Scheitert der Start, steht die
-// echte Ursache (stderr) im Log statt nur ein Connect-Fehler beim Agenten.
+// smokeTestMCP starts the stdio server once as a trial, sends a real MCP
+// initialize and waits for the answer. If the start fails, the real cause
+// (stderr) is in the log instead of just a connect error at the agent.
 func smokeTestMCP(name, command string, args, env []string, dir string, logger func(string)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -988,9 +987,9 @@ func smokeTestMCP(name, command string, args, env []string, dir string, logger f
 	}
 }
 
-// waitForEndpoint meldet, sobald der In-Editor-HTTP-Server (UNREAL_MCP_URL)
-// erreichbar ist — der Editor braucht beim Start Zeit. Kommt binnen 5 Minuten
-// keine Verbindung zustande, gibt es eine deutliche Warnung mit Verdächtigen.
+// waitForEndpoint reports as soon as the in-editor HTTP server (UNREAL_MCP_URL)
+// is reachable — the editor needs time to start up. If no connection is made
+// within 5 minutes, there is a clear warning naming the usual suspects.
 func waitForEndpoint(name, rawURL string, logger func(string)) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
@@ -1014,14 +1013,14 @@ func waitForEndpoint(name, rawURL string, logger func(string)) {
 	logger("WARN MCP server '" + name + "': in-editor server " + rawURL + " not reachable after 5 minutes — is the editor running with the plugin? Firewall? Is the server listening on localhost only?")
 }
 
-// commandLoop liest Steuerbefehle von stdin (für manuelle Bedienung).
-// makeAgentExitHandler baut den Callback, der feuert, wenn der Agent endet und
-// nicht von selbst neugestartet wird (siehe ServiceSpec.OnExit). Der Agent ist
-// im Fenster-Modus der Leitprozess — endet er, ist die Session vorbei und der
-// Launcher darf nicht stumm mit laufendem Editor hängenbleiben.
+// commandLoop reads control commands from stdin (for manual operation).
+// makeAgentExitHandler builds the callback that fires when the agent ends and is
+// not restarted on its own (see ServiceSpec.OnExit). In window mode the agent is
+// the leading process — once it ends the session is over, and the launcher must
+// not silently hang around with a running editor.
 func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supervisor, cfg *config.Config, logger func(string), interactive bool) func(success bool) {
 	var mu sync.Mutex
-	cmdLoopRunning := false // schon in die Launcher-Konsole gewechselt?
+	cmdLoopRunning := false // already switched to the launcher console?
 	return func(success bool) {
 		if success {
 			logger("Agent exited (exit 0).")
@@ -1029,8 +1028,8 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 			logger("Agent crashed / restarts exhausted.")
 		}
 
-		// Läuft bereits die Launcher-Konsole (vorherige 'k'-Wahl), würde ein
-		// zweiter stdin-Prompt mit ihr um die Eingabe konkurrieren — also nur loggen.
+		// If the launcher console is already running (an earlier 'k' choice), a
+		// second stdin prompt would compete with it for the input — so only log.
 		mu.Lock()
 		busy := cmdLoopRunning
 		mu.Unlock()
@@ -1047,8 +1046,8 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 			stop()
 		default: // ask
 			if !interactive {
-				// Headless (-p): kein TTY zum Nachfragen — der Command-Loop liest
-				// stdin. Agent-Ende = Auftrag erledigt -> sauber herunterfahren.
+				// Headless (-p): no TTY to ask on — the command loop reads stdin.
+				// Agent end = job done -> shut down cleanly.
 				stop()
 				return
 			}
@@ -1072,9 +1071,9 @@ func makeAgentExitHandler(ctx context.Context, stop func(), sup *supervisor.Supe
 	}
 }
 
-// promptAgentExit zeigt das Auswahlmenü auf der echten Konsole (os.Stdout/Stdin —
-// die Launcher-Logs gehen im Fenster-Modus in die Datei) und liefert die Wahl.
-// Nach 30s ohne Eingabe gilt "alles beenden" (z.B. Agent über Nacht abgestürzt).
+// promptAgentExit shows the selection menu on the real console (os.Stdout/Stdin —
+// in window mode the launcher logs go to the file) and returns the choice. After
+// 30s without input, "stop everything" applies (e.g. agent crashed overnight).
 func promptAgentExit(success bool) string {
 	if success {
 		fmt.Fprintln(os.Stdout, "\nAgent exited.")
@@ -1092,7 +1091,7 @@ func promptAgentExit(success bool) string {
 		if sc.Scan() {
 			ch <- strings.ToLower(strings.TrimSpace(sc.Text()))
 		} else {
-			ch <- "" // EOF (z.B. stdin geschlossen) -> alles beenden
+			ch <- "" // EOF (e.g. stdin closed) -> stop everything
 		}
 	}()
 	select {
@@ -1156,16 +1155,16 @@ func commandLoop(ctx context.Context, stop func(), sup *supervisor.Supervisor, l
 	}
 }
 
-// --- Hilfsfunktionen ---
+// --- helper functions ---
 
 func secs(n int) time.Duration { return time.Duration(n) * time.Second }
 
 func boolVal(p *bool) bool { return p != nil && *p }
 
-// buildMCPServers stellt die mcpServers-Map zusammen: unser Launcher-Server (HTTP)
-// plus alle zusätzlichen (In-Editor-)MCP-Server aus der Config. Wenn ein Bearer-
-// Token gesetzt ist, bekommt der unreagent-Eintrag den passenden Authorization-
-// Header, damit der embedded Agent (Claude Code) sich selbst nicht aussperrt.
+// buildMCPServers assembles the mcpServers map: our launcher server (HTTP) plus
+// all additional (in-editor) MCP servers from the config. If a bearer token is
+// set, the unreagent entry gets the matching Authorization header, so the
+// embedded agent (Claude Code) does not lock itself out.
 func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
 	unreagent := map[string]interface{}{"type": "http", "url": mcpURL}
 	if cfg.MCP.Token != "" {
@@ -1182,7 +1181,7 @@ func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
 	return servers
 }
 
-// writeMCPConfigs schreibt die MCP-Config in die konfigurierten Datei-Ziele.
+// writeMCPConfigs writes the MCP config to the configured file targets.
 func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{}, baseDir string, logger func(string)) {
 	for _, out := range outputs {
 		path := out.Path
@@ -1213,8 +1212,8 @@ func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{},
 	}
 }
 
-// toVSCode wandelt die mcpServers-Map ins VS-Code-Format (stdio-Server bekommen
-// type:stdio, falls nicht gesetzt).
+// toVSCode converts the mcpServers map into the VS Code format (stdio servers
+// get type:stdio if it is not set).
 func toVSCode(servers map[string]interface{}) map[string]interface{} {
 	out := map[string]interface{}{}
 	for name, def := range servers {
@@ -1250,7 +1249,7 @@ func hasPromptArg(args []string) bool {
 	return hasArg(args, "-p") || hasArg(args, "--print")
 }
 
-// killCrashReporter beendet ein evtl. hängendes Crash-Reporter-Fenster.
+// killCrashReporter terminates a possibly stuck crash reporter window.
 func killCrashReporter() {
 	var cmds [][]string
 	if runtime.GOOS == "windows" {
@@ -1262,11 +1261,11 @@ func killCrashReporter() {
 		cmds = [][]string{{"pkill", "-f", "CrashReportClient"}}
 	}
 	for _, c := range cmds {
-		_ = exec.Command(c[0], c[1:]...).Run() // Fehler ignorieren (Prozess evtl. nicht vorhanden)
+		_ = exec.Command(c[0], c[1:]...).Run() // ignore errors (the process may not exist)
 	}
 }
 
-// cleanRecovery entfernt Recovery-/Crash-Artefakte für einen sauberen Neustart.
+// cleanRecovery removes recovery/crash artefacts for a clean restart.
 func cleanRecovery(projectDir string, logger func(string)) {
 	saved := filepath.Join(projectDir, "Saved")
 	restore := filepath.Join(saved, "Autosaves", "PackageRestoreData.json")

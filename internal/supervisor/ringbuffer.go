@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// ringBuffer hält die letzten N Zeilen einer Prozessausgabe (thread-safe).
+// ringBuffer keeps the last N lines of a process output (thread-safe).
 type ringBuffer struct {
 	mu    sync.Mutex
 	lines []string
@@ -28,7 +28,7 @@ func (r *ringBuffer) add(line string) {
 	}
 }
 
-// tail liefert die letzten n Zeilen (Kopie).
+// tail returns the last n lines (a copy).
 func (r *ringBuffer) tail(n int) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

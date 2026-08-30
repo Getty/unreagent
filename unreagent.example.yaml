@@ -1,42 +1,42 @@
 # ============================================================
-#  unreagent — committbare Projekt-Konfiguration
+#  unreagent — committable project configuration
 #
-#  Benenne diese Datei zu  unreagent.yaml  und lege sie neben die
-#  .uproject (und neben unreagent.exe). Sie ist portabel und gehört
-#  ins Projekt-Repo.
+#  Rename this file to  unreagent.yaml  and place it next to the
+#  .uproject (and next to unreagent.exe). It is portable and belongs
+#  in the project repo.
 #
-#  KEINE Maschinenpfade hier! Sie werden automatisch aufgelöst und
-#  über Platzhalter eingesetzt:
-#    ${ENGINE}        UE-Installationswurzel (Env UE_ROOT / Auto-Detect)
-#    ${PROJECT}       voller Pfad zur .uproject (Auto-Detect daneben)
-#    ${PROJECT_DIR}   Verzeichnis der .uproject
-#    ${PROJECT_NAME}  Name der .uproject ohne Endung
+#  NO machine-specific paths here! They are resolved automatically and
+#  substituted via placeholders:
+#    ${ENGINE}        UE installation root (env UE_ROOT / auto-detected)
+#    ${PROJECT}       full path to the .uproject (auto-detected alongside)
+#    ${PROJECT_DIR}   directory containing the .uproject
+#    ${PROJECT_NAME}  name of the .uproject without extension
 #
-#  Maschinen-Overrides (Engine-Pfad, claude-Pfad …) gehören in eine
-#  git-ignorierte  unreagent.local.yaml  — Beispiel ganz unten.
+#  Machine-specific overrides (engine path, claude path …) belong in a
+#  git-ignored  unreagent.local.yaml  — example at the very bottom.
 # ============================================================
 
 agent:
   enabled: true
   command: claude
-  # Hängt --mcp-config (+ --permission-prompt-tool) automatisch an die
-  # claude-Invocation an — kein manuelles Setup nötig.
+  # Automatically appends --mcp-config (+ --permission-prompt-tool) to the
+  # claude invocation — no manual setup needed.
   claudeIntegration: true
-  # Interaktiv im Vordergrund (Agent erbt die Konsole = echtes TTY) ist DEFAULT.
-  # UE laeuft im Hintergrund, Launcher-Logs -> unreagent.log. Mit window: false
-  # abschalten — z.B. fuer headless: args: ["-p", "<aufgabe>"] (dann window aus).
+  # Interactive in the foreground (agent inherits the console = real TTY) is the DEFAULT.
+  # UE runs in the background, launcher logs -> unreagent.log. Turn off with
+  # window: false — e.g. for headless: args: ["-p", "<task>"] (then window off).
   # window: false
-  # args: ["-p", "Starte und arbeite die Aufgaben ab"]   # headless einmalig
-  # Auf Windows wird (bei claudeIntegration) CLAUDE_CODE_USE_POWERSHELL_TOOL=1
-  # automatisch gesetzt; mit powershellTool: false abschaltbar.
+  # args: ["-p", "Start and work through the tasks"]   # one-off headless
+  # On Windows (with claudeIntegration) CLAUDE_CODE_USE_POWERSHELL_TOOL=1 is
+  # set automatically; disable with powershellTool: false.
   # powershellTool: false
-  # Was passiert, wenn der Agent endet (z.B. /quit) und nicht neugestartet wird?
-  # Der Agent ist im Fenster-Modus der Leitprozess — endet er, ist Schluss.
-  #   ask (Default): im Fenster nachfragen (alles beenden / Editor weiterlaufen
-  #     lassen -> Launcher-Konsole / Agent neu starten; 30s Timeout -> beenden;
-  #     headless ohne TTY = shutdown)
-  #   shutdown: immer sofort den ganzen Stack (UE + MCP + Launcher) beenden
-  #   leave: alles weiterlaufen lassen (nur Warnung) — manuelles Ctrl-C noetig
+  # What happens when the agent exits (e.g. /quit) and isn't restarted?
+  # In window mode the agent is the lead process — when it exits, that's it.
+  #   ask (default): prompt in the window (stop everything / keep the editor
+  #     running -> launcher console / restart the agent; 30s timeout -> stop;
+  #     headless without a TTY = shutdown)
+  #   shutdown: always stop the whole stack (UE + MCP + launcher) immediately
+  #   leave: keep everything running (warning only) — manual Ctrl-C needed
   # onExit: ask
 
 permissions:
@@ -61,18 +61,18 @@ permissions:
 runtimes:
   python:
     enabled: true
-    prepareOnStart: true     # uv sync beim Start, falls pyproject.toml vorhanden
+    prepareOnStart: true     # uv sync on start, if pyproject.toml is present
   node:
     enabled: true
 
-# Datei-Tools (read_file/list_dir/write_file/edit_file) über den MCP-Server.
-# Praktisch zusammen mit `-no-agent`: UE + MCP laufen, ein externer Agent
-# verbindet sich und arbeitet am Projekt, ohne dass jemand lokal anwesend ist.
-# Schnell per Flag: unreagent.exe -files   (bzw. -no-agent für nur UE+MCP)
+# File tools (read_file/list_dir/write_file/edit_file) via the MCP server.
+# Handy together with `-no-agent`: UE + MCP run, an external agent
+# connects and works on the project without anyone present locally.
+# Quick via flag: unreagent.exe -files   (or -no-agent for UE+MCP only)
 files:
   enabled: false
-  root: "${PROJECT_DIR}"     # alle Pfade strikt darauf beschränkt
-  readOnly: false            # true = nur lesen
+  root: "${PROJECT_DIR}"     # all paths strictly confined to this
+  readOnly: false            # true = read-only
 
 mcp:
   enabled: true
@@ -85,22 +85,22 @@ mcp:
   # entry (`unreagent hermes-setup`) and into the embedded agent (Claude
   # Code) automatically — no manual copy needed.
   # token: "changeme-please-rotate"
-  # Zusätzliche In-Editor-MCP-Server, über die der Agent IN der Engine arbeitet
-  # (z.B. UE LLM Toolkit: Node-Bridge -> HTTP-Server im Editor auf Port 3000).
-  # Werden zusammen mit dem unreagent-Server in --mcp-config gegeben.
-  # Stdio-Server werden vor dem Start komplett durchgeprüft — jede Stufe
-  # beschwert sich laut im Log statt stumm zu scheitern:
-  #   Binary im PATH? -> Node: Skript da? node_modules da? (sonst npm install)
+  # Additional in-editor MCP servers the agent uses to work IN the engine
+  # (e.g. UE LLM Toolkit: Node bridge -> HTTP server in the editor on port 3000).
+  # Passed together with the unreagent server in --mcp-config.
+  # Stdio servers are fully checked before start — every stage complains
+  # loudly in the log instead of failing silently:
+  #   Binary in PATH? -> Node: script there? node_modules there? (else npm install)
   #   -> smoke test (initialize handshake) -> is UNREAL_MCP_URL reachable?
-  # strict: false   # true = NUR diese Server (projekt-eigene .mcp.json ignorieren)
+  # strict: false   # true = ONLY these servers (ignore the project's own .mcp.json)
   # extraServers:
   #   ue-llm-toolkit:
   #     command: node
   #     args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
   #     env:
   #       UNREAL_MCP_URL: "http://127.0.0.1:3000"
-  # MCP-Config zusaetzlich als Datei(en) schreiben (fuer externe Clients wie
-  # die eigene Claude-Sitzung, Cursor, VS Code). Auch per Flag: -write-mcp-config
+  # Also write the MCP config as file(s) (for external clients like
+  # your own Claude session, Cursor, VS Code). Also via flag: -write-mcp-config
   # writeConfig:
   #   - { path: ".mcp.json", format: mcp_json }       # Claude Code / Cursor / Claude Desktop
   #   - { path: ".vscode/mcp.json", format: vscode }  # VS Code
@@ -116,29 +116,29 @@ mcp:
 #     # configPath: ""            # empty = $HERMES_HOME/config.yaml or ~/.hermes/config.yaml
 
 # ------------------------------------------------------------
-# unreal: und commands: sind OPTIONAL. Editor-Pfad sowie die
-# Befehle "compile" und "package" werden automatisch aus
-# ${ENGINE} + ${PROJECT} abgeleitet. Nur überschreiben, wenn nötig:
+# unreal: and commands: are OPTIONAL. The editor path as well as the
+# "compile" and "package" commands are derived automatically from
+# ${ENGINE} + ${PROJECT}. Only override when needed:
 #
 # unreal:
 #   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
 #   restart: on-failure
 #   maxRestarts: 5
-#   unattended: true          # -unattended: kein Crash-Dialog + kein Recovery-Prompt (default an)
-#   killCrashReporter: true   # haengendes CrashReportClientEditor.exe killen (default an)
-#   cleanOnRestart: false     # Saved/Autosaves/PackageRestoreData.json + Saved/Crashes vor Start raeumen
+#   unattended: true          # -unattended: no crash dialog + no recovery prompt (default on)
+#   killCrashReporter: true   # kill a hanging CrashReportClientEditor.exe (default on)
+#   cleanOnRestart: false     # clear Saved/Autosaves/PackageRestoreData.json + Saved/Crashes before start
 #
 # commands:
 #   cook:
-#     description: "Nur Content cooken"
+#     description: "Cook content only"
 #     command: "${ENGINE}/Engine/Build/BatchFiles/RunUAT.bat"
 #     args: ["BuildCookRun", "-project=${PROJECT}", "-noP4", "-cook", "-skipstage"]
 # ------------------------------------------------------------
 
 # ============================================================
-#  Beispiel  unreagent.local.yaml  (NICHT committen — git-ignored):
+#  Example  unreagent.local.yaml  (do NOT commit — git-ignored):
 #
-#    engineRoot: "D:/UE/UE_5.7"        # falls Auto-Detect scheitert
+#    engineRoot: "D:/UE/UE_5.7"        # if auto-detect fails
 #    agent:
-#      command: "C:/Users/me/AppData/Roaming/npm/claude.cmd"  # claude nicht im PATH
+#      command: "C:/Users/me/AppData/Roaming/npm/claude.cmd"  # claude not in PATH
 # ============================================================

@@ -1,19 +1,19 @@
-// Package config lädt und validiert die Launcher-Konfiguration (YAML).
+// Package config loads and validates the launcher configuration (YAML).
 //
-// Modell:
-//   - unreagent.yaml        – committbar, portabel, KEINE Maschinenpfade
-//   - unreagent.local.yaml  – git-ignoriert, Maschinen-Overrides (drübergelegt)
+// Model:
+//   - unreagent.yaml        – committable, portable, NO machine paths
+//   - unreagent.local.yaml  – git-ignored, machine overrides (overlaid on top)
 //
-// Maschinenspezifische Pfade werden zur Laufzeit aufgelöst und über Platzhalter
-// in die Config eingesetzt:
+// Machine-specific paths are resolved at runtime and substituted into the config
+// through placeholders:
 //
-//	${ENGINE}        – Wurzel der UE-Installation
-//	${PROJECT}       – voller Pfad zur .uproject
-//	${PROJECT_DIR}   – Verzeichnis der .uproject
-//	${PROJECT_NAME}  – Dateiname der .uproject ohne Endung
+//	${ENGINE}        – root of the UE installation
+//	${PROJECT}       – full path to the .uproject
+//	${PROJECT_DIR}   – directory of the .uproject
+//	${PROJECT_NAME}  – file name of the .uproject without the extension
 //
-// Engine-Auflösung (Priorität): Env UE_ROOT → engineRoot (meist local.yaml) →
-// Auto-Detect der Standard-Epic-Installationspfade.
+// Engine resolution (priority): env UE_ROOT → engineRoot (usually local.yaml) →
+// auto-detection of the standard Epic installation paths.
 package config
 
 import (
@@ -30,10 +30,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config ist die komplette Launcher-Konfiguration.
+// Config is the complete launcher configuration.
 type Config struct {
-	// EngineRoot wird normalerweise nur in unreagent.local.yaml gesetzt, falls
-	// Auto-Detect/Env die Engine nicht finden.
+	// EngineRoot is normally only set in unreagent.local.yaml, in case
+	// auto-detection/env cannot find the engine.
 	EngineRoot  string                 `yaml:"engineRoot"`
 	Unreal      UnrealConfig           `yaml:"unreal"`
 	Agent       AgentConfig            `yaml:"agent"`
@@ -44,63 +44,66 @@ type Config struct {
 	Files       FilesConfig            `yaml:"files"`
 }
 
-// FilesConfig exponiert Datei-Tools (read/write/list/edit) über den MCP-Server,
-// damit ein (auch externer/headless) Agent am UE-Projekt arbeiten kann, ohne
-// dass jemand lokal anwesend ist. Alle Pfade sind auf Root beschränkt.
+// FilesConfig exposes file tools (read/write/list/edit) through the MCP server,
+// so an agent (external/headless as well) can work on the UE project without
+// anyone being present locally. All paths are restricted to root.
 type FilesConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Root     string `yaml:"root"`     // default: ${PROJECT_DIR}
-	ReadOnly bool   `yaml:"readOnly"` // true = nur lesen, kein Schreiben/Editieren
+	ReadOnly bool   `yaml:"readOnly"` // true = read only, no writing/editing
 }
 
-// UnrealConfig beschreibt den Unreal-Editor-Prozess.
+// UnrealConfig describes the Unreal Editor process.
 type UnrealConfig struct {
 	Editor              string   `yaml:"editor"`  // default: ${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe
-	Project             string   `yaml:"project"` // optional; default: Auto-Detect der .uproject
+	Project             string   `yaml:"project"` // optional; default: auto-detection of the .uproject
 	Args                []string `yaml:"args"`
 	ManualStart         bool     `yaml:"manualStart"`
 	Restart             string   `yaml:"restart"`
 	MaxRestarts         int      `yaml:"maxRestarts"`
 	RestartDelaySeconds int      `yaml:"restartDelaySeconds"`
-	// Unattended hängt -unattended an (default true): unterdrückt den
-	// Crash-Reporter-Dialog UND beide Recovery-Prompts beim Neustart.
+	// Unattended appends -unattended (default true): it suppresses the crash
+	// reporter dialog AND both recovery prompts on restart.
 	Unattended *bool `yaml:"unattended"`
-	// KillCrashReporter killt CrashReportClientEditor.exe vor jedem (Neu-)Start
-	// (default true) — Absicherung, falls doch ein Reporter-Fenster hängt.
+	// KillCrashReporter kills CrashReportClientEditor.exe before every (re)start
+	// (default true) — a safeguard in case a reporter window is stuck after all.
 	KillCrashReporter *bool `yaml:"killCrashReporter"`
-	// CleanOnRestart räumt vor jedem Start Saved/Autosaves/PackageRestoreData.json
-	// und Saved/Crashes/* weg (default false) — garantiert sauberer Start.
+	// CleanOnRestart removes Saved/Autosaves/PackageRestoreData.json and
+	// Saved/Crashes/* before every start (default false) — guarantees a clean
+	// start.
 	CleanOnRestart bool `yaml:"cleanOnRestart"`
 }
 
-// AgentConfig beschreibt den Agenten-Prozess (z.B. Claude Code).
+// AgentConfig describes the agent process (e.g. Claude Code).
 type AgentConfig struct {
 	Enabled             bool              `yaml:"enabled"`
 	Command             string            `yaml:"command"`
 	Args                []string          `yaml:"args"`
-	Env                 map[string]string `yaml:"env"` // zusätzliche Umgebungsvariablen (z.B. HOME/USERPROFILE)
+	Env                 map[string]string `yaml:"env"` // additional environment variables (e.g. HOME/USERPROFILE)
 	Workdir             string            `yaml:"workdir"`
 	StartDelaySeconds   int               `yaml:"startDelaySeconds"`
 	Restart             string            `yaml:"restart"`
 	MaxRestarts         int               `yaml:"maxRestarts"`
 	RestartDelaySeconds int               `yaml:"restartDelaySeconds"`
 	ClaudeIntegration   bool              `yaml:"claudeIntegration"`
-	// PowershellTool setzt auf Windows (bei claudeIntegration) die Variable
-	// CLAUDE_CODE_USE_POWERSHELL_TOOL=1 im Agent-Env. Default true; mit
-	// powershellTool: false abschaltbar.
+	// PowershellTool sets CLAUDE_CODE_USE_POWERSHELL_TOOL=1 in the agent env on
+	// Windows (with claudeIntegration). Default true; can be turned off with
+	// powershellTool: false.
 	PowershellTool *bool `yaml:"powershellTool"`
-	// Window lässt den Agenten interaktiv im Vordergrund laufen: er erbt die
-	// echte Konsole des Launchers (TTY), die Launcher-Logs gehen nach
-	// unreagent.log. Default true (außer im headless -p Modus); window: false aus.
+	// Window runs the agent interactively in the foreground: it inherits the
+	// launcher's real console (TTY), the launcher logs go to unreagent.log.
+	// Default true (except in headless -p mode); window: false turns it off.
 	Window *bool `yaml:"window"`
-	// OnExit steuert, was passiert, wenn sich der Agent beendet (z.B. /quit) und
-	// NICHT neugestartet wird — der Agent ist im Fenster-Modus der Leitprozess,
-	// also ist die Session dann vorbei:
-	//   ask      (Default) im Fenster-Modus nachfragen: alles beenden / Editor
-	//            weiterlaufen lassen (Launcher-Konsole) / Agent neu starten.
-	//            Timeout 30s -> alles beenden. Headless ohne TTY = shutdown.
-	//   shutdown immer sofort den ganzen Stack (UE + MCP + Launcher) beenden.
-	//   leave    alles weiterlaufen lassen (nur Warnung) — manuelles Ctrl-C nötig.
+	// OnExit controls what happens when the agent exits (e.g. /quit) and is NOT
+	// restarted — in window mode the agent is the leading process, so the session
+	// is over then:
+	//   ask      (default) ask in window mode: shut everything down / keep the
+	//            editor running (launcher console) / restart the agent.
+	//            Timeout 30s -> shut everything down. Headless without a TTY =
+	//            shutdown.
+	//   shutdown always shut the whole stack down immediately (UE + MCP +
+	//            launcher).
+	//   leave    keep everything running (warning only) — manual Ctrl-C needed.
 	OnExit string `yaml:"onExit"`
 	// Hermes registers the unreagent MCP server with Hermes Agent (Nous
 	// Research) as an alternative agent. It is NOT auto-merged on launcher
@@ -127,7 +130,7 @@ type HermesConfig struct {
 	ConfigPath string `yaml:"configPath"`
 }
 
-// CommandSpec ist ein benannter Einmal-Befehl (z.B. "compile").
+// CommandSpec is a named one-off command (e.g. "compile").
 type CommandSpec struct {
 	Description string   `yaml:"description"`
 	Command     string   `yaml:"command"`
@@ -135,38 +138,37 @@ type CommandSpec struct {
 	Dir         string   `yaml:"dir"`
 }
 
-// MCPConfig steuert den eingebauten MCP-Server sowie zusätzliche MCP-Server, die
-// dem Agenten mitgegeben werden (z.B. ein In-Editor-Plugin wie UE LLM Toolkit,
-// über das Claude Code IN der Engine arbeitet).
+// MCPConfig controls the built-in MCP server as well as additional MCP servers
+// handed to the agent (e.g. an in-editor plugin like UE LLM Toolkit, through
+// which Claude Code works INSIDE the engine).
 type MCPConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"`
-	// Strict gibt --strict-mcp-config an den Agenten weiter: nur die hier/vom
-	// Launcher definierten Server werden genutzt (projekt-eigene .mcp.json wird
-	// ignoriert). Default false = additiv.
+	// Strict passes --strict-mcp-config to the agent: only the servers defined
+	// here / by the launcher are used (the project's own .mcp.json is ignored).
+	// Default false = additive.
 	Strict bool `yaml:"strict"`
 	// Token, if set, requires an "Authorization: Bearer <token>" header on
 	// every MCP request. Empty = open (default — compatible with prior
 	// behavior and local-only setups). Recommended as soon as the MCP server
 	// listens on an address other than 127.0.0.1.
 	Token string `yaml:"token"`
-	// ExtraServers sind roh durchgereichte MCP-Server-Definitionen im Format der
-	// Claude-Code-.mcp.json (Felder type/url/command/args/env/headers …).
-	// Platzhalter wie ${PROJECT_DIR} werden in allen String-Werten ersetzt.
+	// ExtraServers are MCP server definitions passed through raw, in the format of
+	// Claude Code's .mcp.json (fields type/url/command/args/env/headers …).
+	// Placeholders like ${PROJECT_DIR} are substituted in all string values.
 	ExtraServers map[string]map[string]interface{} `yaml:"extraServers"`
-	// WriteConfig schreibt die zusammengebaute MCP-Config zusätzlich als Datei(en)
-	// auf die Platte, damit externe Clients (eigene Claude-Sitzung, Cursor, VS
-	// Code) sie nutzen können.
+	// WriteConfig additionally writes the assembled MCP config to disk as file(s),
+	// so external clients (a separate Claude session, Cursor, VS Code) can use it.
 	WriteConfig []MCPOutput `yaml:"writeConfig"`
 }
 
-// MCPOutput ist ein Datei-Ziel für die geschriebene MCP-Config.
+// MCPOutput is a file target for the written MCP config.
 type MCPOutput struct {
-	Path   string `yaml:"path"`   // relativ zum Projekt oder absolut
+	Path   string `yaml:"path"`   // relative to the project or absolute
 	Format string `yaml:"format"` // mcp_json (default) | vscode
 }
 
-// Permissions steuert das Permission-Prompt-Tool für den Agenten.
+// Permissions controls the permission prompt tool for the agent.
 type Permissions struct {
 	Enabled bool     `yaml:"enabled"`
 	Mode    string   `yaml:"mode"`
@@ -174,13 +176,13 @@ type Permissions struct {
 	Deny    []string `yaml:"deny"`
 }
 
-// Runtimes stellt dem Agenten saubere Ausführungsumgebungen bereit.
+// Runtimes provides the agent with clean execution environments.
 type Runtimes struct {
 	Python PythonRuntime `yaml:"python"`
 	Node   NodeRuntime   `yaml:"node"`
 }
 
-// PythonRuntime nutzt uv (`uv run` baut/synct das venv automatisch).
+// PythonRuntime uses uv (`uv run` builds/syncs the venv automatically).
 type PythonRuntime struct {
 	Enabled        bool   `yaml:"enabled"`
 	UV             string `yaml:"uv"`
@@ -188,7 +190,7 @@ type PythonRuntime struct {
 	PrepareOnStart bool   `yaml:"prepareOnStart"`
 }
 
-// NodeRuntime führt Node-Code im Projektkontext aus.
+// NodeRuntime runs Node code in the project context.
 type NodeRuntime struct {
 	Enabled        bool   `yaml:"enabled"`
 	Node           string `yaml:"node"`
@@ -214,7 +216,7 @@ const (
 	MCPServerName     = "unreagent"
 )
 
-// Info beschreibt die aufgelösten Pfade (für Logging/Diagnose).
+// Info describes the resolved paths (for logging/diagnostics).
 type Info struct {
 	ConfigPath  string
 	LocalPath   string
@@ -223,9 +225,9 @@ type Info struct {
 	ProjectName string
 }
 
-// Load liest die Konfiguration. explicitPath ist optional; ist er leer, wird
-// neben der ausführbaren Datei nach unreagent.yaml gesucht. Eine danebenliegende
-// unreagent.local.yaml wird als Overlay drübergelegt.
+// Load reads the configuration. explicitPath is optional; if it is empty,
+// unreagent.yaml is looked for next to the executable. An unreagent.local.yaml
+// sitting beside it is overlaid on top.
 func Load(explicitPath string) (*Config, Info, error) {
 	var info Info
 
@@ -255,8 +257,8 @@ func Load(explicitPath string) (*Config, Info, error) {
 	info.Project = project
 	info.ProjectName = projectName
 
-	// Aufgelösten/auto-erkannten Projektpfad zurückschreiben, damit der Editor
-	// mit dem Projekt startet und projektbezogene Features ihn nutzen können.
+	// Write the resolved/auto-detected project path back, so the editor starts
+	// with the project and project-related features can use it.
 	c.Unreal.Project = project
 
 	c.substitute(engine, project, projectDir, projectName)
@@ -327,20 +329,20 @@ func (c *Config) applyDefaults() {
 		c.Files.Root = "${PROJECT_DIR}"
 	}
 
-	// Eingebaute Default-Befehle (nur, wenn nicht selbst definiert).
+	// Built-in default commands (only if not defined by the user).
 	if c.Commands == nil {
 		c.Commands = map[string]CommandSpec{}
 	}
 	if _, ok := c.Commands["compile"]; !ok {
 		c.Commands["compile"] = CommandSpec{
-			Description: "Kompiliert die C++-Module des Projekts (UnrealBuildTool).",
+			Description: "Compiles the project's C++ modules (UnrealBuildTool).",
 			Command:     "${ENGINE}/Engine/Build/BatchFiles/Build.bat",
 			Args:        []string{"${PROJECT_NAME}Editor", "Win64", "Development", "-Project=${PROJECT}", "-waitmutex", "-FromMsBuild"},
 		}
 	}
 	if _, ok := c.Commands["package"]; !ok {
 		c.Commands["package"] = CommandSpec{
-			Description: "Erstellt einen verteilbaren Windows-Build (cook + stage + pak).",
+			Description: "Builds a distributable Windows build (cook + stage + pak).",
 			Command:     "${ENGINE}/Engine/Build/BatchFiles/RunUAT.bat",
 			Args: []string{
 				"BuildCookRun", "-project=${PROJECT}", "-noP4", "-platform=Win64",
@@ -351,7 +353,7 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// substitute ersetzt die Platzhalter in allen Pfad-/Argument-Feldern.
+// substitute replaces the placeholders in all path/argument fields.
 func (c *Config) substitute(engine, project, projectDir, projectName string) {
 	rep := strings.NewReplacer(
 		"${ENGINE}", engine,
@@ -382,8 +384,8 @@ func (c *Config) substitute(engine, project, projectDir, projectName string) {
 	}
 }
 
-// substituteAny ersetzt Platzhalter rekursiv in Strings/Maps/Listen (für die
-// roh durchgereichten extraServers-Definitionen).
+// substituteAny replaces placeholders recursively in strings/maps/lists (for the
+// extraServers definitions passed through raw).
 func substituteAny(rep *strings.Replacer, v interface{}) interface{} {
 	switch t := v.(type) {
 	case string:
@@ -442,9 +444,9 @@ func validRestart(p string) error {
 	}
 }
 
-// --- Auflösung ---
+// --- resolution ---
 
-// resolveEngine ermittelt die UE-Installationswurzel.
+// resolveEngine determines the UE installation root.
 func resolveEngine(c *Config) string {
 	if v := strings.TrimSpace(os.Getenv("UE_ROOT")); v != "" {
 		return filepath.ToSlash(v)
@@ -455,9 +457,9 @@ func resolveEngine(c *Config) string {
 	return autodetectEngine()
 }
 
-// autodetectEngine sucht die UE-Installation: zuerst in der Windows-Registry
-// (Epic-Launcher-Installs), dann in den Standard-Installationspfaden. Nimmt die
-// höchste Version mit einer UnrealEditor-Executable.
+// autodetectEngine looks for the UE installation: first in the Windows registry
+// (Epic Launcher installs), then in the standard installation paths. It takes
+// the highest version that has an UnrealEditor executable.
 func autodetectEngine() string {
 	if dir := registryEngine(); dir != "" {
 		return dir
@@ -471,12 +473,12 @@ func autodetectEngine() string {
 	}
 	var candidates []string
 	for _, p := range patterns {
-		// filepath.Glob nutzt den OS-Separator (\ auf Windows) — Forward-Slash-
-		// Pattern würden dort nicht matchen, darum FromSlash.
+		// filepath.Glob uses the OS separator (\ on Windows) — forward-slash
+		// patterns would not match there, hence FromSlash.
 		matches, _ := filepath.Glob(filepath.FromSlash(p))
 		candidates = append(candidates, matches...)
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(candidates))) // höchste Version zuerst
+	sort.Sort(sort.Reverse(sort.StringSlice(candidates))) // highest version first
 	for _, dir := range candidates {
 		if fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe")) {
 			return filepath.ToSlash(dir)
@@ -485,7 +487,7 @@ func autodetectEngine() string {
 	return ""
 }
 
-// registryEngine liest den UE-Installationspfad aus der Windows-Registry
+// registryEngine reads the UE installation path from the Windows registry
 // (HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>\InstalledDirectory).
 func registryEngine() string {
 	if runtime.GOOS != "windows" {
@@ -505,7 +507,7 @@ func registryEngine() string {
 	return ""
 }
 
-// parseRegSZ extrahiert den Wert hinter "REG_SZ" aus einer `reg query`-Ausgabe.
+// parseRegSZ extracts the value behind "REG_SZ" from a `reg query` output.
 func parseRegSZ(out string) string {
 	for _, line := range strings.Split(out, "\n") {
 		if i := strings.Index(line, "REG_SZ"); i >= 0 {
@@ -515,8 +517,9 @@ func parseRegSZ(out string) string {
 	return ""
 }
 
-// resolveProject ermittelt die .uproject (explizit gesetzt oder per Auto-Detect
-// im Konfig-Verzeichnis). Liefert vollen Pfad, Verzeichnis und Name-ohne-Endung.
+// resolveProject determines the .uproject (set explicitly or auto-detected in
+// the config directory). It returns the full path, the directory and the name
+// without the extension.
 func resolveProject(c *Config, baseDir string) (project, dir, name string) {
 	p := strings.TrimSpace(c.Unreal.Project)
 	if p != "" && !strings.Contains(p, "${") {
@@ -538,7 +541,7 @@ func resolveProject(c *Config, baseDir string) (project, dir, name string) {
 	return p, dir, name
 }
 
-// --- Datei-Helfer ---
+// --- file helpers ---
 
 func decodeYAML(path string, c *Config) error {
 	b, err := os.ReadFile(path)
@@ -546,10 +549,10 @@ func decodeYAML(path string, c *Config) error {
 		return fmt.Errorf("config not readable (%s): %w", path, err)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(b))
-	dec.KnownFields(true) // unbekannte Felder = Fehler (Tippfehler-Schutz)
+	dec.KnownFields(true) // unknown fields = error (typo protection)
 	if err := dec.Decode(c); err != nil {
 		if err == io.EOF {
-			return nil // leere Datei ist ok
+			return nil // an empty file is fine
 		}
 		return fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}

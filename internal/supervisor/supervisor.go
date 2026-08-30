@@ -20,37 +20,37 @@ import (
 	"time"
 )
 
-// Logger ist eine einfache Zeilen-Senke (z.B. nach stdout).
+// Logger is a simple line sink (e.g. to stdout).
 type Logger func(line string)
 
-// ServiceSpec beschreibt einen überwachten Prozess.
+// ServiceSpec describes a supervised process.
 type ServiceSpec struct {
 	Name         string
 	Command      string
 	Args         []string
 	Dir          string
-	Env          []string // zusätzliche Umgebungsvariablen ("KEY=VAL")
+	Env          []string // additional environment variables ("KEY=VAL")
 	Autostart    bool
 	StartDelay   time.Duration
 	Restart      string // never | on-failure | always
-	MaxRestarts  int    // 0 = unbegrenzt
+	MaxRestarts  int    // 0 = unlimited
 	RestartDelay time.Duration
-	// PreStart wird vor jedem (Neu-)Start des Prozesses aufgerufen (z.B. um den
-	// Crash-Reporter zu killen oder Recovery-Dateien aufzuräumen).
+	// PreStart is called before every (re)start of the process (e.g. to kill the
+	// crash reporter or to clean up recovery files).
 	PreStart func()
-	// Foreground gibt dem Prozess die echte Konsole des Launchers (stdin/stdout/
-	// stderr werden geerbt) — nötig für interaktive TUIs wie Claude Code, die ein
-	// TTY brauchen. Dann werden stdout/stderr nicht ins Log gespiegelt, und der
-	// Aufrufer sollte die eigene stdin-Nutzung (Command-Loop) unterlassen.
+	// Foreground gives the process the launcher's real console (stdin/stdout/
+	// stderr are inherited) — required for interactive TUIs like Claude Code that
+	// need a TTY. stdout/stderr are then not mirrored into the log, and the caller
+	// should refrain from using stdin itself (command loop).
 	Foreground bool
-	// OnExit feuert, wenn der Prozess endet und NICHT automatisch neugestartet
-	// wird (Policy oder MaxRestarts erschöpft), aber noch "gewünscht" war — also
-	// ein unerwartetes Ende, kein manueller Stop. success = exit 0. Wird in einer
-	// eigenen Goroutine aufgerufen, darf also blockieren / den Supervisor steuern.
+	// OnExit fires when the process ends and is NOT restarted automatically
+	// (policy or MaxRestarts exhausted) but was still "desired" — i.e. an
+	// unexpected end, not a manual stop. success = exit 0. It is called in its own
+	// goroutine, so it may block / control the supervisor.
 	OnExit func(success bool)
 }
 
-// CommandSpec beschreibt einen Einmal-Befehl.
+// CommandSpec describes a one-off command.
 type CommandSpec struct {
 	Description string
 	Command     string
@@ -58,7 +58,7 @@ type CommandSpec struct {
 	Dir         string
 }
 
-// ServiceStatus ist eine Momentaufnahme eines Service.
+// ServiceStatus is a snapshot of a service.
 type ServiceStatus struct {
 	Name     string `json:"name"`
 	Running  bool   `json:"running"`
@@ -70,7 +70,7 @@ type ServiceStatus struct {
 	Unresponsive bool `json:"unresponsive,omitempty"`
 }
 
-// CommandResult ist das Ergebnis eines Einmal-Befehls.
+// CommandResult is the result of a one-off command.
 type CommandResult struct {
 	Output   string `json:"output"`
 	ExitCode int    `json:"exitCode"`
@@ -80,7 +80,7 @@ type CommandResult struct {
 // loop before the service counts as unresponsive.
 const defaultCtrlTimeout = 10 * time.Second
 
-// Supervisor hält alle Services und Befehle.
+// Supervisor holds all services and commands.
 type Supervisor struct {
 	log Logger
 	// ctrlTimeout is a field so tests can shorten it; New sets the default.
@@ -91,7 +91,7 @@ type Supervisor struct {
 	commands    map[string]CommandSpec
 }
 
-// New erzeugt einen Supervisor mit der angegebenen Log-Senke.
+// New creates a supervisor with the given log sink.
 func New(log Logger) *Supervisor {
 	if log == nil {
 		log = func(string) {}
@@ -108,7 +108,7 @@ func (s *Supervisor) logf(format string, a ...interface{}) {
 	s.log(fmt.Sprintf(format, a...))
 }
 
-// AddService registriert einen überwachten Prozess (vor Start aufrufen).
+// AddService registers a supervised process (call before Start).
 func (s *Supervisor) AddService(spec ServiceSpec) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,14 +120,14 @@ func (s *Supervisor) AddService(spec ServiceSpec) {
 	s.order = append(s.order, spec.Name)
 }
 
-// AddCommand registriert einen Einmal-Befehl.
+// AddCommand registers a one-off command.
 func (s *Supervisor) AddCommand(name string, spec CommandSpec) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commands[name] = spec
 }
 
-// Start startet die Überwachungs-Goroutinen aller Services.
+// Start starts the supervision goroutines of all services.
 func (s *Supervisor) Start(ctx context.Context, wg *sync.WaitGroup) {
 	s.mu.Lock()
 	svcs := make([]*service, 0, len(s.order))
@@ -144,7 +144,7 @@ func (s *Supervisor) Start(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-// --- Steuerung (vom MCP-Server / der Tastatur aufgerufen) ---
+// --- control (called by the MCP server / the keyboard) ---
 
 type ctrlKind int
 
@@ -176,22 +176,22 @@ func (s *Supervisor) send(name string, kind ctrlKind) (ServiceStatus, error) {
 	return <-reply, nil
 }
 
-// StartService startet einen (gestoppten) Service.
+// StartService starts a (stopped) service.
 func (s *Supervisor) StartService(name string) (ServiceStatus, error) {
 	return s.send(name, ctrlStart)
 }
 
-// StopService stoppt einen Service und verhindert Auto-Restart.
+// StopService stops a service and prevents auto-restart.
 func (s *Supervisor) StopService(name string) (ServiceStatus, error) {
 	return s.send(name, ctrlStop)
 }
 
-// RestartService startet einen Service neu.
+// RestartService restarts a service.
 func (s *Supervisor) RestartService(name string) (ServiceStatus, error) {
 	return s.send(name, ctrlRestart)
 }
 
-// Status liefert Momentaufnahmen aller Services in Registrierungsreihenfolge.
+// Status returns snapshots of all services in registration order.
 //
 // A service whose control loop does not answer is reported as unresponsive
 // rather than dropped: the caller has to be able to tell "no such service" from
@@ -219,7 +219,7 @@ func (s *Supervisor) Status() []ServiceStatus {
 	return out
 }
 
-// Logs liefert die letzten n Ausgabezeilen eines Service.
+// Logs returns the last n output lines of a service.
 func (s *Supervisor) Logs(name string, n int) ([]string, error) {
 	s.mu.Lock()
 	svc := s.services[name]
@@ -230,14 +230,14 @@ func (s *Supervisor) Logs(name string, n int) ([]string, error) {
 	return svc.logbuf.tail(n), nil
 }
 
-// ServiceNames liefert alle registrierten Service-Namen.
+// ServiceNames returns all registered service names.
 func (s *Supervisor) ServiceNames() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.order...)
 }
 
-// CommandNames liefert alle registrierten Befehlsnamen.
+// CommandNames returns all registered command names.
 func (s *Supervisor) CommandNames() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -248,7 +248,7 @@ func (s *Supervisor) CommandNames() []string {
 	return out
 }
 
-// CommandDescription liefert die Beschreibung eines Befehls.
+// CommandDescription returns the description of a command.
 func (s *Supervisor) CommandDescription(name string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,8 +256,8 @@ func (s *Supervisor) CommandDescription(name string) (string, bool) {
 	return spec.Description, ok
 }
 
-// RunCommand führt einen benannten Einmal-Befehl synchron aus und gibt dessen
-// gesammelte Ausgabe zurück. Auch dieser Prozess läuft in einem Job-Object.
+// RunCommand runs a named one-off command synchronously and returns its
+// collected output. This process runs in a job object as well.
 func (s *Supervisor) RunCommand(name string) (CommandResult, error) {
 	s.mu.Lock()
 	spec, ok := s.commands[name]
@@ -268,7 +268,7 @@ func (s *Supervisor) RunCommand(name string) (CommandResult, error) {
 	return s.runOnce(spec.Command, spec.Args, spec.Dir, nil, fmt.Sprintf("cmd:%s", name))
 }
 
-// RunOnce führt einen beliebigen Befehl synchron aus (genutzt von Runtimes).
+// RunOnce runs an arbitrary command synchronously (used by runtimes).
 func (s *Supervisor) RunOnce(command string, args []string, dir string, env []string, label string) (CommandResult, error) {
 	return s.runOnce(command, args, dir, env, label)
 }
@@ -306,7 +306,7 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	return res, nil
 }
 
-// --- interne Service-Verwaltung ---
+// --- internal service management ---
 
 type service struct {
 	spec   ServiceSpec
@@ -314,8 +314,8 @@ type service struct {
 	logbuf *ringBuffer
 }
 
-// runService ist die Lebenszyklus-Schleife eines Service. Eine einzige
-// Goroutine besitzt den gesamten Zustand; Steuerung läuft über svc.ctrl.
+// runService is the lifecycle loop of a service. A single goroutine owns all of
+// the state; control goes through svc.ctrl.
 func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	spec := svc.spec
 
@@ -342,10 +342,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			return
 		}
 		if job != nil {
-			job.Close() // Windows: tötet den ganzen Baum
+			job.Close() // Windows: kills the whole tree
 		}
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill() // Fallback (Linux / falls Job No-Op)
+			_ = cmd.Process.Kill() // fallback (Linux / if the job is a no-op)
 		}
 		if waitCh != nil {
 			<-waitCh
@@ -378,7 +378,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		}
 		var ss *streamSet
 		if spec.Foreground {
-			// Echte Konsole erben -> echtes TTY für interaktive TUIs.
+			// Inherit the real console -> a real TTY for interactive TUIs.
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		} else {
 			// Own pipes instead of c.StdoutPipe(): Wait() closes the pipes it
@@ -438,7 +438,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		return st
 	}
 
-	// Initialer Start (mit optionaler Verzögerung).
+	// Initial start (with an optional delay).
 	if desired {
 		if spec.StartDelay > 0 {
 			backoff = time.After(spec.StartDelay)
@@ -477,9 +477,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			} else if desired {
 				s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
 				if spec.OnExit != nil {
-					// Eigene Goroutine: der Handler darf blockieren (TTY-Prompt) und
-					// uns über svc.ctrl steuern (start/restart) — synchron wäre das
-					// ein Deadlock, weil wir genau diese Schleife sind.
+					// Own goroutine: the handler may block (TTY prompt) and steer us
+					// via svc.ctrl (start/restart) — doing it synchronously would
+					// deadlock, because we are exactly that loop.
 					go spec.OnExit(success)
 				}
 			}
@@ -506,7 +506,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				start()
 				s.logf("[%s] restarted (manual)", spec.Name)
 			case ctrlStatus:
-				// nur Snapshot
+				// snapshot only
 			}
 			if msg.reply != nil {
 				msg.reply <- snapshot()
@@ -515,7 +515,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 }
 
-// waitChOrNil verhindert, dass ein nil-Channel im select sofort feuert.
+// waitChOrNil prevents a nil channel from firing immediately in a select.
 func waitChOrNil(ch chan error) <-chan error {
 	if ch == nil {
 		return nil
@@ -677,7 +677,7 @@ func shouldRestart(spec ServiceSpec, restarts int, success bool) bool {
 			return false
 		}
 	case "always":
-		// immer (bis MaxRestarts)
+		// always (up to MaxRestarts)
 	default:
 		return false
 	}
@@ -705,8 +705,8 @@ func describeExit(err error) string {
 	return err.Error()
 }
 
-// isNotFound erkennt, ob ein Start fehlschlug, weil das Programm nicht existiert
-// (dann sind Neustarts sinnlos).
+// isNotFound detects whether a start failed because the program does not exist
+// (restarts are pointless then).
 func isNotFound(err error) bool {
 	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist)
 }

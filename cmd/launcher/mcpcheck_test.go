@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Smoke-Test gegen einen Mini-stdio-MCP-Server (node -e), der auf initialize
-// korrekt antwortet — muss als OK gemeldet werden.
+// Smoke test against a minimal stdio MCP server (node -e) that answers
+// initialize correctly — it must be reported as OK.
 func TestSmokeTestMCPOk(t *testing.T) {
 	requireNode(t)
 	logs := captureLogs(func(logger func(string)) {
@@ -19,22 +19,22 @@ func TestSmokeTestMCPOk(t *testing.T) {
 	}
 }
 
-// Ein Server, der sofort mit Fehler stirbt, muss eine WARN mit dem stderr-
-// Inhalt produzieren — beschweren statt aufgeben.
+// A server that dies immediately with an error must produce a WARN containing
+// the stderr output — complain instead of giving up.
 func TestSmokeTestMCPCrash(t *testing.T) {
 	requireNode(t)
 	logs := captureLogs(func(logger func(string)) {
 		smokeTestMCP("kaputt", "node", []string{"-e", `console.error("Cannot find module 'foo'"); process.exit(1);`}, nil, t.TempDir(), logger)
 	})
 	if !strings.Contains(logs, "WARN") || !strings.Contains(logs, "Cannot find module") {
-		t.Fatalf("erwartet WARN mit stderr-Ursache, bekam:\n%s", logs)
+		t.Fatalf("expected WARN with the stderr cause, got:\n%s", logs)
 	}
 }
 
 func requireNode(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node nicht im PATH")
+		t.Skip("node not on PATH")
 	}
 }
 

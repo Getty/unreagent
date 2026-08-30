@@ -14,22 +14,22 @@ import (
 func requireBin(t *testing.T, name string) {
 	t.Helper()
 	if _, err := exec.LookPath(name); err != nil {
-		t.Skipf("%s nicht im PATH — Test übersprungen", name)
+		t.Skipf("%s not on PATH — test skipped", name)
 	}
 }
 
-// Ein Service, der von selbst endet und nicht neugestartet wird, muss OnExit
-// feuern — das ist das Signal, das der Launcher braucht, um nicht stumm mit
-// laufendem Editor hängenzubleiben.
+// A service that exits on its own and is not restarted must fire OnExit — that
+// is the signal the launcher needs so it does not silently hang around with a
+// running editor.
 func TestOnExitFiresOnNaturalExit(t *testing.T) {
 	requireBin(t, "true")
 	fired := make(chan bool, 1)
 	sup := New(nil)
 	sup.AddService(ServiceSpec{
 		Name:      "x",
-		Command:   "true", // beendet sich sofort mit exit 0
+		Command:   "true", // exits immediately with exit 0
 		Autostart: true,
-		Restart:   "on-failure", // exit 0 -> kein Neustart
+		Restart:   "on-failure", // exit 0 -> no restart
 		OnExit:    func(success bool) { fired <- success },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -40,17 +40,17 @@ func TestOnExitFiresOnNaturalExit(t *testing.T) {
 	select {
 	case success := <-fired:
 		if !success {
-			t.Fatalf("erwartet success=true (exit 0), bekam false")
+			t.Fatalf("expected success=true (exit 0), got false")
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("OnExit wurde nicht gefeuert")
+		t.Fatal("OnExit did not fire")
 	}
 	cancel()
 	wg.Wait()
 }
 
-// Ein manuell gestoppter Service darf OnExit NICHT feuern — der Stop war
-// gewollt, da soll der Launcher nicht herunterfahren.
+// A manually stopped service must NOT fire OnExit — the stop was intended, so
+// the launcher must not shut down.
 func TestOnExitNotFiredOnManualStop(t *testing.T) {
 	requireBin(t, "sleep")
 	fired := make(chan bool, 1)
@@ -68,16 +68,16 @@ func TestOnExitNotFiredOnManualStop(t *testing.T) {
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
 
-	time.Sleep(300 * time.Millisecond) // anlaufen lassen
+	time.Sleep(300 * time.Millisecond) // let it come up
 	if _, err := sup.StopService("x"); err != nil {
 		t.Fatalf("StopService: %v", err)
 	}
 
 	select {
 	case <-fired:
-		t.Fatal("OnExit darf bei manuellem Stop nicht feuern")
+		t.Fatal("OnExit must not fire on a manual stop")
 	case <-time.After(700 * time.Millisecond):
-		// gut — nichts gefeuert
+		// good — nothing fired
 	}
 	cancel()
 	wg.Wait()

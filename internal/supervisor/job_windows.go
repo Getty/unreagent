@@ -1,12 +1,12 @@
 //go:build windows
 
-// Windows-Job-Objects sorgen dafür, dass beim Schließen des Job-Handles der
-// komplette Prozessbaum vom Betriebssystem getötet wird (KILL_ON_JOB_CLOSE).
-// Dadurch hinterlässt ein beendeter, neugestarteter oder abgestürzter Launcher
-// keine Waisenprozesse (ShaderCompileWorker, CrashReportClient, …).
+// Windows job objects make the operating system kill the entire process tree
+// when the job handle is closed (KILL_ON_JOB_CLOSE). That way a launcher that
+// exits, restarts or crashes leaves no orphaned processes behind
+// (ShaderCompileWorker, CrashReportClient, …).
 //
-// Wir rufen die Win32-API direkt über syscall.NewLazyDLL auf — keine externe
-// Abhängigkeit, damit der Cross-Compile von Linux aus offline funktioniert.
+// We call the Win32 API directly via syscall.NewLazyDLL — no external
+// dependency, so the cross-compile from Linux works offline.
 package supervisor
 
 import (
@@ -60,13 +60,13 @@ type jobObjectExtendedLimitInfo struct {
 	PeakJobMemoryUsed     uintptr
 }
 
-// Job kapselt ein Windows-Job-Object mit KILL_ON_JOB_CLOSE.
+// Job wraps a Windows job object with KILL_ON_JOB_CLOSE.
 type Job struct {
 	handle syscall.Handle
 }
 
-// NewJob erzeugt ein Job-Object, dessen Prozesse beim Schließen des Handles
-// (auch bei Absturz des Launchers) automatisch beendet werden.
+// NewJob creates a job object whose processes are terminated automatically when
+// the handle is closed (including when the launcher crashes).
 func NewJob() (*Job, error) {
 	r, _, err := procCreateJobObject.Call(0, 0)
 	if r == 0 {
@@ -113,8 +113,8 @@ func (j *Job) Assign(pid int) error {
 	return nil
 }
 
-// Close schließt das Job-Handle. Wegen KILL_ON_JOB_CLOSE beendet das alle noch
-// laufenden Prozesse des Jobs samt deren Kinder.
+// Close closes the job handle. Because of KILL_ON_JOB_CLOSE this terminates all
+// processes still running in the job, including their children.
 func (j *Job) Close() error {
 	if j == nil || j.handle == 0 {
 		return nil
