@@ -1,25 +1,25 @@
-# unreagent — Code-Signing-Zertifikat importieren
+# unreagent — import the code-signing certificate
 #
-# Importiert das oeffentliche Zertifikat von "conflict.industries digital GmbH"
-# in die Windows-Vertrauensspeicher. Danach laeuft die signierte unreagent.exe
-# OHNE "Unbekannter Herausgeber"-Warnung und zeigt die GmbH als Herausgeber.
+# Imports the public certificate of "conflict.industries digital GmbH"
+# into the Windows trust stores. Afterwards the signed unreagent.exe runs
+# WITHOUT the "Unknown Publisher" warning and shows the GmbH as the publisher.
 #
-# ALS ADMINISTRATOR ausfuehren (Rechtsklick -> "Mit PowerShell ausfuehren" als
-# Admin, oder:  powershell -ExecutionPolicy Bypass -File import-cert.ps1 )
+# RUN AS ADMINISTRATOR (right-click -> "Run with PowerShell" as
+# Admin, or:  powershell -ExecutionPolicy Bypass -File import-cert.ps1 )
 #
-# Hinweis: Damit vertraust du Code, der mit diesem Zertifikat signiert ist.
-# Nur importieren, wenn du der Quelle (conflict.industries digital GmbH) vertraust.
+# Note: this makes you trust any code signed with this certificate.
+# Only import it if you trust the source (conflict.industries digital GmbH).
 
 $ErrorActionPreference = "Stop"
 $cer = Join-Path $PSScriptRoot "unreagent-codesign.cer"
 
 if (-not (Test-Path $cer)) {
-    Write-Error "Zertifikat nicht gefunden: $cer"
+    Write-Error "Certificate not found: $cer"
     exit 1
 }
 
 Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
 Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
 
-Write-Host "OK - 'conflict.industries digital GmbH' ist jetzt vertrauenswuerdig."
-Write-Host "Die signierte unreagent.exe startet nun ohne Herausgeber-Warnung."
+Write-Host "OK - 'conflict.industries digital GmbH' is now trusted."
+Write-Host "The signed unreagent.exe now starts without a publisher warning."

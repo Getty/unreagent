@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Signiert eine Windows-.exe mit dem unreagent-Code-Signing-Zertifikat.
-# Benoetigt: osslsigncode + den PRIVATEN Schluessel signing/codesign.key
-# (nicht im Repo — lokal vorhalten/aus dem Vault wiederherstellen).
+# Signs a Windows .exe with the unreagent code-signing certificate.
+# Requires: osslsigncode + the PRIVATE key signing/codesign.key
+# (not in the repo — keep it locally / restore it from the vault).
 #
-#   ./scripts/sign-windows.sh [pfad/zur/exe]   (default: dist/unreagent.exe)
+#   ./scripts/sign-windows.sh [path/to/exe]   (default: dist/unreagent.exe)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,11 +12,11 @@ KEY="signing/codesign.key"
 CERT="signing/codesign.pem"
 
 if [ ! -f "$KEY" ]; then
-  echo "FEHLER: privater Schluessel fehlt: $KEY" >&2
-  echo "  -> sicher aufbewahrten Schluessel hierher zuruecklegen (NICHT committen)." >&2
+  echo "ERROR: private key missing: $KEY" >&2
+  echo "  -> put the securely stored key back here (do NOT commit it)." >&2
   exit 1
 fi
-command -v osslsigncode >/dev/null || { echo "FEHLER: osslsigncode nicht installiert" >&2; exit 1; }
+command -v osslsigncode >/dev/null || { echo "ERROR: osslsigncode not installed" >&2; exit 1; }
 
 osslsigncode sign \
   -certs "$CERT" -key "$KEY" \
@@ -24,7 +24,7 @@ osslsigncode sign \
   -h sha256 -t http://timestamp.digicert.com \
   -in "$EXE" -out "$EXE.signed"
 mv "$EXE.signed" "$EXE"
-echo "signiert: $EXE"
-# Nur Info-Anzeige — verify meldet bei self-signed immer "failed" (keine
-# CA-Kette), das darf den Build nicht abbrechen.
+echo "signed: $EXE"
+# Informational only — verify always reports "failed" for self-signed certs
+# (no CA chain); this must not abort the build.
 osslsigncode verify "$EXE" 2>&1 | grep -E "Subject:|Message digest" | head -2 || true

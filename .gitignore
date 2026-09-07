@@ -1,10 +1,10 @@
 /dist/
-# Lokale Maschinen-Overrides gehören nie ins Repo
+# Local machine overrides never belong in the repo
 unreagent.local.yaml
 unreagent.local.yml
-# vendor/ wird bewusst committed (offline-reproduzierbare Builds)
+# vendor/ is committed on purpose (offline-reproducible builds)
 
-# Code-Signing: privater Schluessel NIEMALS ins Repo
+# Code signing: private key NEVER goes into the repo
 signing/*.key
 signing/*.pfx
 

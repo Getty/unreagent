@@ -1,58 +1,58 @@
-# Code-Signing (self-signed)
+# Code signing (self-signed)
 
-Die `unreagent.exe` wird mit einem **selbst-signierten** Zertifikat von
-„conflict.industries digital GmbH" signiert. Das entfernt die
-„Unbekannter Herausgeber"-Warnung **auf Maschinen, die das Zertifikat einmalig
-importiert haben** — ideal fürs eigene Team / bekannte Nutzer.
+`unreagent.exe` is signed with a **self-signed** certificate from
+"conflict.industries digital GmbH". This removes the
+"Unknown Publisher" warning **on machines that have imported the certificate
+once** — ideal for your own team / known users.
 
-## Für Nutzer: Zertifikat importieren (einmalig)
+## For users: import the certificate (once)
 
-PowerShell **als Administrator**:
+PowerShell **as Administrator**:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File signing\import-cert.ps1
 ```
 
-Das importiert `unreagent-codesign.cer` in „Vertrauenswürdige
-Stammzertifizierungsstellen" und „Vertrauenswürdige Herausgeber". Danach startet
-die signierte `unreagent.exe` ohne Herausgeber-Warnung.
+This imports `unreagent-codesign.cer` into "Trusted Root Certification
+Authorities" and "Trusted Publishers". Afterwards the signed
+`unreagent.exe` starts without a publisher warning.
 
-> Vertrauens-Hinweis: Damit vertraut die Maschine allem, was mit diesem
-> Zertifikat signiert ist. Nur importieren, wenn du conflict.industries digital
-> GmbH vertraust. Für eine breite Öffentlichkeit ist ein CA-ausgestelltes
-> OV/EV-Zertifikat der saubere Weg (dann ist kein Import nötig).
+> Trust notice: this makes the machine trust everything signed with this
+> certificate. Only import it if you trust conflict.industries digital
+> GmbH. For a broad public audience, a CA-issued OV/EV certificate is the
+> clean way to go (no import needed then).
 
-## Dateien
+## Files
 
-| Datei | Im Repo? | Zweck |
+| File | In repo? | Purpose |
 |---|---|---|
-| `unreagent-codesign.cer` | ✅ ja (öffentlich) | Import durch Nutzer (DER) |
-| `codesign.pem` | ✅ ja (öffentlich) | Zertifikat zum Signieren |
-| `codesign.key` | ❌ **NIE** (geheim) | privater Schlüssel — nur lokal/Vault |
+| `unreagent-codesign.cer` | ✅ yes (public) | import by users (DER) |
+| `codesign.pem` | ✅ yes (public) | certificate for signing |
+| `codesign.key` | ❌ **NEVER** (secret) | private key — local/vault only |
 
-## Für Maintainer: signieren
+## For maintainers: signing
 
 ```bash
-make win-signed         # baut + signiert dist/unreagent.exe
-# oder eine vorhandene exe:
+make win-signed         # builds + signs dist/unreagent.exe
+# or an existing exe:
 ./scripts/sign-windows.sh dist/unreagent.exe
 ```
 
-Der **private Schlüssel** `signing/codesign.key` ist git-ignoriert und muss
-sicher aufbewahrt werden (Passwort-Manager/Vault). Wer ihn besitzt, kann im
-Namen der GmbH signieren — entsprechend behandeln.
+The **private key** `signing/codesign.key` is git-ignored and must be
+stored securely (password manager/vault). Whoever holds it can sign in
+the GmbH's name — treat it accordingly.
 
-## Für Maintainer: Zertifikat erzeugen/erneuern
+## For maintainers: generating/renewing the certificate
 
 ```bash
-./scripts/gen-codesign-cert.sh   # nutzt vorhandenen Key, sonst neuer RSA-3072-Key
+./scripts/gen-codesign-cert.sh   # reuses the existing key, otherwise a new RSA 3072 key
 ```
 
-Schreibt `codesign.pem` (signieren) + `unreagent-codesign.cer` (Import). Der
-Subject enthält **nur den CN** (`conflict.industries digital GmbH`): Windows
-zeigt als „Verifizierter Herausgeber" den kompletten Subject-DN — ein zusätzliches
-`O`/`C` mit demselben Wert ließe den Namen doppelt erscheinen
-(„…GmbH, …GmbH, DE"). Nur-CN = der Name steht genau einmal.
+Writes `codesign.pem` (for signing) + `unreagent-codesign.cer` (for import). The
+subject contains **only the CN** (`conflict.industries digital GmbH`): Windows
+shows the full subject DN as "Verified Publisher" — an additional
+`O`/`C` with the same value would make the name appear twice
+("…GmbH, …GmbH, DE"). CN-only = the name appears exactly once.
 
-> Nach einer Erneuerung müssen Nutzer das Zertifikat **neu importieren**
-> (`import-cert.ps1`) — der Thumbprint ändert sich.
+> After a renewal, users must **re-import** the certificate
+> (`import-cert.ps1`) — the thumbprint changes.

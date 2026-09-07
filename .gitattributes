@@ -1,9 +1,9 @@
-# Git LFS + Zeilenenden
-# Basis: gemeinsame UE-5.7-Konvention (vgl. Apocal), erweitert um die
-# unreagent-spezifischen Binaerdateien (*.syso, *.cer).
-# Voraussetzung: `git lfs install` einmal pro Maschine.
+# Git LFS + line endings
+# Base: shared UE 5.7 convention (cf. Apocal), extended with the
+# unreagent-specific binary files (*.syso, *.cer).
+# Prerequisite: `git lfs install` once per machine.
 # ============================================================================
-#  Git LFS — UE- und Asset-Binaerdateien
+#  Git LFS — UE and asset binary files
 # ============================================================================
 # 3D / Animation
 *.uasset filter=lfs diff=lfs merge=lfs -text
@@ -23,7 +23,7 @@
 *.abc filter=lfs diff=lfs merge=lfs -text
 *.usda filter=lfs diff=lfs merge=lfs -text
 *.usdc filter=lfs diff=lfs merge=lfs -text
-# Texturen
+# Textures
 *.png filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.jpeg filter=lfs diff=lfs merge=lfs -text
@@ -60,13 +60,13 @@
 *.webm filter=lfs diff=lfs merge=lfs -text
 *.wmv filter=lfs diff=lfs merge=lfs -text
 *.m4v filter=lfs diff=lfs merge=lfs -text
-# Schriftarten
+# Fonts
 *.ttf filter=lfs diff=lfs merge=lfs -text
 *.otf filter=lfs diff=lfs merge=lfs -text
 *.woff filter=lfs diff=lfs merge=lfs -text
 *.woff2 filter=lfs diff=lfs merge=lfs -text
 *.fnt filter=lfs diff=lfs merge=lfs -text
-# Native Libraries / Windows-Build-Artefakte
+# Native libraries / Windows build artefacts
 *.dll filter=lfs diff=lfs merge=lfs -text
 *.so filter=lfs diff=lfs merge=lfs -text
 *.dylib filter=lfs diff=lfs merge=lfs -text
@@ -76,14 +76,14 @@
 *.exp filter=lfs diff=lfs merge=lfs -text
 *.ilk filter=lfs diff=lfs merge=lfs -text
 *.syso filter=lfs diff=lfs merge=lfs -text
-# Dokumente / Design
+# Documents / design
 *.pdf filter=lfs diff=lfs merge=lfs -text
 *.ai filter=lfs diff=lfs merge=lfs -text
 *.indd filter=lfs diff=lfs merge=lfs -text
 *.eps filter=lfs diff=lfs merge=lfs -text
 *.rtf filter=lfs diff=lfs merge=lfs -text
 *.fla filter=lfs diff=lfs merge=lfs -text
-# Engine-Intermediates / Crash / Packed
+# Engine intermediates / crash / packed
 *.pck filter=lfs diff=lfs merge=lfs -text
 *.pak filter=lfs diff=lfs merge=lfs -text
 *.utxt filter=lfs diff=lfs merge=lfs -text
@@ -91,12 +91,12 @@
 *.udd filter=lfs diff=lfs merge=lfs -text
 *.uddc filter=lfs diff=lfs merge=lfs -text
 *.hash filter=lfs diff=lfs merge=lfs -text
-# Icons / Splash
+# Icons / splash
 *.ico filter=lfs diff=lfs merge=lfs -text
 *.icns filter=lfs diff=lfs merge=lfs -text
-# Zertifikate (oeffentliche Code-Signing-Certs)
+# Certificates (public code-signing certs)
 *.cer filter=lfs diff=lfs merge=lfs -text
-# Archive / Source-Bundles
+# Archives / source bundles
 *.zip filter=lfs diff=lfs merge=lfs -text
 *.7z  filter=lfs diff=lfs merge=lfs -text
 *.rar filter=lfs diff=lfs merge=lfs -text
@@ -105,7 +105,7 @@
 # UE Localization Binaries
 *.locres filter=lfs diff=lfs merge=lfs -text
 # ============================================================================
-#  Zeilenenden — explizit nach Dateityp
+#  Line endings — explicit per file type
 # ============================================================================
 *.bat         eol=crlf
 *.cmd         eol=crlf

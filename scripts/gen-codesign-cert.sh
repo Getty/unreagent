@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Erzeugt das self-signed Code-Signing-Zertifikat fuer unreagent.
+# Generates the self-signed code-signing certificate for unreagent.
 #
-# - Privater Schluessel: signing/codesign.key  (PRIVAT, gitignored, NIE committen)
-#   Wird wiederverwendet, falls vorhanden; sonst neu erzeugt (RSA 3072).
-# - Oeffentliches Zertifikat: signing/codesign.pem (PEM, zum Signieren)
-#   und signing/unreagent-codesign.cer (DER, fuer den Windows-Import durch Nutzer).
+# - Private key: signing/codesign.key  (PRIVATE, gitignored, NEVER commit)
+#   Reused if present; otherwise generated anew (RSA 3072).
+# - Public certificate: signing/codesign.pem (PEM, for signing)
+#   and signing/unreagent-codesign.cer (DER, for users to import on Windows).
 #
-# Der Subject enthaelt BEWUSST nur den CN (Firmenname). Windows zeigt als
-# "Verifizierter Herausgeber" (UAC/SmartScreen) den kompletten Subject-DN —
-# stuenden hier zusaetzlich O und C mit demselben Wert, erschiene der Name
-# doppelt ("…GmbH, …GmbH, DE"). Nur-CN = der Name steht genau einmal.
+# The subject DELIBERATELY contains only the CN (company name). Windows shows
+# the full subject DN as "Verified Publisher" (UAC/SmartScreen) — if O and C
+# were added here with the same value, the name would appear twice
+# ("…GmbH, …GmbH, DE"). CN-only = the name appears exactly once.
 #
 #   ./scripts/gen-codesign-cert.sh
 #
-# Danach muessen Nutzer das neue Zertifikat einmalig neu importieren
-# (signing/import-cert.ps1 als Admin) — Thumbprint hat sich geaendert.
+# Afterwards users must re-import the new certificate once
+# (signing/import-cert.ps1 as Admin) — the thumbprint has changed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,14 +24,14 @@ KEY="signing/codesign.key"
 PEM="signing/codesign.pem"
 CER="signing/unreagent-codesign.cer"
 
-command -v openssl >/dev/null || { echo "FEHLER: openssl nicht installiert" >&2; exit 1; }
+command -v openssl >/dev/null || { echo "ERROR: openssl not installed" >&2; exit 1; }
 
 if [ ! -f "$KEY" ]; then
-  echo "Erzeuge neuen privaten Schluessel: $KEY (RSA 3072)"
+  echo "Generating new private key: $KEY (RSA 3072)"
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$KEY"
   chmod 600 "$KEY"
 else
-  echo "Verwende vorhandenen Schluessel: $KEY"
+  echo "Using existing key: $KEY"
 fi
 
 openssl req -x509 -new -key "$KEY" -sha256 -days "$DAYS" \
@@ -43,8 +43,8 @@ openssl req -x509 -new -key "$KEY" -sha256 -days "$DAYS" \
   -addext "authorityKeyIdentifier=keyid" \
   -out "$PEM"
 
-# DER-Variante fuer den Windows-Import.
+# DER variant for the Windows import.
 openssl x509 -in "$PEM" -outform DER -out "$CER"
 
-echo "geschrieben: $PEM + $CER"
+echo "written: $PEM + $CER"
 openssl x509 -in "$PEM" -noout -subject -issuer -enddate
