@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/github-social.png" alt="unreagent — Unreal Engine Launcher &amp; MCP Orchestrator" width="600">
+</p>
+
 # unreagent
 
 [![ci](https://github.com/Getty/unreagent/actions/workflows/ci.yml/badge.svg)](https://github.com/Getty/unreagent/actions/workflows/ci.yml)
@@ -10,6 +14,9 @@ Python/Node code in prepared runtimes.
 A single `.exe` — **cross-compilable from Linux to Windows**. Stdlib Go only,
 plus one vendored YAML parser; `vendor/` is checked in, so builds are
 offline-reproducible.
+
+Full working example — a real UE project wired to Claude Code with both MCP
+servers running: [unreagent-example](https://github.com/Getty/unreagent-example).
 
 ## Architecture
 
@@ -114,6 +121,22 @@ zip and start `unreagent.exe` — the MCP server will then run on
 > The "LLM thing" (Claude Code) is not included — it is a CLI you install
 > separately. The demo therefore leaves the agent off; to arm it, set
 > `agent.enabled: true` (see below).
+
+| | [`example/`](example/) | [unreagent-example](https://github.com/Getty/unreagent-example) |
+|---|---|---|
+| UE editor | none (`ping` as a stand-in) | real UE 5.7 project |
+| Agent | off by default | Claude Code |
+| In-editor MCP | not wired | UE LLM Toolkit (submodule) |
+| Purpose | try the MCP server in isolation, no downloads | full reference setup, both MCP servers wired |
+
+Use `example/` to poke at the MCP server without installing UE or an agent.
+For the real thing — a UE project with Claude Code driving both
+unreagent-MCP and the in-editor MCP together — clone the standalone
+[unreagent-example](https://github.com/Getty/unreagent-example) repo:
+
+```bash
+git clone --recursive https://github.com/Getty/unreagent-example
+```
 
 ## Setup
 
