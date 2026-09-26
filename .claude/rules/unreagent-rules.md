@@ -28,7 +28,7 @@ This rule depends on whether the Agent/Task tool is available to you.
 
 - **You can spawn subagents** (orchestrating main agent): Do NOT touch behavior-relevant
   code yourself — delegate to `unreagent-worker`. Your lane: coordinate, inspect, plan,
-  review diffs, run builds and tests, manage git, edit prose. When in doubt, delegate.
+  review diffs, run builds and tests, edit prose. When in doubt, delegate.
   Why: only the `unreagent-*` agents get their skills force-loaded via `briefing.skills`;
   you get no briefing and would touch internals with too little context.
 
@@ -37,7 +37,7 @@ This rule depends on whether the Agent/Task tool is available to you.
   | Implement / refactor / debug Go code | `unreagent-worker` (default) |
   | Write/extend tests | `unreagent-test-writer` |
   | Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
-  | Pre-release audit | `unreagent-release-checker` |
+  | Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
   | README / example config / docs | `unreagent-doc-writer` |
 
 - **You cannot spawn subagents** (you ARE an `unreagent-*` agent): the delegation lock
@@ -46,10 +46,13 @@ This rule depends on whether the Agent/Task tool is available to you.
 Behavior-relevant = process lifecycle, MCP protocol and tools, config semantics,
 platform-guarded code, error handling, tests. Prose docs are not.
 
+**Only `unreagent-release-manager` commits.** A worker leaves a commit-ready tree and hands its card
+to `review`; you then dispatch `unreagent-release-manager` to cut the commit and close the card.
+
 ## Coordination — karr board (always in scope)
 
 Ticket coordination is the orchestrating agent's job, so `karr` is always in scope —
-don't invoke the `kanban-issues-karr-cli` skill first, just use it. State lives in
+don't invoke the `kanban-issues-karr-coordination` skill first, just use it. State lives in
 `refs/karr/*`.
 
 `karr list --compact` / `karr board` · `karr show ID` · `karr create "Title" --priority

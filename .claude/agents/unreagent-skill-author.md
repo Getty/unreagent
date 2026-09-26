@@ -7,7 +7,7 @@ briefing:
   skills:
     - unreagent-skill-authoring
     - unreagent-core
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
 ---
 
 You are the unreagent-skill-author for **unreagent**.

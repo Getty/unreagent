@@ -82,13 +82,13 @@ the principle and the lanes are in `.claude/rules/unreagent-rules.md`.
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
 | Write/extend tests | `unreagent-test-writer` |
 | Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
-| Pre-release audit | `unreagent-release-checker` |
+| Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
 | README / example config / docs | `unreagent-doc-writer` |
 
 The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the
 main agent delegates rather than loading them. Skill sources live under
 `.claude/skills/` — `unreagent-core`, `-mcp-tools`, `-config`, `-windows`,
-`-skill-authoring`, plus the shared `kanban-issues-karr-cli` and `git-commit-style`.
+`-skill-authoring`, plus the shared `kanban-issues-karr-coordination` and `git-commit-style`.
 
 Work is coordinated on the repo's own `karr` board (`karr board`).
 
