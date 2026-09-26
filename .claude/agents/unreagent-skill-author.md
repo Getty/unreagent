@@ -2,7 +2,6 @@
 name: unreagent-skill-author
 description: "Author and review the UE domain skills unreagent embeds and ships to agents (skills/<name>/SKILL.md, the `skills` MCP tool, materialization). Writes against the UE LLM Toolkit's C++ headers and tool registry — never against a guessed API. Use for adding, updating or auditing shipped skill documents and the subsystem that delivers them."
 model: inherit
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - unreagent-skill-authoring

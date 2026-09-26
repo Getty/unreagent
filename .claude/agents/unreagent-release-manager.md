@@ -2,7 +2,6 @@
 name: unreagent-release-manager
 description: "Owns unreagent's commits and release readiness — cuts commits from the worker's commit-ready tree, writes commit messages and Changes entries, moves karr cards to done. Release audit: unreagent before a release — version metadata consistency, vendored deps, clean cross-compiles, LFS binaries, signing hygiene, README currency, demo config integrity. Workers never commit; this agent does. Never pushes, tags or releases."
 model: sonnet
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - getty-git-commit-style

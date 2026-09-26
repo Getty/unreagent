@@ -2,7 +2,7 @@
 name: unreagent-doc-writer
 description: "Write and maintain unreagent's user-facing documentation — README.md, unreagent.example.yaml comments, docs/ specs and CLAUDE.md. Enforces the English-only rule for shipped artefacts. Use for documentation changes; not for code."
 model: sonnet
-allowed-tools: Read, Edit, Grep, Glob
+disallowedTools: Write, NotebookEdit, Bash
 briefing:
   skills:
     - unreagent-core

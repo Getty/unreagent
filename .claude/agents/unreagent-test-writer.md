@@ -2,7 +2,6 @@
 name: unreagent-test-writer
 description: "Write and extend Go tests for unreagent using the stdlib testing package — supervisor lifecycle, config loading and substitution, MCP handshake and tool dispatch. Never introduces a test framework and never fakes syscall to reach Windows-only code. Use for test additions, regression scaffolding and reproducing a reported bug as a failing test."
 model: sonnet
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - unreagent-core
