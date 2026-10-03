@@ -19,3 +19,6 @@ config.yml
 # keeps hand-written files like unreagent-helper.py out of the pattern
 unreagent-[0-9]*.py
 unreagent-[0-9]*.mjs
+
+# Claude Code worktrees (claude --worktree / isolated agents) -- never commit
+/.claude/worktrees/
