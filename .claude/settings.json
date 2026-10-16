@@ -2,6 +2,27 @@
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
     "caveman@caveman": true,
-    "briefing@briefing": true
+    "briefing@briefing": true,
+    "skilletor@getty": true
+  },
+  "extraKnownMarketplaces": {
+    "briefing": {
+      "source": {
+        "source": "github",
+        "repo": "Getty/briefing"
+      }
+    },
+    "caveman": {
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "getty": {
+      "source": {
+        "source": "github",
+        "repo": "Getty/marketplace"
+      }
+    }
   }
 }
