@@ -27,6 +27,25 @@ Dependency direction is strictly downward: `main` knows all three, the three kno
 nothing of each other and nothing of `main`. A supervisor that imports `mcp` is a
 design error, not a shortcut.
 
+## The wiring file
+
+`cmd/launcher/main.go` is ~1650 lines and carries the wiring: flag parsing,
+sub-command dispatch, tool registration, the bridge smoke tests and the agent
+lifecycle. Five shared helpers give it its shape — read them before changing
+anything nearby:
+
+| Helper | What it does |
+|---|---|
+| `getString(args, key, def)` | one string argument with a default |
+| `firstString(args, keys…)` | first present key out of several aliases |
+| `errResult(err)` | the MCP error result every handler returns |
+| `serviceAction(sup, name, fn)` | wraps a service call into a tool handler |
+| `scriptAction(sup, cmd, pre, dir, ext, label)` | wraps a one-shot command into a tool handler |
+
+The file only *looks* orthogonal to the three packages below it. A change that
+skips these helpers ends up with a second, subtly different way to do the same
+thing — that is how the wiring grew to 1650 lines in the first place.
+
 ## Non-negotiable invariants
 
 1. **Stdlib only.** The single external dependency is `gopkg.in/yaml.v3`. Anything
