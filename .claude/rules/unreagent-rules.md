@@ -1,8 +1,7 @@
 # unreagent House Rules
 
-Apply to every task in this repository unless explicitly overridden. Bias: caution over
-speed on non-trivial work. Subagents get their discipline from the skills force-loaded
-via `briefing.skills` — this file is for the orchestrating agent.
+Apply to every task here unless explicitly overridden. Bias: caution over speed on non-trivial work;
+subagents get their discipline from `briefing.skills` — this file is for the orchestrating agent.
 
 ## Engineering discipline
 
@@ -36,7 +35,7 @@ This rule depends on whether the Agent/Task tool is available to you.
   | Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
   | README / example config / docs | `unreagent-doc-writer` |
 
-- **You cannot spawn subagents** (you ARE an `unreagent-*` agent): the delegation lock
+- **You cannot spawn subagents** (you ARE a `unreagent-*` agent): the delegation lock
   does not apply to you — implement, refactor, debug and test per these rules.
 
 Behavior-relevant = process lifecycle, MCP protocol and tools, config semantics,
@@ -47,16 +46,13 @@ to `review`; you then dispatch `unreagent-release-manager` to cut the commit and
 
 ## Coordination — karr board (always in scope)
 
-Ticket coordination is the orchestrating agent's job, so `karr` is always in scope —
-don't invoke the `kanban-issues-karr-coordination` skill first, just use it.
-State lives in `refs/karr/*`.
+Ticket coordination is the orchestrating agent's job, so `karr` is always in scope — don't invoke
+the `kanban-issues-karr-coordination` skill first, just use it. State lives in `refs/karr/*`. `karr
+list --compact` / `karr board` · `karr show ID` · `karr create "Title" --priority high --tags a,b` ·
+`karr move ID in-progress --claim NAME` · `karr handoff ID --note "…"`
 
-`karr list --compact` / `karr board` · `karr show ID` · `karr create "Title" --priority
-high --tags a,b` · `karr move ID in-progress --claim NAME` · `karr handoff ID --note "…"`
-
-**Serialize board mutations when fanning out.** Keep implementation parallel, then loop
-the `karr move`/`handoff`/`sync` calls sequentially — N landing at once is a resource
-event, not a cheap command. No background poll loops on the board.
+**Serialize board mutations when fanning out.** Implementation may run in parallel, then loop `karr
+move`/`handoff`/`sync` sequentially — N at once is a resource event. No background poll loops.
 
 ## Release — never without permission
 
@@ -64,6 +60,12 @@ Builds and tests are fine anytime. **Pushing a `v*` tag IS the release** — it 
 `release.yml`, which builds, packages and publishes to GitHub. No dry run, no undo.
 `git tag`, `git push --tags` and `gh release create` are strictly forbidden without the
 maintainer's explicit go-ahead, even if a plan lists "release" as the next step.
+
+## Public issues — never act without instruction
+
+`karr` is the internal agent board. GitHub issues on `Getty/unreagent` are the **public tracker** —
+real people's reports under the maintainer's name. **Never act on one on your own initiative — not
+even to read it.** No listing, viewing, commenting, closing or creating unless told to handle one.
 
 ## Hazards — the locks stay here, the mechanisms live in the `unreagent-*` skills
 
@@ -82,7 +84,7 @@ maintainer's explicit go-ahead, even if a plan lists "release" as the next step.
 
 ## Language — English in everything that ships
 
-README, docs, comments, log lines, MCP tool descriptions, commit messages: German chat
-does not leak into repo artefacts. Older files still carry German comments — translate
-what you touch, don't launch a sweep. Commit conventions: skill `git-commit-style`;
-architecture and API details live in the `unreagent-*` skills — do not duplicate them here.
+README, docs, comments, log lines, MCP tool descriptions, commit messages: German chat must not
+leak into repo artefacts. Older files still carry German comments — translate what you touch,
+don't sweep. Commit conventions: `git-commit-style`; architecture lives in the `unreagent-*`
+skills — don't duplicate it here.
