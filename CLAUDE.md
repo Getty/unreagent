@@ -74,8 +74,9 @@ needed at build time. CI is in `.github/workflows/ci.yml` and
 
 ## Delegation
 
-Delegate behavior-relevant code to the right agent instead of touching it yourself —
-the principle and the lanes are in `.claude/rules/unreagent-rules.md`.
+Delegate behavior-relevant code to the right agent instead of touching it yourself — the
+principle is a shared house rule (skilletor bundle `getty-house@getty`); lanes and hazards are
+in `.claude/rules/unreagent-rules.md`.
 
 | Task | Agent |
 |---|---|

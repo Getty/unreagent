@@ -1,73 +1,36 @@
 # unreagent House Rules
 
-Apply to every task here unless explicitly overridden. Bias: caution over speed on non-trivial work;
-subagents get their discipline from `briefing.skills` — this file is for the orchestrating agent.
+The shared house rules come from skilletor — bundle `getty-house@getty`: engineering
+discipline, the delegation lock, the publish gate, karr coordination. They load as
+`.claude/rules/.local.*.md`; if they are missing, run `skilletor sync` and publish nothing
+until they load. This file adds what is true only here, and wins where it differs.
 
-## Engineering discipline
+## What this repo is
 
-1. **Think before coding** — State assumptions. When uncertain, ask rather than guess.
-   Push back when a simpler approach exists. Stop when confused; name what's unclear.
-2. **Simplicity first** — Minimum code that solves the problem. Nothing speculative.
-   Stdlib-only on purpose: a new dependency needs a real argument.
-3. **Surgical changes** — Touch only what you must. Don't "improve" adjacent code,
-   comments or formatting. Conformance to existing style beats taste.
-4. **Read before you write** — Read the callers and the shared helpers around the change.
-5. **Surface conflicts, don't average them** — Pick one, explain why, flag the other. Don't blend.
-6. **Tests verify intent** — A test that can't fail when the logic changes is wrong.
-   Reproduce a bug before fixing it; leave a regression test behind.
-7. **Fail loud** — "Done" is wrong if anything was skipped silently. "It compiles" is
-   not "it works", and here it is specifically not "it works on Windows".
+A single-binary launcher / orchestrator for Unreal Engine projects (Go, cross-compiled
+Linux → Windows): it supervises the UE editor and an agent and exposes an MCP server for
+them. Read first: the callers and the shared helpers around the change.
 
-## Delegation
+## Agent team
 
-This rule depends on whether the Agent/Task tool is available to you.
-
-- **You can spawn subagents** (orchestrating main agent): Do NOT touch behavior-relevant
-  code yourself — delegate to `unreagent-worker`. Your lane: coordinate, inspect, plan,
-  review diffs, run builds and tests, edit prose. When in doubt, delegate.
-  Why: only the `unreagent-*` agents are force-briefed; you get no briefing.
-
-  | Task | Agent |
-  |---|---|
-  | Implement / refactor / debug Go code | `unreagent-worker` (default) |
-  | Write/extend tests | `unreagent-test-writer` |
-  | Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
-  | Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
-  | README / example config / docs | `unreagent-doc-writer` |
-
-- **You cannot spawn subagents** (you ARE a `unreagent-*` agent): the delegation lock
-  does not apply to you — implement, refactor, debug and test per these rules.
+| Task | Agent |
+|---|---|
+| Implement / refactor / debug Go code | `unreagent-worker` (default) |
+| Write/extend tests | `unreagent-test-writer` |
+| Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
+| Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
+| README / example config / docs | `unreagent-doc-writer` |
+| Read-only research, audit, gap analysis | `unreagent-worker` ("read-only, change nothing") |
 
 Behavior-relevant = process lifecycle, MCP protocol and tools, config semantics,
 platform-guarded code, error handling, tests. Prose docs are not.
 
-**Only `unreagent-release-manager` commits.** A worker leaves a commit-ready tree and hands its card
-to `review`; you then dispatch `unreagent-release-manager` to cut the commit and close the card.
-
-## Coordination — karr board (always in scope)
-
-Ticket coordination is the orchestrating agent's job, so `karr` is always in scope — don't invoke
-the `kanban-issues-karr-coordination` skill first, just use it. State lives in `refs/karr/*`. `karr
-list --compact` / `karr board` · `karr show ID` · `karr create "Title" --priority high --tags a,b` ·
-`karr move ID in-progress --claim NAME` · `karr handoff ID --note "…"`
-
-**Serialize board mutations when fanning out.** Implementation may run in parallel, then loop `karr
-move`/`handoff`/`sync` sequentially — N at once is a resource event. No background poll loops.
-
-## Release — never without permission
+## Release
 
 Builds and tests are fine anytime. **Pushing a `v*` tag IS the release** — it triggers
 `release.yml`, which builds, packages and publishes to GitHub. No dry run, no undo.
-`git tag`, `git push --tags` and `gh release create` are strictly forbidden without the
-maintainer's explicit go-ahead, even if a plan lists "release" as the next step.
 
-## Public issues — never act without instruction
-
-`karr` is the internal agent board. GitHub issues on `Getty/unreagent` are the **public tracker** —
-real people's reports under the maintainer's name. **Never act on one on your own initiative — not
-even to read it.** No listing, viewing, commenting, closing or creating unless told to handle one.
-
-## Hazards — the locks stay here, the mechanisms live in the `unreagent-*` skills
+## Hazards
 
 - A green Linux build says nothing about the product — the artefact is a Windows `.exe`.
   Run `make windows` as well and label Windows-path changes unverified, not tested.
@@ -79,12 +42,11 @@ even to read it.** No listing, viewing, commenting, closing or creating unless t
   local file replaces the base one. Say so whenever you document a list-valued option.
 - CGO breaks the cross-compile (`CGO_ENABLED=0` in CI) — Win32 goes through
   `syscall.NewLazyDLL`, never cgo.
-- `vendor/` is committed and the build is offline — never `go get` mid-task; a new
-  dependency is a decision and has to be vendored.
+- Stdlib-only on purpose, and `vendor/` is committed with an offline build — never `go get`
+  mid-task; a new dependency needs a real argument and has to be vendored.
 
 ## Language — English in everything that ships
 
 README, docs, comments, log lines, MCP tool descriptions, commit messages: German chat must not
 leak into repo artefacts. Older files still carry German comments — translate what you touch,
-don't sweep. Commit conventions: `git-commit-style`; architecture lives in the `unreagent-*`
-skills — don't duplicate it here.
+don't sweep. Architecture lives in the `unreagent-*` skills — reference, don't restate.
