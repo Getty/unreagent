@@ -89,7 +89,8 @@ in `.claude/rules/unreagent-rules.md`.
 The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the
 main agent delegates rather than loading them. Skill sources live under
 `.claude/skills/` — `unreagent-core`, `-mcp-tools`, `-config`, `-windows`,
-`-skill-authoring`, plus the shared `kanban-issues-karr-coordination` and `git-commit-style`.
+`-skill-authoring`; skilletor installs the shared `kanban-issues-karr-coordination`
+and `getty-git-commit-style` next to them.
 
 Work is coordinated on the repo's own `karr` board (`karr board`).
 
