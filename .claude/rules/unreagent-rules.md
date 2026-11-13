@@ -38,8 +38,9 @@ Builds and tests are fine anytime. **Pushing a `v*` tag IS the release** — it 
   the scheduler. Do not reintroduce the bug already fixed in `22f8ca6`.
 - Job Objects with `KILL_ON_JOB_CLOSE` are the no-zombie guarantee — never drop the job
   assignment as "cleanup".
-- `unreagent.local.yaml` overlays by YAML decode, not deep merge: a list or map in the
-  local file replaces the base one. Say so whenever you document a list-valued option.
+- `unreagent.local.yaml` overlays by YAML decode, not deep merge: a list replaces the base
+  list, a map merges by key (each given entry replaced whole) — pinned by
+  `internal/config/overlay_test.go`. Say so whenever you document a list- or map-valued option.
 - CGO breaks the cross-compile (`CGO_ENABLED=0` in CI) — Win32 goes through
   `syscall.NewLazyDLL`, never cgo.
 - Stdlib-only on purpose, and `vendor/` is committed with an offline build — never `go get`
