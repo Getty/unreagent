@@ -1,0 +1,27 @@
+---
+class: standard
+created: 2026-08-21T22:12:54Z
+id: 1
+priority: high
+status: backlog
+tags:
+- skills
+- mcp
+- epic
+title: 'Epic: Skill subsystem -- embed, serve, materialize'
+updated: 2026-11-13T04:22:13Z
+---
+
+One source, two delivery paths: skills/<name>/SKILL.md is embedded into the .exe and served either through the generated 'skills' MCP tool (default) or materialized into <Project>/.claude/skills/unreagent-<name>/.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 3, 5 and 6.
+
+Children:
+- #9  internal/skills: embed, parse, Load, DescribeAll
+- #10 config: skills: section + --no-skills-mcp override
+- #11 MCP tool: skills
+- #12 Materialization
+
+Container ticket -- do not claim it. Children move backlog -> todo as their dependencies close.
+
+UE 5.8 (June 2026) ships native agent skills: Unreal MCP discovers SKILL.md folders in <Project>/Skills/, <Plugin>/Skills/ and Engine/Extras/AgentTools/Skills/ and serves them via AgentSkillToolset.GetSkills. Consider materializing unreagent skills into <Project>/Skills/ so any Unreal MCP client sees them, and check the Class A (toolkit) skills against Epic built-in toolsets. Source: dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor
