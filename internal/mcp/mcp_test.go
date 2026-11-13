@@ -858,6 +858,53 @@ func TestToolPanicBecomesToolError(t *testing.T) {
 	}
 }
 
+// TestToolPanicNilBecomesToolError pins the panic(nil) contract. Since go 1.21
+// (GODEBUG panicnil=0, the default once go.mod says go >= 1.21) panic(nil)
+// surfaces as a *runtime.PanicNilError, so recover() is non-nil and the call
+// is a tool error. With panicnil=1 recover() returns nil, the panic is
+// swallowed and the call would wrongly report success.
+func TestToolPanicNilBecomesToolError(t *testing.T) {
+	sink := &logSink{}
+	s := NewServer("unreagent-test", "0.0.0", sink.log)
+	s.AddTool(Tool{Name: "nilpanic", Handler: func(map[string]interface{}) ToolResult {
+		panic(nil)
+	}})
+
+	w := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nilpanic"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a panic must not become a transport error", w.Code)
+	}
+	obj := object(t, w.Body.Bytes())
+	if got := errorCode(t, obj); got != 0 {
+		t.Fatalf("error code = %d, want a tool result", got)
+	}
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(obj["result"], &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("isError = false, content = %+v: panic(nil) was swallowed and reported as success (GODEBUG=panicnil=1?)", result.Content)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content = %+v, want exactly one text item", result.Content)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, `"nilpanic"`) || !strings.Contains(text, "panicked") {
+		t.Fatalf("text = %q, want it to name the tool and the panic", text)
+	}
+	if !strings.Contains(text, "panic called with nil argument") {
+		t.Fatalf("text = %q, want the PanicNilError message", text)
+	}
+	if !strings.Contains(sink.joined(), "panicked") {
+		t.Fatalf("panic not logged: %q", sink.joined())
+	}
+}
+
 // TestHandlerRunsWithoutLock pins the invariant that the read lock is released
 // before the tool handler runs: a handler registering a tool would otherwise
 // deadlock against its own server.

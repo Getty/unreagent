@@ -37,7 +37,7 @@ artefacts. Translate before committing.
 
 ## Build & dev
 
-Primary target is a Windows `.exe` cross-compiled from Linux. Go ≥ 1.19.
+Primary target is a Windows `.exe` cross-compiled from Linux. Go ≥ 1.26.
 
 ```bash
 make windows       # → dist/unreagent.exe

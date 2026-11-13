@@ -87,8 +87,8 @@ The same config can additionally be written to a file for **external clients**
 
 ## Building
 
-Requirement: Go (>= 1.19). Dependencies are vendored (`vendor/`); builds run
-offline.
+Requirement: Go (>= 1.26). Dependencies are vendored (`vendor/`); builds run
+offline. (An older Go would first try to download a 1.26 toolchain.)
 
 Binary assets (the icon and `cmd/launcher/resource_windows_amd64.syso`) live
 in **Git LFS**. Run `git lfs install` once, then clone / pull with LFS
