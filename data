@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-13T19:33:01Z
+created: 2026-11-13T05:11:44Z
+id: 90
+priority: low
+started: 2026-11-13T19:30:12Z
+status: done
+tags:
+- release
+- docs
+title: Add a Changes file (CPAN format) built from the released tags
+updated: 2026-11-13T19:33:14Z
+---
+
+getty-git-commit-style requires every repo that cuts releases to keep a Changes file with a {{$NEXT}} section; unreagent has v* releases (up to 0.0.9) but no Changes file, and release.yml uses --generate-notes. Build it from the tags and history (version lines timed from the tagged commits), then add entries for what is on main since 0.0.9: engine detection via EngineAssociation (k84), Go 1.27 toolchain + LFS pointer check (k85), Unreal MCP docs (k86).
+
+Committed in bf6793d (Changes); 0.0.9 stamped in b4107a8
