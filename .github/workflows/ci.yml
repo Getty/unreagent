@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          go-version: "1.27.x" # latest patch; move to the next minor before this one leaves support
           cache: false # dependencies are vendored, the build never fetches modules
 
       - name: gofmt
