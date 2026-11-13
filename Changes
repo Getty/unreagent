@@ -1,0 +1,74 @@
+Revision history for unreagent
+
+{{$NEXT}}
+  - ${ENGINE} is detected from the EngineAssociation in the .uproject:
+    Launcher versions and source-build ids resolve, every registered Launcher
+    install counts, and versions compare numerically (5.10 beats 5.9).
+  - Permission layer: Bash rules match per shell segment (chains, grouping,
+    substitution, nested shells); deny fires on any segment, allow only when
+    every segment is covered. Deny sees through quoting and sudo/env/eval.
+  - Non-Bash rules such as Read(...) or WebFetch(...) match the tool's path,
+    pattern, url or query input, with normalised paths; a rule without an
+    evaluable input fails closed.
+  - The permission layer is enforced in headless mode only. On Windows the
+    shell tool is PowerShell, so rules are written PowerShell(...).
+  - MCP server hardening: foreign Origins get 403, POSTs need Content-Type
+    application/json, bodies are size-limited, timeouts are set, and a
+    panicking tool (even panic(nil)) becomes a tool error.
+  - JSON-RPC handling follows the spec: "id": null is a request, batches are
+    validated per element, bad framing answers -32600, initialize negotiates
+    protocolVersion, and the Bearer scheme is case-insensitive.
+  - write_file and edit_file reject a missing content or new_string argument
+    (and edit_file an empty path) instead of truncating the file or deleting
+    every match; read_file declares path required.
+  - run_python and run_node run scripts inside the runtime's project
+    directory, so imports resolve against the project; scripts left by a hard
+    kill are swept at startup.
+  - status lists a service with a stuck control loop as "unresponsive" instead
+    of omitting it, and queries all services concurrently.
+  - Process output is no longer lost: lines over 1 MiB are split instead of
+    stalling the child, and a crashing process's last lines reach the log.
+    run_command keeps only the head and tail of very large outputs.
+  - A failed start (e.g. agent.command not on PATH) is reported as an exit
+    instead of leaving a dead console; a failing Job Object setup is logged
+    and the process runs unsupervised instead of crashing the launcher.
+  - The taskbar flash feature (flash_task tool, "unreagent flash" sub-command,
+    Stop hook) is removed; it never worked reliably.
+  - Tool descriptions, log lines and error messages are English throughout.
+  - make windows stops with a clear error when the .syso resource is an
+    unfetched Git LFS pointer.
+  - Building needs Go 1.26 or newer (the go directive was 1.19); CI and the
+    release build use Go 1.27 and run the test suite before building.
+  - README documents Unreal MCP (UE 5.8+, HTTP :8000) next to the UE LLM
+    Toolkit, the refreshed requirements, MCP hardening, the Git LFS build
+    note and a new architecture graphic; it links the unreagent-example
+    project.
+  - local.yaml overlays by YAML decode, not deep merge: a list replaces the
+    base list, a map merges by key with each given entry replaced whole.
+
+0.0.8     2026-06-12 05:42:04Z
+  - Hermes Agent support: "unreagent hermes-setup" sub-command and the
+    agent.hermes.* settings; see the README section on Hermes Agent.
+  - Optional bearer authentication on the MCP server via mcp.token.
+
+0.0.7     2026-06-12 03:15:56Z
+  - Windows taskbar flash at the end of an agent turn: flash_task MCP tool and
+    "unreagent flash" sub-command, with a Stop hook attached to Claude Code
+    when agent.claudeIntegration is on.
+  - Windows metadata: publisher and version in the .exe resource, asInvoker
+    manifest, new icon; self-signed code-signing certificate with an import
+    script.
+  - Agent runs in its own window by default, inherits the real console in
+    interactive mode, handles /quit without hanging the launcher and does not
+    restart-loop on a missing program; agent.env sets extra variables.
+  - MCP bridges (initialize handshake, in-editor plugin port) are checked
+    before the agent starts; MCP config can be written as .mcp.json or for
+    VS Code.
+  - UE crash dialog and recovery prompt are handled unattended.
+  - Flags -no-agent and -files; file tools read_file, write_file, list_dir
+    and edit_file over MCP.
+  - First release: launcher supervising the UE editor and an agent (Job
+    Objects, restart policy, ring-buffer logs), MCP server with status, logs,
+    ue_start/ue_stop/ue_restart, run_command, run_python, run_node and the
+    approve permission tool, YAML config with ${ENGINE}/${PROJECT}
+    placeholders and a local overlay, runnable ping demo.
