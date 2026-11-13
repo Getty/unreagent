@@ -20,10 +20,16 @@ placeholder system exists.
    executable (`findConfig`).
 2. Decode `unreagent.yaml`.
 3. If `unreagent.local.yaml` exists, decode it **into the same struct**. This is
-   a YAML-decode overlay, not a deep merge: a scalar wins, an absent key leaves
-   the base value alone, and a provided list or map **replaces** the base one
-   wholesale. Users expecting to append one item to `agent.args` will instead
-   replace the list — remember this when documenting a new list-valued field.
+   a YAML-decode overlay with yaml.v3 semantics, not a deep merge (pinned by
+   `internal/config/overlay_test.go`): a scalar wins; an absent key leaves the
+   base value alone; a nested struct (`unreal:`, `agent.hermes:` …) is decoded
+   field by field, so only the fields given change; a list **replaces** the
+   base list; a map **merges by key**: base-only keys survive, and each key
+   the local file gives replaces that entry's value whole, even when the value
+   is a map or struct (`commands.hello: {command: x}` drops the base entry's
+   `args` and `description`). So `{}` cannot clear a base map; `~` (null) can.
+   Users expecting to append one item to `agent.args` will instead replace the
+   list — remember this when documenting a new list- or map-valued field.
 4. `applyDefaults()` — fills empty values. Note that the zero value is
    indistinguishable from "not set" for plain `bool` and `int`; fields whose
    default is `true` are therefore `*bool` (`Unattended`, `KillCrashReporter`,
