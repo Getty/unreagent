@@ -13,7 +13,9 @@
 //	${PROJECT_NAME}  – file name of the .uproject without the extension
 //
 // Engine resolution (priority): env UE_ROOT → engineRoot (usually local.yaml) →
-// auto-detection of the standard Epic installation paths.
+// the engine named by the .uproject's EngineAssociation → the highest version
+// installed (Epic Launcher registry entries and standard installation paths,
+// compared numerically). See engine.go.
 package config
 
 import (
@@ -21,9 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -251,8 +251,9 @@ func Load(explicitPath string) (*Config, Info, error) {
 
 	c.applyDefaults()
 
-	engine := resolveEngine(&c)
+	// Project first: engine auto-detection reads its EngineAssociation.
 	project, projectDir, projectName := resolveProject(&c, baseDir)
+	engine := resolveEngine(&c, project)
 	info.EngineRoot = engine
 	info.Project = project
 	info.ProjectName = projectName
@@ -446,75 +447,16 @@ func validRestart(p string) error {
 
 // --- resolution ---
 
-// resolveEngine determines the UE installation root.
-func resolveEngine(c *Config) string {
+// resolveEngine determines the UE installation root; project (the resolved
+// .uproject path, may be empty) feeds auto-detection its EngineAssociation.
+func resolveEngine(c *Config, project string) string {
 	if v := strings.TrimSpace(os.Getenv("UE_ROOT")); v != "" {
 		return filepath.ToSlash(v)
 	}
 	if c.EngineRoot != "" {
 		return filepath.ToSlash(c.EngineRoot)
 	}
-	return autodetectEngine()
-}
-
-// autodetectEngine looks for the UE installation: first in the Windows registry
-// (Epic Launcher installs), then in the standard installation paths. It takes
-// the highest version that has an UnrealEditor executable.
-func autodetectEngine() string {
-	if dir := registryEngine(); dir != "" {
-		return dir
-	}
-	patterns := []string{
-		`C:/Program Files/Epic Games/UE_*`,
-		`D:/Program Files/Epic Games/UE_*`,
-		`E:/Program Files/Epic Games/UE_*`,
-		`C:/Epic Games/UE_*`,
-		`D:/Epic Games/UE_*`,
-	}
-	var candidates []string
-	for _, p := range patterns {
-		// filepath.Glob uses the OS separator (\ on Windows) — forward-slash
-		// patterns would not match there, hence FromSlash.
-		matches, _ := filepath.Glob(filepath.FromSlash(p))
-		candidates = append(candidates, matches...)
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(candidates))) // highest version first
-	for _, dir := range candidates {
-		if fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe")) {
-			return filepath.ToSlash(dir)
-		}
-	}
-	return ""
-}
-
-// registryEngine reads the UE installation path from the Windows registry
-// (HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>\InstalledDirectory).
-func registryEngine() string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	for _, ver := range []string{"5.7", "5.6", "5.5", "5.4"} {
-		out, err := exec.Command("reg", "query",
-			`HKLM\SOFTWARE\EpicGames\Unreal Engine\`+ver, "/v", "InstalledDirectory").Output()
-		if err != nil {
-			continue
-		}
-		dir := parseRegSZ(string(out))
-		if dir != "" && fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe")) {
-			return filepath.ToSlash(dir)
-		}
-	}
-	return ""
-}
-
-// parseRegSZ extracts the value behind "REG_SZ" from a `reg query` output.
-func parseRegSZ(out string) string {
-	for _, line := range strings.Split(out, "\n") {
-		if i := strings.Index(line, "REG_SZ"); i >= 0 {
-			return strings.TrimSpace(line[i+len("REG_SZ"):])
-		}
-	}
-	return ""
+	return autodetectEngine(project)
 }
 
 // resolveProject determines the .uproject (set explicitly or auto-detected in

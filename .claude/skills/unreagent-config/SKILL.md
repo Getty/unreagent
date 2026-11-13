@@ -37,7 +37,7 @@ placeholder system exists.
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → autodetect (registry, Epic default paths) |
+| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the `.uproject`'s `EngineAssociation` (version → Launcher registry / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds) → highest installed version, compared numerically (Launcher registry + Epic default paths); see `internal/config/engine.go` |
 | `${PROJECT}` | full path to the `.uproject` (autodetected next to the config) |
 | `${PROJECT_DIR}` | its directory |
 | `${PROJECT_NAME}` | its filename without extension |
