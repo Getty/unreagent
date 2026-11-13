@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-11-13T04:21:45Z
+id: 88
+priority: low
+status: backlog
+tags:
+- config
+title: Warn when the .uproject EngineAssociation names an engine that is not installed
+updated: 2026-11-13T04:21:45Z
+---
+
+After k84, autodetection falls back to the highest installed version silently when the association (e.g. "5.7") is not found, so the editor may open the project in a newer engine and prompt for conversion. The config package has no warning channel; needs a field on config.Info plus one log line in cmd/launcher/main.go.
