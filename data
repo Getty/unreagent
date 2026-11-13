@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-11-13T05:26:41Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-13T05:26:41Z
+created: 2026-11-13T04:21:59Z
+id: 89
+priority: low
+started: 2026-11-13T05:14:56Z
+status: done
+tags:
+- build
+- security
+title: go.mod go 1.19 keeps pre-1.21 GODEBUG defaults for the MCP HTTP server
+updated: 2026-11-13T05:26:41Z
+---
+
+Found during k85: even built with Go 1.27, the go 1.19 directive pins compatibility GODEBUG settings (httpmuxgo121=1, httplaxcontentlength=1, urlmaxqueryparams=0, httpcookiemaxnum=0, ...), so some net/http hardening stays off. Fix: raise the go directive (changes the documented minimum Go >= 1.19 in README/CLAUDE.md, and loop-variable semantics) or set //go:debug overrides. Maintainer decision.
+
+Maintainer decided 2026-11-13: do it. Target: go 1.26 (my choice: latest the local 1.26.6 toolchain satisfies, so offline builds need no toolchain download; CI/release run 1.27.x).
+
+2026-11-13 05:16 Started. Baseline DefaultGODEBUG (go1.26.6 local, go 1.19 directive) captured; go1.27.4 baseline also captured (it drops asynctimerchan/tls10server/tls3des/tlsrsakex/gotypesalias/x509keypairleaf, which 1.27 no longer honours). Next: go mod edit -go=1.26, offline vendor check, loopvar/mux/panicnil review.
+
+2026-11-13 05:23 Checked: (1) loopvar via compiler -gcflags=<module>/...=-d=loopvar=2, linux+windows, incl. tests: 0 production loops affected; 21 test loops (t.Run closures over tc/method, no t.Parallel) are stack-allocated and behave identically. Vendored yaml.v3 keeps its own (old) language version. (2) ServeMux: only mux.Handle("/mcp") and ("/"), both the same srv handler, and srv.ServeHTTP never reads the path. Probe old vs new: only change is the clean-path redirect (//mcp, /a/../mcp) 301 -> 307, which keeps POST instead of turning it into GET. (3) panicnil: the single recover() in mcp.callTool compares rec != nil; probe via go test -overlay shows a panic(nil) tool was reported as SUCCESS with empty text under panicnil=1, now isError=true 'panic called with nil argument'. Fix, not break. (4) httpservecontentkeepheaders: no ServeContent/ServeFile/FileServer in the code, no effect. httplaxcontentlength=0: empty Content-Length now 400 (smoke-tested). No TLS/HTTP client code, so the tls*/x509* flips have no code path. Timers: one NewTimer+defer Stop+select, no drain/Reset idiom. winsymlink/winreadlinkvolume: no Lstat/EvalSymlinks/Readlink in production code; list_dir IsDir() is false for a junction under both semantics.
+
+2026-11-13 05:24 Also found (for k49, not done here): resolve() is still lexical, so the winsymlink flip does not touch it. But if k49 is fixed with filepath.EvalSymlinks: under go >= 1.23 semantics (now on, winsymlink=1) EvalSymlinks no longer evaluates Windows mount points/junctions, so an EvalSymlinks-only fix would miss a junction escape on Windows. Suggest adding that to k49. Also: a regression test pinning panic(nil) -> tool error in internal/mcp would be worth a test-writer task.
+
+2026-11-13 05:24 Done: go.mod 'go 1.19' -> 'go 1.26' (go mod edit -go=1.26), no toolchain line, vendor/modules.txt unchanged (vendor consistency check passes; offline regen impossible, yaml.v3 not in mod cache, and not needed). DefaultGODEBUG ./cmd/launcher: before = 31 pinned settings incl. httpmuxgo121=1, httplaxcontentlength=1, panicnil=1; after = empty under go1.26.6; under go1.27.4 = tracebacklabels=0,x509sslcertoverrideplatform=0 (1.27-only changes, pinned to 1.26 by design). No code changes needed. Verified offline (GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off): gofmt -l cmd internal clean, make fmt vet, GOOS=windows go vet, go test ./... -count=1 and -race all ok on go1.26.6 and go1.27.4; CI build commands (incl. CGO_ENABLED=0 windows) ok on 1.27.4; make windows linux ok with the real LFS .syso. Linux smoke of the MCP server with the demo config: initialize, tools/list, 307 on //mcp, 405 GET, 400 empty Content-Length. Windows runtime behaviour NOT run (Linux box): compile/vet only. Docs 'Go >= 1.19' lines left for the dispatcher.
+
+Committed as 1db7089 (go directive 1.26, docs, panic(nil) regression test).
