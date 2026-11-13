@@ -1,6 +1,8 @@
 Revision history for unreagent
 
 {{$NEXT}}
+
+0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
     Launcher versions and source-build ids resolve, every registered Launcher
     install counts, and versions compare numerically (5.10 beats 5.9).
