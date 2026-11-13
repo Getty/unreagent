@@ -24,8 +24,10 @@ and the MCP server on Windows in 30 seconds.
 
 ## Switching to "real"
 
-1. Install Claude Code (e.g. `npm install -g @anthropic-ai/claude-code`) so
-   that `claude` is on the PATH.
+1. Install Claude Code with the native installer (Windows PowerShell:
+   `irm https://claude.ai/install.ps1 | iex`; see the
+   [setup docs](https://code.claude.com/docs/en/setup) — the npm install is
+   deprecated) so that `claude` is on the PATH.
 2. In `unreagent.yaml`:
    ```yaml
    agent: { enabled: true, command: claude, claudeIntegration: true }

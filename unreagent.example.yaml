@@ -7,7 +7,11 @@
 #
 #  NO machine-specific paths here! They are resolved automatically and
 #  substituted via placeholders:
-#    ${ENGINE}        UE installation root (env UE_ROOT / auto-detected)
+#    ${ENGINE}        UE installation root. Resolved in this order: env UE_ROOT,
+#                     engineRoot (usually in local.yaml), the .uproject's
+#                     EngineAssociation (Launcher version or a registered
+#                     source build), then the highest installed version found
+#                     via the registry / Epic default paths
 #    ${PROJECT}       full path to the .uproject (auto-detected alongside)
 #    ${PROJECT_DIR}   directory containing the .uproject
 #    ${PROJECT_NAME}  name of the .uproject without extension
@@ -99,6 +103,19 @@ mcp:
   #     args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
   #     env:
   #       UNREAL_MCP_URL: "http://127.0.0.1:3000"
+  #   # Unreal MCP, built into UE 5.8+ (experimental; enable the "Unreal MCP" and
+  #   # "All Toolsets" plugins). Plain HTTP, no Node bridge. Default port 8000 —
+  #   # if you change it (Editor Preferences, or -ModelContextProtocolPort in
+  #   # unreal.args), change the URL too. HTTP entries get NO launcher checks
+  #   # (those run only for stdio entries); if Claude Code reports the server
+  #   # as failed because the editor was not up yet, reconnect with /mcp.
+  #   # Can run next to the Toolkit above.
+  #   unreal-mcp:
+  #     type: http
+  #     url: "http://127.0.0.1:8000/mcp"
+  # NOTE: extraServers is a map keyed by server name — unreagent.local.yaml adds
+  # servers and replaces a same-named server's whole definition; the other
+  # servers defined here stay. (Lists, e.g. unreal.args, are replaced as a whole.)
   # Also write the MCP config as file(s) (for external clients like
   # your own Claude session, Cursor, VS Code). Also via flag: -write-mcp-config
   # writeConfig:
@@ -121,6 +138,8 @@ mcp:
 # ${ENGINE} + ${PROJECT}. Only override when needed:
 #
 # unreal:
+#   # args REPLACES the default ["-stdout", "-FullStdOutLogOutput"] (the .uproject
+#   # is always prepended) — give the full list. A list in local.yaml replaces it too.
 #   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
 #   restart: on-failure
 #   maxRestarts: 5
@@ -140,5 +159,5 @@ mcp:
 #
 #    engineRoot: "D:/UE/UE_5.7"        # if auto-detect fails
 #    agent:
-#      command: "C:/Users/me/AppData/Roaming/npm/claude.cmd"  # claude not in PATH
+#      command: "C:/Path/To/claude.exe"  # claude not in PATH
 # ============================================================

@@ -20,6 +20,18 @@ servers running: [unreagent-example](https://github.com/Getty/unreagent-example)
 
 ## Architecture
 
+<p align="center">
+  <img src="assets/editor-mcp-flow.png" alt="Architecture: unreagent.exe contains the supervisor (UE and agent in Job Objects, restart policy, ring-buffer logs) and the MCP server on HTTP :8765. The supervisor starts UnrealEditor.exe, which hosts an in-editor MCP plugin (for example UE LLM Toolkit, HTTP :3000). Claude Code reaches the in-editor plugin through a Node stdio bridge and the unreagent MCP server directly, both wired via --mcp-config." width="800">
+</p>
+
+The graphic shows the UE LLM Toolkit path (Node bridge). Since UE 5.8 the
+editor's built-in Unreal MCP can take the place of the plugin and the bridge:
+the agent then talks to it directly over HTTP — see
+[In-editor MCP](#in-editor-mcp-unreal-mcp-or-ue-llm-toolkit-windows).
+
+<details>
+<summary>Text version of the diagram (for terminals and the release archive)</summary>
+
 ```
 +----------------------- unreagent.exe -----------------------+
 |  Supervisor                 MCP server (HTTP :8765)        |
@@ -42,13 +54,19 @@ servers running: [unreagent-example](https://github.com/Getty/unreagent-example)
 +------------------------------------------------------------+
 ```
 
+</details>
+
 Two MCP servers serve the agent:
 
 - **unreagent-MCP** (this launcher, HTTP) — *process* layer: start / stop /
   restart the editor, compile, logs, run_python / run_node, permissions.
-- **In-editor MCP** (e.g. [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit),
-  running *inside* the engine) — *content* layer: blueprints, assets, levels,
-  UE Python. Setup: [In-editor MCP setup](#in-editor-mcp-ue-llm-toolkit-setup-windows).
+- **In-editor MCP** (running *inside* the engine) — *content* layer:
+  blueprints, assets, levels, UE Python. Two options:
+  [Unreal MCP](https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor)
+  (built into UE 5.8+, experimental, plain HTTP, no bridge) or the
+  [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit) plugin
+  (Node stdio bridge). Both can run side by side. Setup:
+  [In-editor MCP](#in-editor-mcp-unreal-mcp-or-ue-llm-toolkit-windows).
 
 The launcher hands the agent both via `--mcp-config` (`mcp.extraServers` in
 the config), so the agent does not have to wire anything up itself. Stdio
@@ -57,7 +75,9 @@ loudly, instead of letting the agent run into a meaningless `-32000`
 connect error: binary on PATH? bridge script present? `node_modules` there
 (or run `npm install`)? does the bridge answer a real `initialize` handshake
 (smoke test)? And once the in-editor server (`UNREAL_MCP_URL`) is reachable,
-that's logged too — or a warning with the usual suspects if it isn't.
+that's logged too — or a warning with the usual suspects if it isn't. These
+checks run only for stdio entries (those with a `command`); an HTTP entry such
+as Unreal MCP is passed through unchecked.
 
 The same config can additionally be written to a file for **external clients**
 (your own Claude session, Cursor, VS Code). Via `mcp.writeConfig` (a list of
@@ -69,6 +89,11 @@ The same config can additionally be written to a file for **external clients**
 
 Requirement: Go (>= 1.19). Dependencies are vendored (`vendor/`); builds run
 offline.
+
+Binary assets (the icon and `cmd/launcher/resource_windows_amd64.syso`) live
+in **Git LFS**. Run `git lfs install` once, then clone / pull with LFS
+enabled. Without it the `.syso` is just a small pointer file and the Windows
+build fails.
 
 ```bash
 make windows   # -> dist/unreagent.exe  (cross-compile from Linux)
@@ -162,7 +187,7 @@ mcp:         { enabled: true }
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> auto-detect of the Epic default paths |
+| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> the `.uproject`'s `EngineAssociation` (Launcher version, or a registered source build) -> the highest installed version found via the registry / Epic default paths |
 | `${PROJECT}` / `${PROJECT_DIR}` / `${PROJECT_NAME}` | `.uproject` next to the config (auto-detect) |
 
 Machine-specific overrides go in a **git-ignored `unreagent.local.yaml`**,
@@ -170,7 +195,7 @@ which is overlaid on top of `unreagent.yaml`:
 
 ```yaml
 # unreagent.local.yaml  (DO NOT commit)
-engineRoot: "D:/UE/UE_5.7"                 # if auto-detect fails
+engineRoot: "D:/UE/UE_5.7"                 # if auto-detect fails (path is an example)
 agent: { command: "C:/.../claude.cmd" }    # if claude is not on PATH
 ```
 
@@ -199,24 +224,99 @@ Without a TTY (headless `-p`), it shuts down cleanly instead. Alternatives:
 `onExit: shutdown` (always shut everything down immediately) or `onExit: leave`
 (everything keeps running, warning only — manual Ctrl-C required).
 
-## In-editor MCP: UE LLM Toolkit setup (Windows)
+## In-editor MCP: Unreal MCP or UE LLM Toolkit (Windows)
 
 For the agent to work **inside the editor** (blueprints, assets, levels, UE
-Python), the UE project needs the in-editor plugin. The short version:
-**drop the plugin into the `Plugins/` folder — done.** No `.uproject` patching,
-no enabling in the plugin browser.
+Python), the editor needs an in-editor MCP server. Two options, which can also
+run side by side (Toolkit on `:3000`, Unreal MCP on `:8000`):
+
+| | Unreal MCP (built in) | UE LLM Toolkit (plugin) |
+|---|---|---|
+| Engine | UE 5.8 or newer | UE 5.7 (the reference project) |
+| Status | experimental (Epic) | third-party plugin |
+| Transport | Streamable HTTP / SSE, `http://127.0.0.1:8000/mcp` | HTTP `:3000` behind a Node stdio bridge |
+| Needs | nothing to install | plugin in `Plugins/`, Visual Studio build once, Node.js |
+
+The short version for the Toolkit: **drop the plugin into the `Plugins/`
+folder — done.** No `.uproject` patching, no enabling in the plugin browser.
+For Unreal MCP: enable two plugins and add one `extraServers` entry.
 
 ### What the machine must have
 
 | Component | What for | Note |
 |---|---|---|
-| Unreal Engine 5.7 | the editor itself | auto-detect via registry / default paths; otherwise `engineRoot` in `unreagent.local.yaml` |
-| Visual Studio 2022 ("Game development with C++" workload) | **once** to build the plugin | the plugin ships as C++ source; UE asks "rebuild?" on first start |
-| Node.js >= 18 | the plugin's stdio bridge | `npm install` for the bridge is done by the launcher automatically |
-| Claude Code | the agent | `claude` on PATH; otherwise `agent.command` in local.yaml |
+| Unreal Engine 5.7 or newer | the editor itself | auto-detect (see the `${ENGINE}` row above); otherwise `engineRoot` in `unreagent.local.yaml`. The reference project ([unreagent-example](https://github.com/Getty/unreagent-example)) runs on 5.7; Unreal MCP needs 5.8+. unreagent itself has not been tested against 5.8 |
+| Visual Studio 2022 17.14+ or Visual Studio 2026 18.0+ ("Game development with C++" workload) | **only for the Toolkit**: builds the plugin once | UE 5.8 lists VS 2022 17.14+ and VS 2026 18.0+ (2026 recommended); the plugin ships as C++ source, UE asks "rebuild?" on first start. Not needed for Unreal MCP |
+| Node.js >= 18 | the Toolkit's stdio bridge, and `run_node` | `npm install` for the bridge is done by the launcher automatically. Not needed for Unreal MCP |
+| Claude Code | the agent | `claude` on PATH; otherwise `agent.command` in local.yaml. Install: [setup docs](https://code.claude.com/docs/en/setup) (native installer; on Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`) |
 | `unreagent.exe` + `unreagent.yaml` | this launcher | see [Setup](#setup) |
 
-### Steps
+### Option A: Unreal MCP (UE 5.8+, built in, experimental)
+
+Source: [Unreal MCP in Unreal Editor](https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor).
+No Node bridge, no Visual Studio build, no plugin download.
+
+1. **Enable the plugins** (Edit -> Plugins): "Unreal MCP" (identifier
+   `ModelContextProtocol`, enabled by default) and "All Toolsets". Both depend
+   on "Toolset Registry", which is enabled automatically. Restart the editor.
+2. **Server defaults** — "Auto Start Server" is on by default and binds
+   `http://127.0.0.1:8000/mcp`. Port and path live in Editor Preferences ->
+   Agentic Workflows -> Model Context Protocol. On the command line
+   `-ModelContextProtocolPort=<port>` overrides the port and
+   `-ModelContextProtocolStartServer` forces the server to start.
+3. **Wire it into unreagent** — `mcp.extraServers` entries are passed through
+   to the agent in `.mcp.json` format, so an HTTP entry works as is:
+
+   ```yaml
+   mcp:
+     enabled: true
+     extraServers:
+       unreal-mcp:
+         type: http
+         url: "http://127.0.0.1:8000/mcp"
+   ```
+
+   `extraServers` is a **map keyed by server name**: an `extraServers` block in
+   `unreagent.local.yaml` adds servers and replaces a same-named server's
+   whole definition, while the other servers from `unreagent.yaml` stay.
+   (Lists such as `unreal.args` or `permissions.deny` are replaced as a whole.)
+
+4. *Optional:* a different port. `unreal.args` **replaces** the default
+   `["-stdout", "-FullStdOutLogOutput"]` (the `.uproject` is always prepended),
+   so give the full list and match the URL:
+
+   ```yaml
+   unreal:
+     args: ["-stdout", "-FullStdOutLogOutput", "-ModelContextProtocolPort=8010"]
+   mcp:
+     extraServers:
+       unreal-mcp:
+         type: http
+         url: "http://127.0.0.1:8010/mcp"
+   ```
+
+Things to know:
+
+- **No bridge checks.** The launcher's startup checks (binary, `node_modules`,
+  `initialize` smoke test, reachability log) run only for stdio entries with a
+  `command`. An HTTP entry gets none, and nothing in `unreagent.log` tells you
+  whether the server is up.
+- **Start order.** Epic's docs say to start the agent after the editor's
+  server is up; unreagent starts editor and agent together. If Claude Code
+  reports the `unreal-mcp` server as failed, wait until the editor has
+  finished loading and reconnect with `/mcp`.
+- **No authentication.** Unreal MCP is loopback-only by default and checks the
+  `Origin` header against localhost / `127.0.0.1` / `[::1]` plus any extras you
+  configure. See [Access from another machine](#access-from-another-machine)
+  before changing the bind address.
+- **One call at a time.** Tool calls run sequentially on the game thread.
+  By default `tools/list` returns only four meta-tools (`list_toolsets`,
+  `describe_toolsets`, `describe_tools`, `call_tool`) instead of every tool
+  ("tool search").
+
+### Option B: UE LLM Toolkit
+
+#### Steps
 
 1. **Drop the plugin into the project** — copy or clone the repo/folder to
    `<Project>/Plugins/UELLMToolkit/`. The `.uplugin` has
@@ -252,7 +352,7 @@ for port 3000 — every step with a clear message in `unreagent.log`.
 ### Access from another machine
 
 The UE HTTP server binds to `localhost` by default. If a remote Claude session
-should reach the in-editor server (port 3000) directly:
+should reach the in-editor server (port 3000 for the Toolkit) directly:
 
 ```ini
 ; Config/DefaultEngine.ini of the UE project
@@ -263,6 +363,11 @@ DefaultBindAddress=any
 Plus a Windows firewall rule for port 3000 — and only in trusted networks,
 the server controls the entire editor. On the other side `UNREAL_MCP_URL`
 then points to `http://<windows-ip>:3000`.
+
+> **Warning:** `DefaultBindAddress=any` also exposes **Unreal MCP** (port 8000
+> by default) to the network. Unreal MCP has no authentication, and anyone who
+> can reach the port can drive the whole editor. Open it only in trusted
+> networks, behind a firewall rule scoped to the machines that need it.
 
 ### Troubleshooting: "Failed to reconnect: -32000"
 
@@ -279,6 +384,14 @@ suspects, in this order:
 4. **Editor (not yet) reachable** — port 3000 only appears once the editor
    is fully up; the launcher logs once it is.
 
+For **Unreal MCP** the chain is shorter, because there is no bridge process:
+if Claude Code shows the server as failed, the editor was most likely not up
+yet when the agent started (reconnect with `/mcp`), the "Unreal MCP" /
+"All Toolsets" plugins are not enabled, or the port or path in the
+`extraServers` URL does not match Editor Preferences -> Agentic Workflows ->
+Model Context Protocol (or `-ModelContextProtocolPort`). Since the launcher
+runs no check on HTTP entries, `unreagent.log` will not say which.
+
 ## Configuration (quick reference)
 
 | Section | Purpose |
@@ -286,7 +399,7 @@ suspects, in this order:
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — editor args, restart policy (`never` / `on-failure` / `always`) |
 | `commands` | *optional* — your own one-shot commands (compile / package are built-in) |
 | `engineRoot` | *usually only in local.yaml* — engine path override |
@@ -307,7 +420,8 @@ Two UE dialogs otherwise block agent-driven operation: the **crash reporter**
 ("not closed cleanly, restore?"). The launcher therefore starts the editor
 with **`-unattended`** — this suppresses **both** in UE 5.7 code (crash
 dialog and both recovery systems: PackageAutoSaver *and* disaster recovery)
-and discards the unclean state instead of asking.
+and discards the unclean state instead of asking. This was verified against
+the UE 5.7 source and **has not been re-checked for UE 5.8 or newer**.
 
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
