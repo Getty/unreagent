@@ -1,0 +1,22 @@
+---
+claimed_at: 2026-11-13T04:26:25Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-13T04:26:25Z
+created: 2026-11-13T04:09:26Z
+id: 86
+priority: medium
+started: 2026-11-13T04:26:25Z
+status: done
+tags:
+- docs
+title: 'README refresh: architecture graphic, UE 5.8 / Unreal MCP, current install
+  paths'
+updated: 2026-11-13T04:26:25Z
+---
+
+Integrate assets/editor-mcp-flow.png (graphic of the ASCII architecture diagram). Cross-check against UE 5.8 (June 2026) and the 5.9 preview: Epic now ships a built-in in-editor MCP server (Unreal MCP, HTTP :8000/mcp, no auth, loopback only) that can be wired via mcp.extraServers type http; VS 2026 is supported (VS 2022 17.14+ still listed); Claude Code recommends the native installer, npm is deprecated. Also document git-lfs as a build prerequisite.
+
+README: architecture PNG + collapsed ASCII fallback (README ships in the release archive without assets/), Unreal MCP (UE 5.8+) as Option A next to the Toolkit, requirements (UE 5.7+, VS 2022 17.14+/2026, native Claude Code installer), Git LFS build note, -unattended verified on 5.7 only, network-exposure warning. example/README: native installer. unreagent.example.yaml: unreal-mcp http entry, ${ENGINE} order. Corrected overlay wording: maps merge by key, lists replace (verified by probe test).
+
+Committed in deb1476
