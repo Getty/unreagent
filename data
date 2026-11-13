@@ -1,0 +1,28 @@
+---
+claimed_at: 2026-11-13T04:25:33Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-13T04:25:33Z
+created: 2026-11-13T04:09:15Z
+id: 84
+priority: high
+started: 2026-11-13T04:25:33Z
+status: done
+tags:
+- config
+- windows
+- bug
+title: 'Engine auto-detect: honour EngineAssociation, find UE 5.8+, sort versions
+  numerically'
+updated: 2026-11-13T04:25:33Z
+---
+
+registryEngine() probes a hard-coded list (5.7, 5.6, 5.5, 5.4), so UE 5.8 (released June 2026) and the 5.9 preview (Nov 2026) are never found via the registry. autodetectEngine() then sorts glob matches as full path strings in reverse, so a D:/ or E:/ install beats a newer C:/ one, and UE_5.10 would sort below UE_5.9. Worst case today: a 5.8 project on a machine that also has 5.7 opens in 5.7. Fix: read EngineAssociation from the .uproject and resolve it first (launcher version -> HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>; {GUID} source build -> HKCU\Software\Epic Games\Unreal Engine\Builds); otherwise enumerate the registry subkeys instead of a fixed list, and pick the highest version numerically across all candidates. Done = unit tests for the version ordering and association parsing; Windows path changes labelled unverified.
+
+2026-11-13 04:15 Started. Plan: move engine detection into internal/config/engine.go (pure helpers + thin reg.exe wrappers), resolve the project before the engine in Load, tests in engine_test.go. config package has no warnings channel (Info is only logged by main.go), so an association miss falls back silently; main.go is out of scope for this card.
+
+2026-11-13 04:19 Also found: (1) config has no warnings channel. An EngineAssociation that names no installed engine falls back to the highest version silently. Making it visible needs a field on config.Info plus one logger line in cmd/launcher/main.go (out of this card's scope), so that is a follow-up for the dispatcher. (2) Unverified risk: reg.exe output is probably in the OEM code page when piped, so a non-ASCII source-build path under HKCU Builds may come back garbled. Launcher paths under Program Files are ASCII. (3) The brief's make-windows caveat is stale: git-lfs is installed and cmd/launcher/resource_windows_amd64.syso is the real 85 KB resource now, and make windows succeeds.
+
+2026-11-13 04:19 Done. New internal/config/engine.go holds detection: pure helpers (parseEngineVersion, compareEngineVersions, classifyAssociation, normalizeBuildID, parseEngineAssociation, parseRegQuery, regSubkeyName, launcherInstalls, sourceBuilds, highestEngine, chooseEngine) plus thin reg.exe wrappers (one 'reg query HKLM\SOFTWARE\EpicGames\Unreal Engine /s', and 'reg query HKCU\...\Builds' only for a non-version association). config.go: Load resolves the project before the engine, resolveEngine(c, project), old autodetectEngine/registryEngine/parseRegSZ removed, package doc updated. SKILL.md row for ${ENGINE} updated. Tests: internal/config/engine_test.go (version order incl. 5.10>5.9, cross-drive, association version/GUID/miss, reg output parsing, on-disk glob). Mutations (lexical compare, association ignored) make the tests fail. A replay of the old algorithm picks E/UE_5.6 over C/UE_5.10. Verified: gofmt -l clean, go vet (linux + GOOS=windows), go test ./... -count=1 ok, make linux, make windows, CGO_ENABLED=0 windows build, demo config loads. UNVERIFIED: the reg.exe calls and Windows paths, which compile but could not run on this box.
+
+Committed in edce144
