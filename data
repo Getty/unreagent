@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-13T04:21:31Z
+id: 87
+priority: medium
+status: backlog
+tags:
+- mcp
+title: HTTP extraServers (Unreal MCP, UE 5.8+) get no readiness check; the agent can
+  start before the editor's server is up
+updated: 2026-11-13T04:21:31Z
+---
+
+prepareMCPBridges only checks stdio entries; an http entry like Unreal MCP (http://127.0.0.1:8000/mcp) is passed through silently. Epic docs say to start the agent after the editor server is up; unreagent starts editor and agent together, so Claude Code may mark the server failed and the user must /mcp reconnect. Options: log reachability for http entries like waitForEndpoint does for UNREAL_MCP_URL (cheap); optionally delay the agent start until a configured http entry answers initialize (with timeout). README documents the /mcp workaround (k86).
