@@ -1,0 +1,27 @@
+---
+claimed_at: 2026-11-13T04:25:58Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-13T04:25:58Z
+created: 2026-11-13T04:09:20Z
+id: 85
+priority: medium
+started: 2026-11-13T04:25:58Z
+status: done
+tags:
+- ci
+- build
+title: 'Toolchain refresh: CI/release on a supported Go, clear error for LFS pointer
+  files in make windows'
+updated: 2026-11-13T04:25:58Z
+---
+
+ci.yml and release.yml build with Go 1.22, which went EOL in Feb 2025; the shipped .exe (an HTTP server) misses ~20 months of stdlib security fixes. Current supported releases: 1.27.4, 1.26.11. Separately, a clone without git-lfs has a 130-byte pointer file as cmd/launcher/resource_windows_amd64.syso; make windows then fails with the cryptic gcc error "unrecognized command-line option -mconsole" (the non-object .syso forces external linking). Fix: bump go-version, and make the windows target fail early with a hint to run git lfs install && git lfs pull.
+
+2026-11-13 04:15 Go 1.27.4 toolchain downloaded (GOTOOLCHAIN=go1.27.4, module cache only). Under it: gofmt -l cmd internal clean, go vet ./... clean, go test ./... -count=1 ok, -race ok, go build ./... ok, linux build ok. Windows CGO_ENABLED=0 build fails here only because the .syso is an LFS pointer (Go 1.27 now says 'invalid linker input file in .syso ... unrecognized binary format'). Choosing 1.27.x.
+
+2026-11-13 04:18 Also found (for the dispatcher, not in scope): go.mod's 'go 1.19' line pins GODEBUG defaults to old behaviour even under Go 1.27 (go list -f '{{.DefaultGODEBUG}}' ./cmd/launcher shows httpmuxgo121=1, httplaxcontentlength=1, httpservecontentmaxranges=1, urlmaxqueryparams=0, httpcookiemaxnum=0, tlssha1=1, tlsmlkem=0 among others). So the new toolchain brings patched stdlib code, but some HTTP/TLS hardening defaults stay off for the MCP HTTP server until the go line is raised or a godebug override is set. Also: Go 1.27 stamps the PE header with OS version 10.0 (1.26: 6.01); irrelevant for UE 5 hosts, but the .exe now declares Windows 10+.
+
+2026-11-13 04:19 Done. (1) ci.yml + release.yml: go-version '1.22' -> '1.27.x' with a comment to move on before it leaves support. Verified under GOTOOLCHAIN=go1.27.4 (module cache only, go.mod/vendor untouched): gofmt -l cmd internal clean, make vet clean, go test ./... -count=1 ok, -race ok, CI's CGO_ENABLED=0 windows build ok, release build with -X main.version ok, make windows ok. (2) Makefile: SYSO variable + a POSIX-sh guard at the top of the windows recipe; a .syso whose first line starts with 'version https://git-lfs.github.com/spec/' fails with an error naming the file and 'git lfs install && git lfs pull' (exit 2 from make). Verified: guard fires on the real tree while it held the pointer, and on a scratch copy holding the HEAD pointer blob, under go1.26.6 and go1.27.4; it does not fire on scratch copies with a random 85 KB blob (fails later with the old gcc -mconsole error, as expected), with no .syso (builds), or with a hand-made amd64 COFF object (builds). Mid-task git-lfs appeared on this host and the real .syso was pulled by someone else (sha256 matches the pointer oid); I never touched it. With the real resource, make windows builds under 1.26.6 and 1.27.4. Windows runtime not tested: compile/link only.
+
+Committed in 41b39f6
