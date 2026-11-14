@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-14T04:58:02Z
+id: 92
+priority: low
+status: backlog
+tags:
+- release
+- ci
+title: Use the Changes section as the GitHub release notes in release.yml
+updated: 2026-11-14T04:58:02Z
+---
+
+release.yml creates the release with --generate-notes, which yields only a compare link (no PRs in this repo). For v0.0.9 the notes were replaced by hand with the 0.0.9 section of Changes. Make the workflow do it: extract the section for ${GITHUB_REF_NAME#v} from Changes (lines after the version line up to the next version line), strip the two-space indent, append the "Full Changelog" compare link, and pass it via --notes-file. Fail the release when the section is missing or empty, so a tag without a stamped Changes section cannot publish. No dry run exists for the tag push, so test the extraction as a script locally against the current Changes.
