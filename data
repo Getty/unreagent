@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-11-14T04:59:04Z
+created: 2026-11-13T19:42:43Z
+id: 91
+priority: low
+started: 2026-11-14T04:58:18Z
+status: done
+tags:
+- cleanup
+title: Remove the stray tracked file lp at the repo root
+updated: 2026-11-14T04:59:04Z
+---
+
+lp (8 bytes, content "2252605", looks like a PID) was committed by accident with fc74ce8. It is not shipped (release.yml packages only the exe, both YAMLs and README.md). Check nothing references it, then git rm it.
+
+Removed lp in c54c1c3; no references, not packaged by release.yml
