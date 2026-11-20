@@ -83,14 +83,22 @@ in `.claude/rules/unreagent-rules.md`.
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
 | Write/extend tests | `unreagent-test-writer` |
 | Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
-| Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
 | README / example config / docs | `unreagent-doc-writer` |
+| Read-only research, audit, card triage | `unreagent-scout` |
+| Review of a finished card before its commit | `unreagent-reviewer` |
+| Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
+
+`OWNERS` (repo root) is the authoritative write-path map; `ack-team owner <file>`
+resolves it. `unreagent-release-manager` commits reviewed work; nothing is pushed,
+tagged or released without the maintainer's word.
 
 The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the
 main agent delegates rather than loading them. Skill sources live under
 `.claude/skills/` — `unreagent-core`, `-mcp-tools`, `-config`, `-windows`,
-`-skill-authoring`; skilletor installs the shared `kanban-issues-karr-coordination`
-and `getty-git-commit-style` next to them.
+`-skill-authoring`; skilletor (`.claude/skilletor.json`) installs the shared
+`kanban-issues-karr-*`, `getty-git-commit-style` and `getty-git-usage` next to them,
+plus the house rules (`.claude/rules/.local.*`). Base skills come from the
+`superpowers` plugin.
 
 Work is coordinated on the repo's own `karr` board (`karr board`).
 

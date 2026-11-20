@@ -1,3 +1,5 @@
+<!-- ack: shape=project manager=none board=karr committer=release-manager outside_input=on headless=off -->
+<!-- ack-tune: since=2026-08-21T22:46:13Z schema=1 -->
 # unreagent House Rules
 
 The shared house rules come from skilletor — bundle `getty-house@getty`: engineering
@@ -13,17 +15,25 @@ them. Read first: the callers and the shared helpers around the change.
 
 ## Agent team
 
+`OWNERS` is the authoritative write-path map; this table routes responsibility. Before
+handing out or reviewing a card, resolve its touched or planned paths with
+`ack-team owner <file>`; an unknown path is fixed in `OWNERS` first.
+
 | Task | Agent |
 |---|---|
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
-| Write/extend tests | `unreagent-test-writer` |
-| Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
-| Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
+| Write/extend tests, a bug as a failing test | `unreagent-test-writer` |
+| Shipped UE skill documents + the skills subsystem; the project's `unreagent-*` skills | `unreagent-skill-author` |
 | README / example config / docs | `unreagent-doc-writer` |
-| Read-only research, audit, gap analysis | `unreagent-worker` ("read-only, change nothing") |
+| Read-only research, audit, gap analysis, card triage | `unreagent-scout` |
+| Review of a finished card before its commit (runs the check itself) | `unreagent-reviewer` |
+| Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
 
 Behavior-relevant = process lifecycle, MCP protocol and tools, config semantics,
 platform-guarded code, error handling, tests. Prose docs are not.
+
+Card flow: owner works it → `review` → `unreagent-reviewer` notes its verdict →
+`unreagent-release-manager` commits the checked state and moves it to `done`.
 
 ## Release
 
@@ -45,6 +55,9 @@ Builds and tests are fine anytime. **Pushing a `v*` tag IS the release** — it 
   `syscall.NewLazyDLL`, never cgo.
 - Stdlib-only on purpose, and `vendor/` is committed with an offline build — never `go get`
   mid-task; a new dependency needs a real argument and has to be vendored.
+- `cmd/launcher/main.go` (~1650 lines) holds the MCP tool handlers, bridge preparation,
+  lifecycle wiring and sub-commands, and most open bug cards point at it. Cards that edit
+  it run one after another, never in parallel; fan out only across disjoint files.
 
 ## Language — English in everything that ships
 

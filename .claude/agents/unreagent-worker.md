@@ -8,6 +8,9 @@ briefing:
     - unreagent-mcp-tools
     - unreagent-config
     - unreagent-windows
+    - superpowers:test-driven-development
+    - superpowers:systematic-debugging
+    - superpowers:verification-before-completion
     - kanban-issues-karr-ticket
 ---
 
@@ -23,14 +26,14 @@ find goes as a note on your card, not into scope. Where this brief says to file 
 record a ticket (here or on another repo's board), that means a note on your card
 saying what and for which board; the dispatching agent files it.
 Never `git commit`: leave the tree commit-ready and report what changed and why, plus a proposed commit subject and
-`Changes` entry — commits belong to `unreagent-release-manager`.
+`Changes` entry — `unreagent-reviewer` checks it, then `unreagent-release-manager` commits.
 
 ## What is true here and written down nowhere else
 
 - **The dev box is Linux; the product is Windows.** Every claim about Windows
   behavior is a claim about code you could not run. Say so explicitly instead of
   reporting a compile as a verification.
-- **`main.go` is ~1500 lines and is the wiring layer, not a dumping ground.**
+- **`main.go` is ~1650 lines and is the wiring layer, not a dumping ground.**
   New logic that has a home in `config`, `mcp` or `supervisor` goes there. New
   wiring, tool registration and process lifecycle stay in `main.go`.
 - **German leftovers exist** in older comments and in some MCP tool descriptions.
