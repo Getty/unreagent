@@ -1,0 +1,63 @@
+---
+claimed_at: 2026-11-21T23:28:09Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-21T23:27:52Z
+created: 2026-11-21T21:49:10Z
+id: 195
+priority: medium
+started: 2026-11-21T22:58:21Z
+status: done
+tags:
+- skills
+- class-c
+title: 'Skills: Control Rig & Retargeting (Class C)'
+updated: 2026-11-21T23:28:09Z
+---
+
+- ue-control-rig -- control_rig (16 operations, batch among them)
+- ue-retarget -- retarget (23 operations: skeleton, IK Rig, IK Retargeter, FBX import, batch retarget, animation inspection and diagnosis)
+
+Size L: 39 operations, the largest Class C card (k20 had blueprint_query with 15). Sub-documents are expected for ue-retarget.
+
+Lane: unreagent-skill-author (OWNERS: skills/). Depends on: nothing open. Parallel with k193 and k194: new directories only, and the inbound links below name files no other Class C card touches.
+Decision of record: k5. Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7. Format precedent: k20, k21 and the shipped ue-* skills. Working rules: skill unreagent-skill-authoring.
+
+Sources (toolkit checkout ../ue-llm-toolkit at 9f6a0f7, paths under Plugin/UELLMToolkit/Source/UELLMToolkit/Private/):
+- MCP/Tools/MCPTool_ControlRig.h (Info.Name :37) and .cpp (dispatch :76-137), ControlRigEditor.cpp
+- MCP/Tools/MCPTool_Retarget.h (Info.Name :53) and .cpp (dispatch :51-145), RetargetEditor.cpp
+No VibeUE text.
+
+Known from planning, to be settled by the author from the source:
+- Both implementations carry engine-version guards (ControlRigEditor.cpp:4, MCPTool_ControlRig.cpp:5; RetargetEditor.cpp:992, :1006-1008, :1098, :1157, :1263, :1473-1486, UE 5.7+ against 5.6). Where an operation behaves differently per engine version, the skill says so, as ue-metasounds does for its 5.7 gate.
+- control_rig requires rig_path on every call, list_structs and list_templates included (MCPTool_ControlRig.h parameter list); the header calls batch "a single undo bracket" -- check what a failing op inside a batch leaves behind before repeating that (k132 item 22 found the same claim false for anim_blueprint_modify).
+- retarget's import_fbx / batch_import_fbx overlap asset_import (skill ue-assets), and its add_bone / copy_bone_tracks / inspect_anim overlap anim_edit (skill ue-anim-sequence): say which tool to take for which job.
+- recompile and save are explicit operations: state which writes compile or save on their own and which do not.
+
+Inbound links (only these existing files): skills/ue-anim-blueprint/anim-nodes.md (control_rig_class, :67 and :105), skills/ue-blueprints/graphs.md (:58, :111), skills/ue-anim-sequence/sequences.md (:162), skills/ue-assets/SKILL.md (the asset_import row).
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill above; long material in <section>.md sub-documents that the body names
+- frontmatter in the plain form: name equals the directory, description says when to reach for the skill in one or two lines, toolkit_tools lists exactly the tools named above and passes TestToolkitToolsExistInToolkit; unreal_classes only if the skill really works through execute_script
+- every documented operation, parameter, default, result field and error string is traceable to a header or cpp line; the hand-off note lists operation -> file:line, and all dispatched operations are covered (16 / 23)
+- each skill opens with task recipes (the calls for the common jobs, in order: for example IK Rig pair -> retargeter -> setup_ops -> batch_retarget -> diagnose_anim) before the reference tables; a recipe uses only operations and parameters the skill documents
+- each skill states what a success result does not prove (compiled, saved, a link or mapping actually made, a retargeted animation that looks right)
+- where the header and the code disagree, the skill follows the code and says so; where runtime behavior cannot be read off the source, it states the documented contract and stops -- no example that looks tested
+- other skills are named by their shipped names
+- upstream bugs found on the way are appended to k132
+
+Verification: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 ./... && make windows, and go test -count=1 -v ./internal/skills to see that the toolkit lint ran rather than skipped. Run it where Go is installed; the planning machine has none. Docs-only change, no Windows code path: make windows proves the embed builds, nothing more.
+
+Risk: written against source, not against a running editor (spec section 9); retargeting quality in particular cannot be judged from source. Two more description lines in the skills tool description.
+
+Skill-author finished (main tree, uncommitted): skills/ue-control-rig (single document), skills/ue-retarget (+ sections rigs, retargeter, import, anim-checks); inbound links in ue-anim-blueprint/anim-nodes.md, ue-blueprints/graphs.md, ue-anim-sequence/sequences.md, ue-assets. Operations 16/16 and 23/23 mapped to handler and implementation lines at toolkit 9f6a0f7. Short check green, toolkit lint ran. control_rig batch is not transactional and uses its own key names; only import_fbx and batch_import_fbx save. The section intended as 'analysis' is named anim-checks. Two statements rest on engine knowledge (AutoMapChains second argument forces a remap; a trailing / in folder_path matches nothing). 22 upstream bugs noted on k132. Spec table at docs/superpowers/specs/2026-08-21-skill-subsystem-design.md:355 wants rows (k196). Proposed subject: Add shipped skills ue-control-rig and ue-retarget (k195).
+
+unreagent-reviewer 2026-11-21: verdict CHANGES NEEDED. Check: gofmt -l / go vet ./... / go test ./... / make windows green; toolkit lint ran. Docs only. Confirmed against 9f6a0f7: toolkit_tools, all 16 + 23 operations, the control_rig batch keys, opposite defaults and non-transactional behaviour, all saving and succeeds-without-effect claims, the engine-version table, the recipe without setup_ops, sections named in the body. Must fix: (1) add_bone 'never marked dirty' stated as fact (ue-retarget/SKILL.md:192-194, :217; rigs.md:6-7, :76-78; retargeter.md:203-204): the tool calls neither Modify nor MarkPackageDirty but does call the engine's USkeleton::HandleSkeletonHierarchyChange (RetargetEditor.cpp:573), whose effect is unverified; hedge as ue-anim-sequence/SKILL.md:121-122 does. Should fix: (2) ue-control-rig/SKILL.md:254-256: a misnamed optional batch key is ignored and the entry succeeds with the default (ControlRigEditor.cpp:753-757, :819-825). Nits: ue-retarget/SKILL.md:254 (5.6 also adds default ops), :214 (save is requested, not checked), :221 (total_issues 0 skips root motion when root_bone is NOT_FOUND), ue-control-rig/SKILL.md:110-112 (batch set_default passes an empty value). Back to unreagent-skill-author.
+
+Skill-author round 2 (2026-11-21): all six findings applied. add_bone: the tool's code neither calls Modify nor marks dirty, the engine's hierarchy-change handler is unverified (four places). Batch: misnamed required key fails, misnamed optional key succeeds with the default (two more examples added: is_getter, as_input). Version table, import save requested-not-checked (also in import.md), total_issues and NOT_FOUND, batch set_default empty value. Left as is, for the reviewer to judge: ue-retarget/SKILL.md:89 and import.md:87 still say the imports save without the hedge. Short check green. Narrow re-review requested.
+
+unreagent-reviewer 2026-11-21, narrow re-review: verdict READY. All six fixes confirmed against ControlRigEditor.cpp and RetargetEditor.cpp, including the two extra batch examples (is_getter, as_input). Full check green (gofmt, go vet, go test -count=1 ./..., make windows); toolkit lint ran. Recommended, not blocking, sent to the author: hedge ue-retarget/SKILL.md:89-90 and import.md:86-87 (save is requested, not checked); var is only partly a required batch key. Commit waits for the maintainer's word on Class C (k5).
+
+Skill-author round 3 (2026-11-21): the reviewer's recommended wording edits applied (imports ask the engine to save; var and cpp_type; line break). Main agent ran the full check on the final tree: see next note.
+
+2026-11-21 23:28 unreagent-release-manager: committed as d4edd23.
