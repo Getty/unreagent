@@ -1,15 +1,19 @@
 // Tests for k73: read_file reads a byte range, chosen with offset (negative
-// counts from the end) and limit (default and maximum 256 KiB), without
-// loading the whole file. When the text is not the whole file it is followed
-// by a trailer line "[bytes X-Y of Z]" (Y exclusive), plus the offset to
-// continue with when more follows. Range edges move to UTF-8 character
-// boundaries. Like filetools_test.go, whose scaffolding these tests reuse,
-// the tool is driven through mcp.Server's JSON-RPC tools/call.
+// counts from the end) and limit (default and maximum 47 KiB since k173, the
+// 48 KiB reply cap less room for the trailer), without loading the whole
+// file. When the text is not the whole file it is followed by a trailer line
+// "[bytes X-Y of Z]" (Y exclusive), plus the offset to continue with when
+// more follows. Range edges move to UTF-8 character boundaries. Like
+// filetools_test.go, whose scaffolding these tests reuse, the tool is driven
+// through mcp.Server's JSON-RPC tools/call.
 package main
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -45,7 +49,7 @@ func assertReadFile(t *testing.T, what string, res toolCallResult, want string) 
 	if res.Text != want {
 		g, w := res.Text, want
 		if len(g) > 200 || len(w) > 200 {
-			// Big texts: report the lengths and both ends, not 256 KiB twice.
+			// Big texts: report the lengths and both ends, not 47 KiB twice.
 			t.Fatalf("%s: text mismatch\n len got=%d want=%d\n got  head=%q tail=%q\n want head=%q tail=%q",
 				what, len(g), len(w), g[:min(60, len(g))], g[max(0, len(g)-80):], w[:min(60, len(w))], w[max(0, len(w)-80):])
 		}
@@ -78,22 +82,23 @@ func TestReadFileSmallFileHasNoTrailer(t *testing.T) {
 }
 
 // TestReadFileLargeFileReturnsHeadWithTotal pins the default for a file
-// larger than the limit: the first 256 KiB, then a trailer naming the total
+// larger than the limit: the first 47 KiB, then a trailer naming the total
 // size and the offset that continues the read. The old tool returned the
 // head with a bare "[truncated]" and no way on.
 func TestReadFileLargeFileReturnsHeadWithTotal(t *testing.T) {
 	content := numberedLines(131072) // 1 MiB
-	want := content[:262144] + "\n[bytes 0-262144 of 1048576; continue with offset=262144]"
+	want := content[:48128] + "\n[bytes 0-48128 of 1048576; continue with offset=48128]"
 	assertReadFile(t, "1 MiB file, no offset", readFileTool(t, "big.log", content, nil), want)
 }
 
 // TestReadFileNegativeOffsetReadsTail pins the tail convenience: a negative
-// offset counts from the end, so -65536 is the last 64 KiB. The range ends at
-// the end of the file, so the trailer has no "continue" part.
+// offset counts from the end, so -48128, the example the description gives,
+// is the last 47 KiB. The range ends at the end of the file, so the trailer
+// has no "continue" part.
 func TestReadFileNegativeOffsetReadsTail(t *testing.T) {
 	content := numberedLines(131072) // 1 MiB
-	want := content[1048576-65536:] + "\n[bytes 983040-1048576 of 1048576]"
-	assertReadFile(t, "offset=-65536", readFileTool(t, "big.log", content, map[string]interface{}{"offset": -65536}), want)
+	want := content[1048576-48128:] + "\n[bytes 1000448-1048576 of 1048576]"
+	assertReadFile(t, "offset=-48128", readFileTool(t, "big.log", content, map[string]interface{}{"offset": -48128}), want)
 
 	// A tail of a small file: a range that does not start at 0 is not the
 	// whole file, so it carries the trailer.
@@ -134,12 +139,12 @@ func TestReadFileOffsetAtEndIsEmptyRange(t *testing.T) {
 		"\n[bytes 10-10 of 10]")
 }
 
-// TestReadFileLimitIsClampedTo256KiB pins that a limit above 256 KiB is
+// TestReadFileLimitIsClampedTo47KiB pins that a limit above 47 KiB is
 // clamped rather than honoured, and that a limit that is not positive is an
 // error instead of an empty read.
-func TestReadFileLimitIsClampedTo256KiB(t *testing.T) {
+func TestReadFileLimitIsClampedTo47KiB(t *testing.T) {
 	content := numberedLines(131072) // 1 MiB
-	want := content[:262144] + "\n[bytes 0-262144 of 1048576; continue with offset=262144]"
+	want := content[:48128] + "\n[bytes 0-48128 of 1048576; continue with offset=48128]"
 	assertReadFile(t, "limit=10 MiB", readFileTool(t, "big.log", content, map[string]interface{}{"limit": 10 << 20}), want)
 
 	for _, limit := range []int{0, -1} {
@@ -148,6 +153,70 @@ func TestReadFileLimitIsClampedTo256KiB(t *testing.T) {
 		if !res.IsError || res.Text != want {
 			t.Errorf("limit=%d: IsError=%v\n got  %q\n want %q", limit, res.IsError, res.Text, want)
 		}
+	}
+}
+
+// trailerRE is read_file's trailer line, the continue offset optional.
+var trailerRE = regexp.MustCompile(`\n\[bytes (\d+)-(\d+) of (\d+)(?:; continue with offset=(\d+))?\]$`)
+
+// k173: read_file returned up to 256 KiB per call, more than the 48 KiB
+// (toolReplyBytes) Claude Code takes into the agent's context from one reply.
+// Its default and maximum range now leave room for the trailer line, at its
+// longest too, and a file larger than one call is still read whole by
+// following the trailer's offsets, each reply within the cap.
+func TestReadFileReplyFitsTheCap(t *testing.T) {
+	longest := fmt.Sprintf("\n[bytes %d-%d of %d; continue with offset=%d]", int64(math.MaxInt64), int64(math.MaxInt64), int64(math.MaxInt64), int64(math.MaxInt64))
+	if readFileLimit+len(longest) > toolReplyBytes {
+		t.Errorf("a range of %d bytes and the longest trailer (%d bytes) make a reply over the %d cap", readFileLimit, len(longest), toolReplyBytes)
+	}
+
+	srv, root := newFileToolsServer(t, true)
+	if got := listTools(t, srv)["read_file"]["properties"].(map[string]interface{})["limit"].(map[string]interface{})["description"]; got != "Maximum number of bytes (default and maximum 48128)" {
+		t.Errorf("limit description = %q, want it to name 48128", got)
+	}
+
+	// 160,000 bytes of lines, then 90,000 of 3-byte runes: the last ranges
+	// end inside a character and have to move back.
+	content := numberedLines(20000) + strings.Repeat("€", 30000)
+	mustWriteFile(t, filepath.Join(root, "big.log"), content)
+	for _, limit := range []interface{}{nil, 10 << 20} {
+		t.Run(fmt.Sprintf("limit %v", limit), func(t *testing.T) {
+			var got strings.Builder
+			offset, calls := 0, 0
+			for {
+				args := map[string]interface{}{"path": "big.log", "offset": offset}
+				if limit != nil {
+					args["limit"] = limit
+				}
+				res := callTool(t, srv, "read_file", args)
+				calls++
+				if res.IsError {
+					t.Fatalf("offset=%d: %q", offset, res.Text)
+				}
+				if len(res.Text) > toolReplyBytes {
+					t.Fatalf("offset=%d: reply is %d bytes, more than the %d cap", offset, len(res.Text), toolReplyBytes)
+				}
+				m := trailerRE.FindStringSubmatchIndex(res.Text)
+				if m == nil {
+					t.Fatalf("offset=%d: no trailer: %.80q…", offset, res.Text[max(0, len(res.Text)-80):])
+				}
+				if x, _ := strconv.Atoi(res.Text[m[2]:m[3]]); x != offset {
+					t.Fatalf("offset=%d: range starts at %d", offset, x)
+				}
+				got.WriteString(res.Text[:m[0]])
+				if m[8] < 0 {
+					break
+				}
+				offset, _ = strconv.Atoi(res.Text[m[8]:m[9]])
+			}
+			if got.String() != content {
+				t.Fatalf("the ranges joined are %d bytes, not the file's %d", got.Len(), len(content))
+			}
+			// 250,000 bytes at 48,128 a call, less what the rune edges cost.
+			if calls != 6 {
+				t.Errorf("read in %d calls, want 6", calls)
+			}
+		})
 	}
 }
 

@@ -119,6 +119,86 @@ func TestCommandResultLinesBefore(t *testing.T) {
 	}
 }
 
+// k175: the launcher's reply cap cuts the oldest bytes of the last n lines,
+// and when it cuts the "[... N bytes omitted]" line, its own count has to take
+// in the N bytes. Gap finds that line among the last n lines and hands over
+// N. With limit 8, as above, Output's lines are l1, l2, l3, the marker, 6, l7,
+// l8; the middle "\nl4\nl5\nl" was 8 bytes.
+func TestCommandResultGap(t *testing.T) {
+	result := func(s string) CommandResult {
+		b := newHeadTailBuffer(8)
+		b.Write([]byte(s))
+		return b.result(0)
+	}
+	dropped := result("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n")
+	// The tail is newlines only: the marker is Output's last line. The
+	// middle "\nl4\nl5\nl6\n" was 10 bytes.
+	blankTail := result("l1\nl2\nl3\nl4\nl5\nl6\n" + strings.Repeat("\n", 8))
+	for _, tc := range []struct {
+		name       string
+		res        CommandResult
+		n          int
+		wantIndex  int
+		wantBytes  int
+		wantInside bool
+	}{
+		{"tail lines only", dropped, 3, 0, 0, false},
+		{"from the marker", dropped, 4, 0, 8, true},
+		{"one head line above it", dropped, 5, 1, 8, true},
+		{"all of Output", dropped, 7, 3, 8, true},
+		{"more than Output", dropped, 10, 3, 8, true},
+		{"tail of newlines only", blankTail, 1, 0, 10, true},
+		{"tail of newlines only, all of Output", blankTail, 4, 3, 10, true},
+		{"n = 0", dropped, 0, 0, 0, false},
+		{"nothing dropped", result("l1\nl2\nl3\n"), 3, 0, 0, false},
+		{"zero value", CommandResult{Output: "a\nb\nc\n"}, 3, 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index, bytes, ok := tc.res.Gap(tc.n)
+			if index != tc.wantIndex || bytes != tc.wantBytes || ok != tc.wantInside {
+				t.Fatalf("Gap(%d) = %d, %d, %v; want %d, %d, %v", tc.n, index, bytes, ok, tc.wantIndex, tc.wantBytes, tc.wantInside)
+			}
+		})
+	}
+}
+
+// k175 review: the last n lines must not start on a line the dropped middle
+// splits. The kept tail's first line ("6" above) began in the middle, and the
+// marker line stands for it, so counting from either miscounts: a window
+// starting there reaches back to the kept head's last line, l3, two lines
+// above the tail.
+func TestCommandResultWindow(t *testing.T) {
+	result := func(s string) CommandResult {
+		b := newHeadTailBuffer(8)
+		b.Write([]byte(s))
+		return b.result(0)
+	}
+	dropped := result("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n")                     // tail lines 6, l7, l8
+	blankTail := result("l1\nl2\nl3\nl4\nl5\nl6\n" + strings.Repeat("\n", 8)) // the marker is last
+	for _, tc := range []struct {
+		name string
+		res  CommandResult
+		n    int
+		want int
+	}{
+		{"below the tail's first line", dropped, 2, 2},
+		{"from the tail's first line", dropped, 3, 5},
+		{"from the marker", dropped, 4, 5},
+		{"from the head's last line", dropped, 5, 5},
+		{"above it", dropped, 6, 6},
+		{"n = 0", dropped, 0, 0},
+		{"tail of newlines only, from the marker", blankTail, 1, 2},
+		{"tail of newlines only, from the head's last line", blankTail, 2, 2},
+		{"nothing dropped", result("l1\nl2\nl3\n"), 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.res.Window(tc.n); got != tc.want {
+				t.Fatalf("Window(%d) = %d, want %d", tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
 // The whole point: memory must not grow with the size of the output.
 func TestHeadTailBufferMemoryStaysBounded(t *testing.T) {
 	const chunk = 64 * 1024

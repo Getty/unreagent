@@ -145,12 +145,13 @@ Revision history for unreagent
     longer warns "path not found" on every start, a name missing from PATH
     is reported as such, and one found only relative to the current
     directory, which exec refuses to start, is named as that.
-  - read_file takes offset and limit (bytes): a negative offset counts from
-    the end, so offset=-65536 returns the last 64 KiB of a log. A file not
-    returned whole ends in a "[bytes X-Y of Z]" line with the total size and
-    the offset to continue with, replacing the "[truncated]" marker. The file
-    is no longer loaded whole, and range edges move to UTF-8 character
-    boundaries.
+  - read_file takes offset and limit (bytes) and returns at most 47 KiB per
+    call, so one reply with its trailer stays within 48 KiB: a negative offset
+    counts from the end, so offset=-48128 returns the last 47 KiB of a log. A
+    file not returned whole ends in a "[bytes X-Y of Z]" line with the total
+    size and the offset to continue with, replacing the "[truncated]"
+    marker. The file is no longer loaded whole, and range edges move to UTF-8
+    character boundaries.
   - New shipped skills ue-level-actors (spawn, move, delete and edit actors in
     the open level), ue-levels (open, create and save levels, survey what a
     level holds) and ue-assets (find, inspect, edit, save, move, delete and
@@ -292,7 +293,8 @@ Revision history for unreagent
   - run_command, run_python, run_node and logs hold a reply to 48 KiB: past
     that its oldest output goes, the start of a single long line too, and a
     line "[... N bytes omitted; a reply holds at most 48 KiB]" below any lines
-    marker says how much. A run_* reply could reach about 2 MiB before, a logs
+    marker says how much, the middle dropped from an output past 2 MiB
+    included. A run_* reply could reach about 2 MiB before, a logs
     reply hundreds of MiB; 48 KiB stays under the 50,000 characters past which
     Claude Code moves a reply into a file.
   - A stop, start or restart (ue_stop, ue_start, ue_restart, the console's

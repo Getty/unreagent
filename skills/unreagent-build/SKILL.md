@@ -98,11 +98,17 @@ These errors come back before anything runs:
   mid-line. A single line longer than 48 KiB comes back as its end only. The
   cut never splits a UTF-8 character. The B bytes are gone.
 - **Past 2 MiB the middle is dropped as well.** While the command runs, the
-  launcher keeps only the first and the last MiB of its output. N counts the
-  dropped lines too, as long as the last MiB holds at least 300 lines. When it
-  holds fewer, the 300 lines reach back past the gap into the first MiB, the
-  48 KiB cut keeps only their newest bytes, and N counts only the lines above
-  the 300: neither number includes the dropped middle.
+  launcher keeps only the first and the last MiB of its output, and the
+  markers count the dropped middle too: N whole lines, then B bytes, are
+  everything above what you see. When the last MiB holds more than 300 lines
+  (its first line, which can begin in the dropped part, counts as one), the
+  300 lines all come from it: N includes the dropped lines, and B counts bytes
+  of the 300 only. When it holds 300 or fewer, the lines reach back into the
+  first MiB, at least to its last line: N counts only the first MiB's lines
+  above them, and B includes the dropped bytes. In the rare reply that still
+  shows the launcher's own `[... D bytes omitted]` line, that line names the
+  middle, B leaves it out, and the reply can hold up to 302 lines, that line
+  included.
 - **Nothing else is retained.** The launcher discards the output once the call
   returns. `logs` holds no command output. The launcher log records only two
   lines per run:
@@ -194,7 +200,7 @@ There, a run's children are not killed with it.
 | `exit` non-zero, an omitted marker, and the errors look like follow-ons | the first errors are among the omitted lines or bytes | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
 | `[... N lines omitted]` after the `exit` line | the first N lines of the output were cut | they are gone. Rerun only if you must |
-| `[... B bytes omitted; a reply holds at most 48 KiB]` after the `exit` line or the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut; the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
+| `[... B bytes omitted; a reply holds at most 48 KiB]` after the `exit` line or the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut (past 2 MiB, B can include the dropped middle); the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
 | the call never returns, or the client times out | no timeout exists, and the run continues on the host | do not retry. Watch the launcher log for `[cmd:<name>] done` |
 | a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
 

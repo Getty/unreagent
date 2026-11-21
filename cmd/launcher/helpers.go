@@ -74,12 +74,12 @@ func tailLines(s string, n int) string {
 // run_python and run_node return.
 const toolOutputLines = 300
 
-// toolReplyBytes caps a run_* or logs reply. Claude Code saves a text reply
-// longer than 50,000 characters to a file instead of putting it in the
-// agent's context; 48 KiB of bytes is at most 49,152 characters, marker
-// included. Uncapped, 300 long lines (or one) can reach the 2 MiB the
-// supervisor keeps of a command's output, and the log buffer's 500 lines can
-// be up to 1 MiB each.
+// toolReplyBytes caps a run_*, logs or read_file reply (readFileLimit is
+// derived from it). Claude Code saves a text reply longer than 50,000
+// characters to a file instead of putting it in the agent's context; 48 KiB
+// of bytes is at most 49,152 characters, marker included. Uncapped, 300 long
+// lines (or one) can reach the 2 MiB the supervisor keeps of a command's
+// output, and the log buffer's 500 lines can be up to 1 MiB each.
 const toolReplyBytes = 48 << 10
 
 // replyCutReason is why capReply's marker cut: "a reply holds at most 48 KiB".
@@ -87,13 +87,20 @@ var replyCutReason = fmt.Sprintf("a reply holds at most %d KiB", toolReplyBytes>
 
 // commandReply is a one-shot tool's reply: "exit N", a blank line and the
 // last n lines of the command's output, led by an omittedMarker line when it
-// printed more, the whole held to toolReplyBytes by capReply.
+// printed more, the whole held to toolReplyBytes by capReply. Where the
+// supervisor dropped the middle, the lines reach back as far as Window says,
+// so that both counts are of the output's own lines and bytes.
 func commandReply(res supervisor.CommandResult, n int) string {
+	n = res.Window(n)
 	head := fmt.Sprintf("exit %d\n\n", res.ExitCode)
 	if k := res.LinesBefore(n); k > 0 {
 		head += omittedMarker(k, "") + "\n"
 	}
-	return capReply(head, strings.Split(tailLines(res.Output, n), "\n"))
+	gap, dropped, ok := res.Gap(n)
+	if !ok {
+		gap = -1
+	}
+	return capReply(head, strings.Split(tailLines(res.Output, n), "\n"), gap, dropped)
 }
 
 // capReply is head followed by lines joined with "\n", held to at most
@@ -103,7 +110,13 @@ func commandReply(res supervisor.CommandResult, n int) string {
 // after head says how many. The cut never splits a UTF-8 sequence, and a
 // line it leaves empty goes with its line break. head is never cut. Only the
 // lines kept are joined, so a log buffer of long lines is not copied whole.
-func capReply(head string, lines []string) string {
+//
+// gap is the index in lines of the supervisor's "[... N bytes omitted]" line
+// for a dropped middle, dropped its N; gap is -1 when lines hold none. The
+// output never held that line or the line breaks around it, so what the cut
+// takes of them does not count. When the cut reaches the line, the whole line
+// goes and N counts instead: the count is of the output's own bytes.
+func capReply(head string, lines []string, gap, dropped int) string {
 	size := max(len(lines)-1, 0) // the line breaks of the join
 	for _, l := range lines {
 		size += len(l)
@@ -113,7 +126,11 @@ func capReply(head string, lines []string) string {
 	}
 	// The marker is sized for the most that can be omitted, so the reply
 	// stays within the cap whatever count it ends up naming.
-	keep := max(toolReplyBytes-len(head)-len(bytesMarker(size, replyCutReason))-1, 0)
+	most := size
+	if gap >= 0 {
+		most += dropped
+	}
+	keep := max(toolReplyBytes-len(head)-len(bytesMarker(most, replyCutReason))-1, 0)
 	// Walk back to the oldest line the kept bytes reach into; rest counts the
 	// bytes after it, its line break included.
 	i, rest := len(lines)-1, 0
@@ -126,12 +143,33 @@ func capReply(head string, lines []string) string {
 	for k := 1; k < utf8.UTFMax && cut < len(first) && !utf8.RuneStart(first[cut]); k++ {
 		cut++
 	}
-	kept := lines[i+1:]
-	if cut < len(first) {
-		kept = append([]string{first[cut:]}, kept...)
+	if i == gap && cut > 0 {
+		cut = len(first) // the rest of the marker would name no count
+	}
+	if cut == len(first) {
+		i, cut = i+1, 0 // nothing of it is kept: it goes with its line break
+	}
+	// The text kept is lines[i:], the first of them less its first cut bytes.
+	kept := lines[i:]
+	if cut > 0 {
+		kept = append([]string{lines[i][cut:]}, lines[i+1:]...)
 	}
 	body := strings.Join(kept, "\n")
-	return head + bytesMarker(size-len(body), replyCutReason) + "\n" + body
+	omitted := size - len(body)
+	if gap >= 0 {
+		// The output never held the marker line or the line breaks around
+		// it; when the line went, the bytes it stands for count instead.
+		if gap > 0 && gap <= i {
+			omitted-- // the line break before it
+		}
+		if gap < i {
+			omitted += dropped - len(lines[gap])
+			if gap < len(lines)-1 {
+				omitted-- // the line break after it
+			}
+		}
+	}
+	return head + bytesMarker(omitted, replyCutReason) + "\n" + body
 }
 
 // omittedMarker is the line a tool reply puts where k lines are left out,

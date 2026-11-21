@@ -316,9 +316,9 @@ The editor failed and is not restarted. Any crash dumps are in <project dir>\Sav
 `restarted (manual)` is logged only when `ue_restart` spawned a new editor. A
 start that failed logs `start failed: …` instead.
 
-`read_file` (`unreagent-files`) returns at most 256 KiB per call, and a negative
-`offset` counts from the end of the file: `offset: -65536` returns the last
-64 KiB of `unreagent.log` or of the editor's log file, where a crash is. To
+`read_file` (`unreagent-files`) returns at most 47 KiB per call, and a negative
+`offset` counts from the end of the file: `offset: -48128` returns the last
+47 KiB of `unreagent.log` or of the editor's log file, where a crash is. To
 search a long log, use `run_python` / `run_node` (`unreagent-runtimes`).
 
 ## The edit loop

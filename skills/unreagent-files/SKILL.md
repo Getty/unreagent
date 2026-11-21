@@ -162,7 +162,7 @@ fixes are theirs:
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `read_file` | `path`, `offset` (optional), `limit` (optional) | file content as text, at most 256 KiB per call; a `[bytes X-Y of Z]` line follows unless it is the whole file |
+| `read_file` | `path`, `offset` (optional), `limit` (optional) | file content as text, at most 47 KiB per call; a `[bytes X-Y of Z]` line follows unless it is the whole file |
 | `list_dir` | `path` (optional) | one entry per line, directories with a trailing `/` |
 | `write_file` | `path`, `content` | `written: <path> (<n> bytes)` |
 | `edit_file` | `path`, `old_string`, `new_string` | `<n> occurrence(s) replaced in <path>` |
@@ -171,10 +171,11 @@ fixes are theirs:
 
 - `path` (string, required) — relative to the root.
 - `offset` (integer, optional, default 0) — the first byte to read. A negative
-  offset counts from the end of the file, so `-65536` is the last 64 KiB; one
+  offset counts from the end of the file, so `-48128` is the last 47 KiB; one
   that reaches before the start reads from byte 0.
 - `limit` (integer, optional) — the most bytes to return. Default and maximum
-  262144 (256 KiB); a larger value is clamped to it, and 0 or less is an error.
+  48128 (47 KiB), so a reply with its trailer line stays within 48 KiB; a
+  larger value is clamped to it, and 0 or less is an error.
 
 Both accept an integer string such as `"65536"`; missing, `null` or `""` gives
 the default. Any other value, such as `1.5`, `"end"` or `true`, returns
@@ -221,14 +222,15 @@ at the end is not: it returns an empty range followed by `[bytes Z-Z of Z]`.
 The end of a log, where a crash is, takes one call. With the default root:
 
 ```json
-{"path": "Saved/Logs/<ProjectName>.log", "offset": -65536}
+{"path": "Saved/Logs/<ProjectName>.log", "offset": -48128}
 ```
 
-A log longer than 64 KiB comes back as its last 64 KiB followed by
-`[bytes X-Z of Z]`; a shorter one comes back whole, without a trailer. When
-what you need starts earlier, a larger negative offset reaches further back, up
-to `-262144` for the most one call returns; beyond that, page with `offset` and
-`limit`.
+A log longer than 47 KiB comes back as its last 47 KiB followed by
+`[bytes X-Z of Z]`; a shorter one comes back whole, without a trailer. That is
+the most one call returns. A larger negative offset, such as `-65536`, starts
+further back but does not reach the end: it returns 47 KiB from there, followed
+by `[bytes X-Y of Z; continue with offset=Y]`. Page on with `offset=Y` to the
+end.
 
 Text only. Binary content is returned as-is through a JSON string and arrives
 mangled. Reading a directory fails with
@@ -298,7 +300,7 @@ back.
 | `Error: 'old_string' missing` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
 | content ends in a line `[bytes X-Y of Z]` or `[bytes X-Y of Z; continue with offset=Y]` | `read_file` returned bytes `X` to `Y` (exclusive) of a `Z`-byte file, not the whole file; the line and the newline before it are not file content | to go on, call again with `offset=Y`; for the end of the file, a negative `offset` |
 | `Error: 'offset' <n> is past the end of "<given>" (<size> bytes)` | `offset` is larger than the file | use an offset up to the size named, or a negative one to count from the end |
-| `Error: 'limit' must be a positive number of bytes, got <n>` | `limit` is 0 or negative | omit it for the default of 262144, or pass a positive byte count |
+| `Error: 'limit' must be a positive number of bytes, got <n>` | `limit` is 0 or negative | omit it for the default of 48128, or pass a positive byte count |
 | `Error: 'offset' must be an integer, got …` (or `'limit'`) | neither a whole number nor an integer string, such as `1.5` or `"end"` | pass an integer number of bytes |
 | `Error: 'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got …` (or `'limit'`) | the number does not fit a 64-bit integer | pass a byte count; a negative `offset` counts from the end |
 | `Error: 'content' missing` | `content` absent or not a string — typically a misspelled parameter name | rewrite with the correct parameter name; nothing was written |

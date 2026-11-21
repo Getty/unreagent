@@ -96,7 +96,8 @@ when those lines are longer, their oldest bytes go too, and
 `[... B bytes omitted; a reply holds at most 48 KiB]` follows the `exit` line
 and any lines marker. The first line you see can then start mid-line, and a
 single line longer than 48 KiB comes back as its end only. Output past 2 MiB
-also loses its middle, as `run_command` output does (`unreagent-build`).
+also loses its middle, as `run_command` output does, and the markers count it
+too (`unreagent-build`).
 
 Either marker means the oldest output is gone, and a rerun prints the same.
 Narrow the script instead: print only the lines you need, a count, or a

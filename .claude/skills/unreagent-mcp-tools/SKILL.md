@@ -103,18 +103,34 @@ closure; a one-shot tool returns what `run_command` and `scriptAction` return,
 `commandReply(res, toolOutputLines)`, with `IsError` on a non-zero exit.
 `commandReply` (`helpers.go`) is `exit N`, a blank line and the last 300
 lines, led by an `omittedMarker` line `[... N lines omitted]` when there were
-more; N comes from `CommandResult.LinesBefore`, which also counts what the
-supervisor's 2 MiB head/tail buffer dropped. `logs` uses `omittedMarker` with a
-reason for the lines its 500-line buffer dropped. Both hand that head and the
-lines to `capReply(head, lines)`, which holds the whole reply to
+more. It first widens n with `CommandResult.Window(n)`, so the lines shown
+never start on a line the supervisor's dropped middle splits: when its 2 MiB
+head/tail buffer dropped the middle and `keptLines <= n < keptLines+2`, the
+last n lines would start on the kept tail's first line, which can begin
+inside the middle, or on the `[... D bytes omitted]` line, so `Window`
+returns `keptLines+2` and they start at the kept head's last line instead
+(the gap line at index 1). `LinesBefore`, `Gap` and `tailLines` all take the
+widened n. N comes from `CommandResult.LinesBefore`, which also counts the
+dropped lines when the lines shown lie below the gap line. `logs` uses
+`omittedMarker` with a reason for the lines its 500-line buffer dropped. Both
+hand that head and the
+lines to `capReply(head, lines, gap, dropped)`, which holds the whole reply to
 `toolReplyBytes` (48 KiB, a named constant, not a config option). Claude Code
 saves a text reply over 50,000 characters to a file instead of putting it in
 the agent's context; 48 KiB is at most 49,152 characters, marker included, so
 the cap stays below that. It keeps the newest bytes, cuts a single oversized
 line too, never splits a UTF-8 sequence, and puts the `bytesMarker` line
 `[... N bytes omitted; a reply holds at most 48 KiB]` right after `head`,
-which it never cuts. It joins only the lines it keeps, so pass the lines, not
-a joined string: the log buffer can hold 500 lines of up to 1 MiB each.
+which it never cuts. `gap` is the index in `lines` of the supervisor's own
+`[... D bytes omitted]` line and `dropped` its D, both from
+`CommandResult.Gap(n)` (`gap` -1 when the lines hold none; `logs` passes
+`-1, 0`). When the cut reaches that line, the whole line goes, and D joins the
+byte count in place of the line and its two line breaks, so the count is of
+the output's own bytes (k175). It joins only the lines it keeps, so pass the
+lines, not a joined string: the log buffer can hold 500 lines of up to 1 MiB
+each. `read_file` does not go through `capReply`: `readFileLimit`
+(`filetools.go`) is `toolReplyBytes` less 1 KiB for the trailer line, and its
+description and `limit` schema are built from that constant (k173).
 `tailLines` alone, without a marker, is for log excerpts (`bridge.go`,
 `lifecycle.go`), not tool replies.
 

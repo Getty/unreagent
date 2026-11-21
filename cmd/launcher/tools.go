@@ -58,7 +58,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "logs",
-		Description: fmt.Sprintf("Returns the last output lines (stdout+stderr) of a supervised process, from a buffer that keeps only its last %[1]d lines. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured. When you ask for more than it still holds and it has dropped older lines, the reply starts with [... N lines omitted; the log keeps only the last %[1]d]; a larger lines value does not bring those back. A reply holds at most %[2]d KiB: past that its oldest bytes go, of a single long line too, and a line [... N bytes omitted; %[3]s] takes their place.", supervisor.LogLines, toolReplyBytes>>10, replyCutReason),
+		Description: fmt.Sprintf("Returns the last output lines (stdout+stderr) of a supervised process, from a buffer that keeps only its last %[1]d lines. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured. When you ask for more than it still holds and it has dropped older lines, the reply starts with [... N lines omitted; the log keeps only the last %[1]d]; a larger lines value does not bring those back. Past the reply's size cap its oldest bytes go, of a single long line too, and a line [... N bytes omitted; %[2]s] takes their place.", supervisor.LogLines, replyCutReason),
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -82,7 +82,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 			if dropped > 0 && (n <= 0 || n > len(lines)) {
 				head = omittedMarker(dropped, fmt.Sprintf("the log keeps only the last %d", supervisor.LogLines)) + "\n"
 			}
-			return mcp.ToolResult{Text: capReply(head, lines)}
+			return mcp.ToolResult{Text: capReply(head, lines, -1, 0)}
 		},
 	})
 
@@ -90,10 +90,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	// marker of commandReply and capReply's byte marker below it. The
 	// supervisor's own byte marker for a middle it dropped sits more than the
 	// cap above the end of the output, so the cap nearly always cuts it away,
-	// and the note names that drop itself. When the kept lines reach back
-	// past it, neither count includes it (k175).
+	// and the note names that drop itself. Its lines count in the line marker
+	// when the last lines lie below it (LinesBefore), its bytes in the byte
+	// marker when the cut takes it (capReply, k175).
 	cutNote := "A cut is marked by a line: [... N lines omitted] at the top, then [... N bytes omitted; " + replyCutReason + "] where the oldest bytes of the rest went, of a single long line too. " +
-		"Past 2 MiB the middle of the output is dropped as well, and with long lines neither count includes it."
+		"Past 2 MiB the middle of the output is dropped as well, and those counts include it."
 
 	cmdNames := sup.CommandNames()
 	srv.AddTool(mcp.Tool{

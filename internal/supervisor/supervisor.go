@@ -120,9 +120,9 @@ type ServiceStatus struct {
 type CommandResult struct {
 	Output   string `json:"output"`
 	ExitCode int    `json:"exitCode"`
-	// lines and keptLines are set when the output buffer dropped the middle
-	// of the output (see headTailBuffer.result and LinesBefore).
-	lines, keptLines int
+	// lines, keptLines and dropped are set when the output buffer dropped the
+	// middle of the output (see headTailBuffer.result, LinesBefore and Gap).
+	lines, keptLines, dropped int
 }
 
 // LogLines is how many output lines a service's log buffer keeps. Older lines

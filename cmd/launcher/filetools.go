@@ -73,9 +73,9 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 
 	srv.AddTool(mcp.Tool{
 		Name: "read_file",
-		Description: "Reads a text file from the UE project (path relative to the project root): source, config, logs. At most 256 KiB per call: " +
-			"offset (bytes) picks the start, and a negative offset counts from the end, so offset=-65536 is the last 64 KiB — the end of a log, where a crash is; " +
-			"limit (bytes) caps the size, default and maximum 262144. " +
+		Description: fmt.Sprintf("Reads a text file from the UE project (path relative to the project root): source, config, logs. At most %[1]d KiB per call: ", readFileLimit>>10) +
+			fmt.Sprintf("offset (bytes) picks the start, and a negative offset counts from the end, so offset=-%[1]d is the last %[2]d KiB — the end of a log, where a crash is; ", readFileLimit, readFileLimit>>10) +
+			fmt.Sprintf("limit (bytes) caps the size, default and maximum %d. ", readFileLimit) +
 			"Unless the text is the whole file, a line [bytes X-Y of Z] follows it (Y exclusive, Z the file size; the newline before it is not part of the file), with '; continue with offset=Y' when more follows. " +
 			"Range edges move inward to UTF-8 character boundaries, by up to 3 bytes. An offset past the end is an error naming the size.",
 		InputSchema: map[string]interface{}{
@@ -83,7 +83,7 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			"properties": map[string]interface{}{
 				"path":   map[string]interface{}{"type": "string", "description": "Path to the file, relative to the project root"},
 				"offset": map[string]interface{}{"type": "integer", "description": "First byte to read (default 0); negative counts from the end"},
-				"limit":  map[string]interface{}{"type": "integer", "description": "Maximum number of bytes (default and maximum 262144)"},
+				"limit":  map[string]interface{}{"type": "integer", "description": fmt.Sprintf("Maximum number of bytes (default and maximum %d)", readFileLimit)},
 			},
 			"required": []string{"path"},
 		},
@@ -253,8 +253,11 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 	})
 }
 
-// readFileLimit is read_file's default and maximum range, in bytes.
-const readFileLimit = 256 * 1024
+// readFileLimit is read_file's default and maximum range, in bytes: the reply
+// cap less 1 KiB for the trailer line, which is at most 113 bytes even for a
+// file of the largest size an int64 holds. It stays a whole number of KiB, as
+// read_file's description names it in KiB.
+const readFileLimit = toolReplyBytes - 1<<10
 
 // readFileRange reads the range of f that read_file returns: from offset
 // (negative counts back from size, and a start before 0 becomes 0) for at
