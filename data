@@ -1,0 +1,44 @@
+---
+claimed_at: 2026-11-21T04:47:36Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T04:47:49Z
+created: 2026-11-21T02:36:16Z
+depends_on:
+- 96
+id: 116
+priority: low
+started: 2026-11-21T03:33:02Z
+status: done
+tags:
+- hermes
+title: 'hermes-setup: keep user-added keys inside the unreagent entry'
+updated: 2026-11-21T04:47:49Z
+---
+
+Found while working k96: replacing mcp_servers.<name> drops keys the user added inside that entry (for example a Hermes timeout). Update the entry in place instead: set url/headers (the keys unreagent owns), keep the rest. cmd/launcher/hermes.go, Linux-testable through the hermesSetup seam.
+
+**Handed out (2026-11-21), bundled with k118 + k122 (all hermes.go) to one unreagent-worker in its own worktree. Main-agent choice (mine):** unreagent owns exactly the leaf keys it writes (url, and headers.Authorization — the worker confirms the set from the code); every other key in the entry stays, including other headers; the managed-marker text changes to say only those keys are refreshed. Anchor/alias refusals stay as they are.
+
+Worker done (2026-11-21, worktree-agent-aa1f2e2fa22aeac6a, hermes.go + hermes_test.go): the entry is edited in place; unreagent owns url and headers.Authorization only; checkEdit expects the old entry with those two keys set; new marker text replaces the k96 one. New refusals before any change: entry or headers not a string-keyed mapping, an alias, or brought in by a merge key. Main-agent decisions: (1) those cases used to be replaced silently; refusing them is accepted — a silent clobber of a hand-written entry is what k96 set out to stop; (2) the anchored-entry message changes 'refusing to replace it' to 'refusing to change it', since nothing is replaced any more (wording only, refusal unchanged). README follow-up by the doc-writer before review.
+
+Ready for review (2026-11-21): code + tests by the worker (worktree-agent-aa1f2e2fa22aeac6a, hermes.go, hermes_test.go); README hermes-setup section by the doc-writer, with main-agent prose fixes (the k96 entry marker never shipped in a release — v0.0.9 predates 8f24738 — so the README no longer mentions it; the multi-document rule now matches the test table: '--- ~' and '--- # note' are refused, a bare trailing '---' or '...' with comment lines after it is accepted).
+
+2026-11-21 04:15 Review (unreagent-reviewer, 2026-11-21): CHANGES NEEDED. Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go, README.md (hermes-setup) in worktree-agent-aa1f2e2fa22aeac6a, uncommitted, base 8f24738. Check run by the reviewer: gofmt -l cmd internal skills (empty), go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race -count=3 ./cmd/launcher, make linux, make windows, go mod verify — all green. Mutations: a whole-entry replacement is caught by checkEdit itself ("left untouched: the result would not hold the new mcp_servers.unreagent"); so are no trailing-comment move, a want that ignores the old entry, no checkHermesEntry, setString dropping comments, url appended last. Disabling the checkEdit call in hermesSetup survives — as it did at 8f24738, so the wiring is only covered by TestCheckEdit (low, optional).
+(1) hermes.go:575-579 takeTrailingComments runs every time and moves comments that yaml.v3 put inside the entry out of it, to server indent plus a blank line, even on a run with nothing to add. Input: mcp_servers: {unreagent: {url, headers: {Authorization: Bearer tok, then a comment line '# X-Debug: "1"' at header indent}}, github: …} -> the comment ends up after the entry at server indent; the same for '# disabled: true' at entry indent before another server. yaml.v3 does tell these apart when a sibling server follows (a server-indent comment becomes that sibling's head comment), so the move is only needed when the entry is the last server. README "What stays" ("the rest of it keeps its keys, order and comments") is false for these inputs. Needs a test with a sibling server after the entry.
+(2) hermes.go:589/662: Authorization is matched case-sensitively. headers: {authorization: Bearer old} -> the entry gets both 'authorization: Bearer old' and 'Authorization: Bearer <new>'. The server reads r.Header.Get("Authorization"), the first value; if Hermes sends them in file order, the stale one wins -> 401 after a "registered" run (how Hermes sends them is unverified). Before k116 the whole entry was replaced, so this is new. Match the header name case-insensitively or refuse.
+(3) README.md:652-654: the marker contains backticks inside a single-backtick code span, so the span breaks; use a double-backtick span. README.md:645-648 says headers AND Authorization go "at the end of the entry"; the code puts Authorization last in headers (in mid-entry when headers is mid-entry). README.md:650 "a replaced value keeps its comments": a non-scalar url loses its nested comments (trivial).
+(4) Note for the main agent: a stdio entry (command/args) keeps command and gains url+headers; which transport Hermes picks is unverified (before k116 the entry was replaced whole).
+Scope: code by unreagent-worker, README by unreagent-doc-writer (ack-team owner). No German. Fixes go back to the worker (1, 2) and the doc-writer (3).
+
+Back to the worker after review (2026-11-21). Main-agent decisions on the findings: (F1) move a trailing comment out of the entry only when the entry is the last server; with a server after it the comment stays inside, pinned by a test. (F2) headers.Authorization is matched case-insensitively: the one matching key keeps its spelling and gets the new value; more than one case variant is refused as ambiguous. (F6) an unreagent entry that carries command (a stdio entry, which hermes-setup never wrote) is refused, nothing written, instead of gaining url and headers next to command. README fixes (marker as a double-backtick span, Authorization goes at the end of headers, narrow 'a replaced value keeps its comments') after the code settles. F7 (checkEdit call unpinned, pre-existing) is a separate card.
+
+Review fixes done (2026-11-21): F1 trailing-comment move only when the entry is the last server (with a server after it the comment stays inside; tests for both); F2 Authorization matched ignoring case, the existing spelling kept, two or more spellings refused; F6 an entry with command (stdio) refused, with what to do; both new messages end with the fix, not 'refusing to change it'. Worker's own calls: command counts when present at all (also ~ or via merge key), args alone does not; stdio/ambiguity checks run before the structure checks. Known, accepted: in the last server a comment at the very end of the entry still moves behind it (yaml.v3 gives comments no position); a first run that adds headers/Authorization before a following server leaves the entry's last comment above the added key. README (main agent): owned keys, case-insensitive match, Authorization at the end of headers, marker as a double-backtick span, the last-server comment exception, the stdio and ambiguous-Authorization refusals.
+
+2026-11-21 04:42 Re-review (unreagent-reviewer, 2026-11-21): APPROVE. Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go, README.md (hermes-setup) in worktree-agent-aa1f2e2fa22aeac6a, uncommitted, base 8f24738. Check run by the reviewer on this state: gofmt -l cmd internal skills (empty), go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race -count=3 ./cmd/launcher, make linux, make windows, go mod verify — all green.
+F1 fixed: with a server after the entry, a comment at the end of headers or of the entry stays inside on every run; in the last server it moves behind the entry (accepted). Mutations: always moving fails TestHermesSetupKeepsCommentInsideEntryBeforeNextServer; never moving fails TestHermesSetupKeepsCommentAfterReplacedEntry.
+F2 fixed: authorization/AUTHORIZATION keep their spelling and get the new token, also through a merge key; two spellings are refused. Mutations: a case-sensitive match fails 3 test functions; the merge using a literal "Authorization" while hermesEntryWant uses the helper is caught by checkEdit itself ("would not hold the new mcp_servers.unreagent"); dropping the two-spellings refusal fails 2 cases.
+F6 fixed: an entry with command is refused, also through a merge key or as an alias; args alone and a capitalised 'Command' go through. Mutation: no stdio refusal fails 3 cases. Low, not blocking: the worker's own call that 'command: ~' counts is not pinned — treating a null command as absent leaves the suite green.
+README step 8, "What stays" and the two new refusal bullets match the code; "first six" is right; the marker renders as one code span. No German. Scope in lane (code: unreagent-worker, README: main agent's prose edit).
+
+Committed as b04e79a on main (rebased onto 3ab0142, full check green after the rebase).
