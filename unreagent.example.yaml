@@ -132,7 +132,10 @@ mcp:
   # Passed together with the unreagent server in --mcp-config.
   # Stdio servers are fully checked before start — every stage complains
   # loudly in the log instead of failing silently:
-  #   Binary in PATH? -> Node: script there? node_modules there? (else npm install)
+  #   Binary in PATH? -> Node: script there? node_modules there and marked
+  #   (node_modules/.unreagent-installed, written after a passing smoke
+  #   test)? (else npm install; if the smoke test still fails, the log
+  #   names the repair)
   #   -> smoke test (initialize handshake) -> is UNREAL_MCP_URL reachable?
   # strict: false   # true = ONLY these servers (ignore the project's own .mcp.json)
   # extraServers:

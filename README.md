@@ -73,9 +73,12 @@ the config), so the agent does not have to wire anything up itself. Stdio
 bridges are fully checked before the agent starts, with each step logged
 loudly, instead of letting the agent run into a meaningless `-32000`
 connect error: binary on PATH? bridge script present? `node_modules` there
-(or run `npm install`, cut off after 5 minutes; a failed install is logged as
-a warning and skips the smoke test, but the bridge stays in the agent's
-config)? does the bridge answer a real `initialize` handshake
+and marked as working (`.unreagent-installed`, written once the bridge passed
+its smoke test; otherwise the launcher runs `npm install`, cut off after 5
+minutes; a failed install is logged as a warning and skips the smoke test,
+but the bridge stays in the agent's config — unless a `node_modules` was
+already there, which is kept and left to the smoke test)? does the bridge
+answer a real `initialize` handshake
 (smoke test)? And once the in-editor server (`UNREAL_MCP_URL`) is reachable,
 that's logged too — or a warning with the usual suspects if it isn't. These
 checks run only for stdio entries (those with a `command`); an HTTP entry such
@@ -496,11 +499,22 @@ suspects, in this order:
    launcher then logs a warning (in `unreagent.log` in window mode, on the
    console otherwise) and skips the smoke test, but the bridge stays in the
    agent's config and the editor still starts, so Claude Code reports the
-   server as failed. An install cut short (the timeout, or Ctrl-C) can leave
-   a partial `node_modules`, and because the directory exists the next start
-   skips the install. Delete the bridge's `node_modules` (the log names the
-   directory) and start again once the network works, or run `npm install`
-   there by hand.
+   server as failed. Once the bridge passes the smoke test, the launcher
+   writes `node_modules/.unreagent-installed`; the next start skips the
+   install only if that marker exists. Without it, the launcher runs
+   `npm install` over whatever `node_modules` is there — say, one left by an
+   install cut short (the timeout, or Ctrl-C) — once the network works, or
+   you run `npm install` there by hand (the launcher deletes nothing; npm
+   itself may remove extraneous packages). If an install fails while a
+   `node_modules` was already there (say, offline with a complete one from
+   before the marker existed), the folder is kept and the smoke test
+   decides: a pass writes the marker, a fail is the `-32000` case. When the
+   smoke test fails over a `node_modules` that was already there and its
+   error names a missing module or file, the log names the repair: for a
+   marked folder, delete the marker so the next start runs `npm install`,
+   then the folder itself if that does not help; for an unmarked one, delete
+   the folder — `npm install` can report a partial tree as up to date, so
+   installing again does not repair it.
 4. **Editor (not yet) reachable** — port 3000 only appears once the editor
    is fully up; the launcher logs once it is.
 
