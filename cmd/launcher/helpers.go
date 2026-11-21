@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/conflict-industries/unreagent/internal/mcp"
 	"github.com/conflict-industries/unreagent/internal/supervisor"
@@ -73,23 +74,82 @@ func tailLines(s string, n int) string {
 // run_python and run_node return.
 const toolOutputLines = 300
 
-// commandTail is tailLines for a one-shot tool's reply: the last n lines of
-// the command's output, led by an omittedMarker line when it printed more.
-func commandTail(res supervisor.CommandResult, n int) string {
-	text := tailLines(res.Output, n)
+// toolReplyBytes caps a run_* or logs reply. Claude Code saves a text reply
+// longer than 50,000 characters to a file instead of putting it in the
+// agent's context; 48 KiB of bytes is at most 49,152 characters, marker
+// included. Uncapped, 300 long lines (or one) can reach the 2 MiB the
+// supervisor keeps of a command's output, and the log buffer's 500 lines can
+// be up to 1 MiB each.
+const toolReplyBytes = 48 << 10
+
+// replyCutReason is why capReply's marker cut: "a reply holds at most 48 KiB".
+var replyCutReason = fmt.Sprintf("a reply holds at most %d KiB", toolReplyBytes>>10)
+
+// commandReply is a one-shot tool's reply: "exit N", a blank line and the
+// last n lines of the command's output, led by an omittedMarker line when it
+// printed more, the whole held to toolReplyBytes by capReply.
+func commandReply(res supervisor.CommandResult, n int) string {
+	head := fmt.Sprintf("exit %d\n\n", res.ExitCode)
 	if k := res.LinesBefore(n); k > 0 {
-		return omittedMarker(k, "") + "\n" + text
+		head += omittedMarker(k, "") + "\n"
 	}
-	return text
+	return capReply(head, strings.Split(tailLines(res.Output, n), "\n"))
+}
+
+// capReply is head followed by lines joined with "\n", held to at most
+// toolReplyBytes. When that is longer, the oldest bytes of the lines go:
+// whole lines, then the start of the oldest line kept, which may be the only
+// one. A line "[... N bytes omitted; a reply holds at most 48 KiB]" right
+// after head says how many. The cut never splits a UTF-8 sequence, and a
+// line it leaves empty goes with its line break. head is never cut. Only the
+// lines kept are joined, so a log buffer of long lines is not copied whole.
+func capReply(head string, lines []string) string {
+	size := max(len(lines)-1, 0) // the line breaks of the join
+	for _, l := range lines {
+		size += len(l)
+	}
+	if len(head)+size <= toolReplyBytes {
+		return head + strings.Join(lines, "\n")
+	}
+	// The marker is sized for the most that can be omitted, so the reply
+	// stays within the cap whatever count it ends up naming.
+	keep := max(toolReplyBytes-len(head)-len(bytesMarker(size, replyCutReason))-1, 0)
+	// Walk back to the oldest line the kept bytes reach into; rest counts the
+	// bytes after it, its line break included.
+	i, rest := len(lines)-1, 0
+	for i > 0 && rest+len(lines[i]) < keep {
+		rest += len(lines[i]) + 1
+		i--
+	}
+	first := lines[i]
+	cut := len(first) - (keep - rest)
+	for k := 1; k < utf8.UTFMax && cut < len(first) && !utf8.RuneStart(first[cut]); k++ {
+		cut++
+	}
+	kept := lines[i+1:]
+	if cut < len(first) {
+		kept = append([]string{first[cut:]}, kept...)
+	}
+	body := strings.Join(kept, "\n")
+	return head + bytesMarker(size-len(body), replyCutReason) + "\n" + body
 }
 
 // omittedMarker is the line a tool reply puts where k lines are left out,
 // with why after a semicolon when given: "[... 100 lines omitted]". It
 // matches the supervisor's "[... N bytes omitted]".
 func omittedMarker(k int, why string) string {
-	unit := "lines"
-	if k == 1 {
-		unit = "line"
+	return omittedLine(k, "line", why)
+}
+
+// bytesMarker is omittedMarker for k bytes: "[... 100 bytes omitted]".
+func bytesMarker(k int, why string) string {
+	return omittedLine(k, "byte", why)
+}
+
+// omittedLine is the marker line for k units left out, why after a semicolon.
+func omittedLine(k int, unit, why string) string {
+	if k != 1 {
+		unit += "s"
 	}
 	s := fmt.Sprintf("[... %d %s omitted", k, unit)
 	if why != "" {

@@ -69,7 +69,7 @@ func scriptAction(sup *supervisor.Supervisor, command string, pre []string, dir,
 			return errResult(err)
 		}
 		return mcp.ToolResult{
-			Text:    fmt.Sprintf("exit %d\n\n%s", res.ExitCode, commandTail(res, toolOutputLines)),
+			Text:    commandReply(res, toolOutputLines),
 			IsError: res.ExitCode != 0,
 		}
 	}

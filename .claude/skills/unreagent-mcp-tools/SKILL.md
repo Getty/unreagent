@@ -100,13 +100,23 @@ comes from `startFailure` (`tools.go`), which the launcher console's `start` /
 `r` answers share (`commandLoop`); keep the two on it. The other
 tools — `status`, `logs`, `run_command` — call the supervisor from their own
 closure; a one-shot tool returns what `run_command` and `scriptAction` return,
-`exit N` plus `commandTail(res, toolOutputLines)`, with `IsError` on a
-non-zero exit. `commandTail` (`helpers.go`) is the last 300 lines, led by an
-`omittedMarker` line `[... N lines omitted]` when there were more; N comes from
-`CommandResult.LinesBefore`, which also counts what the supervisor's 2 MiB
-head/tail buffer dropped. `logs` uses `omittedMarker` with a reason for the
-lines its 500-line buffer dropped. `tailLines` alone, without a marker, is for
-log excerpts (`bridge.go`, `lifecycle.go`), not tool replies.
+`commandReply(res, toolOutputLines)`, with `IsError` on a non-zero exit.
+`commandReply` (`helpers.go`) is `exit N`, a blank line and the last 300
+lines, led by an `omittedMarker` line `[... N lines omitted]` when there were
+more; N comes from `CommandResult.LinesBefore`, which also counts what the
+supervisor's 2 MiB head/tail buffer dropped. `logs` uses `omittedMarker` with a
+reason for the lines its 500-line buffer dropped. Both hand that head and the
+lines to `capReply(head, lines)`, which holds the whole reply to
+`toolReplyBytes` (48 KiB, a named constant, not a config option). Claude Code
+saves a text reply over 50,000 characters to a file instead of putting it in
+the agent's context; 48 KiB is at most 49,152 characters, marker included, so
+the cap stays below that. It keeps the newest bytes, cuts a single oversized
+line too, never splits a UTF-8 sequence, and puts the `bytesMarker` line
+`[... N bytes omitted; a reply holds at most 48 KiB]` right after `head`,
+which it never cuts. It joins only the lines it keeps, so pass the lines, not
+a joined string: the log buffer can hold 500 lines of up to 1 MiB each.
+`tailLines` alone, without a marker, is for log excerpts (`bridge.go`,
+`lifecycle.go`), not tool replies.
 
 Commands are one-shot and blocking (`RunCommand` / `RunOnce`); a UE `compile`
 takes minutes and the agent's MCP client is waiting the whole time. If you add

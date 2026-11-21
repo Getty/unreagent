@@ -83,18 +83,25 @@ runs it there, deletes it, and returns:
 exit <code>
 
 [... N lines omitted]
-<the last 300 lines of stdout and stderr, merged>
+[... B bytes omitted; a reply holds at most 48 KiB]
+<the last 300 lines of stdout and stderr, merged, at most 48 KiB>
 ```
 
 The result is marked as an error when the exit code is non-zero. stdout and
 stderr go into one buffer and cannot be told apart afterwards, so label your own
 output if the distinction matters. Only the last 300 lines survive: a script
 that printed more gets the `[... N lines omitted]` line (`[... 1 line omitted]`
-for one) and loses those N lines. Printing a large payload is not a way to
-retrieve it — write it to a file under the project root and read it with
-`read_file` instead. Output past 2 MiB also loses its middle, as `run_command`
-output does, and if what is kept fits in 300 lines, only a
-`[... B bytes omitted]` line marks the cut (`unreagent-build`).
+for one) and loses those N lines. The reply as a whole holds at most 48 KiB:
+when those lines are longer, their oldest bytes go too, and
+`[... B bytes omitted; a reply holds at most 48 KiB]` follows the `exit` line
+and any lines marker. The first line you see can then start mid-line, and a
+single line longer than 48 KiB comes back as its end only. Output past 2 MiB
+also loses its middle, as `run_command` output does (`unreagent-build`).
+
+Either marker means the oldest output is gone, and a rerun prints the same.
+Narrow the script instead: print only the lines you need, a count, or a
+summary. Printing a large payload is not a way to retrieve it — write it to a
+file under the project root and read it with `read_file` instead.
 
 | | `run_python` | `run_node` |
 |---|---|---|

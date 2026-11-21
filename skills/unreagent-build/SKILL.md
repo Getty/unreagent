@@ -66,13 +66,15 @@ no timeout and no working-directory parameter.
 exit <code>
 
 [... N lines omitted]
-<the last 300 lines of stdout and stderr, merged>
+[... B bytes omitted; a reply holds at most 48 KiB]
+<the last 300 lines of stdout and stderr, merged, at most 48 KiB>
 ```
 
 The `[... N lines omitted]` line is there only when the command printed more
-than 300 lines. The result is marked as an error when the exit code is
-non-zero. Decide success by the exit code, not by the text. `exit -1` means the
-launcher could not determine an exit code.
+than 300 lines, the `[... B bytes omitted; …]` line only when those lines are
+more than a reply holds. The result is marked as an error when the exit code
+is non-zero. Decide success by the exit code, not by the text. `exit -1` means
+the launcher could not determine an exit code.
 
 These errors come back before anything runs:
 
@@ -85,15 +87,22 @@ These errors come back before anything runs:
 ## Reading the result
 
 - **Only the last 300 lines come back.** When the command printed more, they
-  are led by `[... N lines omitted]` (`[... 1 line omitted]` for one), unless
-  what the 2 MiB cap below kept fits in 300 lines and only its
-  `[... B bytes omitted]` line marks the cut. The N lines are gone.
+  are led by `[... N lines omitted]` (`[... 1 line omitted]` for one). The N
+  lines are gone.
+- **A reply holds at most 48 KiB**, the `exit` line and the markers included.
+  When the last 300 lines are longer (about 160 bytes a line on average),
+  their oldest bytes go as well, and
+  `[... B bytes omitted; a reply holds at most 48 KiB]` follows the `exit`
+  line and any lines marker. Whole lines go first, then the start of the
+  oldest line kept: you see at most 300 lines, and the first one can start
+  mid-line. A single line longer than 48 KiB comes back as its end only. The
+  cut never splits a UTF-8 character. The B bytes are gone.
 - **Past 2 MiB the middle is dropped as well.** While the command runs, the
-  launcher keeps only the first and the last MiB of its output, and N counts
-  the dropped lines too. The gap itself shows only when the last MiB holds
-  fewer than 300 lines: a line `[... B bytes omitted]`, the lines on either
-  side of it can be cut mid-line. N then counts only the lines above what you
-  see.
+  launcher keeps only the first and the last MiB of its output. N counts the
+  dropped lines too, as long as the last MiB holds at least 300 lines. When it
+  holds fewer, the 300 lines reach back past the gap into the first MiB, the
+  48 KiB cut keeps only their newest bytes, and N counts only the lines above
+  the 300: neither number includes the dropped middle.
 - **Nothing else is retained.** The launcher discards the output once the call
   returns. `logs` holds no command output. The launcher log records only two
   lines per run:
@@ -104,9 +113,16 @@ These errors come back before anything runs:
 For `compile`, errors print as they occur, and other compile actions keep
 running after the first failure. In a long failing build, the first error can
 be among the omitted lines. If the result starts with `[... N lines omitted]`
-and what you see looks like a follow-on error, for example an unknown type that
-a missing include would explain, the cause may be among them. Fix what you can
-see and compile again. A build with fewer errors fits in 300 lines.
+or carries the 48 KiB marker, and what you see looks like a follow-on error,
+for example an unknown type that a missing include would explain, the cause
+may be among them. Fix what you can see and compile again. A build with fewer
+errors is more likely to fit.
+
+You cannot narrow a `run_command` run: it takes no arguments, and a rerun of
+the same state cuts the same way. Output that must be read whole belongs in a
+file. Only the user can arrange that, with a script added as a command that
+writes the output to a file under the project; `read_file` (`unreagent-files`)
+then reads it in pieces.
 
 For `package`, the output runs to thousands of lines, and you see its end:
 whether the run failed, and in which stage.
@@ -175,9 +191,10 @@ There, a run's children are not killed with it.
 | `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
 | `Error: start failed: exec: …/Engine/…` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
 | `exit` non-zero, with `Unable to build while Live Coding is active` | the editor is running with Live Coding | `ue_stop`, then compile again |
-| `exit` non-zero, `[... N lines omitted]`, and the errors look like follow-ons | the first errors are among the omitted lines | fix what is visible, then compile again |
+| `exit` non-zero, an omitted marker, and the errors look like follow-ons | the first errors are among the omitted lines or bytes | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
 | `[... N lines omitted]` after the `exit` line | the first N lines of the output were cut | they are gone. Rerun only if you must |
+| `[... B bytes omitted; a reply holds at most 48 KiB]` after the `exit` line or the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut; the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
 | the call never returns, or the client times out | no timeout exists, and the run continues on the host | do not retry. Watch the launcher log for `[cmd:<name>] done` |
 | a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
 

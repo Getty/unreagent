@@ -252,6 +252,14 @@ request for more than it holds, or for all of it (`0` or negative), starts with
 it has dropped since the launcher started, restarts included; a larger `lines`
 does not bring them back.
 
+A reply holds at most 48 KiB. When the lines you asked for are longer, their
+oldest bytes go, and `[... B bytes omitted; a reply holds at most 48 KiB]`
+comes first, or right below the lines marker. The first line you see can then
+start mid-line, and a single line longer than 48 KiB comes back as its end
+only. No `lines` value reaches the cut bytes, since every reply ends at the
+newest line. Read them in the launcher log or the editor's log file with
+`read_file` (below).
+
 What the buffer holds:
 
 - **The last 500 lines per service.** On a busy editor startup, 500 lines is a
@@ -275,7 +283,7 @@ What the buffer holds:
 
 | Source | Holds | Limits |
 |---|---|---|
-| `logs` | the last 500 lines of editor stdout/stderr | no launcher lines, no build output |
+| `logs` | the last 500 lines of editor stdout/stderr | no launcher lines, no build output, at most 48 KiB per reply |
 | launcher log | every editor line as `[ue] <line>`, plus the launcher's own lines | is a file only when the launcher runs its own agent in the foreground |
 | `Saved/Logs/<ProjectName>.log` in the project | the log file the editor writes itself | written by UE, not by the launcher |
 
@@ -367,6 +375,7 @@ nothing in `status` reflects this. Check the plugin itself:
 | `logs` is empty for `agent` | the agent runs in the foreground | expected. Its output is on the console |
 | `Error: unknown service "agent"` | the launcher runs no agent of its own | expected with an external agent |
 | `logs` starts with `[... N lines omitted; the log keeps only the last 500]` | N older lines were dropped from the buffer | a larger `lines` does not help; use the launcher log or `Saved/Logs/` |
+| `logs` starts with `[... B bytes omitted; a reply holds at most 48 KiB]`, or has it below the lines marker | the lines asked for are more than a reply holds; their oldest B bytes were cut, and the first line can start mid-line | no `lines` value brings them back; read the launcher log or `Saved/Logs/` with `read_file` |
 | plugin tools fail right after a restart | the editor is still loading | wait for the plugin, as above |
 
 ## See also
