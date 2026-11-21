@@ -36,7 +36,7 @@ type Skill struct {
 
 // frontmatter is the complete set of keys a SKILL.md may carry. Unknown keys
 // are rejected, so a misspelt toolkit_tools is an error rather than an ignored
-// key — and cannot slip past the toolkit-registry lint planned in k18.
+// key — and cannot slip past the toolkit-registry lint (toolkit_lint_test.go).
 type frontmatter struct {
 	Name          string   `yaml:"name"`
 	Description   string   `yaml:"description"`

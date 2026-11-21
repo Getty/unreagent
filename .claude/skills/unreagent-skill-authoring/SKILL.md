@@ -66,10 +66,10 @@ What binds the author:
   cannot be rewritten in place — for example a tag, an anchor, an alias, an
   escape, a folded or block scalar (`>`, `|`), a value over several lines
   (`materializedSource`). `Load` accepts it, but materialization refuses the
-  whole set before writing
-  anything (WARN, the start goes on), and `go test ./cmd/launcher` fails over
-  the shipped set (`TestMaterializeWritesEverySkill`). Only names that gain
-  the prefix are checked; write every skill this way.
+  whole set before writing anything (WARN, the start goes on), and
+  `go test ./cmd/launcher` fails over the shipped set
+  (`TestMaterializeWritesEverySkill`). Only names that gain the prefix are
+  checked; write every skill this way.
 - **Refer to other skills by the shipped name** — `ue-tasks`, never
   `unreagent-ue-tasks`. It is the name the `skills` tool takes; on disk the
   same skill is `unreagent-ue-tasks/`, and the body is not rewritten.
@@ -107,8 +107,10 @@ unreal_classes: [MaterialEditingLibrary]
 - `name` — required; equals the skill's directory name, and sets the
   materialized one; plain or quoted, on one line (Delivery).
 - `description` — required, non-blank.
-- `toolkit_tools` — a list of the plugin MCP tools this skill covers. To be
-  lint-checked (see the lint below).
+- `toolkit_tools` — a list of the plugin MCP tools this skill covers, by
+  their bare names (`material`, not `unreal_material`): tools the toolkit
+  registers in `MCPToolRegistry.cpp`, or the bridge tools `get_ue_context`
+  and `status`. Lint-checked (see the lint below).
 - `unreal_classes` — a list of relevant `unreal.*` Python classes, for skills
   that work through `execute_script`.
 - Long material goes into sub-documents `<skill>/<section>.md`; the section
@@ -158,10 +160,16 @@ names `skills.enabled: false` as the way out).
 ## Authoritative sources, in order
 
 1. **The toolkit's C++ headers** — `../ue-llm-toolkit/Plugin/UELLMToolkit/Source/
-   UELLMToolkit/Private/MCP/Tools/MCPTool_*.h`. Each declares its `Info.Name` and
-   enumerates its operations. This is the only in-repo, checkable source of truth
-   for tool schemas, and it is why Class A skills can be written offline at all.
-2. **`MCPToolRegistry.cpp`** — the definitive list of registered tool names.
+   UELLMToolkit/Private/MCP/Tools/MCPTool_*.h`. Each enumerates its operations
+   and usually declares its `Info.Name`; for a few tools (Asset, Lighting,
+   Material, Niagara) the name sits in `MCPTool_X.cpp` instead. This is the
+   only in-repo, checkable source of truth for tool schemas, and it is why
+   Class A skills can be written offline at all.
+2. **`MCPToolRegistry.cpp`** — the definitive list of registered tools. It
+   registers classes (`FMCPTool_X`); each tool's name is that class's
+   `Info.Name`, in `Tools/MCPTool_X.h` or, for a few, `Tools/MCPTool_X.cpp`.
+   The bridge itself (`Resources/mcp-bridge/index.js`) adds `get_ue_context`
+   and `status`.
 3. **The plugin's own docs** — `Resources/mcp-bridge/contexts/*.md` (served by
    `get_ue_context`) and `Resources/domains/*.md`. Useful background; skills
    should *point at* them rather than duplicate them.
@@ -169,7 +177,10 @@ names `skills.enabled: false` as the way out).
    only, never a runtime dependency. See the licensing rule below.
 
 Set the toolkit location via `UE_LLM_TOOLKIT` when the checkout is not the
-sibling `../ue-llm-toolkit`.
+sibling `../ue-llm-toolkit` (a relative value is taken from the repository
+root). When it is set, the lint looks nowhere else: a path without
+`MCPToolRegistry.cpp` skips it. A linked worktree, such as
+`.claude/worktrees/<name>`, also finds the sibling of its main checkout.
 
 ## The line you may not cross
 
@@ -185,12 +196,20 @@ the documented contract and stop — do not invent examples that look tested.
 
 ## The lint
 
-Not written yet (k18): a Go test (not a separate binary) is to assert that
-every name in `toolkit_tools` exists in `MCPToolRegistry.cpp`. It will require
-the toolkit checkout and **skip cleanly when it is absent**, so CI without it
-stays green. This is the drift alarm for upstream tool renames; when it fires,
-the skill is wrong, not the lint. Until it lands, check every `toolkit_tools`
-entry against the registry by hand.
+`TestToolkitToolsExistInToolkit` (`internal/skills/toolkit_lint_test.go`)
+asserts that every name in `toolkit_tools` is a tool the toolkit provides:
+registered in `MCPToolRegistry.cpp` (a registration under `#if` counts, a
+commented-out one does not), or defined by the bridge itself in
+`Resources/mcp-bridge/index.js` (`get_ue_context`, `status`). It needs the
+toolkit checkout (found as under the sources above) and **skips cleanly when
+it is absent**, so CI without it stays green; `go test -v ./internal/skills`
+shows whether it ran. This is the drift alarm for upstream tool renames; when
+it names a skill and a tool, the skill is wrong, not the lint. When it cannot
+place what it reads (no registration, a class without exactly one name, a
+missing bridge file or one that defines no tool), it fails instead: the
+upstream syntax changed, and the lint is what to adapt. The parse itself also
+runs without a checkout, over a stand-in (`TestToolkitToolNames*`), so CI
+still checks that part.
 
 Covered today, in `internal/skills/skills_test.go`: every embedded skill parses
 and comes back with its directory name, a description and a body; the embed

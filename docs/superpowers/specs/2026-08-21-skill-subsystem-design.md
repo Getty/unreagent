@@ -126,9 +126,9 @@ unreal_classes: [MaterialEditingLibrary]
 
 - `name`, `description` — required. `description` must state *when* to use the
   skill, since it is the whole basis for selection.
-- `toolkit_tools` — which of the plugin's 43 MCP tools the skill covers.
-  Replaces VibeUE's `vibeue_classes`. To be lint-checked against the registry
-  (§8, planned: k18).
+- `toolkit_tools` — which of the toolkit's MCP tools the skill covers (43
+  registered, plus the bridge's own `get_ue_context` and `status`). Replaces
+  VibeUE's `vibeue_classes`. Lint-checked against the toolkit (§8, k18).
 - `unreal_classes` — relevant `unreal.*` Python classes, for skills that work
   through `execute_script`.
 
@@ -147,7 +147,7 @@ there is one (a stray top-level file has no skill, a bad skill name no file).
   unique and the source of a skill is obvious.
 - The key set is closed: `name`, `description`, `toolkit_tools` and
   `unreal_classes`. An unknown key is rejected, so a misspelt `toolkit_tools`
-  cannot slip past the registry lint planned in §8 (k18). `name` and
+  cannot slip past the toolkit lint in §8 (k18). `name` and
   `description` are required; the description is collapsed to one line.
 - The frontmatter is exactly one YAML document. A bare `---` line always
   closes the frontmatter and the body follows. It is an error when a `...`
@@ -413,21 +413,29 @@ Written, in `internal/skills/skills_test.go`:
 - the embed holds only `<skill>/<doc>.md` and misses no source file under
   `skills/`; `Load` rejects each malformed case in §4.1
 
-Planned, with the card that brings each:
+Written, in `cmd/launcher/skills_test.go` (delivery, k11, k12, k16, k17) and
+`internal/config/skills_test.go` (config, k10, k15):
 
 - the `skills` tool returns a known skill, errors informatively on an unknown
   one, and resolves sub-documents (k16, with the tool, k11)
 - materialization creates prefixed directories, replaces its own on rerun,
   removes prefixed directories no longer in the set, and leaves unprefixed
   sibling directories untouched (k17, with materialization, k12)
-- config: defaults, `--no-skills-mcp` override, and the both-paths-off error
-  (k10, k15)
+- config: defaults and the both-paths-off error (k10, k15, in
+  `internal/config`); the `--no-skills-mcp` override, in `cmd/launcher`
 
-**Skill content lint** (planned, k18; a test, not a separate binary): every
-tool named in `toolkit_tools` must exist in the plugin's `MCPToolRegistry.cpp`.
-This catches drift when the toolkit submodule is updated. It requires the
-toolkit checkout to be present and skips cleanly when it is not, so CI without
-the submodule stays green.
+**Skill content lint** (k18; a test, not a separate binary:
+`internal/skills/toolkit_lint_test.go`): every tool named in `toolkit_tools`
+must exist in the toolkit, either registered in the plugin's
+`MCPToolRegistry.cpp` or defined by the mcp-bridge itself
+(`Resources/mcp-bridge/index.js`: `get_ue_context`, `status`; see §7). The
+registry registers classes; each tool's name is its class's `Info.Name`. This
+catches drift when the toolkit checkout is updated. The lint finds the checkout
+through `UE_LLM_TOOLKIT`, else the sibling `ue-llm-toolkit` next to the
+repository root (or next to the main checkout, when run in a worktree), and
+skips cleanly when there is none, so CI without it stays green. When it cannot
+parse the toolkit files it fails rather than skips, so an upstream syntax
+change stops the lint instead of thinning it.
 
 ## 9. Risks
 
