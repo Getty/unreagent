@@ -108,7 +108,12 @@ runtimes:
 # Quick via flag: unreagent.exe -files   (or -no-agent for UE+MCP only)
 files:
   enabled: false
-  root: "${PROJECT_DIR}"     # all paths strictly confined to this
+  # default ${PROJECT_DIR}. All paths are confined to it. Absolute symlinks or
+  # junctions, and links leading out of the root, are refused (also on the way
+  # to a new file); a plugin linked in from outside is unreachable through the
+  # link: put it into the project, or point root at a directory holding both and
+  # use the plugin's real path. Windows reserved names (NUL, aux.h) are refused.
+  root: "${PROJECT_DIR}"
   readOnly: false            # true = read-only
 
 mcp:

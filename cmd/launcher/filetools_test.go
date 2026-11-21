@@ -383,7 +383,7 @@ func TestReadOnlyRegistersOnlyReadTools(t *testing.T) {
 // handler actually treats as mandatory. Calling pathSchema() directly proved
 // nothing about the registered tools — list_dir feeds the same helper as
 // read_file but its handler defaults an absent path to the project root
-// (main.go's resolve(getString(args, "path", "."))), so advertising "path"
+// (filetools.go's confine(getString(args, "path", "."))), so advertising "path"
 // as required there is a real drift between schema and handler, not just a
 // helper property. This goes through tools/list, the way a schema-validating
 // MCP client would, for all four file tools.
@@ -436,7 +436,7 @@ func TestFileToolSchemasRequiredParamsMatchHandlers(t *testing.T) {
 	// advertise "path" as required, whether "required" is absent entirely or
 	// present without "path" in it — either shape must pass this assertion.
 	if req := requiredParams(t, "list_dir"); contains(req, "path") {
-		t.Errorf("list_dir: inputSchema.required = %v, must NOT include \"path\" (handler defaults to project root, main.go:585)", req)
+		t.Errorf("list_dir: inputSchema.required = %v, must NOT include \"path\" (handler defaults to project root, filetools.go)", req)
 	}
 
 	if req := requiredParams(t, "write_file"); len(req) != 2 || !contains(req, "path") || !contains(req, "content") {

@@ -66,28 +66,81 @@ authoritative statement of the root and the mode in effect.
 `files.root` defaults to `${PROJECT_DIR}`, the directory holding the `.uproject`,
 and is substituted at config load. If it is set to an empty string, the root
 falls back to the agent working directory, and failing that to the launcher's
-own working directory.
+own working directory. Where an error message below names `<root>`, that is
+`files.root` made absolute, as configured, not resolved through links.
 
-Every path parameter is joined onto the root and the result is rejected unless
-it is the root itself or lies below it. This is a guarantee: no argument to
-these tools can read or write outside the root. What it costs you:
+Every call opens the root afresh and resolves the path inside it one component
+at a time, links included, so nothing can be swapped in between the check and
+the use. No path argument to these tools reaches outside the root: not through
+`..`, not through an absolute path, not through a symlink or junction. What it
+costs you:
 
 - **Paths are relative to the root. Always.** There is no way to address a file
   elsewhere on the machine.
-- **An absolute path is not honoured** — it is joined onto the root like any
-  other relative path. `/etc/passwd` becomes `<root>/etc/passwd`; `C:\Windows\x`
-  becomes `<root>\C:\Windows\x`. You get a confusing "not found" or invalid-path
-  error rather than the file you asked for. If a result makes no sense, check
-  first whether you passed an absolute path.
-- **Escaping with `..` is detected** after the path is cleaned, and produces
-  `Error: path outside the allowed root`.
+- **An absolute path is accepted only under the root.** It is made relative to
+  the root and then gets every check below; the root's own absolute path means
+  the root. A root that lies behind a link may be spelled either way, as
+  configured or as its real location. Any other absolute path is refused with
+  `Error: path "<given>" must be relative to the project root "<root>"; an absolute path is accepted only under it`.
+  On a Windows host that includes a rooted path (`\Source\Foo.cpp`) and a
+  drive-relative one (`C:Source\Foo.cpp`).
+- **Escaping with `..` is refused** after the path is cleaned, with
+  `Error: path outside the allowed root`. `Source/../Config/x.ini` is fine;
+  `../x` and `Source/../../x` are not. On a Windows host a relative path with a
+  colon in it (`a.txt:stream`) gets the same error.
+- **A link that leaves the root is not followed.** A symlink or junction
+  anywhere on the path is refused when its target is absolute or lies outside
+  the root:
+  `Error: path "<given>": a link on the path (symlink or junction) is absolute or leads outside the allowed root "<root>" (<go-error>)`,
+  where `<go-error>` is Go's own, such as
+  `openat <name>: path escapes from parent` or
+  `mkdirat <dir>: path escapes from parent`. The refusal holds on the way to a
+  path that does not exist yet, so `write_file` creates neither the file nor
+  missing directories beyond such a link, and it holds through a dangling link.
+  An absolute target is refused even when it points back into the root, so a
+  Windows junction, whose target is always absolute, is never followed. A
+  relative link that stays inside the root works normally. The link itself
+  still shows up when you list its parent; only following it fails.
+- **A link loop, or more than 8 links on one path,** fails with
+  `Error: openat <name>: too many levels of symbolic links`.
+- **Windows reserved device names are refused** in any path component, on every
+  host: `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9` (also with the
+  superscript digits `¹ ² ³`), `CONIN$` and `CONOUT$`, in any letter case, also
+  with an extension or trailing spaces. `aux.h`, `NUL.txt` and
+  `Source/CON/x.txt` are all refused with
+  `Error: path component "<component>" is a reserved Windows device name`.
+  On Windows such a name opens a device instead of a file, and a file of that
+  name written on another host cannot be checked out on Windows. Names that only
+  start like one (`CONTRIBUTING.md`, `console.h`, `COM10.txt`) and `COM0` /
+  `LPT0` are ordinary names.
 - **An empty or omitted path is not a shortcut to the root** — that holds per
   tool, not in general. `list_dir` defaults to the root. `read_file`,
   `write_file` and `edit_file` reject an absent or empty `path` up front with
   `Error: 'path' missing`. Pass `path` explicitly to all three.
-- The check is lexical; symlinks are not resolved. A symlink inside the root
-  pointing outside it is followed. Treat the confinement as a guard against path
-  mistakes, not as a security boundary around a hostile project tree.
+
+What the confinement does not cover: a hard link is not a link in this sense
+but a second directory entry for the same file, so one inside the root reads and
+writes that file wherever its other names live; on a Linux host a bind mount
+inside the root is crossed as well.
+
+### A plugin linked in from outside the root
+
+A plugin is often linked into `<Project>/Plugins/` from a shared checkout
+elsewhere, with a junction or a symlink. The file tools cannot follow that
+link: listing `Plugins` still shows the entry (without a trailing `/`, see
+list_dir), but every path through it fails with the link error above. Neither a
+retry nor an absolute spelling of the path gets through. Tell the user; both
+fixes are theirs:
+
+- **Put the plugin into the project**, as a real directory under `Plugins/`
+  rather than a link.
+- **Or set `files.root` to a directory that holds both** the project and the
+  plugin. The plugin is then reachable at its real location, not through the
+  link: a junction or an absolute symlink is still refused, and only a relative
+  symlink that stays inside the new root works. Every path is then relative to
+  the new root, so the project's own files gain the project directory as a
+  prefix (`MyGame/Source/…`); the `File tools active` log line shows the root in
+  effect.
 
 ## Tools
 
@@ -114,12 +167,16 @@ system's error.
 
 ### list_dir
 
-`path` (string, optional; defaults to the root).
+`path` (string, optional). An empty or omitted path, `.`, or the root's
+absolute path lists the root.
 
-One entry per line, directory names suffixed with `/`, sorted by name. Not
-recursive; no sizes, no timestamps, no filtering, no glob. An empty directory
-yields an empty result, which is a success, not an error. To walk a tree, call
-`list_dir` per level.
+One entry per line, directory names suffixed with `/`, sorted by byte value, so
+upper case comes first (`Q.txt` before `a.txt`). A symlink or junction is listed
+under its own name without the `/`, even when it points to a directory and even
+when it leads out of the root; whether it can be followed shows only when you
+list or read through it. Not recursive; no sizes, no timestamps, no filtering,
+no glob. An empty directory yields an empty result, which is a success, not an
+error. To walk a tree, call `list_dir` per level.
 
 ### write_file
 
@@ -162,12 +219,24 @@ back.
 |---|---|---|
 | `-32602 unknown tool: read_file` | file tools disabled | user sets `files.enabled: true`, or runs with `-files` |
 | `-32602 unknown tool: write_file` while `read_file` works | `files.readOnly: true` | user clears `readOnly`; do not retry |
-| `Error: path outside the allowed root` | the path escaped the root | make it relative to the project root |
+| `Error: path "<given>" must be relative to the project root "<root>"; an absolute path is accepted only under it` | an absolute or rooted path that is not under the root | make it relative to the root; if it should be under it, compare with the `File tools active … under:` log line |
+| `Error: path outside the allowed root` | a relative path climbs out with `..`; on a Windows host also a relative path with a colon | drop the `..`; nothing above the root is reachable |
+| `Error: path "<given>": a link on the path (symlink or junction) is absolute or leads outside the allowed root "<root>" (…)` | a symlink or junction on the path has an absolute target or leads out of the root | do not retry; see A plugin linked in from outside the root |
+| `Error: openat <name>: too many levels of symbolic links` | a link loop, or more than 8 links on the path | do not retry; tell the user |
+| `Error: path component "<component>" is a reserved Windows device name` | `CON`, `NUL`, `AUX`, `COM1`, `aux.h`, … in some component | pick another name; such a file cannot exist on Windows |
 | `Error: 'path' missing` | `path` absent or empty | supply it; for `list_dir`, empty means the root |
 | `Error: 'old_string' not found` | no literal match | re-read the file; check whitespace and line endings |
 | `Error: 'old_string' missing` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
 | content ends in `…[truncated]` | file exceeds 256 KiB | you have the head only; the tail is unreachable |
 | `Error: 'content' missing` | `content` absent or not a string — typically a misspelled parameter name | rewrite with the correct parameter name; nothing was written |
+| `Error: open <root>: no such file or directory` | the root itself does not exist; every call fails | user fixes `files.root` |
+| `Error: openat <name>: no such file or directory` | nothing at that path under the root | check with `list_dir` |
+| `Error: read <abs path>: is a directory` | `read_file` on a directory | use `list_dir` |
+| `Error: readdirent <abs path>: not a directory` | `list_dir` on a file | use `read_file` |
+
+The last four rows quote a Linux host. On a Windows host the operating system's
+part of the message (`no such file or directory`, `is a directory`,
+`not a directory`) reads differently.
 
 ## Do not hand-edit assets
 

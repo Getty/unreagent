@@ -521,6 +521,7 @@ runs no check on HTTP entries, `unreagent.log` will not say which.
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
+| `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
 | `engineRoot` | *usually only in local.yaml* — engine path override; relative is resolved against the working directory |
 
@@ -847,8 +848,44 @@ description and are therefore automatically in context.
 | `run_command` | run a preconfigured command (compile, package) |
 | `logs` | last output lines of a service |
 | `run_python` / `run_node` | run code in a prepared environment |
-| `read_file` / `list_dir` / `write_file` / `edit_file` | file access on the project (only with `files.enabled` / `-files`, scoped to `root`) |
+| `read_file` / `list_dir` / `write_file` / `edit_file` | file access on the project (only with `files.enabled` / `-files`), confined to `files.root`: paths are relative to it, and an absolute path is accepted only under it. Refused: any other absolute or rooted path ("must be relative to the project root"), a relative path that climbs out with `..`, a Windows reserved device name (`CON`, `NUL`, `AUX`, `COM1`, `aux.h`, …) in any path component (on every platform), and any symlink or Windows junction on the path that is absolute or leads outside the root — also on the way to a file that does not exist yet. A plugin linked into `Plugins/` from outside the root is therefore out of reach through the link: put the plugin into the project, or set `files.root` to a directory holding both and reach the plugin at its real path (see File-tool confinement below) |
 | `approve` | permission prompt tool for Claude Code |
+
+### File-tool confinement
+
+`read_file`, `list_dir`, `write_file` and `edit_file` never leave `files.root`.
+Each call opens the root afresh and resolves the path inside it, link by link,
+so a link cannot be swapped in between the check and the use.
+
+- A relative path is taken against the root. An absolute path is accepted only
+  when it lies under the root; any other absolute or rooted path is refused:
+  `path "/etc/passwd" must be relative to the project root "<root>"; an absolute path is accepted only under it`.
+- A relative path that climbs out (`../x`) is refused: `path outside the allowed root`.
+- A symlink or Windows junction on the path is refused when its target is
+  absolute or leads outside the root. A junction always has an absolute target,
+  so it is refused even when it points back into the root. The check also
+  covers the way to a file that does not exist yet, so `write_file` cannot
+  create a file through such a link:
+  `a link on the path (symlink or junction) is absolute or leads outside the allowed root "<root>"`.
+  A relative link that stays inside the root works.
+- A Windows reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+  `LPT1`-`LPT9`, also with an extension such as `aux.h`) in any path component
+  is refused: `path component "aux.h" is a reserved Windows device name`. The
+  check runs on every platform, because such a file created on Linux cannot be
+  checked out on Windows.
+
+**A plugin linked into `Plugins/` from outside the project.** A common layout
+links a shared plugin into `<Project>/Plugins/` with a symlink or junction. The
+file tools cannot reach through that link, and a read of it fails with the link
+error above. Either put the plugin into the project as a real directory, or
+set `files.root` to a directory that holds both the project and the plugin's
+real location. A wider root does not make the link itself work — a junction
+or absolute symlink is still refused — so the plugin is then reached at its
+real path, and every path gains the project directory as a prefix
+(`MyGame/Source/...`).
+
+On Windows the junction and reserved-name handling is built but not yet
+verified on a Windows host; the behavior above is exercised on Linux only.
 
 ### MCP server hardening
 

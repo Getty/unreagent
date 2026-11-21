@@ -78,6 +78,9 @@ code goes back to the worker as a note on its card, not as your own fix. **Never
     - The documented `claude.cmd` shim in `unreagent.local.yaml` passes the
       `--mcp-config` JSON through intact.
     - `read_file path=CON` (and the other reserved device names) is rejected.
+    - The file tools work in a project inside a OneDrive-synced folder
+      (online-only placeholders are reparse points, which `os.Root` may refuse),
+      and a junction under the root is refused with the documented message.
     - The signed `.exe` shows the publisher and the release version in
       Properties → Details.
 
