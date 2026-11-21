@@ -50,9 +50,12 @@ code goes back to the worker as a note on its card, not as your own fix. **Never
 7. **Docs.** `README.md` and `unreagent.example.yaml` cover every user-visible
    change since the last tag (`git log --oneline $(git describe --tags --abbrev=0)..`).
 8. **Changes.** `Changes` (CPAN format) has a `{{$NEXT}}` section covering every
-   user-visible change since the last tag. The GitHub release notes are still
-   `gh release create --generate-notes` (commit subjects) until k92 switches them to
-   the `Changes` section — so flag unclear or German commit subjects too.
+   user-visible change since the last tag. That section IS the GitHub release
+   notes: `release.yml` extracts it with `scripts/changes-section.sh` for the tag's
+   version and fails before building when the tagged commit has no stamped section
+   for it (still `{{$NEXT}}`, missing or empty). So the version line must be stamped
+   and committed before the tag, and the section must read as release notes —
+   clear, English, user-facing.
 9. **Workflows.** `.github/workflows/ci.yml` and `release.yml` are pinned
    independently; a version gap between their actions is drift — report it once.
 10. **Windows smoke test.** A green Linux run says nothing about the `.exe`. These
