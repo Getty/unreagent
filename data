@@ -1,0 +1,96 @@
+---
+claimed_at: 2026-11-21T07:11:31Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:13:47Z
+created: 2026-08-21T23:23:53Z
+depends_on:
+- 8
+id: 25
+priority: medium
+started: 2026-11-21T06:17:43Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: Viewport & PIE testing (Class A)'
+updated: 2026-11-21T07:14:14Z
+---
+
+- ue-viewport -- capture_viewport
+- ue-pie-testing -- gameplay_debug, run_console_command, get_output_log
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size M. k19 first.
+
+Skill-author: written, uncommitted, in the k25 worktree. Files: skills/ue-viewport/SKILL.md (261 lines); skills/ue-pie-testing/SKILL.md (251), sequences.md (249), input.md (167), log.md (131). Written from the toolkit source only (headers, .cpp, PIESequenceRunner, MCPParamValidator, registry, HTTP server, bridge index.js); no VibeUE text. go test ./internal/skills, gofmt -l, go vet clean.
+Hedged as unverified (engine-side or no editor): whether the static-mesh, Blueprint and other non-Persona editors have a preview the tool finds; whether a package path (no .Name) loads for asset_path; which viewport counts as active; frame freshness without a redraw; whether IMC triggers/modifiers apply to injected input (header and debug.md disagree); whether editor-world console commands such as slomo reach PIE; when log lines reach the file; the run_sequence-with-PIE-running failure; the debug.md digital-press advice; what the Take Recorder does when PIE ends.
+Added beyond the toolkit tools: a run_python sketch that POSTs to the plugin HTTP API and writes the JPEG to a file, marked as not exercised (the bridge returns image_base64 as text, read_file is text only).
+Left out: HighResShot and other engine screenshot commands; raw execute_script routes (Class B); what wrong-type values do where the code does not show it.
+Overlap with unreagent logs: SKILL.md "Which log to read" routes to get_output_log, logs or read_file, and points to unreagent-iterate for the buffer limits instead of restating them, so k74 does not invalidate it.
+Upstream bugs noted on k132 (L1, P1-P11, H1-H5, V1-V2).
+
+Ready for review: skills/ue-viewport (capture_viewport) and skills/ue-pie-testing (gameplay_debug, run_console_command, get_output_log; sections sequences, input, log). Check: go test -count=1 ./internal/skills, gofmt -l cmd internal skills, go vet ./... all clean. Uncommitted in the k25 worktree.
+
+**Review 2026-11-21** (unreagent-reviewer): CHANGES NEEDED (small). Owner of all files: unreagent-skill-author (ack-team owner).
+
+Reviewed (untracked in the k25 worktree, base 9e624eb; git diff HEAD empty, nothing outside skills/): skills/ue-viewport/SKILL.md; skills/ue-pie-testing/SKILL.md, sequences.md, input.md, log.md. Checked against the toolkit source (MCPTool_CaptureViewport, _GameplayDebug, _RunConsoleCommand, _GetOutputLog, PIESequenceRunner, MCPParamValidator, MCPToolRegistry, UnrealClaudeMCPServer, UnrealClaudeConstants, mcp-bridge index.js/lib.js, Scripts/ue-tool.sh).
+
+Check, run by me in the worktree: gofmt -l cmd internal skills (empty), go vet ./... (ok), go test -count=1 ./... (all ok, incl. internal/skills), make windows (dist/unreagent.exe built). Docs-only change; no Windows-path code touched.
+
+Findings, most important first:
+1. (Medium, safety) skills/ue-viewport/SKILL.md:197-202 - presents the direct-call 30 s timeout as a plain error. On timeout the toolkit's HTTP path (UnrealClaudeMCPServer.cpp:262-283) returns while the queued game-thread lambda still holds the stack-local result (use-after-free, k132 / k26 item 1), so a direct capture against a busy game thread can crash the editor. Add a caution: call it directly only when the editor is idle (no PIE start, no long task), and treat a timeout as a hazard, not as "busy, retry".
+2. (Low, bug in sketch) skills/ue-viewport/SKILL.md:187-188 - `raise SystemExit(res.get("message"))`: server-level failures (unknown tool, bad JSON; UnrealClaudeMCPServer.cpp:355-365) carry their text in `error`, not `message`, so the script exits 0 with no output. Use `res.get("message") or res.get("error") or json.dumps(res)`.
+3. (Low, accuracy) skills/ue-pie-testing/sequences.md:94-95 - "A capture that fails leaves no file and no entry in the manifest" holds only for failures before compression. PIESequenceRunner.cpp:1546-1555 ignores SaveArrayToFile's result and adds the manifest entry anyway, so a failed write leaves an entry pointing at a missing file. Say so.
+4. (Low, hedging) skills/ue-pie-testing/input.md:14-15 - "The game reacts only if that player's mapping contexts and the pawn's bindings use the action" states engine behaviour as fact, and the next paragraph says the plugin contradicts itself on mapping-context handling. Keep the pawn-binding requirement, hedge the mapping-context part.
+5. (Low, hedging) skills/ue-pie-testing/sequences.md:77-80 - the gap-to-release recipe for digital actions is engine behaviour stated without a hedge; the later "neither has been verified" covers only the plugin's two notes.
+
+Nits (optional):
+- skills/ue-pie-testing/sequences.md:114 - `take_slate` is present only when non-empty (GameplayDebug.cpp:897).
+- skills/ue-pie-testing/sequences.md:57 - `delay_ms` is optional, default 0 (GameplayDebug.cpp:523-527).
+- skills/ue-pie-testing/sequences.md:179 - GetBaseFilename also strips an extension from the last part of output_dir.
+- skills/ue-pie-testing/sequences.md:146 - captured_frames counts named captures only, not auto-captures.
+- skills/ue-pie-testing/input.md:114 - AXIS lines appear only on ticks with an active action (GameplayDebug.cpp:1268).
+- skills/ue-pie-testing/SKILL.md:181 - the read_file row lists "a search", but 187-188 send searching to run_python.
+
+run_python sketch (item 2 of the brief): port, endpoint, body shape, no auth, {success,message,data}, HTTP 400, timeout text and unknown-parameter warning all match the plugin and ue-tool.sh; fits unreagent-runtimes and does not contradict unreagent-files (read_file text-only). Recommendation: keep it, with findings 1 and 2 fixed.
+
+Verified with no finding: all 17 gameplay_debug operations and their 5 short forms; run_sequence steps, defaults, end conditions, manifest and sequence_status; execute_sequence; input values, continuous injection, monitor, montages; the 23-entry console blocklist (exact); get_output_log file order, parameters, filter order, result fields, messages, errors and the since cursor incl. L1; capture_viewport parameters, tab lookup, camera presets and coordinates, frames, retries, results. The logs table agrees with unreagent-iterate and the logs tool and does not restate the 500-line limit (k74). Frontmatter toolkit_tools exact and registered, no unreal_classes. English only, no VibeUE text. k132 bugs steered around. The proposed Changes entry is accurate.
+
+Landing note: the worktree predates main's e66eb98 (k20, k24, k26); after landing on main, re-run go test ./internal/skills there. Follow-up, not k25: ue-enhanced-input on main does not link back to ue-pie-testing; ue-tasks has the same direct-timeout gap as finding 1.
+
+Review fixes (round 2), each checked against the toolkit source. ue-viewport/SKILL.md: 187-191 sketch exits 1 with message, else error, else the raw JSON (CreateErrorResponse puts server errors in 'error'); 200-205 notes the {success:false,error} shape; 207-215 new: call directly only while the editor is idle, a 30 s timeout is a crash risk (job left queued writes freed memory, UnrealClaudeMCPServer.cpp:262-283, on k132), do not retry, check status; 258 new failure-mode row for that timeout. ue-pie-testing/sequences.md: 57 delay_ms optional, default 0; 77-83 gap-as-release hedged as engine behaviour, input_tape sends false on 0 frames; 97-101 only failures before the JPEG leave no entry, the unchecked SaveArrayToFile still adds one (PIESequenceRunner.cpp:1546-1555); 120-121 take_slate only when non-empty; 153 captured_frames = capture steps done, grabber count while auto-capture runs (GetStatus :405-413); 186 manifest name drops any extension (GetBaseFilename). ue-pie-testing/input.md: 14-20 pawn binding kept, mapping-context need hedged (description vs debug.md); 119 AXIS only on ticks with an active action (MCPTool_GameplayDebug.cpp:1244,1268). ue-pie-testing/SKILL.md: 181 read_file row no longer lists a search. log.md unchanged. go test -count=1 ./internal/skills ok; gofmt -l cmd internal skills empty; sketch parses (ast), SystemExit(str) exits 1.
+
+Round-2 review fixes done in the worktree (5 k25 files, uncommitted): required 1-5 and all six nits; line list in the previous note. Checks green: go test ./internal/skills, gofmt. Ready for re-review.
+
+**Review round 2, 2026-11-21** (unreagent-reviewer): READY.
+
+Re-checked the changed lines against the toolkit source: skills/ue-viewport/SKILL.md:187-191, 200-205, 207-215, 258; skills/ue-pie-testing/sequences.md:57, 77-83, 97-101, 120-121, 153, 186; input.md:14-20, 119; SKILL.md:181. All round-1 findings are resolved:
+1. Direct-call timeout: 207-215 and row 258 match UnrealClaudeMCPServer.cpp:262-283 (the event is returned to the pool and the stack-local result is left behind while the job is still queued); status is documented in unreagent-iterate.
+2. Sketch exit: 190-191 exits 1 and falls back to error; 200-202 match CreateErrorResponse (success false plus error, for a missing tool name, oversized or invalid body; an unknown tool still comes back in message from the registry).
+3. Manifest: 97-101 match DoNamedCapture (the early returns write nothing; SaveArrayToFile result ignored, entry added).
+4. and 5. Hedging: input.md:14-20 quotes the header (pipeline incl. mappings) and debug.md:68 (bypasses IMC modifiers) correctly; sequences.md:77-83 is hedged, hold end only stops the timer, and the tape injects Val.X != 0 every frame.
+Nits fixed: delay_ms default 0 (GameplayDebug.cpp:523-527), take_record/take_slate conditions (894-900), captured_frames (PIESequenceRunner.cpp:405-413; correct for run_sequence, where the timer capture is off), GetBaseFilename, AXIS only for active actions (GameplayDebug.cpp:1244), read_file row.
+
+Check, run by me: gofmt -l cmd internal skills (empty), go test -count=1 ./internal/skills (ok). Round 1 also ran a full go vet, go test ./... and make windows, all green. Scope unchanged: only the two untracked skill directories, git diff HEAD empty.
+
+Optional nit, not blocking: sequences.md:91 is one unwrapped 107-column line, where the rest of the file wraps near 78.
+
+Landing note stands: the worktree base predates e66eb98; re-run go test ./internal/skills after landing on main. The follow-ups are k140.
+
+Committed as 2e27485
