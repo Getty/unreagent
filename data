@@ -1,0 +1,317 @@
+---
+class: standard
+completed: 2026-11-21T14:43:54Z
+created: 2026-11-21T02:27:29Z
+id: 113
+priority: high
+started: 2026-11-21T14:43:54Z
+status: done
+tags:
+- permissions
+- security
+title: Bash ANSI-C quoting ($'…') bypasses the permission tokenizer
+updated: 2026-11-21T14:43:54Z
+---
+
+Found by the k104/k59 reviewer (pre-existing on 2e72af4): the command tokenizer in internal/config/permission.go does not know bash's $'…' quoting, where \' is an escaped quote. With Bash(echo *) allowed, "echo $'\'' ; touch /tmp/pwned" is allowed and bash runs the touch — a full allowlist bypass; "echo $'\'' > /etc/passwd" likewise passes the redirection guard. Fix: tokenize $'…' with its escape rules (or fail closed on any $' the tokenizer cannot follow). Linux-testable; reproduce in bash. Bundled with k59 (same tokenizer, same worktree).
+
+**Scope grew (2026-11-21), worker's fix round:** two older bypasses on main of the same class are fixed in the same worktree — quotes inside a double-quoted ${…} (echo "${x:-'"'}" ; touch …) and backquotes inside an unquoted ${…}; readDelimited now honours backquotes and backslash escapes. Recorded here because they are the same tokenizer class.
+
+Review fixes done (2026-11-21): $'…' read and decoded as bash 5.2 does in every tokenizer (table checked against bash), $' inside double quotes stays literal; dq ${…} parsed like bash; readDelimited honours backquotes and escapes. PowerShell parsing stays with k114.
+
+**Re-review 2026-11-21** (unreagent-reviewer, worktree-agent-a37f74fe4818f37c6, uncommitted on 2e72af4; files internal/config/permission.go, permission_test.go, config.go, load_test.go, +1006/-40): CHANGES REQUESTED.
+
+The new $'…' handling and the double-quoted ${…} handling open two bypasses. HEAD 2e72af4 fails closed on both. Each one hides a `;` or a redirection from three checks:
+- the allow list
+- the deny list
+- the k59 redirection guard
+
+I reproduced each in bash 5.2.37 (extquote on), and the hidden command runs.
+
+Check, run by me in the worktree. All green:
+- gofmt -l cmd internal skills (empty)
+- go vet ./...
+- GOOS=windows go vet ./...
+- go test -count=1 ./... (4 packages ok)
+- go test -race -count=1 ./internal/config
+- GOOS=windows go test -c ./internal/config
+- make windows (exit 0)
+- revert pins in a scratch copy: my own 18 mutations and the worker's 27, all red
+
+Blocking, new in this worktree:
+
+1. permission.go splitSegments, readDelimited, substitutions, outputRedirections and redirection. `$$` is bash's PID parameter, but every one of these starts `$'` at its second `$`.
+   - With allow [Bash(echo *)], `echo $$'\' ; touch x ; echo ''` is ALLOWED as one segment.
+   - With Bash allowed and deny [Bash(touch *)], the deny rule does not fire.
+   - `echo $$'\' > /etc/passwd ; echo ''` passes the redirection guard.
+   - Variants: `echo $$$$'\' ; touch x ; echo ''`, `echo ${x:-$$'\'} ; touch x ; echo '}'`, `echo "${x:-$$'\'}" ; touch x ; echo "'}"`.
+   - An odd run such as $$$'…' happens to parse right.
+   - Fix: consume `$$` as one token wherever `$'`, `${` or `$(` is recognised.
+   - The pre-existing `echo $${ ; touch x ; echo }` has the same root. HEAD allows it too. Fix it in the same pass.
+
+2. permission.go readDelimited counts every bare `{` as nesting inside ${…}. bash closes ${…} at the first unquoted `}` and nests only on `${`.
+   - With allow [Bash(echo *)], these are ALLOWED, and HEAD denied both: `echo "${x:-{}" ; touch x ; echo "}"` and `echo "${x:-${y:-{}}" ; touch x ; echo "}}"`.
+   - `echo "${x:-{}" > /etc/passwd ; echo "}"` passes the redirection guard.
+   - Pre-existing in the unquoted form, which HEAD allows too: `echo ${x:-{} ; touch x ; echo }`.
+   - Fix: for `${`, only a nested `${` raises the depth.
+   - Pin both forms with tests.
+
+Claims that hold, checked against bash:
+- A `'` inside a double-quoted ${…}: `echo "${x:-'}" ; touch …` stays one segment, and bash does not run the touch.
+- A backslash in ${…}: `echo ${x:-\{} ; touch x ; echo }` is now denied. HEAD allowed it.
+- Backquotes in quoted and unquoted ${…} are handled.
+- $' inside double quotes stays literal.
+- `echo $$$'\'' ; touch x` is now denied. HEAD allowed it.
+- The worker checked the decode table against bash. I did not redo that.
+
+Pre-existing on HEAD, in the same desync class but outside this card. Suggest a new high/security card for these:
+
+3. Comments. `#` starts a comment, but the tokenizer opens quotes inside it. These are ALLOWED under Bash(echo *) (\n is a newline):
+   - `echo x # it's\ntouch x`
+   - `echo x #"\ntouch x`
+   - `echo $(echo a # it's\n) ; touch x`
+
+4. Here-doc bodies are tokenized as commands. With Bash(cat *), `cat <<EOF\necho it's\nEOF\ntouch x` is ALLOWED.
+
+5. readBackquote drops the backslash before every byte, while bash drops it only before $, ` and \. These are ALLOWED, and bash runs the touch inside the substitution:
+   - ``echo `echo \' ; touch x` ``
+   - ``echo `echo \" ; touch x` ``
+   - ``echo `echo $'\'' ; touch x` ``
+
+Unverified at runtime: Git Bash on Windows. All probes ran in bash 5.2.37 on Linux.
+
+Fixes go to unreagent-worker (owner of all four files).
+
+Back to the worker (2026-11-21): two regressions against HEAD in the worktree's tokenizer — (1) $$ read as the start of $' (splitSegments, substitutions, outputRedirections, redirection, readDelimited): 'echo $$'\\' ; touch x ; echo ''' allowed and past the redirection guard; HEAD's 'echo $${ ; touch x ; echo }' has the same cause — fix in the same pass; (2) a bare { counts as nesting inside ${…} (readDelimited): 'echo "${x:-{}" ; touch x ; echo "}"' allowed. k59 and k104 are approved and wait for this; one commit for all three.
+
+**Round 2 (worker, 2026-11-21):** fixed both regressions in internal/config/permission.go. $$ is now read as one token at all seven sites: splitSegments (both branches), substitutions, outputRedirections, the redirection target word, readDelimited, and shellTokens (deny rules: 'env X=$$'\'' rm -rf /' had slipped past Bash(rm -rf *)). Inside ${…} only an unescaped ${ nests; a bare { is literal. New tests: TestShellSegments :404-408 and TestDollarDollarAndBraceNesting (:1000), each case checked in bash 5.2 first. Before the fix, 19 of 21 deny-expected cases were allowed; all 36 mutations are pinned. Of the 37 reviewer probes, the still-allowed ones are the comment and backquote-escape class (k127). Ready for re-review.
+
+Re-review round 2 (main agent; the reviewer hung after its probe run and was stopped, so this is a verdict from its probe results): NOT READY.
+
+The probes were run through Permissions.Decide and through bash, with two rule sets. A is the allowlist Bash(echo *). D is allowAll with the deny rule Bash(touch *). "runs" means bash really created the file M.
+
+Regressions against main (main denies these, the branch allows them under A and D, and bash runs the touch):
+- r4: echo "${x:-"${y:-'"'}"}" ; touch M
+- s2: echo "${x:-"$(echo '"')"}" ; touch M
+
+Still open, on main as well (allowed under A and D, touch runs):
+- r3: echo ${x:-"${y:-'"'}"} ; touch M
+- s3: echo ${x:-"$(echo '"')"} ; touch M
+- r10: echo ${x:-${x:-${x:-${x:-${x:-$(touch M)}}}}}
+- r11: echo ${x:-${x:-${x:-${x:-$(touch M)}}}}
+
+Also open: s1, echo "${x:-"${y:-'"'}"}" > out, is allowed under A, which refuses redirections.
+
+Fixed by the branch: r8, echo ${x:-$$'\'} > out, is now denied under A.
+
+Main agent's decision: stop modelling bash's quoting inside ${...} and fail closed instead. A ${...} whose body holds a quote, a backquote, $( or a nested ${, or any nesting deeper than the tokenizer follows, makes the command undecidable. That means not allowed under an allowlist, and treated as matching under deny rules. Every probe above becomes a table case. Back to the worker, rebased onto current main first.
+
+**Round 3 (worker, 2026-11-21):** rebased onto 7f1d0c5. load_test.go had one conflict; both sides are kept (k124's multi-document tests and k104's TestPathRulesMustBeAbsolute).
+
+Fix, per the main agent's decision (internal/config/permission.go). The tokenizer no longer models bash's quoting inside ${...}.
+- New readBrace reads a ${...} body up to the first unescaped }.
+- A ', ", backquote, $(, ${ or $[ before that brace makes the line undecidable.
+- Nesting past maxShellDepth is now undecidable too. Before, it was dropped silently, which failed open.
+- Undecidable means no segments, so it takes the existing empty-segment path: the allowlist grants nothing, and every deny rule for the tool matches.
+- substitutions() is removed. It is dead: a body readBrace accepts holds no substitution.
+- readDelimited skips ${...} through readBrace, so $(echo ${x:-)}) is one substitution, as it is in bash.
+- My own addition: $[ is a trigger. bash nests $[...] inside ${...}; checked: echo ${x:-$[ } ; touch M ; ]} is one word.
+- bash checks: \} inside ${...} is a literal brace in both quoting contexts.
+
+Probes, as A/D for main -> round 2 -> round 3. A = allowlist Bash(echo *); D = allow_all with deny Bash(touch *).
+- r4, s2: deny/deny -> allow/allow -> deny/deny
+- r3, s3, r10, r11, s1: allow/allow -> allow/allow -> deny/deny
+- r8: allow/allow -> deny/allow -> deny/deny
+- main has no redirection guard (k59), which is why s1 and r8 pass A there.
+- Extra: five nested $( past the cap was allow/allow on main and on round 2, and bash runs the touch. Now deny/deny.
+
+Behaviour changes (the intended trade):
+- Denied now under Bash(echo *), though harmless in bash: echo ${x:-${y:-a}} · echo "${x:-${y:-}}" · echo "${x:-${y:-}'}" ; touch x ; echo "'}".
+- shellSegments now yields nothing for echo ${x:-$(id)}, echo "${x:-$(id)}", echo ${x:-$'\''$(id)} and echo "${x:-'"'}" ; touch x. So any Bash deny rule matches them.
+- s1 and r8 are denied under D only because an undecidable line counts as matching. There is no touch in them.
+
+Tests:
+- TestUndecidableCommandsFailClosed, 15 probes: the 8 above, plus a backquote, $[, inside $(...), inside bash -c, and the depth cap. Each asserts that shellSegments is nil, A denies, and D is blocked by Bash(touch *).
+- It also checks 9 lines that are still decidable, allowed under both.
+- Flipped expectations, cases kept: 4 in TestShellSegments, 3 in TestDollarDollarAndBraceNesting.
+- Red against round 2's permission.go, green with the fix. 9 mutations of the fix, all red.
+
+Check, all green:
+- gofmt -l cmd internal skills (empty)
+- go vet ./... and GOOS=windows go vet ./...
+- go test -count=1 ./... (5 packages)
+- go test -race ./internal/config
+- make linux and make windows (exit 0)
+
+Windows: compiled only. Git Bash on Windows is unverified.
+
+Drift, for unreagent-doc-writer: the README's "Permission layer" section should say that a command line the splitter cannot follow is denied under an allowlist and matches every deny rule.
+
+Still separate (k127): comments, here-doc bodies, backquote escapes.
+
+Round 3 done: fail closed on unreadable ${...} and on nesting past the depth cap; rebased onto 7f1d0c5, uncommitted in worktree-agent-a37f74fe4818f37c6. Ready for re-review.
+
+**Re-review round 3** (unreagent-reviewer, 2026-11-21, worktree-agent-a37f74fe4818f37c6, uncommitted on 7f1d0c5; files internal/config/permission.go, permission_test.go, config.go, load_test.go): CHANGES NEEDED.
+
+Check, run by me in the worktree. All green:
+- gofmt -l cmd internal skills (empty)
+- go vet ./... and GOOS=windows go vet ./...
+- go test -count=1 ./... (5 packages ok)
+- go test -race -count=1 ./internal/config
+- make linux and make windows (exit 0)
+- TestUndecidableCommandsFailClosed against round 2's permission.go (go test -overlay, worktree untouched): all 13 undecidable subtests red.
+
+Probes: 95 lines, each run through Permissions.Decide and through bash 5.2.37 in a scratch cwd. The rule sets:
+- A is the allowlist Bash(echo *).
+- D is allow_all with the deny rule Bash(touch *).
+- B is the allowlist Bash(bash *) + Bash(echo *).
+
+Claims that hold:
+- All 8 round-2 probes (r3, r4, r10, r11, s1, s2, s3, r8) are denied under A and D. They are byte-identical to the worker's list.
+- Escapes in ${...}: \}, \\, \', \", \$(, $\(, \${, $\{ and backslash-newline are all read as bash reads them. Wherever bash runs the touch, the tokenizer sees it.
+- $[: no probe is allowed where bash runs anything.
+- bash -c with ${...} is consistent.
+- Depth cap:
+  - Allowed: 4 nested $( with echo.
+  - Denied (fails closed): 5 harmless levels.
+  - Denied: a touch at depth 4, and a backquote or bash -c at depth 5.
+- } inside quotes within $(...): 13 probes, all consistent with bash.
+- Plain usage stays allowed under A:
+  - `echo hello`, `echo "$HOME"`, `echo ${HOME}`, `echo ${x:-default}`, `echo "${HOME}/x"`
+  - `echo ${x:+set} ${#x} "${x//a/b}" ${x%.*}`, `echo $HOME/${USER}`, `echo $(echo hi)`, `echo ${x:-default} && echo ok`
+  - `echo "${HOME}" 2>&1`, `echo ${x:-default} > /dev/null`, `echo ${HOME:0:1}`
+- The rebase kept k104 and k59 intact:
+  - config.go: the changes are identical to round 2.
+  - load_test.go: identical except the fmt import, which 7f1d0c5 already has.
+  - permission.go: between round 2 and round 3 only the tokenizer and its comments changed. checkRules and pathPatternProblem are untouched, and outputRedirections changes only its ${ case.
+- Scope: only the four internal/config files. No German.
+
+Blocking:
+
+1. permission.go:628-644. readBrace accepts a process substitution in an unquoted ${...} body, and bash runs it. Each of these is ALLOWED under A and D, and bash runs the touch:
+   - `echo ${x:-<(touch M)}`
+   - `echo ${x-<(touch M)}`
+   - `echo ${x:->(touch M)}`
+   - `echo ${x:=<(touch M)}`
+   - `echo ${HOME:+<(touch M)}`
+   - `echo ${HOME#<(touch M)}` (a pattern runs it too)
+   - `echo ${x:-a b <(touch M)}`
+   - `echo $(echo ${x:-<(touch M)})`
+   - `bash -c 'echo ${x:-<(touch M)}'` (under B and D)
+
+   Main allows all of these too, so this is not a regression. But it is the class round 3 set out to close: a ${...} body that holds a command. In the double-quoted form, `echo "${x:-<(touch M)}"`, bash runs nothing.
+
+   Fix: make <( and >( triggers in readBrace as well. Escaped, as in `echo ${x:-\<(touch M)}`, it stays a literal; bash prints it.
+
+2. permission.go:628-644, value-driven. An assignment operator inside ${...} plants a value that a later expansion on the same line executes. Each of these is ALLOWED under A and D, and bash runs the touch:
+   - `echo ${x:=\$\(touch\ M\)} ${x@P}` (prompt expansion)
+   - `echo ${x=\$\(touch\ M\)} ${x@P}`
+   - `echo ${x:=\$\(touch\ M\)} ; echo ${x@P}` (two segments, each one covered)
+   - `echo ${x:=a[\$\(touch\ M\)]} ${!x}` (indirection to an array subscript)
+   - `echo ${x:=a[\$\(touch\ M\)]} ${HOME:x}` (the arithmetic offset evaluates x)
+
+   Main allows these too. They contradict the comment at permission.go:456-457, which says allowlist mode fails closed by construction.
+
+   Suggested cut: treat the assignment operators = and := inside ${...} as undecidable. Under an allowlist, that is the in-line source of a planted value. @P and a leading ! are worth considering as well.
+
+   Whether this stays in k113 or becomes a new high/security card is the main agent's call. I would fix it in the same readBrace pass.
+
+Not blocking. Pre-existing, outside ${...}, and belongs to the escape class of k127:
+
+3. permission.go:1171-1181. Inside double quotes, shellTokens drops the backslash before every byte. bash drops it only before $, `, ", \ and newline.
+   - `bash -c "echo \' ; touch M ; echo \'"` reads as one quoted echo in the nested script, but bash runs the touch.
+   - It is ALLOWED under B and D. Main behaves the same.
+
+Windows: compiled only (make windows, GOOS=windows go vet). Git Bash on Windows is unverified.
+
+Subject: "Guard Bash redirections, refuse relative path rules, fail closed on unreadable shell syntax (k59, k104, k113)" holds once finding 1 is fixed (and finding 2, if it stays in this card).
+
+Changes entry: I found no proposed entry on k113, k104 or k59, so there is nothing to confirm. That is for unreagent-release-manager.
+
+Base: main has moved to 22bee2b. 7f1d0c5..22bee2b touches no internal/config file.
+
+Fixes go to unreagent-worker, the owner of all four files (ack-team owner).
+
+Main agent's decision on the round-3 re-review: both findings stay in k113, and the fix changes from listing triggers to listing what is allowed.
+
+readBrace accepts a ${...} body only in these shapes:
+- an optional leading # (length);
+- a name: an identifier, positional digits, or one of the special parameters @ * # ? $ ! -;
+- optionally one operator from :- - :+ + :? ? # ## % %%;
+- after the operator, a word that holds no $( ${ $[ backquote, quote, <( or >(. A plain $name inside the word stays allowed.
+
+Every other body is undecidable. That covers indirection (${!x}), transformations (${x@P}), assignment (${x=...}, ${x:=...}), substring offsets (${x:off}, which are arithmetic), replacement and case operators (${x/a/b}, ${x^^}), and anything the shapes above do not match. The reviewer's process-substitution probes and planted-value probes become table cases, and the plain-usage set stays allowed.
+
+Split out as separate cards:
+- Finding 3, the backslash inside double quotes in shellTokens, goes to k127 as a note.
+- A value planted by an assignment segment and executed by a later arithmetic context under deny rules gets its own card, because deny rules cannot be complete for Bash.
+
+Round 4, worker (restart after the hung run). Result:
+
+Whitelist: readBrace (permission.go) checked against the decision note, and it matches. It follows #name; a name (identifier, positional digits, one of @ * # ? $ ! -); an optional operator from :- - :+ + :? ? # ## % %%; and a word with no $( ${ $[ backquote, quote, <( or >(. A plain $name and $$ are fine, and a backslash escapes. Everything else is undecidable, an unterminated body included. Stricter than the note in one place: # takes no operator, so ${#x:-a} is undecidable, and bash rejects it anyway.
+
+One gap filled, in tests only: two table cases for bash 5.3's ${ cmd; } and ${| cmd; } went into TestUndecidableCommandsFailClosed. The whitelist already rejects them, because no name follows the brace. Bash 5.3 running them is from its documentation; the local bash is 5.2.37, so that part is unverified here.
+
+Reading noted, not changed: bash takes ${!#} and ${!?} as indirection through $# or $?. The whitelist reads them as $! with a # or ? operator. Both values are always numbers, so the indirection reaches a positional parameter and evaluates nothing. ${!@}, ${!*}, ${!x} and ${!1} stay undecidable.
+
+Red run: a scratch copy of permission.go via go test -overlay, with the tree untouched. Its readBrace accepts any body and keeps only the round-3 triggers (quotes, backquote, $( ${ $[), with no <( >( check and no name or operator shape. Result: FAIL, 27 subtests of TestUndecidableCommandsFailClosed:
+- all 11 process-substitution cases;
+- all 6 planted-value cases (@P, = for @P, @P in the next segment, indirection, offset, subscript);
+- both 5.3 cases;
+- 8 of the 9 'not followed' cases. ${x is unterminated, so it is undecidable either way.
+Nothing else failed. Green with the real file: ok.
+
+Check, all exit 0:
+- gofmt -l cmd internal skills (empty)
+- go vet ./...
+- GOOS=windows go vet ./...
+- go test -count=1 ./... (5 packages ok)
+- go test -race -count=1 ./internal/config
+- make linux
+- make windows
+
+Windows: compiled only. Git Bash on Windows is unverified.
+
+Scope: still only the four internal/config files. No probes went through a real shell.
+
+Round 4 done. readBrace now lists what is allowed (the shapes from the decision note), and both round-3 findings are table cases. The red run with the round-3 trigger list fails 27 subtests. The full check is green (gofmt, vet, vet with GOOS=windows, test, race, make linux, make windows). Windows is compiled only. Proposed subject: Guard Bash redirections, refuse relative path rules, fail closed on unreadable shell syntax (k59, k104, k113)
+
+**Verdict on round 4 (main agent, 2026-11-21): ready**
+
+The re-reviewer hung again after its probes and was stopped. The verdict is built from its saved results in the session scratch dir (k113-rr5).
+
+**Full check** (the reviewer's, 15:15): all green on the worktree.
+- `gofmt -l` printed nothing.
+- `go vet ./...` and `GOOS=windows go vet ./...` are clean.
+- `go test -count=1 ./...` passes.
+- `go test -race ./internal/config` passes.
+- `make linux` and `make windows` build.
+- Windows is compiled only.
+
+**Probe table:** 103 probes, through `Decide` with three policies:
+- A: allowlist `Bash(echo *)`;
+- D: allow_all with deny `Bash(touch *)`;
+- B: allowlist `Bash(bash *)` plus `Bash(echo *)`.
+
+Each was then run in a real bash with harmless stand-ins (`touch M`, `> out`).
+
+**Results:**
+- Every round-3 bypass (r3, r4, r8, r10, r11, s1, s2, s3) is now denied under all three policies.
+- Every probe that is allowed has no effect in bash, apart from two cases:
+  - **e13** (`echo ${x:-a} > out`) is allowed under D and writes `out`. That is expected: D denies only touch, and the redirection is not a touch.
+  - **c1** (`bash -c "echo \' ; touch M ; echo \'"`) is allowed under D and B, and bash runs touch.
+
+**c1** is the known backslash-inside-double-quotes issue in `shellTokens`. It was split off to k127 as finding 3 of the round-3 review. Bash keeps the backslash before `'` inside double quotes; the tokenizer drops it, so the nested `bash -c` parse sees a quoted string. The issue predates this card and is not made worse by it, so it does not block k113. k127 goes to high priority and comes right after k113.
+
+**The worker's deviations are accepted:**
+- `${#x:-a}` is undecidable. That is stricter than the note, and bash rejects the form anyway.
+- `${!#}` and `${!?}` are read as `$!` plus an operator. In bash they are indirection through `$#` or `$?`, which only reaches a positional parameter, so nothing gets evaluated.
+
+**Next:**
+- README Permission layer, with k111's items plus the note that a command the tokenizer cannot read is denied: unreagent-doc-writer, in this worktree.
+- Then unreagent-release-manager.
+- Proposed subject (72 chars): "Guard redirections, relative rules and unreadable Bash (k59, k104, k113)".
+
+README Permission layer + permissions table row documented (k104 path rules, k59 redirections/escapes/Windows case+UNC, k113 fail-closed unreadable commands); README.md only, uncommitted in worktree agent-a37f74fe4818f37c6
+
+Committed in 602304e on main (checks green: gofmt, vet both GOOS, test, race, make linux/windows; Windows compiled only).
