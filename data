@@ -1,0 +1,59 @@
+---
+claimed_at: 2026-11-21T23:27:36Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-21T23:27:21Z
+created: 2026-11-21T21:48:45Z
+id: 194
+priority: medium
+started: 2026-11-21T22:58:04Z
+status: done
+tags:
+- skills
+- class-c
+title: 'Skills: Lighting & Sequencer (Class C)'
+updated: 2026-11-21T23:27:36Z
+---
+
+- ue-lighting -- lighting (10 operations: lights, sky light, sky atmosphere, fog, post-process volumes)
+- ue-sequencer -- sequencer (7 operations: Take Recorder start/stop/status, open/scrub/get_state/close of a Level Sequence)
+
+Lane: unreagent-skill-author (OWNERS: skills/). Depends on: nothing open. Parallel with k193 and the Control Rig & Retargeting card: new directories only, and the inbound links below name files no other Class C card touches.
+Decision of record: k5. Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7. Format precedent: k20 and the shipped ue-* skills. Working rules: skill unreagent-skill-authoring.
+
+Sources (toolkit checkout ../ue-llm-toolkit at 9f6a0f7, paths under Plugin/UELLMToolkit/Source/UELLMToolkit/Private/):
+- MCP/Tools/MCPTool_Lighting.h (operation list :11-25; the name is in the cpp) and MCPTool_Lighting.cpp (Info.Name :36, dispatch :117-153), LightingEditor.cpp
+- MCP/Tools/MCPTool_Sequencer.h (Info.Name :14) and .cpp (dispatch :15-21), SequencerController.cpp
+No VibeUE text.
+
+Known from planning, to be settled by the author from the source:
+- lighting takes free-form `properties` / `settings` objects; the header names no keys. The skill documents only the keys LightingEditor.cpp reads, with the line, and says what happens to an unknown key.
+- lighting spawns and edits level actors, as ue-level-actors does with spawn_actor / set_property: say when to use which, and whether the level is marked dirty.
+- sequencer's take_* operations and gameplay_debug's run_sequence both drive the Take Recorder (skill ue-pie-testing, section sequences): say which owns which job.
+- `open` moves the viewport camera (camera_location / camera_rotation): link skill ue-viewport for the capture that follows.
+
+Inbound links (only these existing files): skills/ue-level-actors/SKILL.md, skills/ue-pie-testing/sequences.md, skills/ue-viewport/SKILL.md.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill above; long material in <section>.md sub-documents that the body names
+- frontmatter in the plain form: name equals the directory, description says when to reach for the skill in one or two lines, toolkit_tools lists exactly the tools named above and passes TestToolkitToolsExistInToolkit; unreal_classes only if the skill really works through execute_script
+- every documented operation, parameter, property key, default, result field and error string is traceable to a header or cpp line; the hand-off note lists operation -> file:line, and all dispatched operations are covered (10 / 7)
+- each skill opens with task recipes (the calls for the common jobs, in order) before the reference tables
+- each skill states what a success result does not prove (level saved or not, a key applied or ignored, a take actually recorded)
+- where the header and the code disagree, the skill follows the code and says so; where runtime behavior cannot be read off the source, it states the documented contract and stops -- no example that looks tested
+- other skills are named by their shipped names
+- upstream bugs found on the way are appended to k132
+
+Verification: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 ./... && make windows, and go test -count=1 -v ./internal/skills to see that the toolkit lint ran rather than skipped. Run it where Go is installed; the planning machine has none. Docs-only change, no Windows code path: make windows proves the embed builds, nothing more.
+
+Risk: written against source, not against a running editor (spec section 9). Two more description lines in the skills tool description.
+
+Skill-author finished (main tree, uncommitted): skills/ue-lighting (+ section properties), ue-sequencer; inbound links in ue-level-actors, ue-viewport, ue-pie-testing/sequences.md. Operations 10/10 and 7/7 mapped to dispatch, handler and implementation lines at toolkit 9f6a0f7. Short check green, toolkit lint ran. Unknown property keys are skipped silently (Set 0 properties). 13 upstream bugs noted on k132. Proposed subject: Ship skills ue-lighting and ue-sequencer (k194).
+
+unreagent-reviewer 2026-11-21: verdict CHANGES NEEDED, one must-fix. Check: gofmt -l / go vet ./... / go test ./... / make windows green; toolkit lint ran (43 tools). Docs only, no Windows code path. Confirmed against 9f6a0f7: toolkit_tools, all 10 + 7 operations and aliases, properties.md key by key (18 light, 9 sky light, 9 sky atmosphere, 18 fog, 26 post-process keys with type, field and line), all eight succeeds-without-effect claims. Must fix: (1) ue-lighting/SKILL.md:321-322 and :351 state the spawned post-process volume has the engine's default size / is small; the code gives it no brush or bounds (LightingEditor.cpp:1605) and the effective bounds are engine behaviour: mark unverified, say infinite: true is the only setting known to work. Should fix: (2) ue-sequencer/SKILL.md:45-47 capture_viewport with no parameters may show a stale frame (ue-viewport Freshness). Nits: (3) ue-level-actors/SKILL.md:382-384 'listing what it applied' holds for set operations only; (4) ue-lighting/SKILL.md:173 light-class casts are checked before the sky atmosphere component. Back to unreagent-skill-author.
+
+Skill-author round 2 (2026-11-21): all four findings applied. spawn_post_process_volume: the code sets no brush and no bounds, effective bounds unverified, infinite: true the only setting known to apply. Sequencer recipes capture with an explicit camera taken from get_state. Short check green. Narrow re-review requested.
+
+unreagent-reviewer 2026-11-21, narrow re-review: verdict READY. All four fixes confirmed against LightingEditor.cpp and SequencerController.cpp (get_state returns camera_location {x,y,z} and camera_rotation {pitch,yaw,roll}, :482-497, the shape capture_viewport takes). Check: gofmt, go vet, go test ./internal/skills ./cmd/launcher, make windows green; toolkit lint ran. Nits, not blocking (ue-sequencer/SKILL.md:43-58): say what to do when get_state has no camera fields; the same-viewport assumption is unstated; say whether to call get_state again after each scrub. Commit waits for the maintainer's word on Class C (k5).
+
+2026-11-21 23:27 unreagent-release-manager: committed as ff7674a.
