@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-21T10:22:32Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T10:22:32Z
+created: 2026-11-21T04:42:56Z
+id: 126
+priority: low
+started: 2026-11-21T08:45:12Z
+status: done
+tags:
+- mcp
+- console
+title: Console start/r and the agent restart ignore a failed start; ue_start reports
+  running for an editor that dies at once
+updated: 2026-11-21T10:22:44Z
+---
+
+Found by the k72 worker. (1) cmd/launcher/lifecycle.go: commandLoop start/r and restartAgent ignore the snapshot StartService/RestartService return, so a failed start shows only in the log line of the supervisor, not as a console reply. (2) ue_start/ue_restart answer right after the spawn: an editor that starts and dies within a second still reports running:true. Done: the console names a failed start like ue_start does (k72 lastError); for (2) decide whether a short settle wait is worth it or document the limit in the tool description. Lane: unreagent-worker.
+
+From the k72 review (2026-11-21): lastError covers only spawn and pipe failures. Probe: editor set to 'false' → ue_start isError=false, running:true, and status then shows no lastError. Realistic: a bad .uproject, a missing DLL on Windows. If (2) gets a settle wait, an exit inside it should also set lastError.
+
+2026-11-21 09:04 Worker: (1) Console start / r <name> / r / restart now go through act(), the serviceAction rule: an error is answered 'Error: <err>', a start that leaves the service not running 'Error: service "ue" did not start: <lastError>' (shared wording: startFailure in tools.go). stop <name> answers an error too (unknown service). Red first: TestConsoleNamesAFailedStart. restartAgent still prints nothing itself — my choice: its failed start comes back to the exit handler as an unrestarted exit (at once for a missing program, after the policy's retries otherwise), and the prompt header now names it: 'Agent did not start: <lastError>' instead of 'Agent crashed.' (agentEnded reads lastError via Status). A line from restartAgent would race the next prompt for the console. Red first: TestPromptNamesAFailedAgentStart. (2) Decision by the main agent, not the maintainer: no settle wait. ServiceStatus gains lastExit (json lastExit, omitempty): how the last run that ended on its own ended ('exit 3'); StartService/RestartService clear it like restarts, policy restarts keep it, a manual stop does not set it. ue_start/ue_restart descriptions: 'running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)'; status description names lastExit. Red first: TestStatusShowsHowTheEditorLastExited (the k72 probe: exit 3 -> status had no trace).
+
+2026-11-21 09:20 Worker: done as noted above. One addition since: the demo (example/unreagent.yaml, ping as the editor, run on Linux where ping rejects -unattended) shows status lastExit 'exit 2' and ue_restart answering running:true for a ping that dies at once, which is the limit the new descriptions name. Also found, not fixed: with a retrying agent policy the console stays silent about a failed agent start until the retries end (the prompt header names it then). Checks green on the final tree: gofmt, go vet (linux + GOOS=windows), go test ./..., go test -race, make linux, make windows. Ready for review.
+
+2026-11-21 09:28 Skill texts updated (skill-author, uncommitted in the bundle worktree): skills/unreagent-iterate/SKILL.md — fact 3, status field table (lastError, lastExit), ue_start answer table now the 'Error: service "ue" did not start: <lastError>' result plus the running-then-lastExit check, ue_restart, edit-loop step 6, failure-mode rows; also the older mismatches: crash loop now describes the fast-fail give-up (3 failures within 10 s, maxRestarts 0) instead of 'restarted forever', give-up log line added, 'restarted (manual)' logged only on success. .claude/skills/unreagent-mcp-tools/SKILL.md (startFailure shared with commandLoop), .claude/skills/unreagent-core/SKILL.md (tools.go row: startFailure; lifecycle.go row: agentEnded, console/lineReader, editorPreStart). gofmt clean, go test ./internal/skills ./cmd/launcher green.
+
+2026-11-21 Worker: rebased onto ce31def (k45/k123/k141, k88); no change to the fix, and the texts are unchanged. Checks green on the rebased tree. Still in review.
+
+2026-11-21 10:17 Review (unreagent-reviewer): verdict READY. Check: same reviewer run as noted on k120 (all green). The main agent's decision (no settle wait) holds: act() (cmd/launcher/lifecycle.go:361) names a failed console start through startFailure (tools.go:236); agentEnded (lifecycle.go:311) names a failed agent start in the exit prompt; status carries lastExit (internal/supervisor/supervisor.go:106, set at :641, cleared at :666/:678); the status, ue_start and ue_restart descriptions say running means spawned (tools.go:23/37/49). Red without the fix: act ignoring a start that left the service down fails TestConsoleNamesAFailedStart; agentEnded never naming lastError fails TestPromptNamesAFailedAgentStart; lastExit never set, or kept by ue_start, fails TestStatusShowsHowTheEditorLastExited. Findings (low, worker): the clear on ue_restart (supervisor.go:678) is untested (removing it survives ./...) although tools.go:49, README and the shipped skill promise it; that policy restarts keep lastExit (supervisor.go:645-648) is untested as well (clearing it there survives ./...). Changes (release-manager): rewrite the existing unreleased 'ue_start and ue_restart fail, naming the cause ...' bullet instead of adding a second one.
+
+Committed in b8e300c (Windows behaviour compiled only, unverified on a real .exe)
