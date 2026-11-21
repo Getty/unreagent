@@ -1,0 +1,83 @@
+---
+claimed_at: 2026-11-21T02:54:13Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:56:48Z
+created: 2026-08-21T23:22:28Z
+depends_on:
+- 8
+id: 9
+priority: high
+started: 2026-11-21T02:17:53Z
+status: done
+tags:
+- skills
+- subsystem
+title: 'internal/skills: embed, parse, Load, DescribeAll'
+updated: 2026-11-21T02:57:00Z
+---
+
+Create the internal/skills package: the embedded FS and the only component that parses skill files. Depends on nothing but embed and the vendored YAML parser; testable without a launcher, an editor or a network.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 6.1.
+Agent: unreagent-worker.
+
+Acceptance:
+- go:embed of skills/<name>/SKILL.md plus sub-documents skills/<name>/<section>.md
+- Skill{Name, Description, ToolkitTools, UnrealClasses, Body, Files}
+- Load() ([]Skill, error) -- parses all embedded skills once at startup and returns an error on malformed frontmatter, so a broken skill fails loudly at build/test time instead of vanishing
+- DescribeAll([]Skill) string -- renders the name/description table used as the MCP tool description
+- no new dependency; stdlib + the existing YAML parser only
+
+Blocked until #8 lands at least one skill under skills/ -- go:embed fails on an empty pattern.
+
+--- Note from #8 (2026-08-22) ---
+Two skills now exist under skills/ (unreagent-files, unreagent-runtimes), so go:embed has something to match. Both use frontmatter with only name and description -- no toolkit_tools, no unreal_classes -- so the parser must treat those two as optional and absent, not empty-but-present.
+
+Descriptions are ~265 characters each. At 23 skills that is roughly 6 KB of generated tool description sitting permanently in the agent's context via DescribeAll. That is the intended trade (spec section 3.1), but check the rendered size once more skills land.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, can start now: the 'blocked until k8' text is stale (k8 done). go:embed cannot reach skills/ from internal/skills/, so the embed needs a package at the repo root or under skills/. The two shipped skills carry only name+description frontmatter, so toolkit_tools/unreal_classes must parse as optional. k14 could be written alongside. Lane: unreagent-skill-author. Size M.
+
+Skill-author done (worktree-agent-a3da3e60971abce81, uncommitted, base c563b81): new skills/embed.go (package skills, //go:embed */*.md, directive only) + internal/skills (Skill, Load, load(fs.FS), DescribeAll); split because go:embed cannot use '..'; internal/skills stays the only parser. Own choices: name must equal the directory, closed frontmatter key set (KnownFields), non-empty body, only <name>/*.md (no auxiliary files), absent toolkit_tools/unreal_classes = nil, Files keyed by bare section name, DescribeAll is a '- name: description' list (no table, no preamble — k11's). Not wired into cmd/launcher (k11), no config (k10).
+
+**Review 2026-11-21 (unreagent-reviewer)**: worktree-agent-a3da3e60971abce81 on c563b81, files skills/embed.go, internal/skills/skills.go (tests: see k14). Verdict: APPROVE WITH NITS. The commit still waits on the k14 fix.
+
+Check, run in the worktree, all green: gofmt -l cmd internal skills (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./internal/skills, make linux, make windows, GOOS=windows CGO_ENABLED=0 go build ./..., go mod verify (all modules verified). go.mod, go.sum and vendor/ are untouched; no cgo; English only.
+Windows: the package and its test binary compile but were not executed, so this is UNVERIFIED. cmd/launcher does not import internal/skills yet, so dist/unreagent.exe carries no skills until k11.
+
+Layout is sound. go:embed cannot use '..', skills/embed.go holds only the directive, and internal/skills is its only importer. That it stays the only parser rests on a comment, which is acceptable. The embed set is exactly the 4 SKILL.md files (go list EmbedFiles). Top-level files and nested dirs are excluded.
+
+Parser choices, checked against spec §4/§6.1: none of them rejects a skill the spec allows. name == directory matches the skills/<name>/ layout and gives k12 a safe path component. yaml.v3 rejects duplicate keys. A --- line in the body stays in the body.
+
+Nits:
+(1) skills/embed.go:11-13 and skills.go:59-62/89-104: */*.md embeds names starting with '.' or '_' (.draft.md -> section '.draft', .hidden/SKILL.md -> skill '.hidden', _wip/), unlike Go's directory-embed rule. Neither embed test catches this. Reject those names in the loader.
+(2) skills.go:94-104: x/.md yields Files[""], and an empty sub-document passes even though an empty body is rejected (:133).
+(3) skills.go:116-120: there is a single Decode, so keys after a YAML '...' line are silently dropped and get past KnownFields. Require a second Decode to return io.EOF.
+(4) skills.go:148-155: a BOM, or a trailing space or tab on a delimiter line, fails loudly but with a misleading 'does not start with ---' / 'no closing ---' message.
+(5) On main, CI gofmt still checks only cmd internal (ci.yml:25), so embed.go is only format-gated once k112 lands. Commit k112 with k9 or before it.
+(6) For k115 (spec): §6.1 says 'table' but DescribeAll renders a list. §3.1 names auxiliary files as a materialization capability, and the only-<name>/*.md rule now rules them out. Record both.
+
+DescribeAll's format works as a tool description: 1062 bytes for 4 skills.
+
+**Approved with nits; nits taken in the same worktree (2026-11-21):** */*.md embeds dot/underscore names (.draft.md, .hidden/SKILL.md, _wip/) — reject them in the loader; empty section names (x/.md) and empty sub-documents pass; keys after a YAML '...' line escape the closed key set (require a second Decode to hit io.EOF); BOM / trailing whitespace on '---' fail with misleading messages. Landing order: k112 (CI gofmt covers skills/) before or with k9.
+
+Review fixes done (2026-11-21), worktree agent-a3da3e60971abce81: dot/underscore skill and section names rejected; empty section names and empty sub-documents rejected; frontmatter must be exactly one YAML document (second Decode must hit io.EOF); BOM / trailing whitespace on '---' get an error naming the problem (choice: name it, not tolerate it — shipped files are read by other parsers once materialized). k112 landed (3c88864), so CI gofmt covers skills/. Back to the same reviewer.
+
+**Re-review 2026-11-21 (unreagent-reviewer)**: same worktree, files skills/embed.go and internal/skills/skills.go after the fix round. Verdict: APPROVE.
+
+Check, run in the worktree, all green: gofmt -l cmd internal skills (empty), go vet ./... for linux and windows, go test -count=1 ./..., go test -race ./internal/skills, make windows, GOOS=windows CGO_ENABLED=0 go build ./... plus the windows test binary, go mod verify. go.mod, go.sum and vendor/ are untouched; English only.
+The same three files on top of main 3c88864 are also green: CI gofmt there now covers skills (ci.yml:25), so the k112 landing order is met.
+Windows: compile-only, UNVERIFIED. cmd/launcher does not import internal/skills yet (k11).
+
+All first-round nits are resolved:
+(1) Dot and underscore skill and section names are rejected (checkName, skills.go:124-132), and the embed.go comment now says so. .draft.md, _wip.md, .hidden/ and _wip/ on disk each fail Load with a message that names the problem.
+(2) Empty section names and empty sub-documents are rejected (:101-111).
+(3) A second Decode must return io.EOF (:148-155). No false positives: trailing comments, comment-only frontmatter and a bare '...' still parse as before.
+(4) A BOM or a trailing blank on '---' gets a precise error (:185-222). Choosing strictness over tolerance is sound. It fails loudly at test time on files this repo authors. k12 writes the raw SKILL.md, so what ships stays the plain form every reader accepts. Body lines are never scanned, so a body '--- ' horizontal rule still passes.
+(5) Met by k112.
+(6) Belongs to k115.
+
+Nothing new to fix. A BOM inside a sub-document is accepted, which is harmless because sub-documents have no frontmatter. DescribeAll is unchanged: 1062 bytes for 4 skills.
+
+Committed 4b71fea, landed on main
