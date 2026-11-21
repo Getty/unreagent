@@ -71,8 +71,11 @@ needed at build time. CI is in `.github/workflows/ci.yml` and
   and must not be removed.
 - **Agent ↔ Launcher** — the launcher injects `--mcp-config` for Claude Code
   and `--permission-prompt-tool mcp__unreagent__approve` when permissions are
-  enabled. Bridge smoke-tests run before the agent starts (initialize
-  handshake, port-3000 readiness for the in-editor plugin).
+  enabled and the agent is not interactive in window mode. An interactive
+  agent, or `claudeIntegration: false`, gets no prompt tool, and the launcher
+  logs a startup WARN that the policy is not enforced
+  (`permissionsInertReason`). Bridge smoke-tests run before the agent starts
+  (initialize handshake, port-3000 readiness for the in-editor plugin).
 
 ## Delegation
 

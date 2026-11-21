@@ -43,8 +43,10 @@
 agent:
   enabled: true
   command: claude                # default: claude
-  # Automatically appends --mcp-config (+ --permission-prompt-tool) to the
-  # claude invocation — no manual setup needed.
+  # Automatically appends --mcp-config to the claude invocation — no manual
+  # setup needed. With permissions.enabled it also appends --permission-prompt-tool,
+  # but only to a headless agent (not window: true; with window unset, -p/--print
+  # in args); see "permissions" below.
   claudeIntegration: true
   # Interactive in the foreground (agent inherits the console = real TTY) is the DEFAULT.
   # UE runs in the background, launcher logs -> unreagent.log (previous session kept as unreagent.log.1;
@@ -83,8 +85,18 @@ agent:
   # env:
   #   SOME_VARIABLE: "value"
 
+# The policy applies ONLY to a headless Claude Code agent with claudeIntegration
+# (args: ["-p", "<task>"]). An interactive agent (the default window mode) never
+# consults it: allow_all passes --dangerously-skip-permissions (deny rules are
+# not applied), the other modes leave the prompts to Claude Code in its window.
+# So with enabled: true and an interactive agent (agent.window: true, or
+# agent.window unset and no -p/--print in agent.args) the launcher logs a "WARN
+# permissions are not enforced" line at startup (and prints it to stderr when
+# the log is a file) and starts anyway. The same WARN appears when
+# agent.claudeIntegration is false. No warning without an agent (-no-agent / agent.enabled: false).
+# This example keeps it off for that reason; set it true together with a -p task.
 permissions:
-  enabled: true
+  enabled: false             # default false
   mode: allow_all            # allow_all | allowlist | deny_all (default if unset: allowlist)
   deny:
     - "Bash(rm -rf *)"

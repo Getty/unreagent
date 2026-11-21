@@ -41,8 +41,13 @@ other program first.
 2. In `unreagent.yaml`:
    ```yaml
    agent: { enabled: true, command: claude, claudeIntegration: true }
-   permissions: { enabled: true, mode: allow_all, deny: ["Bash(rm -rf *)"] }
    ```
+   Leave `permissions` out for this window-mode agent: an interactive Claude
+   Code never consults the policy (`allow_all` even skips its prompts and no
+   `deny` rule applies), and the launcher logs a `WARN permissions are not
+   enforced` at startup. To enforce a policy, run Claude headless (`-p` with a
+   task in `agent.args`); see the Permission layer in the main
+   [README](../README.md).
 3. For a real UE project: remove `unreal.editor`/`args` (the defaults from
    `${ENGINE}` take over) and place the files next to the `.uproject`. Details
    in the main [README](../README.md).

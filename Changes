@@ -269,6 +269,15 @@ Revision history for unreagent
     127.0.0.1 or [::1]), or a browser extension as exactly scheme://host
     (chrome-extension://<id>, moz-extension://<uuid>). null, wildcards,
     paths and the schemes file, ftp, ws and wss are refused.
+  - With permissions.enabled, the launcher logs a WARN at startup (also on
+    stderr when its log is a file) when the policy cannot take effect, and
+    starts anyway. An interactive agent, the window default, gets no
+    --permission-prompt-tool, so mode, allow and deny are never consulted; with
+    agent.claudeIntegration on, mode allow_all runs it with
+    --dangerously-skip-permissions, and an interactive agent warns even with
+    the flag wired into agent.args by hand. With agent.claudeIntegration: false
+    no prompt tool is passed at all. unreagent.example.yaml now ships
+    permissions.enabled: false.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

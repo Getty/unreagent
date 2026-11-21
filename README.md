@@ -191,10 +191,14 @@ The launcher is **dropped into the UE project** and the config is **committed**:
 
 ```yaml
 agent:       { enabled: true, command: claude, claudeIntegration: true }
-permissions: { enabled: true, mode: allow_all, deny: ["Bash(rm -rf *)"] }
 runtimes:    { python: { enabled: true }, node: { enabled: true } }
 mcp:         { enabled: true }
 ```
+
+This starts Claude Code in the window, with no permission policy. Adding
+`permissions: { enabled: true, ... }` to it does **not** make the policy apply:
+in window mode it cannot, and the launcher logs a `WARN` saying so (see
+[Permission layer](#permission-layer)).
 
 ### Portability: paths are resolved at runtime
 
@@ -594,8 +598,8 @@ you which of the remaining causes applies.
 
 | Section | Purpose |
 |---|---|
-| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
-| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
+| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules; enforced only for a headless Claude Code agent with `claudeIntegration` (`-p`/`--print` with a task); for an interactive agent or with `claudeIntegration: false` the launcher logs a startup `WARN` and the policy is not applied (exceptions, and the open `agent.window: false` case: see Permission layer) — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535, anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
@@ -647,9 +651,10 @@ bIsEnabled=false
 
 With `permissions.enabled` + `agent.claudeIntegration` the launcher starts
 the agent with `--permission-prompt-tool mcp__unreagent__approve` — but
-**only in headless mode** (`agent.args` contains `-p`/`--print`, or
-`agent.window: false`). Every permission prompt from Claude Code then goes
-through the `approve` tool, which decides per the configured policy.
+**only in headless mode**: `agent.args` carries `-p`/`--print` with a task.
+Every permission prompt from Claude Code then goes through the `approve` tool,
+which decides per the configured policy. (Whether `agent.window: false` alone,
+without `-p`, is headless is not settled; use `-p`/`--print`.)
 
 > **Interactive window mode (the default) does not enforce the policy this
 > way.** With `mode: allow_all` the launcher passes
@@ -659,7 +664,39 @@ through the `approve` tool, which decides per the configured policy.
 > the policy actually enforced, run headless or drive Claude Code externally
 > against the MCP server (`-no-agent`).
 
-Modes: `allow_all` = auto-approve everything, `deny` rules still apply (e.g.
+**Startup warning.** When `permissions.enabled` is set and the policy cannot
+take effect, the launcher logs one line starting with
+`WARN permissions are not enforced:` and starts anyway; it does not refuse the
+config. With the log in a file (window mode) the line is also printed to
+stderr, so you see it before Claude Code takes the window. It appears when:
+
+- **the agent runs interactively** (`agent.window: true`, or `agent.window`
+  unset and no `-p`/`--print` in `agent.args`): the launcher passes no
+  `--permission-prompt-tool`, so `mode`, `allow` and `deny` are never
+  consulted. With
+  `claudeIntegration: true` and no hand-wired flag, the warning also says what
+  the agent gets instead: `--dangerously-skip-permissions` under `allow_all`
+  (every tool call runs, including one a `deny` rule names), or no permission
+  flag under `allowlist` / `deny_all` (Claude Code asks you in its window as
+  usual). With a `--permission-prompt-tool` wired into `agent.args` by hand,
+  it names that flag, which takes effect only for a headless agent.
+- **`agent.claudeIntegration` is `false`**: the launcher passes the agent no
+  `--permission-prompt-tool` at all, so the policy is dead config. The fix is
+  `claudeIntegration: true` (Claude Code only), plus `-p`/`--print` with a task
+  if the agent is interactive.
+
+To enforce the policy: put `"-p"` (or `"--print"`) and its task in
+`agent.args`, and leave `agent.window` unset or false. There is no warning for an external agent (`-no-agent`, or
+`agent.enabled: false`), which can call `approve` itself. Nor is there one for
+a headless agent with `claudeIntegration: false` where you wired
+`--permission-prompt-tool` into `agent.args` by hand; an interactive agent
+always warns, hand-wired flag or not.
+
+Modes (where the policy is enforced, see above; under an interactive agent
+with `claudeIntegration: true`, `allow_all` makes the launcher pass
+`--dangerously-skip-permissions`, so Claude Code's prompts are skipped and no
+`deny` rule applies):
+`allow_all` = auto-approve everything, `deny` rules still apply (e.g.
 `Bash(rm -rf *)`); `allowlist` (the default when `mode` is unset) = deny
 everything except what an `allow` rule matches — the only mode that fails
 closed by construction; `deny_all` = reject everything.
@@ -1234,6 +1271,9 @@ subprocess it won't start. Hence three ways:
    [Manual control](#manual-control-stdin)) show on the console as well as in
    the log. If the log cannot be created, the launcher prints a
    warning to stderr and its logs go to the console instead. Disable with `window: false`; off in `-p` mode.
+   An interactive agent is not subject to the permission policy: with
+   `permissions.enabled` the launcher logs a `WARN` at startup, see
+   [Permission layer](#permission-layer).
 2. **Headless / task** (`agent.args: ["-p", "<task>"]`) — one-shot task
    without a window, then the agent exits.
 3. **External** (`-no-agent`) — the launcher does not start an agent; you

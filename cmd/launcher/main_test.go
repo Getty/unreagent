@@ -605,6 +605,202 @@ func TestServeMCPClosedIsNotAFailure(t *testing.T) {
 	}
 }
 
+// k38, k46 (maintainer's decision: warn, do not refuse): an enabled
+// permissions policy that the launcher cannot hand to the agent it starts —
+// an interactive agent, or one without claudeIntegration — is named in one
+// warning: that it is not enforced, what is passed instead, and how to get it
+// enforced. No policy, an external agent, a headless Claude Code with the
+// integration and a headless agent with a prompt tool wired by hand are
+// silent. An interactive agent always warns, a hand-wired prompt tool or not
+// (main agent's decision on the k38 review): that flag is a headless feature,
+// and the warning's fix is to run headless.
+func TestPermissionsInertReason(t *testing.T) {
+	headless := []string{"-p", "work through the tasks"}
+	handWired := []string{"--permission-prompt-tool", "mcp__unreagent__approve"}
+	const (
+		notEnforced = "permissions are not enforced: "
+		skipFlag    = "--dangerously-skip-permissions"
+		headlessFix = `put "-p" (or "--print") and its task in agent.args, and leave agent.window unset or false`
+		windowMode  = "runs interactively in window mode (agent.window: true, or agent.window unset and no -p/--print in agent.args)"
+		launcherOff = "the launcher passes --permission-prompt-tool only to a headless agent"
+		wiredOff    = "the --permission-prompt-tool wired into agent.args by hand takes effect only for a headless agent"
+		noClaude    = "agent.claudeIntegration is false"
+		claudeFix   = "set agent.claudeIntegration: true"
+		askWindow   = "asks in its window"
+	)
+	modes := []string{config.ModeAllowAll, config.ModeAllowlist, config.ModeDenyAll}
+	type row struct {
+		name        string
+		enabled     bool // permissions.enabled
+		mode        string
+		agent       bool // agent.enabled
+		claude      bool // agent.claudeIntegration
+		args        []string
+		interactive bool     // as run() derives it from agent.window and agent.args
+		want        []string // nil: no warning
+		absent      []string
+	}
+	rows := []row{
+		{name: "permissions disabled, interactive allow_all", mode: config.ModeAllowAll, agent: true, claude: true, interactive: true},
+		{name: "permissions disabled, no claudeIntegration", mode: config.ModeDenyAll, agent: true},
+		// run() never sees an agent it does not start as interactive.
+		{name: "external agent, claudeIntegration", enabled: true, mode: config.ModeAllowAll, claude: true},
+		{name: "external agent, no claudeIntegration", enabled: true, mode: config.ModeDenyAll},
+		{name: "headless --print", enabled: true, mode: config.ModeAllowlist, agent: true, claude: true, args: []string{"--print", "task"}},
+		{name: "agent.window: false without -p", enabled: true, mode: config.ModeAllowAll, agent: true, claude: true},
+		{name: "no claudeIntegration, headless, prompt tool wired by hand", enabled: true, mode: config.ModeAllowlist, agent: true,
+			args: append(slices.Clone(headless), handWired...)},
+		{name: "no claudeIntegration, headless, prompt tool wired by hand as -flag=value", enabled: true, mode: config.ModeAllowlist, agent: true,
+			args: append(slices.Clone(headless), "--permission-prompt-tool=mcp__unreagent__approve")},
+		{name: "interactive, agent.window: true with -p", enabled: true, mode: config.ModeAllowlist, agent: true, claude: true, args: headless, interactive: true,
+			want: []string{windowMode, launcherOff, headlessFix}, absent: []string{skipFlag, noClaude, wiredOff}},
+		{name: "no claudeIntegration and interactive: one warning, both fixes", enabled: true, mode: config.ModeAllowAll, agent: true, interactive: true,
+			want: []string{noClaude, claudeFix, headlessFix}, absent: []string{skipFlag, windowMode}},
+		{name: "no claudeIntegration, interactive, prompt tool wired by hand as -flag=value", enabled: true, mode: config.ModeAllowlist, agent: true,
+			args: []string{"--permission-prompt-tool=mcp__unreagent__approve"}, interactive: true,
+			want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, skipFlag}},
+	}
+	for _, mode := range modes {
+		rows = append(rows, row{name: "headless -p, " + mode, enabled: true, mode: mode, agent: true, claude: true, args: headless},
+			row{name: "headless -p, prompt tool wired by hand, " + mode, enabled: true, mode: mode, agent: true, claude: true,
+				args: append(slices.Clone(headless), handWired...)})
+		interactive := row{name: "interactive, " + mode, enabled: true, mode: mode, agent: true, claude: true, interactive: true,
+			want: []string{windowMode, launcherOff, headlessFix}, absent: []string{noClaude, wiredOff}}
+		// A hand-wired prompt tool on an interactive agent: the launcher's own
+		// flags as above, but the text names the hand-wired flag and no
+		// longer claims Claude Code asks as usual.
+		wired := row{name: "interactive, prompt tool wired by hand, " + mode, enabled: true, mode: mode, agent: true, claude: true,
+			args: handWired, interactive: true,
+			want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, askWindow}}
+		if mode == config.ModeAllowAll {
+			interactive.want = append(interactive.want, skipFlag, "including one a deny rule names")
+			wired.want = append(wired.want, "The launcher also passes --dangerously-skip-permissions (mode allow_all).")
+		} else {
+			interactive.want = append(interactive.want, "passes no permission flag instead", askWindow)
+			interactive.absent = append(interactive.absent, skipFlag)
+			wired.absent = append(wired.absent, skipFlag)
+		}
+		rows = append(rows, interactive, wired,
+			row{name: "no claudeIntegration, interactive, prompt tool wired by hand, " + mode, enabled: true, mode: mode, agent: true,
+				args: handWired, interactive: true,
+				want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, skipFlag}},
+			row{name: "no claudeIntegration, headless, " + mode, enabled: true, mode: mode, agent: true, args: headless,
+				want: []string{noClaude, claudeFix}, absent: []string{headlessFix, skipFlag, windowMode}})
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Agent:       config.AgentConfig{Enabled: tc.agent, ClaudeIntegration: tc.claude, Args: tc.args},
+				MCP:         config.MCPConfig{Enabled: true}, // validate requires it for permissions
+				Permissions: config.Permissions{Enabled: tc.enabled, Mode: tc.mode, Deny: []string{"Bash(rm -rf *)"}},
+			}
+			got := permissionsInertReason(cfg, tc.interactive)
+			if tc.want == nil {
+				if got != "" {
+					t.Fatalf("warned although the policy takes effect or there is nothing to enforce: %s", got)
+				}
+				return
+			}
+			if !strings.HasPrefix(got, notEnforced) {
+				t.Fatalf("got %q, want a warning starting %q", got, notEnforced)
+			}
+			for _, want := range append(tc.want, "permissions.mode ("+tc.mode+"), allow and deny are never consulted") {
+				if !strings.Contains(got, want) {
+					t.Errorf("warning does not say %q: %s", want, got)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(got, absent) {
+					t.Errorf("warning says %q, which does not apply here: %s", absent, got)
+				}
+			}
+		})
+	}
+}
+
+// k38, k46 through run(): the warning about an inert permissions policy is
+// logged before the agent command line. In window mode, where the log is a
+// file and the console the agent's, it also goes to stderr, once; with the
+// log on stdout stderr stays clean. A headless Claude Code with the
+// integration gets the prompt tool and no warning.
+func TestRunWarnsWhenThePermissionsPolicyIsInert(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		agent  string // agent settings after enabled and command
+		window bool
+		want   string // in the WARN line; "" = no warning
+	}{
+		{"window mode, allow_all (k38)", "  window: true\n  claudeIntegration: true\n", true, "--dangerously-skip-permissions"},
+		{"no claudeIntegration, log on stdout (k46)", "  window: false\n  claudeIntegration: false\n", false, "agent.claudeIntegration is false"},
+		{"headless with the integration", "  args: [\"-p\", \"task\"]\n  claudeIntegration: true\n", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			agent := filepath.Join(dir, "agent.sh") // ignores the flags the launcher adds
+			if err := os.WriteFile(agent, []byte(markerScript), 0o755); err != nil {
+				t.Fatalf("write agent: %v", err)
+			}
+			yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n"+tc.agent+"  startDelaySeconds: 1\n"), freeLoopbackAddr(t))
+			yaml = strings.Replace(yaml, "permissions:\n  enabled: false\n",
+				"permissions:\n  enabled: true\n  mode: allow_all\n  deny: [\"Bash(rm -rf *)\"]\n", 1)
+			l := startLauncherIn(t, dir, yaml)
+			// Logged after the agent command line, and once the signal
+			// handler is installed (k141): SIGTERM ends the run cleanly.
+			const listening = "MCP server listening on "
+			logPath := filepath.Join(dir, "unreagent.log")
+			if tc.window {
+				waitFileLine(t, logPath, listening)
+			} else {
+				l.waitLine(t, listening)
+			}
+			if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("SIGTERM: %v", err)
+			}
+			if code := l.exitCode(t); code != 0 {
+				t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			log := l.stdout.String()
+			if tc.window {
+				b, err := os.ReadFile(logPath)
+				if err != nil {
+					t.Fatalf("read launcher log: %v", err)
+				}
+				log = string(b)
+			}
+			const warn = "WARN permissions are not enforced: "
+			var line string
+			for _, ln := range strings.Split(log, "\n") {
+				if strings.Contains(ln, warn) {
+					line = ln
+				}
+			}
+			stderr := l.stderr.String()
+			if tc.want == "" {
+				if line != "" || strings.Contains(stderr, warn) {
+					t.Fatalf("warned although the prompt tool is passed:\nlog: %s\nstderr: %s", line, stderr)
+				}
+				if !strings.Contains(log, "--permission-prompt-tool mcp__unreagent__approve") {
+					t.Errorf("the agent command has no prompt tool:\n%s", log)
+				}
+				return
+			}
+			if !strings.Contains(line, tc.want) {
+				t.Fatalf("launcher log has no warning saying %q:\n%s", tc.want, log)
+			}
+			if before, _, _ := strings.Cut(log, "Agent command: "); !strings.Contains(before, warn) {
+				t.Errorf("the warning does not come before the agent command line:\n%s", log)
+			}
+			alerts := strings.Count(stderr, "unreagent: "+warn)
+			if tc.window && alerts != 1 {
+				t.Errorf("stderr has the warning %d times; want once:\n%s", alerts, stderr)
+			}
+			if !tc.window && alerts != 0 {
+				t.Errorf("stderr repeats the warning that the log on stdout already shows:\n%s", stderr)
+			}
+		})
+	}
+}
+
 // k48: the sub-command after a bool flag or a -flag=value form was taken as
 // that flag's value, so the launcher started the editor and the agent instead
 // of the one-shot sub-command; an unknown word launched as well. Each line

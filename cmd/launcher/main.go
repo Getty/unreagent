@@ -147,6 +147,13 @@ func run() error {
 			fmt.Println()
 		}
 	}
+	// In window mode the launcher log is a file and the console the agent's,
+	// so a line the user must see is also written to alert, stderr; otherwise
+	// the log is the console already and alert stays nil.
+	var alert io.Writer
+	if logOut != io.Writer(os.Stdout) {
+		alert = os.Stderr
+	}
 
 	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
 	if cfg.Agent.Enabled {
@@ -247,7 +254,8 @@ func run() error {
 				if agentInteractive {
 					// Interactive: --permission-prompt-tool is a headless feature
 					// (-p) and aborts otherwise. allow_all -> skip prompts; other
-					// modes -> Claude asks in the window (manually).
+					// modes -> Claude asks in the window (manually). Either way
+					// the policy is not applied: permissionsInertReason says so.
 					if cfg.Permissions.Mode == config.ModeAllowAll {
 						agentArgs = append(agentArgs, "--dangerously-skip-permissions")
 					}
@@ -257,6 +265,14 @@ func run() error {
 			}
 			logger(fmt.Sprintf("Agent: Claude integration active (%d MCP server(s)%s)",
 				len(mcpServers), strictWord(cfg.MCP.Strict)))
+		}
+		// Before the agent takes the console in window mode (k38, k46).
+		if reason := permissionsInertReason(cfg, agentInteractive); reason != "" {
+			line := "WARN " + reason
+			logger(line)
+			if alert != nil {
+				fmt.Fprintln(alert, "unreagent: "+line)
+			}
 		}
 		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(agentArgs, " "))
 		sup.AddService(supervisor.ServiceSpec{
@@ -340,13 +356,6 @@ func run() error {
 			ReadTimeout:       60 * time.Second,
 			WriteTimeout:      4 * time.Hour,
 			IdleTimeout:       120 * time.Second,
-		}
-		// In window mode the launcher log is a file and the console the
-		// agent's, so a serve failure is also written to stderr; otherwise
-		// the log is the console already.
-		var alert io.Writer
-		if logOut != io.Writer(os.Stdout) {
-			alert = os.Stderr
 		}
 		mcpServing.Store(true)
 		go serveMCP(httpSrv, mcpLn, &mcpServing, logger, alert)
@@ -455,6 +464,62 @@ func hasArg(args []string, want string) bool {
 
 func hasPromptArg(args []string) bool {
 	return hasArg(args, "-p") || hasArg(args, "--print")
+}
+
+// permissionsInertReason is the warning, without its WARN prefix, for a
+// permissions policy that cannot take effect on the agent this launcher
+// starts; "" when it can, or when there is no policy or no such agent. The
+// policy reaches the agent only through --permission-prompt-tool, which the
+// agent-start block in run() passes with claudeIntegration and only to an
+// agent that is not interactive: keep the two in step. An external agent
+// (agent disabled, -no-agent) can call approve through its own flag, and so
+// can a headless agent whose args carry the flag by hand. An interactive
+// agent always warns, whether claudeIntegration is set and whether the flag
+// is wired by hand: the flag is a headless feature, and the warning's fix is
+// to run headless. Maintainer's decision for k38 and k46: warn and start
+// anyway, do not refuse.
+//
+// claudeIntegration: false with an interactive agent and no hand-wired flag
+// is one warning, not two: the launcher then passes no permission flag at
+// all, so the interactive text's "passed instead" would be wrong, and the
+// fix needs both steps. With a hand-wired flag the cause is the window
+// alone, so that text names the flag and asks only for headless.
+func permissionsInertReason(cfg *config.Config, agentInteractive bool) string {
+	if !cfg.Permissions.Enabled || !cfg.Agent.Enabled {
+		return ""
+	}
+	handWired := slices.ContainsFunc(cfg.Agent.Args, func(a string) bool {
+		return a == "--permission-prompt-tool" || strings.HasPrefix(a, "--permission-prompt-tool=")
+	})
+	if !agentInteractive && (cfg.Agent.ClaudeIntegration || handWired) {
+		return ""
+	}
+	const notEnforced = "permissions are not enforced: "
+	policy := "permissions.mode (" + cfg.Permissions.Mode + "), allow and deny are never consulted"
+	headless := `run the agent headless: put "-p" (or "--print") and its task in agent.args, and leave agent.window unset or false`
+	if !cfg.Agent.ClaudeIntegration && !handWired {
+		fix := "set agent.claudeIntegration: true (Claude Code only)"
+		if agentInteractive {
+			fix += " and " + headless
+		}
+		return notEnforced + "agent.claudeIntegration is false, so the launcher passes the agent no --permission-prompt-tool and " +
+			policy + ". To enforce the policy, " + fix + "."
+	}
+	window := "the agent runs interactively in window mode (agent.window: true, or agent.window unset and no -p/--print in agent.args), and "
+	fix := " To enforce the policy, " + headless + "."
+	if handWired {
+		also := ""
+		if cfg.Agent.ClaudeIntegration && cfg.Permissions.Mode == config.ModeAllowAll {
+			also = " The launcher also passes --dangerously-skip-permissions (mode allow_all)."
+		}
+		return notEnforced + window + "the --permission-prompt-tool wired into agent.args by hand takes effect only for a headless agent, so " +
+			policy + "." + also + fix
+	}
+	instead := "The launcher passes no permission flag instead: Claude Code asks in its window as usual, and you answer each prompt yourself."
+	if cfg.Permissions.Mode == config.ModeAllowAll {
+		instead = "The launcher passes --dangerously-skip-permissions instead (mode allow_all): every tool call runs without a prompt, including one a deny rule names."
+	}
+	return notEnforced + window + "the launcher passes --permission-prompt-tool only to a headless agent, so " + policy + ". " + instead + fix
 }
 
 func strictWord(strict bool) string {
