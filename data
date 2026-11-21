@@ -1,0 +1,121 @@
+---
+class: standard
+completed: 2026-11-21T17:21:49Z
+created: 2026-11-21T09:06:47Z
+id: 150
+priority: low
+started: 2026-11-21T16:38:25Z
+status: done
+tags:
+- logging
+- cmd
+title: In window mode the startup lines before the log switch never reach unreagent.log
+updated: 2026-11-21T17:21:49Z
+---
+
+In window mode the launcher prints its startup lines (cmd/launcher/main.go ~:73-91: config load, engine resolution, the EngineAssociation WARN from k88, other info.Warnings) to the console before it switches output to unreagent.log. Those lines go to the console only and are missing from the log, so a user who reads unreagent.log after a window-mode start does not see why a fallback engine was chosen.
+
+Done when: the lines printed before the switch also land in unreagent.log (buffered and replayed after the log opens, or the log opened earlier, as long as a failed MCP bind still writes no file — k123), with a test that pins it. Found during the k45/k88 review.
+
+Main agent's decision 2026-11-21: k150, k151 and k152 go to one unreagent-worker as a bundle, since all three are about what reaches the console and the log. The cards stay separate.
+- **k150:** buffer the lines printed before the log switch, and replay them into unreagent.log once it opens. Keep their original timestamps. A failed MCP bind still writes no file (k123).
+- **k151:** in window mode, the supervisor's own lines and the console-command outcomes (started, stopped, restarted, leave, shutdown) go to the console as well as to the log.
+- **k152:** each failed agent start that the restart policy retries leaves exactly one console line naming the error and the retry. When the policy gives up, the existing 'Agent did not start' prompt stays as it is.
+
+2026-11-21 16:47 Worker plan (bundle k150/k151/k152), base 3fea8a6. k150: run()'s logger also writes into an in-memory buffer until the window-mode switch; at the switch the buffer's bytes (already stamped) go into unreagent.log first, then logOut becomes the file; the buffer is dropped in every other case. The bind still comes before the log opens, so a failed bind writes nothing (k123). Test seam: a package var for the logger's clock, stepped per line in the run() harness, so a re-stamped replay would show. k151: commandLoop shows a lifecycle command that went through on the console in window mode (console only: the supervisor's own line is the log's copy); onExit leave/shutdown lines go through console.reply. k152: new supervisor hook ServiceSpec.OnStartRetry(Retry), called on the loop when a failed Start is retried (not for the attempt the policy gives up on); the supervisor also logs its restart N/M in D line on that path, as it does after an exit. run() wires it for the agent to alert (stderr in window mode) as one line per retry.
+
+2026-11-21 17:00 Worker report, bundle k150/k151/k152. Worktree agent-a3ccae984ddb3daa3, branch worktree-agent-a3ccae984ddb3daa3, base main 3fea8a6, not committed. No file of the k177 worker (helpers.go, tools.go, scripts.go, replycap_test.go) or of the k186 test-writer (mcpconfig_test.go) was touched.
+
+FILES
+- cmd/launcher/main.go: k150. run()'s logger writes each stamped line to logOut and, until the window-mode switch, into an in-memory buffer (early). Once openLauncherLog returns the file, the buffer's bytes go into it first, so the lines keep the times they were logged at. Then logOut becomes the file. early is set to nil right after the window-mode block in every case (no window mode, or the log could not be created), before any goroutine logs. The bind (listenMCP) still comes before the log opens: a failed bind writes no file (k123, TestRunExitsWhenTheMCPAddressCannotBeBound green). New seam: var now = time.Now, the logger's clock (the run() harness steps it). k152 wiring: the agent ServiceSpec gets OnStartRetry, which writes "unreagent: " + agentRetryLine(r) to alert (stderr in window mode, nil otherwise).
+- cmd/launcher/lifecycle.go: k151. console.show(line) writes to the console only when the log is elsewhere (logSeparate); it does not log, because the supervisor's own started/stopped/restarted line is already in the log. commandLoop's act takes a done word and shows "ue is running (pid N)", "ue restarted (pid N)" or "ue stopped" for a stop/start/r/restart that went through. Errors are unchanged. The onExit leave and shutdown lines go through con.reply: console plus log in window mode, logged once otherwise. k152: agentRetryLine(r) = "Agent did not start: <err> — retry N[/M] in D", worded like agentEnded's prompt line.
+- internal/supervisor/supervisor.go: k152. New ServiceSpec.OnStartRetry func(Retry) and type Retry{Err, Restart, MaxRestarts, Delay}. They are called on the service's loop when a failed Start (not program-not-found) is retried, never for the start the policy gives up on (OnExit reports that one as before) and never for a restart after an exit. The same path now logs "[name] restart N/M in D", the line the exit path already logs. Before this, a retried failed start left only "start failed: ..." in the log, with nothing saying a retry comes. This applies to every service, the editor too. That log line is my choice, not asked for: it makes the log (and the console in headless mode, where the log is the console) say that a retry follows.
+- Tests: cmd/launcher/lifecycle_test.go, cmd/launcher/console_test.go, internal/supervisor/fastfail_test.go.
+
+TESTS
+- k150 TestRunReplaysTheStartupLinesIntoTheLauncherLog (lifecycle_test.go). A real run() in window mode, with k88's fallback-engine WARN as the scenario (EngineAssociation 5.7, UE_5.9 installed). The clock steps one minute per line (clockStepEnv in the harness). Pins: the console still shows the startup lines, unreagent.log opens with exactly those lines byte for byte (time included), and the lines logged after the switch follow.
+- k151 TestConsoleShowsTheOutcomeInWindowMode (console_test.go). Subtests: stop/start/r ue show "ue stopped", "ue is running (pid N)" and "ue restarted (pid M)" with the pids status reports, and the log keeps the supervisor's lines. Control: with the log on the console nothing is written beside it (a status answer is the handshake that the earlier commands are done). onExit leave and onExit shutdown lines on the console and in the log; shutdown ends the session.
+- k152 TestRunNamesEachRetriedAgentStartOnTheConsole (lifecycle_test.go). A real run() in window mode with a non-executable agent, in two cases: maxRestarts 2, and maxRestarts 0 (the fast-fail give-up, k70). Pins: one stderr line per retry, as many as the log's restart lines and one fewer than the failed starts (none for the start given up on). Each line names the start error and "retry i[/M] in 1s". The exit prompt names the failed start once, unchanged (k126). Exit 1. No sleeps: the test waits for the process to exit.
+- k152 contract of the new hook TestOnStartRetryReportsEachRetriedStartError (fastfail_test.go): once per retry with the start error and the number; zero calls for restarts after exits. This is a second test for k152, beyond the one asked for, because the exported hook has a not-after-an-exit rule the run() test cannot see.
+- Helper: agentSessionOn now delegates to agentSessionWith(t, con, onExit, ...).
+
+MUTATIONS (go test -overlay, tree untouched, all 16 runs killed)
+k150: no replay; replay re-stamped with the current clock; replay after a line logged post-switch.
+k151: no show on success; show also when the log is the console; wrong pid; leave line back to logger only; shutdown line back to logger only.
+k152: hook never called (killed in the run() test and the supervisor test); hook also called for the given-up start (killed in both); hook also called after an exit restart (supervisor test); supervisor restart line removed; run() does not wire the hook; line drops the error.
+
+CHECK (all green, run fresh)
+- gofmt -l cmd internal skills: empty
+- go vet ./... and GOOS=windows go vet ./...: clean
+- go test -count=1 ./...: all ok (launcher 41s, supervisor 10s)
+- go test -count=1 -race ./cmd/launcher ./internal/supervisor: ok
+- make linux, make windows: built; CGO_ENABLED=0 GOOS=windows go build ./cmd/launcher: ok
+Windows: window mode is a separate console window on Windows, and none of these console lines (show, the onExit reply, the stderr retry line written from the supervisor's loop) have been seen there: they are unverified on Windows. The Windows build only shows that it compiles.
+
+PROPOSED SUBJECT (70 chars)
+Show window mode's startup, outcome and retry lines (k150, k151, k152)
+
+CHANGES (user-facing)
+- In window mode unreagent.log now starts with the startup lines (config, engine, project and their warnings, such as a fallback engine), which used to reach the console only. They keep the times they were logged at. (k150)
+- In window mode the launcher console confirms a start, stop or restart that went through: "ue is running (pid N)", "ue restarted (pid N)", "ue stopped". The agent.onExit leave and shutdown lines show on the console as well. (k151)
+- A failed agent start that the restart policy retries now shows one line per retry on the console in window mode: "unreagent: Agent did not start: <error> — retry N[/M] in Ds". The launcher log names the retry of any failed start ("[name] restart N/M in Ds"), as it already does after an exit. (k152)
+
+DOCS (not touched, for the doc-writer / skill-author)
+- README "How the agent runs", mode 1: unreagent.log also holds the startup lines shown on the console before the switch. README "Manual control": in window mode a start/stop/restart that went through answers "<name> is running (pid N)" / "<name> restarted (pid N)" / "<name> stopped" on the console (the log has the supervisor's line); the onExit leave/shutdown lines show on the console. Wherever retries and the exit prompt are described: the per-retry stderr line, and that the prompt still names only the start given up on.
+- unreagent-core skill: invariant 6's list of direct alert writes gains run()'s OnStartRetry wiring for the agent (k152). The lifecycle.go row gains console.show and agentRetryLine. The main.go/run() row gains the early-line replay into the window-mode log (k150) and the now clock seam. The supervisor hooks (next to PreStart/OnExit) gain ServiceSpec.OnStartRetry/Retry.
+- unreagent-mcp-tools skill (~:100, the startFailure paragraph): the console's start/r answers now also confirm success in window mode, through console.show, not startFailure.
+
+FOUND, NOT FIXED (for the main agent to file or drop)
+- A retried agent run that exits within the fast-fail window (the process started, then exit 1) still leaves no unreagent line on the window-mode console; only the agent's own output is there. k152 covers start errors (lastError), as the card describes.
+- While the launcher console is open in window mode, automatic editor lines (a crash, "[ue] exited", "[ue] restart N in D") still go to the log only; k151 covers console-command outcomes and onExit lines.
+- With onExit leave or shutdown, the console line does not say how the agent ended ("Agent exited (exit 0)." / "Agent failed ..." stay log-only).
+
+2026-11-21 17:01 Ready for review: window-mode startup lines replayed into unreagent.log with their original times; bind-failure still writes nothing. Full report in the notes above. Check green: gofmt, vet linux+windows, go test ./..., -race launcher+supervisor, make linux+windows. Not committed; worktree branch worktree-agent-a3ccae984ddb3daa3 on 3fea8a6.
+
+Main agent 2026-11-21:
+- **Found, not fixed (items 1-3).** The three items go to a new card, k188.
+- **The unrequested extra is accepted:** the supervisor log line '[name] restart N/M in D' after a retried failed start. It fills a gap the log had.
+- **Next:** docs in this worktree by unreagent-doc-writer (README) and unreagent-skill-author (unreagent-core, unreagent-mcp-tools), in parallel. Then unreagent-reviewer.
+
+Docs (doc-writer): README How the agent runs mode 1 (startup-line replay), When the agent ends (per-retry console line), Restart policy section (log line [name] restart N/M in D), Manual control (window-mode start/stop/restart outcomes, onExit leave/shutdown); unreagent.example.yaml window comment. Gaps (k188) not documented.
+
+2026-11-21 17:08 Skill author (bundle k150/k151/k152), worktree agent-a3ccae984ddb3daa3, not committed. Only skill files touched.
+- .claude/skills/unreagent-core/SKILL.md:40-49: new paragraph under The layers on the ServiceSpec hooks (PreStart, OnExit, OnStartRetry/Retry, k152). The core skill had no PreStart/OnExit list before; placing it after the dependency-direction paragraph is my choice. OnStartRetry rule as the code has it: once per failed start the policy retries, not for a start that is not retried (the given-up one, program not found: OnExit reports those), not for a restart after an exit; runs on the loop, returns quickly, never calls the supervisor; plus the new '[name] restart N[/M] in D' log line.
+- unreagent-core :57 (main.go row): the window-mode log switch replays 'early' into unreagent.log as stamped (k150); the 'now' clock seam.
+- unreagent-core :63 (lifecycle.go row): agentRetryLine; commandLoop with console.reply vs console.show.
+- unreagent-core :127-131 (invariant 6): the agent's OnStartRetry in run() joins the direct alert writes, one line per retry, none for the given-up start.
+- .claude/skills/unreagent-mcp-tools/SKILL.md:100-103: in window mode a console command that went through is confirmed by console.show ('<name> is running (pid N)' / 'restarted (pid N)' / 'stopped', k151), not by startFailure.
+- Shipped skills/: checked unreagent-iterate, unreagent-build, unreagent-runtimes, unreagent-files for console/unreagent.log claims. None made false by the bundle (the new '[ue] restart N in D' after a failed spawn fits iterate's line list and its restarts table); no change.
+- Check: go test -count=1 ./internal/skills ./cmd/launcher ok (TestToolkitToolsExistInToolkit ran and passed).
+Also found, pre-existing (k80), not this bundle: skills/unreagent-iterate/SKILL.md:299-300 says unreagent.log 'is truncated at every launcher start'; openLauncherLog keeps the previous session as unreagent.log.1 and appends when that rename fails (README :346 has it). An agent looking for the previous run's crash is not told about .1.
+
+2026-11-21 18:20 Reviewer verdict, bundle k150/k151/k152 (worktree agent-a3ccae984ddb3daa3, base 3fea8a6): CHANGES NEEDED, prose and Changes only. The Go code is ready.
+
+CHECK (run by me, all green): gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -race ./cmd/launcher ./internal/supervisor ok; -race -count=10 on the four new tests ok; make linux and make windows built. The diff applies onto main 62ed8a8 (git apply --check), and vet plus go test ./... are green there too. Mutants re-run with -overlay: m150-restamp, m151-show-always and m152-hook-on-giveup-too (launcher and supervisor test) are all killed.
+Windows: compiled only. The replay, console.show, the onExit console lines and the stderr retry line are UNVERIFIED on Windows.
+
+CODE (ready):
+- k150: early is written only into the opened log (main.go:156) and set to nil right after the window block in every case (main.go:166). No goroutine logs before that. The bind (main.go:130) still comes before the log opens, and the k123 test is green. now is the only new seam.
+- k151: show writes to the console only, and does nothing when the log is the console. The onExit leave and shutdown lines go through con.reply. Non-window mode is unchanged.
+- k152: the hook fires only in the retried failed-start branch (supervisor.go:695-703), after restarts++. It does not fire for the give-up (giveUp, or shouldRestart false), for program-not-found or on the exit path. It runs on the loop, and run()'s closure only writes to alert. The new '[name] restart N[/M] in D' line is not a duplicate: before, the failed-start path logged only 'start failed'. It applies to ue as well.
+
+FINDINGS:
+1. README.md:1515 (doc-writer): 'The log has the supervisor's own line for it' is false for 'start <name>' of a service that is already running. ctrlStart logs nothing when cmd != nil (supervisor.go:760), yet the console shows '<name> is running (pid N)' (lifecycle.go:396 via :449). Fix: narrow the sentence, e.g. 'for a start, stop or restart it carried out; a start of a running service answers on the console only'. Or have the worker log that case.
+2. Changes (release-manager): the three proposed lines end in (k150)/(k151)/(k152), but Changes carries no ticket ids, so drop them. Consider folding the k151 line into the unreleased k120 entry (Changes:122-123). Line 1: change 'now starts with' to 'now also holds' (with the append fallback the log does not start with them). Line 3: change '[name] restart N/M in Ds' to 'N[/M] in D'.
+3. README.md:374 (doc-writer, nit): 'the prompt above names it' holds for onExit: ask only. With leave or shutdown there is no prompt.
+4. README.md:372 (nit): 'in Ds'. The delay is a Go duration ('3s', or '1m30s' for 90), and README.md:393 writes 'in D'. Use one form.
+5. Cosmetic: ragged wrap at README.md:1444-1445 ('argument; the agent' / 'still gets ...'). .claude/skills/unreagent-core/SKILL.md:42 is an unwrapped 130-char line (skill-author).
+Subject 'Show window mode's startup, outcome and retry lines (k150, k151, k152)': 70 chars, ok. Logs are in the session scratchpad under k15x-rv/.
+
+Main agent 2026-11-21 on the review's findings:
+- **1, 3, 4 and the README part of 5:** fixed by me in README.md.
+  - The supervisor-line sentence is narrowed to the starts, stops and restarts actually carried out: a start of a running service only answers on the console.
+  - 'With onExit: ask the prompt above names it.'
+  - The retry line is written 'retry N[/M] in D', with D a duration such as 5s or 1m30s, in both places.
+  - The ragged wrap at ~:1444 is rewrapped.
+- **The skill line, unreagent-core:42 (130 chars):** accepted as cosmetic.
+- **2, Changes:** for the release-manager. Drop the ticket ids. Fold the k151 line into the unreleased k120 entry. Line 1 says 'now also holds'. Line 3 reads 'N[/M] in D'.
+
+No code changed, so no re-review. Next: unreagent-release-manager.
+
+Committed as 7036a88 (bundle k150/k151/k152).
