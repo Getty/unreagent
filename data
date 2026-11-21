@@ -1,0 +1,93 @@
+---
+claimed_at: 2026-11-21T17:53:09Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T17:53:09Z
+created: 2026-11-21T11:57:51Z
+id: 163
+priority: low
+started: 2026-11-21T17:25:18Z
+status: done
+tags:
+- mcp
+- bridge
+title: UNREAL_MCP_URL watch window can run out during a later bridge's npm install
+updated: 2026-11-21T17:53:22Z
+---
+
+Found by the k87 worker. In prepareMCPBridges the UNREAL_MCP_URL watcher (waitForEndpoint, 5-minute window) starts right after its own bridge's smoke test, inside the loop. A later stdio bridge's npm install can take up to 5 minutes, so the in-editor server's window can be used up before the editor has even started, and the user gets a false 'not reachable' warning. k87 already starts the http/sse extraServers watchers after the loop for this reason. Done: start the UNREAL_MCP_URL watcher after the loop as well (collect it like the http entries), with a test that a slow later bridge does not eat the window. Lane: unreagent-worker; file cmd/launcher/bridge.go — after k87 lands.
+
+Main agent's decision 2026-11-21: as the card says.
+- Collect the UNREAL_MCP_URL watcher in the loop the way k87 collects the http/sse entries, and start it after the loop.
+- Add a test showing that a slow later bridge does not use up the first one's watch window.
+- Lane: unreagent-worker. It runs in parallel with k159 (main.go/hermes.go), so stay in bridge.go and its tests.
+
+Worker report (worktree branch worktree-agent-a044464bd9ff63c2a, base main 7036a88, not committed).
+
+Files:
+- cmd/launcher/bridge.go, prepareMCPBridges: the loop now collects every watch, the http/sse url (k87) and a stdio bridge's UNREAL_MCP_URL, in one local slice of {name, endpoint, url}. The watches start together after the loop, behind the existing ctx check. The k87 `remote []string` plus the url lookup after the loop is folded into that slice. A watch is still collected only for a bridge that reached its smoke test, whatever the smoke test's verdict, as before. The in-loop `ctx.Err() == nil` guard is gone because the post-loop check covers it: a cancel starts no watch at all. The doc comment is updated (point 4 and the ctx paragraph).
+- cmd/launcher/bridge_test.go: new TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall. There are two node bridges, alpha and beta. Each has an UNREAL_MCP_URL pointing at a live httptest server. The fake npm touches `ready` in the bridge directory and holds until the test writes `release`. Map order is random, so the test finds whichever install started first, releases it, and waits for the later bridge's `ready`. That is the handshake that shows the loop is on the later install. It then asserts that no 'is reachable' line exists yet. It releases the later install and asserts that both watches then report reachable. The window is 1 minute, so no window wait is involved. One bound remains: a 200ms hold before the negative check, because the fixed code gives nothing to wait for. A watch started in the loop was started before the held install even began.
+
+Red/green:
+- Before the fix, the new test failed 3 of 3: "the watch of 'alpha' started while the npm install of 'beta' was still running".
+- After the fix it passed 10 of 10, and 10 of 10 under -race together with the other watcher tests.
+
+Mutation (go test -overlay, tree not edited): a copy of bridge.go in which the UNREAL_MCP_URL line inside the loop is back to `go waitForEndpoint(ctx, name, editorEndpoint, u, logger)` instead of the append. The new test failed 20 of 20 under it, in both map orders (alpha first 19 times, beta first once).
+
+Check, all green:
+- gofmt -l cmd internal skills: empty
+- go vet ./... and GOOS=windows go vet ./...: clean
+- go test -count=1 ./...: ok
+- go test -race -count=1 ./cmd/launcher: ok
+- make linux and make windows: both built
+
+Windows: the change is platform-neutral Go; only the cross-compile and vet ran for windows, nothing was run there.
+
+Docs/skills: none needed. README (Unreal MCP 'Things to know', around line 503) already says the url is watched 'like the in-editor UNREAL_MCP_URL: once bridge preparation is done'. That was inaccurate for UNREAL_MCP_URL until now and is accurate after this change. The README intro (around line 86), unreagent.example.yaml and the .claude/skills make no claim about when the watch starts.
+
+Proposed subject (67 chars): Start the UNREAL_MCP_URL watch once every bridge is prepared (k163)
+
+Proposed Changes line. v0.0.9 did give the false warning: its main.go started the watch inside the loop, after that bridge's smoke test, with a 5-minute window.
+  - The in-editor server's reachability watch (UNREAL_MCP_URL) starts once
+    every MCP bridge is prepared, so another bridge's npm install no longer
+    uses up its 5 minutes and warns "not reachable" before the editor has
+    even started.
+
+Ready for review: the UNREAL_MCP_URL watch is collected in the loop and started after it, together with the http/sse watches (bridge.go). There is a new test, TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall: it uses an npm handshake, fails 20 of 20 under the in-loop overlay mutation and passes after the fix. The full check is green, including -race and make windows. Worktree branch worktree-agent-a044464bd9ff63c2a, not committed; the report is in the previous note.
+
+Reviewer verdict 2026-11-21: READY. No blocking findings.
+
+Checked: cmd/launcher/bridge.go (prepareMCPBridges) and cmd/launcher/bridge_test.go (TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall). Only these two files changed, both owned by unreagent-worker (ack-team owner).
+
+Watcher change:
+- Every watch is collected in the loop and started after it, behind the ctx check (bridge.go:131-136). That covers the http/sse url (:86) and a stdio bridge's UNREAL_MCP_URL (:126).
+- A watch is still collected only after the smoke test: the LookPath and prepareNodeBridge continues skip it, as before.
+- Dropping the in-loop ctx guard loses nothing. A cancel during a later install makes prepareNodeBridge return !ok, and the next iteration's top check returns, so no watch starts. A cancel during the last bridge's install or smoke test is caught by the post-loop check. Before the fix, an earlier bridge's watch was already running in that case.
+- prepareMCPBridges runs synchronously before sup.Start in run() (main.go:418), so the window now starts right before the editor does.
+
+Test:
+- The 200ms hold at bridge_test.go:1091 is a sound negative check, not a fragile pass. With the fix, no watch can exist before release(later), so it cannot go red on correct code. Under the mutation, the in-loop goroutine needs one local dial plus a log line, and it has the whole later-install handshake plus 200ms to do it. Load can only make it miss a regression, never fail a good tree.
+- go test -race -count=20 -run TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall ./cmd/launcher: 20/20 pass, no race, about 0.3s each.
+- The worker's overlay mutation (the in-loop go waitForEndpoint instead of the append), -count=10: 10/10 FAIL with 'the watch of alpha started while the npm install of beta was still running'.
+
+Full check, run on main f0c7132 plus the diff in a scratch worktree:
+- gofmt -l cmd internal skills: empty. go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok. go test -race ./cmd/launcher: ok.
+- make linux and make windows: built.
+- Main moved to d61227a (k189, a skill doc only) during the review. The diff applies there (git apply --check), and gofmt, both vets, go test ./... and make windows passed again on d61227a plus the diff.
+- Windows: unverified. The code is platform-neutral, but only the vet and cross-compile ran for Windows, and the new test skips there (newScripts).
+
+Prose:
+- The bridge.go doc comment (point 4, the http/sse paragraph, the ctx paragraph) and the post-loop comment match the code.
+- README ~:503 ('like the in-editor UNREAL_MCP_URL: once bridge preparation is done') is now true.
+- unreagent.example.yaml and the unreagent-core, -mcp-tools and -config skills make no claim about watch timing.
+- No German in the touched text.
+
+Non-blocking note, no change needed: an unparseable UNREAL_MCP_URL now logs its 'not a URL with a host' WARN after all bridges are prepared, not next to its own bridge's lines. The line names the bridge.
+
+Changes line: accurate. v0.0.9's main.go:891 starts go waitForEndpoint inside the loop with a 5-minute deadline, so 'no longer' holds. It does not overlap the unreleased k87 entry.
+Subject: 'Start the UNREAL_MCP_URL watch once every bridge is prepared (k163)', 67 chars, fine.
+
+Logs: the reviewer's scratchpad k163-rv (fullcheck.log, fullcheck-d61227a.log, race20.log, mutation.log).
+
+Committed as e14ad0e on main (ff-merged from worktree-agent-a044464bd9ff63c2a); full check green on d61227a plus the diff.
