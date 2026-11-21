@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-11-21T05:08:04Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:08:15Z
+created: 2026-08-24T23:43:46Z
+id: 72
+priority: medium
+started: 2026-11-21T04:18:19Z
+status: done
+tags:
+- mcp
+- bug
+title: ue_start / ue_restart report success when the editor failed to start
+updated: 2026-11-21T05:08:15Z
+---
+
+main.go:501-510: serviceAction returns the status snapshot with IsError=false; the spawn error only reaches the launcher log (the log file in window mode). Observed: nonexistent editor -> {running:false, desired:false}, isError:false, log says 'neugestartet (manuell)'. Trigger: wrong unreal.editor, unresolved engine (#43), any spawn error.
+Acceptance: IsError is set when a start/restart leaves st.Running false, carrying the last start error (the supervisor exposes it in ServiceStatus); test.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: serviceAction always returns IsError=false. ServiceStatus has no last-error field (the card's 'the supervisor exposes it' is wrong); needs a LastError field first. Linux test easy (nonexistent editor). Size M.
+
+Decision 2026-11-21 (main agent, not the maintainer): ServiceStatus gains lastError (json lastError, omitempty) with the last start error; ue_start/ue_restart set IsError when the editor is not running afterwards and name that error; ue_stop and an already-running ue_start stay non-errors. Bundled with k77 and k80 (same helpers, one worker).
+
+Worker done (2026-11-21, worktree-agent-ada6ed91c99688f4c): ServiceStatus.lastError (set on spawn/pipe failure, cleared on success); serviceAction takes an explicit starts flag; ue_start/ue_restart fail with 'service "ue" did not start: <lastError>' plus the snapshot; StartService/RestartService are synchronous, so no race. The 'restarted (manual)' line now only after a successful start. Docs + project skills follow before review.
+
+Ready for review (2026-11-21, worktree-agent-ada6ed91c99688f4c): code + tests by the worker; README + unreagent.example.yaml by the doc-writer; .claude/skills unreagent-core/-mcp-tools/-windows by the skill-author (serviceAction signature, starts check, crashReporterKillers). Main-agent call: the PreStart(automatic) contract stays in the code comments, not in a skill.
+
+Review 2026-11-21 (unreagent-reviewer, worktree-agent-ada6ed91c99688f4c on 3ab0142, uncommitted): APPROVE. Files: internal/supervisor/supervisor.go, status_test.go, cmd/launcher/tools.go, tools_test.go, README.md, .claude/skills unreagent-core/-mcp-tools. Check run by the reviewer, all green: gofmt -l cmd internal skills (empty); go vet ./... and GOOS=windows go vet ./...; go test -count=1 ./...; go test -race -count=3 ./internal/supervisor ./cmd/launcher; make linux; make windows (PE32+ x86-64); go mod verify. Claims confirmed: lastErr set on spawn and pipe failure, cleared on success, carried in snapshot; serviceAction(..., starts); ue_start/ue_restart IsError when not running, ue_stop and ue_start on a running editor not; reply comes after start() in the control loop, so no race; 'restarted (manual)' guarded by cmd != nil. Mutations 11, 9 killed. Survivors (non-blocking): (1) tools.go:209, dropping st.LastError from the 'did not start: %s' line survives, because tools_test.go:270 only checks that the path is somewhere in the text, and the JSON appended to it already carries lastError. Pin the README's 'Error: service "ue" did not start: <lastError>' prefix. (2) supervisor.go:513, the pipe-failure lastErr has no test (impractical to induce; accepted). Observation for a follow-up card: lastError covers spawn/pipe failures only. A program that spawns and exits at once gives ue_start isError=false, running:true, and afterwards a status with no lastError (probe: Command 'false'). Realistic cases are a bad .uproject, or on Windows a missing DLL (unverified). README.md:803 ('why the last start failed') and the k70 'failed to start' log wording can be read as covering this. Windows: no platform-specific change; compiled only, unverified.
+
+Committed as c0045e2 on main
