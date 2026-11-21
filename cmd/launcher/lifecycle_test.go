@@ -74,7 +74,8 @@ type launcherRun struct {
 	cmd    *exec.Cmd
 	lines  chan string // stdout, line by line; closed at EOF
 	stdout *syncLog
-	stderr syncBuffer // read while the launcher runs, too (waitStderr)
+	stderr syncBuffer     // read while the launcher runs, too (waitStderr)
+	stdin  io.WriteCloser // the launcher's stdin; set only by startLauncherPiped
 	done   chan struct{}
 	err    error
 }
@@ -93,10 +94,29 @@ func startLauncher(t *testing.T, yaml string) *launcherRun {
 // -config.
 func startLauncherIn(t *testing.T, dir, yaml string, args ...string) *launcherRun {
 	t.Helper()
+	return startLauncherCmd(t, dir, yaml, false, args)
+}
+
+// startLauncherPiped is startLauncherIn with a pipe as the launcher's stdin
+// (l.stdin), so a test can type console commands. The agent script of such a
+// test is a shell script, so sh must be on PATH too. The caller closes l.stdin.
+func startLauncherPiped(t *testing.T, dir, yaml string, args ...string) *launcherRun {
+	t.Helper()
+	return startLauncherCmd(t, dir, yaml, true, args)
+}
+
+// startLauncherCmd is the one place a launcher test process is started; piped
+// gives it a stdin pipe (l.stdin) instead of no stdin.
+func startLauncherCmd(t *testing.T, dir, yaml string, piped bool, args []string) *launcherRun {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the configs use sleep/false and the tests send SIGTERM")
 	}
-	for _, bin := range []string{"sleep", "false"} {
+	bins := []string{"sleep", "false"}
+	if piped {
+		bins = append(bins, "sh")
+	}
+	for _, bin := range bins {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s not on PATH", bin)
 		}
@@ -114,6 +134,11 @@ func startLauncherIn(t *testing.T, dir, yaml string, args ...string) *launcherRu
 	l.cmd.Dir = dir
 	l.cmd.Env = append(os.Environ(), runConfigEnv+"="+path, runArgsEnv+"="+strings.Join(args, "\n"))
 	l.cmd.Stderr = &l.stderr
+	if piped {
+		if l.stdin, err = l.cmd.StdinPipe(); err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+	}
 	out, err := l.cmd.StdoutPipe()
 	if err != nil {
 		t.Fatalf("stdout pipe: %v", err)

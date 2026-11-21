@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -684,63 +683,6 @@ done
 if [ -f "$p" ]; then echo "ok $p"; else echo "missing $p"; fi >> "$0.starts"
 `
 
-// startLauncherWithStdin is startLauncherIn with a pipe as the launcher's
-// stdin, so a test can type console commands.
-func startLauncherWithStdin(t *testing.T, dir, yaml string) (*launcherRun, io.WriteCloser) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the configs use sleep and the tests send SIGTERM")
-	}
-	for _, bin := range []string{"sleep", "sh"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH", bin)
-		}
-	}
-	path := filepath.Join(dir, "unreagent.yaml")
-	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-	l := &launcherRun{lines: make(chan string, 256), stdout: &syncLog{}, done: make(chan struct{})}
-	l.cmd = exec.Command(exe, "-test.run=^TestLauncherRunProcess$")
-	l.cmd.Dir = dir
-	l.cmd.Env = append(os.Environ(), runConfigEnv+"="+path, runArgsEnv+"=")
-	l.cmd.Stderr = &l.stderr
-	in, err := l.cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	out, err := l.cmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
-	}
-	if err := l.cmd.Start(); err != nil {
-		t.Fatalf("start launcher: %v", err)
-	}
-	go func() {
-		sc := bufio.NewScanner(out)
-		for sc.Scan() {
-			l.stdout.log(sc.Text())
-			l.lines <- sc.Text()
-		}
-		close(l.lines)
-		l.err = l.cmd.Wait()
-		close(l.done)
-	}()
-	t.Cleanup(func() {
-		select {
-		case <-l.done:
-		default:
-			_ = l.cmd.Process.Kill()
-			<-l.done
-		}
-	})
-	return l, in
-}
-
 // k186: the config file outlives the agent's exit. run() removes its
 // directory only when it returns, so every later start of the agent finds
 // the file at the same --mcp-config path. The agent here ends with exit 0 and
@@ -761,14 +703,14 @@ func TestRunRestartedAgentFindsTheSameMCPConfigFile(t *testing.T) {
 		t.Fatalf("write agent: %v", err)
 	}
 	yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n  window: false\n  claudeIntegration: true\n  startDelaySeconds: 1\n  restart: on-failure\n  onExit: leave\n"), freeLoopbackAddr(t))
-	l, stdin := startLauncherWithStdin(t, dir, yaml)
-	defer stdin.Close()
+	l := startLauncherPiped(t, dir, yaml)
+	defer l.stdin.Close()
 
 	const starts = 3
 	var want string
 	for n := 1; n <= starts; n++ {
 		if n > 1 {
-			if _, err := io.WriteString(stdin, "start agent\n"); err != nil {
+			if _, err := io.WriteString(l.stdin, "start agent\n"); err != nil {
 				t.Fatalf("type 'start agent': %v", err)
 			}
 		}
