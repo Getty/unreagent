@@ -1,0 +1,70 @@
+---
+claimed_at: 2026-11-21T18:34:39Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:34:39Z
+created: 2026-11-21T07:41:40Z
+id: 147
+priority: low
+started: 2026-11-21T18:10:16Z
+status: done
+tags:
+- config
+- linux
+title: Warn about a non-executable file or a directory as unreal.editor on Linux
+updated: 2026-11-21T18:34:39Z
+---
+
+Found by the worker in k130, confirmed in its review. On Linux the editor-path check in cmd/launcher/helpers.go (pathFound, fileExists = os.Stat) accepts an existing file without the execute bit, or a directory, as unreal.editor, although exec.Command then fails with permission denied. k130 deliberately kept os.Stat off Windows so Linux behaviour stayed byte-for-byte. Dev-box only (the product target is Windows), so low value. Fix sketch: off Windows, also warn when the path is a directory or has no execute bit, with a message that says so rather than "path not found". Done when the warning matches what exec.Command does on Linux, pinned by a test.
+
+**Decision 2026-11-21 (main agent):** off Windows, a directory or a file with no execute bit named as unreal.editor gets its own warning naming the cause ("is a directory", "is not executable"), not "not found". It stays a warning, the same severity as today's. Windows is unchanged. k178 follows it, also in helpers.go.
+
+Worker report (unreagent-worker), worktree agent-a039567b61f84f014 on dc53cfe, uncommitted. Changed: cmd/launcher/helpers.go, cmd/launcher/helpers_test.go.
+
+Fix: pathFound (bool) is now pathProblem (string). It returns "not found", "is a directory", "is not executable", or "" when the path starts. warnIfMissing logs "WARN <label>: path <why>: <path>". "not found" gives the old line byte for byte, so the existing exact-message test TestWarnIfMissingAddsNoExtensionElsewhere still passes. Outside Windows: a failed os.Stat is "not found", as before (an unreadable parent directory counts too). Then IsDir is "is a directory", then exec.LookPath(path) is "is not executable". With a "/" in the path, LookPath checks only that file and does not search PATH. The Windows branch is unchanged: any exec.LookPath error is "not found", so the line is the same. Severity stays WARN.
+
+The judgment call, my choice, written in the comment: "executable" means what exec.LookPath decides. That is access(2) X_OK for the process's effective user, falling back to "any x bit" only where access is unavailable (ENOSYS, or EPERM under seccomp). A file that only another user may execute therefore warns, and execve refuses it too. I used this rule instead of "any x bit" because it is still one stdlib call and needs no build tag or uid arithmetic. It also matches what execve does, a noexec mount included.
+
+Test: TestWarnIfMissingNamesWhyAPathDoesNotStart, skipped on Windows. It covers an executable file (no warning), a 0644 file ("path is not executable: <path>", exact) and a 0755 directory ("path is a directory: <path>", exact; its x bits show the directory check is separate). Each case first runs exec.Command(path).Run() and asserts it fails exactly when a warning is expected, so the test checks its premise against exec itself. It was red before the fix: both causes logged nothing.
+
+Mutation sweep with go test -overlay on helpers.go, worktree untouched: 7 mutants, 6 killed. Killed: the fix reverted (the pre-change file), no directory case, no execute check, LookPath on every OS, causes swapped, the old fixed "path not found" message. Survived, as expected: "any x bit" (fi.Mode()&0o111) instead of LookPath. Only a file owned by another user, or a uid change, tells the two apart, which a deterministic test cannot set up without root. The chosen rule is documented, not pinned.
+
+Check, all green on the Linux dev box: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 -timeout 600s ./...; make linux; make windows; GOOS=windows go test -c ./cmd/launcher. Windows: the branch is textually the same and produces the same line, but it is compile-checked only, not run.
+
+README: no sentence needs a change. It never quotes the editor-path warning.
+
+Proposed subject (63 chars): Warn when unreal.editor is a directory or not executable (k147)
+
+Proposed Changes entry, under {{$NEXT}}, next to the k130 Windows entry:
+  - Outside Windows, an unreal.editor path that is a directory or a file the
+    launcher may not execute now warns "path is a directory" or "path is not
+    executable" at start, instead of nothing; starting it fails with
+    permission denied.
+v0.0.9 had the same gap (os.Stat only, silent), so this is a change since the last release. It only shows on a non-Windows dev box. I lean toward keeping the entry for symmetry with the k130 one, but dropping it as too minor is defensible.
+
+No drift found.
+
+Ready for review: pathProblem names the cause outside Windows (not found / is a directory / is not executable, via os.Stat + exec.LookPath), Windows line unchanged. Test TestWarnIfMissingNamesWhyAPathDoesNotStart, 6/7 overlay mutants killed (the any-x-bit rule survives by design). Full check green on Linux; Windows compile-only. Uncommitted in worktree agent-a039567b61f84f014.
+
+Review (unreagent-reviewer), worktree agent-a039567b61f84f014 at dc53cfe, files cmd/launcher/helpers.go and cmd/launcher/helpers_test.go. Verdict: CHANGES NEEDED. One test case is missing. The code is right.
+
+Check run by me, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 -timeout 600s ./...; go test -race -count=1 -timeout 900s ./cmd/launcher; make linux; make windows; GOOS=windows go test -c ./cmd/launcher. The patch applies cleanly onto main 146366f (k162/k166 has landed), and vet, Windows vet and go test ./... are green there too. Windows is UNVERIFIED: compile and vet only.
+
+1. (needs a change) helpers_test.go, TestWarnIfMissingNamesWhyAPathDoesNotStart: the accepted rule ("the user's x bit, as exec.LookPath decides it") is not pinned. The any-x-bit mutant survives. The report says only a file owned by another user, or a uid change, can tell the two rules apart. That is wrong. A file the test user owns with mode 0o611 (no owner x, group/other x) is refused by execve and by LookPath, but passes the any-x-bit rule. I added that case through go test -overlay: it passes on the fix and fails on the worker's m3-anyxbit mutant. As root (I ran it under unshare -r) root executes any x bit, so the test's premise check fires for this case. Skip the case when os.Geteuid() == 0.
+2. (wording, for the Changes entry) "a file the launcher may not execute" says too much. A file under a directory without search permission cannot be executed either, but it warns "path not found", in v0.0.9 and now. Suggest "a file it has no execute permission for". "instead of nothing" is correct: v0.0.9's warnIfMissing was !fileExists (os.Stat only) and said nothing for a directory or a file without x. Subject: 63 chars, fine.
+3. (info, possible follow-up card) helpers.go pathProblem: every os.Stat error is "not found". For a path under an unsearchable directory, stat fails with EACCES and exec says permission denied, but the warning says "path not found". This is the same as before and outside the decision, so it does not block.
+4. (info) A file with x bits that is neither a valid binary nor a script warns nothing, while exec fails with "exec format error". Out of scope.
+
+Verified: the Windows branch makes the same LookPath call and turns any error into "not found", so the line "WARN <label>: path not found: <path>" is byte for byte the old one. The k130 PATHEXT test is Windows-only and skips here. The Linux "not found" line is unchanged (the exact-message test passes). The new test skips first thing on Windows. Probed causes are all right: a symlink to a directory gives "is a directory", a dangling symlink "not found", a symlink to a 0644 file "is not executable", a 0611 own file "is not executable". As root (unshare -r) the shipped test passes and LookPath equals execve in every probed case. The only caller is main.go warnIfMissing; no pathFound is left in the repo. My mutants: helpers.go as at HEAD fails 2 subtests, removing the IsDir case fails 1, removing the exec check fails 1, an owner-x-only check survives (as does any-x). Scope is OK (both files belong to unreagent-worker), and all text is English.
+
+Worker follow-up on the review (worktree agent-a039567b61f84f014, still uncommitted). Only cmd/launcher/helpers_test.go changed; helpers.go is as reviewed.
+1. Test gap closed: new case "x for group and other, not owner" in TestWarnIfMissingNamesWhyAPathDoesNotStart. It covers Others.sh at mode 0o611 and expects "WARN unreal.editor: path is not executable: <path>". A second os.Chmod sets 0o611 after WriteFile, so a strict umask cannot clear the group and other x bits and leave a case that no longer tells the rules apart. It skips when os.Geteuid() == 0, through a notRoot field on the table row. As uid 1000 it passes, and its exec.Command premise check confirms execve refuses the file. The test comment now says the check goes by this user's permission, not by any execute bit.
+Overlay sweep rerun: 7 of 7 mutants killed. m3-anyxbit (fi.Mode()&0o111 in place of LookPath) now fails, on exactly the new case. The other six fail as before.
+2. Changes wording fixed as asked. Updated entry, under {{$NEXT}}:
+  - Outside Windows, an unreal.editor path that is a directory or a file it
+    has no execute permission for now warns "path is a directory" or "path is
+    not executable" at start, instead of nothing; starting it fails with
+    permission denied.
+Check, all green: gofmt -l cmd (empty); go vet ./cmd/launcher on linux and windows; go test -count=1 -timeout 300s -run WarnIfMissing ./cmd/launcher. The full ./... run, make linux and make windows from the first report were not repeated: since then only the test file changed, and the windows vet compiles it. Proposed subject unchanged: Warn when unreal.editor is a directory or not executable (k147)
+
+Review fix round: main agent checked it (0o611 case present, go test -run WarnIfMissing green, any-x-bit mutant fails on exactly that case; only helpers_test.go changed) and stood in for a second reviewer round. Committed as 0c1839c with the final Changes entry; full check green on 146366f base (gofmt, vet, windows vet, go test ./..., -race ./cmd/launcher, make linux, make windows). Windows compile-only.
