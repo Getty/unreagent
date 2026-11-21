@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-21T23:51:02Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-21T23:50:46Z
+created: 2026-11-21T23:41:59Z
+id: 210
+priority: medium
+started: 2026-11-21T23:42:19Z
+status: done
+tags:
+- mcp
+- ue
+title: run_command description states the Live Coding refusal as fact
+updated: 2026-11-21T23:51:02Z
+---
+
+From k206. cmd/launcher/tools.go, the end of the run_command tool description: "Stop the editor (ue_stop) before compile, since UnrealBuildTool refuses to build while Live Coding is active, and ue_start it afterwards to load the new modules." No source establishes the refusal (experiment U7 in docs/research/2026-11-21-unreal-editor.md is the Windows run). The shipped skills unreagent-build, unreagent-iterate and unreagent-files now hedge it, so the tool description says more than the skills.
+
+Owner: unreagent-worker. Small. Done when: the description keeps the instruction (stop the editor before compile, start it afterwards) and gives a reason that is true without the refusal, e.g. that the running editor has the modules loaded and the new ones load only on the next start; any test pinning the description is updated with it. Tool descriptions are prompt surface (skill unreagent-mcp-tools): keep it as short as it is.
+
+Worker finished (main tree, uncommitted): cmd/launcher/tools.go, last sentence of the run_command description now reads 'Stop the editor (ue_stop) before compile, since it has the project's modules loaded and the build may fail or wait, and ue_start it afterwards to load the rebuilt modules.' No other statement of the refusal in cmd/ or internal/; no test pins the text. gofmt, go vet, go test -count=1 ./..., make windows green; string change only, nothing Windows-specific exercised. Proposed subject: Drop the unverified Live Coding claim from the run_command description (k210).
+
+unreagent-reviewer 2026-11-21: verdict READY. One sentence, about 8 characters longer, pronoun resolves to the editor, no other statement of the refusal in cmd/ or internal/, no test pinned the old text; consistent with the hedged skills. Full check green; the Windows build was compiled only, nothing ran on Windows. Note for k202: cmd/launcher/main.go:214 (log line 'no crash dialog, no recovery prompt') and the comment at internal/config/config.go:91-92 are now the only places stating the -unattended recovery claim as fact.
+
+2026-11-21 23:51 Committed as c2cd673.
