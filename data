@@ -1,0 +1,51 @@
+---
+claimed_at: 2026-11-21T23:14:23Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-21T23:14:06Z
+created: 2026-11-21T22:57:29Z
+id: 199
+priority: high
+started: 2026-11-21T22:58:55Z
+status: done
+tags:
+- skills
+- team
+- permissions
+title: 'Project skill unreagent-permissions: how the permission layer decides and
+  how to change it safely'
+updated: 2026-11-21T23:14:23Z
+---
+
+One project skill under .claude/skills/unreagent-permissions/ for the developer agents (not shipped): the working knowledge of the permission layer in internal/config/permission.go and its wiring in cmd/launcher.
+
+Why: permission.go is about 1300 lines with 1200 lines of tests, and eight open cards concern it (k109, k110, k114, k127, k168, k171, k183, k184) -- the largest cluster on the board, and security-relevant. The project skills mention it only in passing in unreagent-config, so every worker and reviewer re-derives the model from the code.
+
+Owner: unreagent-skill-author (.claude/skills/unreagent-*).
+
+Content, mined from the code and its tests, not from memory:
+- the model: what Decide takes and returns, deny before mode, the modes, where the launcher calls it and when the layer is enforced at all (headless only)
+- fail closed per rule sense: a deny rule in doubt matches, an allow rule in doubt does not grant -- and what that means for every new parser branch
+- how a shell line becomes segments: the splitter and tokenizer, which constructs are read, which are refused as undecidable, Bash versus PowerShell
+- non-Bash rules: which input field each tool rule matches, path normalisation, Windows path semantics as a parameter
+- the catalogue of known gaps with their cards, so nobody states them as closed
+- how to add a case: where the table tests live, how a bypass becomes a failing test first, what the reviewer must probe
+- docs/research/2026-11-21-shell-constructs.md is named as an unchecked external corpus, not restated
+
+Acceptance:
+- every statement traceable to a symbol in permission.go, a test name, or a card
+- no restating of unreagent-config; link to it
+- description says when to reach for the skill; SKILL.md near 200 lines; English only
+- k127 is in review with a rewritten splitter that is not on main: describe main, and name k127 as the pending change
+
+Follow-up for the main agent after review: add the skill to briefing.skills of worker, test-writer, reviewer and scout.
+
+Skill-author finished (main tree, uncommitted): .claude/skills/unreagent-permissions/SKILL.md, 254 lines (target near 200). Symbols and test names checked against internal/config and cmd/launcher; behavioural claims probed through go test -overlay. Describes main; k127 named as pending. Follow-ups filed as k200, k201; notes on k110, k127. Proposed subject: Add the unreagent-permissions project skill (k199).
+
+unreagent-reviewer 2026-11-21: verdict CHANGES NEEDED. File: .claude/skills/unreagent-permissions/SKILL.md. Check: gofmt -l / go vet ./... / go test ./... / make windows all green (no Go change; the Windows build only compiled). Every fail-closed table row and the k127/k183/k184 gaps on main probed through Decide via go test -overlay; the tree was not edited. Findings: (1) :84 the allow side of the spelling row is unpinned, say 'no test yet'; (2) :55 agentInteractive misdescribed: agent.window overrides -p both ways; (3) :106-107 the nestedScripts example is not in its comment and is not strictly closed (bash -c reboot x vs Bash(reboot)); nits :82 (blank goes through stringInput), :202-205 (indirection is not a wrapper case). Length: earned; optional trim :241-251. Back to unreagent-skill-author.
+
+Skill-author round 2 (2026-11-21): all five findings applied; 253 lines. nestedScripts example dropped; blank command moved to row 1 naming stringInput; agentInteractive reworded; spelling row says allow: no test yet; accepted-class sentence corrected. The bash -c reboot x case is filed as its own card. Narrow re-review requested.
+
+unreagent-reviewer 2026-11-21, narrow re-review: verdict READY. File: .claude/skills/unreagent-permissions/SKILL.md (253 lines). Checked the five round-1 places plus the trimmed reviewer list; rest of the file unchanged. No Go change, so the round-1 gate (gofmt/vet/test/make windows, green) stands and was not rerun. Nit, not blocking: in row 1 (:80) the blank-value case is not pinned by TestUnevaluableBracketRulesFailClosed; add 'blank: no test yet' with the next touch. Main agent added the skill to briefing.skills of worker, test-writer, reviewer and scout.
+
+2026-11-21 23:14 Committed as e8b1980 (Add the unreagent-permissions project skill (k199)).
