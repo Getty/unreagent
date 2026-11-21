@@ -193,9 +193,10 @@ launcher runs two hooks:
   its own agent. Any other name returns `Error: unknown service "<name>"`.
   `run_command` commands are not services. Their output exists only in the
   result of the call that ran them.
-- `lines` (integer, default 50). It must be a JSON number: a string such as
-  `"200"` is ignored and you get 50. `0`, a negative number, or more lines than
-  are buffered returns the whole buffer.
+- `lines` (integer, default 50). A numeric string such as `"200"` counts as
+  200. Missing, `null` or `""` gives 50. Any other value, such as `"all"` or
+  `true`, returns `Error: 'lines' must be an integer, got …`. `0`, a negative
+  number, or more lines than are buffered returns the whole buffer.
 
 The result is the lines joined by newlines and nothing else: no header, no
 timestamps, no truncation marker. An empty result means nothing is buffered.
@@ -279,11 +280,11 @@ For C++:
 8. **Wait for the in-editor plugin** before you use its tools (see below).
 
 Stop the editor before you compile, not after. The `run_command` tool
-description suggests compiling and then calling `ue_restart`, but that only
-works when the build can run beside the live editor. UE 5 enables Live Coding
-by default, and UnrealBuildTool refuses to build while a Live Coding session is
-active. It says so in its output: `Unable to build while Live Coding is
-active`. Stopping first rules that conflict out.
+description gives the same order: `ue_stop` before `compile`, then `ue_start`
+to load the new modules. UE 5 enables Live Coding by default, and
+UnrealBuildTool refuses to build while a Live Coding session is active. It
+says so in its output: `Unable to build while Live Coding is active`. Stopping
+first rules that conflict out.
 
 ### Waiting for the in-editor plugin
 

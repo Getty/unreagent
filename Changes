@@ -21,6 +21,15 @@ Revision history for unreagent
     stops at load with an error instead of starting a non-existent editor.
   - -files with an unresolved files.root is refused, and the file-tools
     startup line only appears when the MCP server is enabled.
+  - The approve permission tool denies a request it cannot read (no tool
+    name, or no tool input object) instead of handing it to the policy,
+    where allow_all let it through with an empty input.
+  - logs takes lines as a numeric string ("5") and answers a non-numeric
+    value with an error instead of silently returning 50 lines.
+  - The logs and run_command descriptions match the code: stop the editor
+    before compile (Live Coding blocks UnrealBuildTool), command output
+    never reaches logs, and logs service=agent stays empty while the agent
+    runs in the foreground.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

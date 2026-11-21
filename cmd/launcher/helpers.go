@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/conflict-industries/unreagent/internal/mcp"
@@ -50,14 +51,31 @@ func stringArg(args map[string]interface{}, key string) (string, bool) {
 	return v, ok
 }
 
-func getInt(args map[string]interface{}, key string, def int) int {
+// getInt reads an integer argument. A JSON number arrives as float64 and is
+// truncated; a numeric string ("5") is accepted too, because some MCP clients
+// send every argument as a string. An absent key, null or "" yields def, as
+// for getString. Anything else is an error, not a silent default.
+func getInt(args map[string]interface{}, key string, def int) (int, error) {
 	switch v := args[key].(type) {
+	case nil:
+		return def, nil
 	case float64:
-		return int(v)
+		return int(v), nil
 	case int:
-		return v
+		return v, nil
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return def, nil
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return 0, fmt.Errorf("'%s' must be an integer, got %q", key, v)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("'%s' must be an integer, got %T", key, v)
 	}
-	return def
 }
 
 func firstString(args map[string]interface{}, keys ...string) string {

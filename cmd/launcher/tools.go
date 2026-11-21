@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/conflict-industries/unreagent/internal/config"
@@ -50,7 +52,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "logs",
-		Description: "Returns the last output lines of a service (stdout+stderr). Use service='ue' for editor/build output, service='agent' for the agent. Handy for reading compile errors or crash messages.",
+		Description: "Returns the last output lines (stdout+stderr) of a supervised process. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. run_command output is never in here; it comes back only in the run_command result. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -60,7 +62,10 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			service := getString(args, "service", "ue")
-			n := getInt(args, "lines", 50)
+			n, err := getInt(args, "lines", 50)
+			if err != nil {
+				return errResult(err)
+			}
 			lines, err := sup.Logs(service, n)
 			if err != nil {
 				return errResult(err)
@@ -72,8 +77,8 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	cmdNames := sup.CommandNames()
 	srv.AddTool(mcp.Tool{
 		Name: "run_command",
-		Description: "Runs a preconfigured one-off command synchronously and returns its output + exit code. Typical commands: compile (build the C++ modules), package (create a build). Available commands: " +
-			strings.Join(cmdNames, ", ") + ". After 'compile', ue_restart is recommended.",
+		Description: "Runs a preconfigured one-off command and returns once it exits, with its exit code and the last 300 lines of its output (stdout+stderr merged). That output is kept nowhere else; logs does not have it. Typical commands: compile (build the C++ modules), package (create a build). Available commands: " +
+			strings.Join(cmdNames, ", ") + ". Stop the editor (ue_stop) before 'compile', since UnrealBuildTool refuses to build while Live Coding is active, and ue_start it afterwards to load the new modules.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -152,10 +157,18 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 			Handler: func(args map[string]interface{}) mcp.ToolResult {
 				toolName := firstString(args, "tool_name", "toolName", "name", "tool")
 				toolInput := firstMap(args, "tool_input", "input", "arguments", "parameters")
-				if toolInput == nil {
-					toolInput = map[string]interface{}{}
+				// A request we cannot attribute to a tool and its input fails
+				// closed: Decide("", {}) would let allow_all (or any deny list
+				// that cannot match "") allow it, with updatedInput {}.
+				var dec config.Decision
+				switch {
+				case toolName == "":
+					dec.Message = fmt.Sprintf("unreadable permission request: no tool name (looked for tool_name, toolName, name, tool; got keys %q)", slices.Sorted(maps.Keys(args)))
+				case toolInput == nil:
+					dec.Message = fmt.Sprintf("unreadable permission request: no tool input object (looked for tool_input, input, arguments, parameters; got keys %q)", slices.Sorted(maps.Keys(args)))
+				default:
+					dec = cfg.Permissions.Decide(toolName, toolInput)
 				}
-				dec := cfg.Permissions.Decide(toolName, toolInput)
 				var payload map[string]interface{}
 				if dec.Allow {
 					payload = map[string]interface{}{"behavior": "allow", "updatedInput": toolInput}
