@@ -119,7 +119,9 @@ restart is coming (see Automatic restarts).
 Kills the editor right away and clears `desired`, so the editor stays down
 until `ue_start` or `ue_restart`. The call blocks until the process has exited
 and its remaining output has been drained (at most 2 s). When it returns, the
-editor's last lines are in `logs`.
+editor's last lines are in `logs`. Like `ue_start` and `ue_restart`, it waits
+10 s at most in all. Past that it returns an error instead of this result;
+Failure modes says which of those errors may be retried.
 
 ```json
 {"name":"ue","running":false,"pid":0,"restarts":0,"desired":false}
@@ -128,7 +130,12 @@ editor's last lines are in `logs`.
 ## ue_restart
 
 One step that does `ue_stop` and then `ue_start`: the same kill, then the same
-spawn-time report. While an automatic restart is pending, it takes that
+spawn-time report, as long as the kill, the pre-start hooks (see Automatic
+restarts) and the spawn take 10 s at most together. The hooks can take longer.
+The call then returns
+`Error: service "ue" took the request and is still carrying it out after 10s …`
+while the restart goes on. Do not call `ue_restart` again; poll `status`
+(see Failure modes). While an automatic restart is pending, it takes that
 restart's place as `ue_start` does and spares the crash evidence; a separate
 `ue_stop` first would cancel the restart and not spare it (see Automatic
 restarts). It also works as a plain start when the editor is not running, and
@@ -369,8 +376,10 @@ nothing in `status` reflects this. Check the plugin itself:
 | `running: true` at start, then `lastExit`, a new `pid` or a higher `restarts` | the editor died during startup. The launcher restarts it, or gave up (next row) | `ue_stop`, then read `logs` |
 | `running: false, desired: true` and `lastExit` that stay past the restart delay | the editor failed and no restart is coming, for example after 3 quick failures in a row | read `logs` and `Saved/Crashes/`, fix the cause, then `ue_start` |
 | `restarts` climbs every few seconds | a crash loop of an editor that runs more than 10 s each time, or one under a `maxRestarts` limit | `ue_stop` breaks it |
-| `Error: service "ue" is not responding` | the control loop was busy for more than 10 s | wait, call `status`, then retry |
-| `"unresponsive": true` in `status` | same cause | do not `ue_start`; check again |
+| `ue_start`, `ue_stop` or `ue_restart` returns `Error: service "ue" is not responding: it did not take the request within 10s; nothing was done` | the control loop was busy for more than 10 s and never took the call | wait, call `status`, then retry |
+| a control call returns `Error: service "ue" is busy with its pre-start step and did not take the request within 10s; nothing was done, try again shortly` | the loop is running the pre-start hooks of another start and never took the call | wait a few seconds, then retry |
+| a control call returns `Error: service "ue" took the request and is still carrying it out after 10s` (with `(busy with its pre-start step)` while the hooks run), ending in `do not repeat it, check status for the outcome` | the call is still under way. It has not failed | do not repeat it: a second `ue_restart` waits behind the first and then restarts the editor the first one just spawned. Poll `status` until it answers without `unresponsive`, then read the `ue` entry as the call's result: `running: true` for a start that spawned, `desired: false` for a stop, a `lastError` for a start that failed |
+| `"unresponsive": true` in `status` | the control loop did not answer within 10 s | do not `ue_start`; check again |
 | `logs` is empty for `ue` | the editor has not written anything yet, or `unreal.args` lacks `-stdout` | check `status`. The user restores the args |
 | `logs` is empty for `agent` | the agent runs in the foreground | expected. Its output is on the console |
 | `Error: unknown service "agent"` | the launcher runs no agent of its own | expected with an external agent |

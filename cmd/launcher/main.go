@@ -195,7 +195,7 @@ func run() error {
 	}
 	// Like onAgentExit below: set once the session exists.
 	var onEditorExit func(supervisor.Exit)
-	sup.AddService(supervisor.ServiceSpec{
+	if err := sup.AddService(supervisor.ServiceSpec{
 		Name:         "ue",
 		Command:      cfg.Unreal.Editor,
 		Args:         ueArgs,
@@ -209,7 +209,9 @@ func run() error {
 				onEditorExit(e)
 			}
 		},
-	})
+	}); err != nil {
+		return err
+	}
 
 	// --- agent service ---
 	// onAgentExit is only set once ctx/stop exist (see below); the service holds
@@ -275,7 +277,7 @@ func run() error {
 			}
 		}
 		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(agentArgs, " "))
-		sup.AddService(supervisor.ServiceSpec{
+		if err := sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
 			Command:      cfg.Agent.Command,
 			Args:         agentArgs,
@@ -292,7 +294,9 @@ func run() error {
 					onAgentExit(e.Success)
 				}
 			},
-		})
+		}); err != nil {
+			return err
+		}
 		if agentInteractive {
 			logger("Agent: runs interactively in the foreground (inherits the console)")
 		}

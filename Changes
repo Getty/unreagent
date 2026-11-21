@@ -293,6 +293,14 @@ Revision history for unreagent
     marker says how much. A run_* reply could reach about 2 MiB before, a logs
     reply hundreds of MiB; 48 KiB stays under the 50,000 characters past which
     Claude Code moves a reply into a file.
+  - A stop (ue_stop, console stop) that meets the process ending on its own
+    counts as the stop: no automatic restart and no exit handling, so a
+    headless launcher is not shut down by it.
+  - ue_start, ue_stop, ue_restart and the console's start, stop and r give up
+    after 10 s in total. The error says whether the request was taken. One
+    still being carried out says so, points to status and is not to be
+    repeated; an editor busy with its pre-start step is named as busy, not as
+    not responding.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

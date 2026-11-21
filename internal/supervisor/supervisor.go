@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,8 +48,9 @@ type ServiceSpec struct {
 	// OnExit fires when the process ends and is NOT restarted automatically
 	// (policy, MaxRestarts exhausted, a start that cannot be retried, or the
 	// fast-fail give-up) but was still "desired" — i.e. an unexpected end, not
-	// a manual stop. It is called in its own goroutine, so it may block /
-	// control the supervisor.
+	// a manual stop. A StopService that is already waiting when the process
+	// ends on its own wins over the exit: OnExit does not fire for it. It is
+	// called in its own goroutine, so it may block / control the supervisor.
 	OnExit func(Exit)
 }
 
@@ -124,8 +126,9 @@ type CommandResult struct {
 // are dropped, and Logs says how many.
 const LogLines = 500
 
-// defaultCtrlTimeout is how long a control message waits for the service's
-// loop before the service counts as unresponsive.
+// defaultCtrlTimeout is how long a control call waits for the service's loop
+// to take its message and answer it, both together, before the service counts
+// as unresponsive.
 const defaultCtrlTimeout = 10 * time.Second
 
 // FastFailWindow and fastFailLimit define a service that keeps failing right
@@ -149,6 +152,10 @@ type Supervisor struct {
 	services       map[string]*service
 	order          []string
 	commands       map[string]CommandSpec
+	// exitTaken, when set, is called by a service's loop once it has taken a
+	// run's exit, right before it looks for a control message that came in the
+	// meantime. A test seam: it lets a test make a stop wait at that point.
+	exitTaken func()
 }
 
 // New creates a supervisor with the given log sink.
@@ -170,16 +177,21 @@ func (s *Supervisor) logf(format string, a ...interface{}) {
 	s.log(fmt.Sprintf(format, a...))
 }
 
-// AddService registers a supervised process (call before Start).
-func (s *Supervisor) AddService(spec ServiceSpec) {
+// AddService registers a supervised process (call before Start). A name that
+// is already registered is refused: two loops would share one service.
+func (s *Supervisor) AddService(spec ServiceSpec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.services[spec.Name]; ok {
+		return fmt.Errorf("service %q is already registered", spec.Name)
+	}
 	s.services[spec.Name] = &service{
 		spec:   spec,
 		ctrl:   make(chan ctrlMsg),
 		logbuf: newRingBuffer(LogLines),
 	}
 	s.order = append(s.order, spec.Name)
+	return nil
 }
 
 // AddCommand registers a one-off command.
@@ -229,13 +241,44 @@ func (s *Supervisor) send(name string, kind ctrlKind) (ServiceStatus, error) {
 	if svc == nil {
 		return ServiceStatus{}, fmt.Errorf("unknown service %q", name)
 	}
+	// One deadline for the whole call: the loop has to take the message and
+	// answer it within ctrlTimeout. reply is buffered, so a loop that answers
+	// after the caller gave up does not block on it.
 	reply := make(chan ServiceStatus, 1)
+	deadline := time.NewTimer(s.ctrlTimeout)
+	defer deadline.Stop()
 	select {
 	case svc.ctrl <- ctrlMsg{kind: kind, reply: reply}:
-	case <-time.After(s.ctrlTimeout):
-		return ServiceStatus{}, fmt.Errorf("service %q is not responding", name)
+	case <-deadline.C:
+		return ServiceStatus{}, svc.timeoutError(false, s.ctrlTimeout)
 	}
-	return <-reply, nil
+	select {
+	case st := <-reply:
+		return st, nil
+	case <-deadline.C:
+		return ServiceStatus{}, svc.timeoutError(true, s.ctrlTimeout)
+	}
+}
+
+// timeoutError says why a control call ran out of time after d. taken tells a
+// message the loop took and is still carrying out from one it never took, for
+// which nothing was done. A taken one goes on, so it must not read as failed:
+// a repeated call would wait behind it and then act on what it did, a second
+// restart restarting the editor the first just spawned. A loop inside
+// PreStart is named as busy with it, not as not responding: PreStart runs on
+// the loop, and the editor's shells out.
+func (svc *service) timeoutError(taken bool, d time.Duration) error {
+	name, busy := svc.spec.Name, svc.preStarting.Load()
+	switch {
+	case !taken && busy:
+		return fmt.Errorf("service %q is busy with its pre-start step and did not take the request within %s; nothing was done, try again shortly", name, d)
+	case !taken:
+		return fmt.Errorf("service %q is not responding: it did not take the request within %s; nothing was done", name, d)
+	case busy:
+		return fmt.Errorf("service %q took the request and is still carrying it out after %s (busy with its pre-start step); do not repeat it, check status for the outcome", name, d)
+	default:
+		return fmt.Errorf("service %q took the request and is still carrying it out after %s; do not repeat it, check status for the outcome", name, d)
+	}
 }
 
 // StartService starts a (stopped) service.
@@ -429,6 +472,9 @@ type service struct {
 	spec   ServiceSpec
 	ctrl   chan ctrlMsg
 	logbuf *ringBuffer
+	// preStarting is set while the loop runs spec.PreStart, so a control call
+	// that times out meanwhile can say so (timeoutError).
+	preStarting atomic.Bool
 }
 
 // runService is the lifecycle loop of a service. A single goroutine owns all of
@@ -522,7 +568,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		pre.AfterGiveUp = afterGiveUp
 		afterGiveUp = false
 		if spec.PreStart != nil {
+			svc.preStarting.Store(true)
 			spec.PreStart(pre)
+			svc.preStarting.Store(false)
 		}
 		// startFailed reports a start that will not be retried. The service was
 		// desired and is not coming back, which is exactly what OnExit is for —
@@ -626,6 +674,40 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		return cmd == nil && backoff != nil && backoffAuto
 	}
 
+	// handle carries out a control message and answers it.
+	handle := func(msg ctrlMsg) {
+		switch msg.kind {
+		case ctrlStart:
+			desired = true
+			restarts, quickFails, lastExit = 0, 0, ""
+			pre := Start{ReplacesRestart: replacesRestart()}
+			backoff = nil
+			if cmd == nil {
+				start(pre)
+			}
+		case ctrlStop:
+			desired = false
+			backoff = nil
+			stop()
+			s.logf("[%s] stopped (manual)", spec.Name)
+		case ctrlRestart:
+			desired = true
+			restarts, quickFails, lastExit = 0, 0, ""
+			pre := Start{ReplacesRestart: replacesRestart()}
+			backoff = nil
+			stop()
+			start(pre)
+			if cmd != nil { // a failed start has logged its own lines
+				s.logf("[%s] restarted (manual)", spec.Name)
+			}
+		case ctrlStatus:
+			// snapshot only
+		}
+		if msg.reply != nil {
+			msg.reply <- snapshot()
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -651,8 +733,29 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			releaseStreams()
 			cmd, job, waitCh = nil, nil, nil
 			success := err == nil
-			lastExit = describeExit(err)
-			s.logf("[%s] exited (%s)", spec.Name, lastExit)
+			exit := describeExit(err)
+			s.logf("[%s] exited (%s)", spec.Name, exit)
+			// A control message that came while this exit was handled (the
+			// drain can take drainTimeout), or that was ready together with
+			// it — select picks either at random — is taken before the exit is
+			// acted on. A stop wins: the run ends as the stop's, with no
+			// restart, no OnExit and lastExit kept, as when select picks the
+			// stop first and stop() collects the exit. Any other message is
+			// carried out after the exit, as on the next turn.
+			if s.exitTaken != nil {
+				s.exitTaken()
+			}
+			var pending *ctrlMsg
+			select {
+			case msg := <-svc.ctrl:
+				pending = &msg
+			default:
+			}
+			if pending != nil && pending.kind == ctrlStop {
+				desired = false
+			} else {
+				lastExit = exit
+			}
 			restart := desired && shouldRestart(spec, restarts, success)
 			gaveUp := restart && giveUp()
 			if restart && !gaveUp {
@@ -671,38 +774,12 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 					go spec.OnExit(Exit{Success: success, StartFailed: failedEarly})
 				}
 			}
+			if pending != nil {
+				handle(*pending)
+			}
 
 		case msg := <-svc.ctrl:
-			switch msg.kind {
-			case ctrlStart:
-				desired = true
-				restarts, quickFails, lastExit = 0, 0, ""
-				pre := Start{ReplacesRestart: replacesRestart()}
-				backoff = nil
-				if cmd == nil {
-					start(pre)
-				}
-			case ctrlStop:
-				desired = false
-				backoff = nil
-				stop()
-				s.logf("[%s] stopped (manual)", spec.Name)
-			case ctrlRestart:
-				desired = true
-				restarts, quickFails, lastExit = 0, 0, ""
-				pre := Start{ReplacesRestart: replacesRestart()}
-				backoff = nil
-				stop()
-				start(pre)
-				if cmd != nil { // a failed start has logged its own lines
-					s.logf("[%s] restarted (manual)", spec.Name)
-				}
-			case ctrlStatus:
-				// snapshot only
-			}
-			if msg.reply != nil {
-				msg.reply <- snapshot()
-			}
+			handle(msg)
 		}
 	}
 }

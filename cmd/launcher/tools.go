@@ -33,21 +33,25 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		},
 	})
 
+	// takenNote tells the lifecycle tools' callers how the supervisor's control
+	// timeout shows (supervisor.timeoutError).
+	const takenNote = " Gives up after 10s: an error saying the request was taken means it is still being carried out, so check status instead of repeating the call."
+
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_start",
-		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit).",
+		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)." + takenNote,
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StartService, true),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_stop",
-		Description: "Stops the Unreal Editor and prevents auto-restart until it is explicitly started again. Terminates the whole process tree (no orphan processes).",
+		Description: "Stops the Unreal Editor and prevents auto-restart until it is explicitly started again. Terminates the whole process tree (no orphan processes)." + takenNote,
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StopService, false),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_restart",
-		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit).",
+		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)." + takenNote,
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.RestartService, true),
 	})
