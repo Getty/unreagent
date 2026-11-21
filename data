@@ -1,0 +1,235 @@
+---
+class: standard
+completed: 2026-11-21T16:36:34Z
+created: 2026-11-21T14:05:07Z
+id: 181
+priority: medium
+started: 2026-11-21T15:30:27Z
+status: done
+tags:
+- security
+- agent
+title: The agent's command line still carries the bearer token inline
+updated: 2026-11-21T16:37:26Z
+---
+
+Found by the k44 review, outside that card's scope.
+
+**Problem:** since k44, the launcher log no longer shows the `--mcp-config` value, but the agent's command line still carries the whole MCP config inline: the bearer token (`mcp.token`) and the extra servers' env values. On a multi-user Unix machine, any local user can read another user's process arguments through `/proc/<pid>/cmdline` or `ps`. On Windows, a process's command line is readable to other sessions with enough rights.
+
+**Idea:** Claude Code's `--mcp-config` accepts a file path as well as a JSON string. Write the config to a 0600 file in a private directory (for example under the launcher's own state dir, or `os.MkdirTemp` with 0700), pass its path, and remove it on shutdown. `writePrivateFile` from k44, or the shared helper of k178, does the writing.
+
+**To decide:**
+- Where the file lives.
+- Cleanup on crash: the job object kills the agent, but the file stays behind.
+- Whether `-no-agent` / external clients are affected. They aren't: they already read `writeConfig` files.
+
+Lanes: unreagent-worker. The README's agent and bearer-auth paragraphs follow with unreagent-doc-writer. Touches main.go/mcpconfig.go, so it goes after k44 in the main.go queue.
+
+**Main agent 2026-11-21: decision before handing this to unreagent-worker.** These choices are mine, not the maintainer's. k181 and k172 go to one worker, because both edit the agent-args block in `run()` (`main.go` ~:250-280).
+
+**k181: pass a file path instead of inline JSON.**
+- At startup, `run()` creates a private directory with `os.MkdirTemp("", "unreagent-")`, which is 0700 on Unix.
+- It writes `{"mcpServers": …}` there as `mcp-config.json` with `writePrivateFile`, which sets 0600.
+- It passes `--mcp-config <path>`.
+- The file lives for the whole launcher run, so agent restarts reuse it. The directory is removed when `run()` returns, on every return path.
+- A failure to create or write it is a startup error: exit 1, naming the path and the cause. There is no silent fallback to inline JSON, because that would put the token back on the command line.
+- The `Agent command:` log line shows the launcher's own config path. That is no secret, and it helps debugging. Any other `--mcp-config` value (hand-wired in `agent.args`) stays redacted.
+- A launcher that is killed hard leaves the directory in the per-user temp dir. That is accepted: it is 0700 with a 0600 file inside, so there is no sweep.
+- Unchanged: `-write-mcp-config`, the `writeConfig` targets and Hermes.
+- Windows: `%TEMP%` is per-user, and the mode bits do not apply there. Quoting a path with a space for a `.cmd` agent (`claude.cmd`) is unverified; say so.
+
+**k172: no second --permission-prompt-tool.**
+- If `agent.args` already holds `--permission-prompt-tool`, in either form, the launcher does not add its own.
+- If the hand-wired value is `mcp__unreagent__approve`, log one INFO line saying it is already set.
+- If it is another tool, the policy is not enforced. That goes through `permissionsInertReason`, as a WARN in the log and on alert, the same way the existing inert cases do.
+
+**Tests:**
+- The agent gets a path, not JSON.
+- The file is 0600 inside a 0700 directory, on Unix.
+- It holds the servers, and the token when one is set.
+- It is gone after `run()` returns.
+- A failed write exits 1.
+- No duplicate prompt-tool flag; the log line or WARN in both k172 cases.
+- Show the tests can fail via overlays.
+
+**README and skills follow,** from the main agent and the skill-author.
+
+unreagent-worker 2026-11-21: k181 and k172 done together. The tree is commit-ready in worktree agent-a2f2562b0d7d4415c, based on main 84bec97. Nothing is committed. Files: cmd/launcher/{main.go,mcpconfig.go,main_test.go,mcpconfig_test.go}.
+
+**Changed**
+- mcpconfig.go, `writeAgentMCPConfig(servers)`: creates a directory with `os.MkdirTemp("", "unreagent-")` (0700) and writes `mcp-config.json` into it with `writePrivateFile` (0600, indented). If the write fails, it removes the directory again. The error names the path and the cause, and says why there is no inline fallback.
+- mcpconfig.go, `removeAgentMCPConfig(path, logger, alert)`: calls RemoveAll on that directory. If that fails, a WARN names the directory, in the log and on alert. I added this beyond the decision: a leftover directory can still hold the token.
+- mcpconfig.go, `redactAgentArgs(args, token, own)`: the launcher's own file after its `--mcp-config` is shown as is. Every other `--mcp-config` value is still `<redacted>`, a hand-wired path too.
+- main.go, `run()`:
+  - Writes the file. A failure returns the error, so the launcher exits 1.
+  - Defers the removal for the whole run, so agent restarts reuse the file.
+  - Passes `--mcp-config <path>`, and the "Agent command:" line shows that path.
+- main.go, k172: new `promptToolsIn(cfg.Agent.Args)` reads both forms.
+  - No hand-wired flag: the launcher appends its own, as before.
+  - Every hand-wired value is `mcp__unreagent__approve`: no append. One INFO line: "Agent: --permission-prompt-tool mcp__unreagent__approve is set in agent.args already; the launcher does not pass it a second time".
+  - Any other value: no append, and `permissionsInertReason` WARNs.
+- main.go, `permissionsInertReason`: for a headless agent whose hand-wired flag names another tool, or approve mixed with another tool, it now warns: "the --permission-prompt-tool wired into agent.args by hand names \"X\", not mcp__unreagent__approve, so …never consulted." With claudeIntegration it adds "The launcher passes no --permission-prompt-tool of its own next to it." The fix it names is to set the flag to approve, or, with claudeIntegration, to remove it. An interactive agent with another tool keeps the window text and adds "That flag names \"X\"…, so set it to mcp__unreagent__approve as well."
+- **My choice, beyond the note's wording:** the other-tool WARN also fires with `claudeIntegration: false`, since the policy goes unconsulted there just the same.
+- New const `approveTool`. The now-unused `encoding/json` import is gone from main.go.
+
+**Tests** (all in cmd/launcher)
+- New `TestRunHandsTheAgentItsMCPConfigAsAPrivateFile`, with subtests "token set" and "no token":
+  - The agent gets a path, and no argument holds the config, the token or an env value.
+  - The file is 0600 inside a 0700 `unreagent-*` directory under TMPDIR.
+  - It holds the URL and the bridge's env, plus the Authorization header when a token is set.
+  - The log line shows the path, and the directory is gone after exit.
+- New `TestRunExitsWhenTheAgentMCPConfigCannotBeWritten`: TMPDIR does not exist → exit 1, stderr names the path and the cause, and neither the editor nor the agent starts.
+- New `TestRunWarnsWhenTheAgentMCPConfigCannotBeRemoved`: a read-only config directory → the WARN in unreagent.log, and once on stderr in window mode.
+- New `TestRunPassesNoSecondPermissionPromptTool`, with four cases (none by hand, approve, approve in = form, another tool): the flag reaches the agent exactly once, and the INFO or WARN appears as decided.
+- `TestRedactAgentArgs`: added rows for the launcher's own path.
+- `TestPermissionsInertReason`: five new rows for another tool.
+- Adapted to read the file instead of the inline argument: `TestRunKeepsTheMCPSecretsOutOfTheLauncherLog` and `TestRunHandsOutALoopbackURLForAWildcardMCPAddress`.
+
+**Red on today's code** (old behaviour behind the new signature, via overlay): every new claim fails:
+- 3 redact rows and 5 inert rows.
+- 3 prompt-tool subtests: the flag was there twice.
+- Both private-file subtests, and the k44 and wildcard tests: the argument is inline JSON.
+- The exit test: the launcher kept running.
+
+**Mutations** (via overlay; the tree is untouched). Each one is caught:
+- Inline JSON back: the private-file tests, k44, wildcard, remove-WARN.
+- File mode 0644: "mode 0644, want 0600".
+- Directory 0755: "mode 0755, want 0700".
+- Directory not removed: "temp directory holds [unreagent-…]", and the remove-WARN test.
+- Flag duplicated next to approve: the approve subtests.
+- No WARN for another tool: 4 inert rows and the "another tool" subtest.
+- Inline fallback on a write failure: the exit test.
+
+**Full check, green:**
+- `gofmt -l cmd internal skills` prints nothing.
+- `go vet ./...` and `GOOS=windows go vet ./...` pass.
+- `go test -count=1 ./...` and `go test -race ./cmd/launcher` pass.
+- `make linux` and `make windows` pass, and so does `CGO_ENABLED=0 GOOS=windows go build`.
+- `example/` still works: the agent is off there, so it never reaches this path.
+
+**Not verified**
+- Windows: compiled only, never run. %TMP% is per-user, and the mode bits do not apply there.
+- Windows: a temp path with a space, passed through `claude.cmd`, is unverified. The old inline JSON, with its quotes, was the more fragile case through cmd.exe, and was not verified either.
+- Windows: if RemoveAll right after the job closes hits a sharing violation, the new WARN would show it. Unverified.
+- Claude Code reading the file: only `claude --help` was checked (2.1.330: "--mcp-config <configs...> Load MCP servers from JSON files or strings"). No real agent run.
+- Agent restarts reusing the file: holds by construction (one file per run, fixed args). No run() test covers it.
+- A write failure after a successful MkdirTemp cannot be reached without a test hook, and I added none. Only the MkdirTemp failure is tested through run(). Both paths share `agentMCPConfigError`.
+- A hard-killed launcher leaves the directory behind, as the decision accepts.
+
+**README must change** (doc-writer or main agent):
+- Lines ~345-348, ~639, ~1120 and ~1400 say "Agent command: shows --mcp-config <redacted>". It now shows the launcher's own config file path. A hand-wired `--mcp-config` value stays `<redacted>`, and the token is still blanked in other arguments.
+- Near the bearer-auth and agent paragraphs (~1119), add:
+  - The agent gets `--mcp-config <temp>/unreagent-*/mcp-config.json`: 0600 in a 0700 directory on Unix, in the per-user %TMP% on Windows.
+  - It lives for the whole run and is removed at exit. A hard-killed launcher leaves it behind.
+  - A temp directory the launcher cannot write to stops it at startup with exit 1. TMPDIR, or TMP on Windows, picks the directory.
+  - `-write-mcp-config` and writeConfig are unchanged.
+- Permission layer, ~691-730:
+  - The launcher passes no second `--permission-prompt-tool` next to a hand-wired one.
+  - One naming approve gets an INFO line.
+  - One naming another tool gets the not-enforced WARN, also without claudeIntegration.
+- CLAUDE.md's "injects --mcp-config" stays true.
+
+**Skills must change** (skill-author):
+- `unreagent-core` SKILL.md:51, the `mcpconfig.go` row: add `writeAgentMCPConfig` / `removeAgentMCPConfig`, and that `redactAgentArgs` shows the own path.
+- `unreagent-mcp-tools` SKILL.md:142: the `headers:` block now goes into the agent's `mcp-config.json` file, not inline.
+- `unreagent-config` SKILL.md:132: still true. It could say "(a file)".
+
+To review: commit-ready in worktree agent-a2f2562b0d7d4415c. The notes above say what changed, list the tests and mutations, and name what is unverified (Windows) and the README and skill follow-ups. Proposed subject: 'Pass the MCP config as a file, add no second prompt tool (k181, k172)'.
+
+unreagent-doc-writer: README.md and unreagent.example.yaml updated in the worktree. README: ~345-349 (old-release log note: own config path, never contents); ~639 (agent table row: file, own path shown, other values redacted); ~1119-1146 (bearer-auth: agent gets a file: dir/file modes, lifetime, removal WARN, hard-kill leftover, startup exit 1 with no inline fallback, TMPDIR/TMP, Windows space-in-path unverified; Agent command: line); ~1423 (window-mode log line); new 'A hand-wired --permission-prompt-tool' paragraph in Permission layer (~728-737: no second flag, INFO for approve, WARN for another tool also with claudeIntegration false) and the 'no warning' sentence after it narrowed to a hand-wired approve. Example yaml: agent.claudeIntegration comment (~46-51). internal/config tests pass.
+
+unreagent-skill-author 2026-11-21: project skills updated for k181/k172 in worktree agent-a2f2562b0d7d4415c. Not committed, cards not moved. Read first: the diff in cmd/launcher/main.go and mcpconfig.go (writeAgentMCPConfig, removeAgentMCPConfig, redactAgentArgs with own, promptToolsIn, permissionsInertReason).
+
+**Changed**
+- `.claude/skills/unreagent-core/SKILL.md`:
+  - The `mcpconfig.go` row (:51) lists `writeAgentMCPConfig` / `removeAgentMCPConfig`: mcp-config.json in an os.MkdirTemp directory, 0600 in 0700 on Unix, the per-user %TEMP% on Windows, never inline. It also says `redactAgentArgs` shows the launcher's own path and replaces every other `--mcp-config` value, including a hand-wired path.
+  - Invariant 6, the list of WARNs written to alert directly: adds `removeAgentMCPConfig` at exit.
+  - Invariant 6, "One deliberate exception, the MCP bind" was stale, because a failed agent config write now exits 1 as well. It now reads "Two deliberate exceptions" and names the second with its reason (no inline fallback). The file lives for the whole run, and its removal is deferred.
+- `.claude/skills/unreagent-mcp-tools/SKILL.md` (:142, Auth): the `headers:` block from `buildMCPServers` goes into the private mcp-config.json through `writeAgentMCPConfig`. `--mcp-config` carries only the path.
+
+**Left as is**
+- `unreagent-config` SKILL.md:132 ("the agent's `--mcp-config`" takes ClientURL): still true.
+- `unreagent-mcp-tools` SKILL.md:82 (the undocumented `--permission-prompt-tool` input schema): still true.
+- No project skill describes how the prompt tool is injected, so k172 makes nothing stale there.
+- I grepped the shipped skills (`skills/unreagent-*`) for inline, --mcp-config, redact and permission-prompt-tool. Nothing matched, so they are unchanged.
+- CLAUDE.md is untouched.
+
+**Check:** `go test -count=1 ./internal/skills` passes. That test covers only `skills/`. The edited `.claude/skills` files have no test.
+
+unreagent-reviewer 2026-11-21, k181 + k172 (worktree agent-a2f2562b0d7d4415c, base 84bec97).
+
+**Verdict: changes needed, one small doc fix (README.md:731). After that it is ready, and the fix needs no new code check.** The code is ready and tested on Linux. The Windows paths are compiled only, so they are unverified.
+
+**Check I ran myself, all green:**
+- `gofmt -l cmd internal skills` printed nothing.
+- `go vet ./...` and `GOOS=windows go vet ./...` pass.
+- `go test -count=1 ./...` passes in all 5 packages.
+- `go test -count=1 -race ./cmd/launcher` passes (81s). No failure, so the k161 flake did not show.
+- `make linux` and `make windows` pass.
+
+**By hand, Linux, a binary built in scratch with mcp.token and an extra server's env set:**
+- The agent's argv and /proc/<pid>/cmdline hold `-p task --mcp-config <TMPDIR>/unreagent-<n>/mcp-config.json --permission-prompt-tool mcp__unreagent__approve`.
+- Neither the token nor the env value is in argv, cmdline, stdout or stderr.
+- The directory is drwx------ and the file -rw-------. The file holds the Bearer header and the env value.
+- The "Agent command:" line shows the path, and TMPDIR is empty after exit.
+
+**Restart, by hand:** `restart: always` with an agent that exits after 2s. All 3 starts got the same path, and the file was there each time. The launcher then gave up (fast-fail) and exited, and the directory was gone.
+
+**Mutations** (overlays, tree untouched):
+- The worker's "inline" is caught by 4 tests: wildcard, k44, the private-file test with both subtests, and remove-WARN.
+- The worker's "duplicate" is caught by both approve subtests.
+- Mine, "noeqform" (promptToolsIn drops the = form), is caught by 4 TestPermissionsInertReason rows and the run() "-flag=value" subtest.
+- Mine, "infoany" (INFO for any hand-wired tool), is caught by the "another tool" subtest.
+- Mine, "rmonexit" (the directory is removed in the agent's OnExit), is **not caught**: see finding 2.
+
+**Private file, checked:**
+- run() writes it at main.go:253 after the MCP bind (:117), so a fatal bind leaves nothing behind. It is written before any service starts (sup.Start is at :401).
+- The deferred removal (:258) covers every later return: AddService at :310, and the normal end at :431. wg.Wait at :426 comes first, so the agent is dead before the removal.
+- A signal after :338 goes through the same return.
+- If the write fails, run() returns before sup.Start. The bound listener is closed by its defer, so nothing is left running.
+- Symlinks and TOCTOU: writePrivateFile opens without O_EXCL (mcpconfig.go:94) and would follow a link. That is safe here: the directory is fresh from MkdirTemp (mcpconfig.go:138, random name, 0700), so no other user can plant a link in it. On Windows the directory inherits the ACL of the per-user %TEMP%. O_EXCL would only be defense in depth, so this is not a finding.
+
+**Log line, checked:** the own path is shown only after a bare --mcp-config (mcpconfig.go, redactAgentArgs). A hand-wired value is still <redacted>, in both forms. The token is still blanked in every other argument.
+
+**k172, checked:**
+- With claudeIntegration, the flag reaches the agent exactly once, in either form (TestRunPassesNoSecondPermissionPromptTool).
+- A hand-wired approve gets the log line at main.go:277. Another tool gets the WARN through permissionsInertReason.
+- The worker's extension, the WARN also with claudeIntegration: false, is sound. The launcher passes nothing there, so a hand-wired other tool leaves approve unconsulted, which is exactly the "inert" case. The old code was silent there. The text correctly drops "or remove it" and "no second one" without claudeIntegration.
+- The claudeIntegration:false case is covered by a unit row only, not through run().
+
+**Findings, most important first:**
+1. README.md:731: "the launcher logs one `INFO` line". No launcher line carries an INFO tag. The line is "Agent: --permission-prompt-tool mcp__unreagent__approve is set in agent.args already; …" (main.go:277). A user who greps for INFO finds nothing. Quote the line's start, or say "one log line". Owner: unreagent-doc-writer.
+2. Test gap, not blocking: no test covers "restarts reuse the file". The rmonexit mutant passes the whole set. Restart reuse holds by hand (above) and by construction. A follow-up for unreagent-test-writer: a run() test whose agent has `restart: always` and records at each start that the file exists.
+3. main.go:253-258 against :338, low: the file is written before `signal.NotifyContext`. A Ctrl-C or SIGTERM in that window takes Go's default action: the process dies, no defer runs, and the directory stays. The window holds writeMCPConfigs (:323), which can wait up to 5s on `git check-ignore`. This is the same class as the accepted hard kill (0700/0600). It could be closed by installing the handler before the write; card or accept. Related and unverified: on Windows, closing the console (CTRL_CLOSE_EVENT reaches Go as SIGTERM, with about 5s grace) kills the launcher before the defer if shutdown takes longer. That is likely the most common way to leave the directory behind there.
+4. README.md:729-730, nit: "so the agent never gets the flag twice". It is the launcher that never adds a second one. Two flags wired by hand still both reach the agent.
+5. .claude/skills/unreagent-core/SKILL.md:123, nit: "Two deliberate exceptions" is not exhaustive. setupSkills already ends run() with exit 1 (main.go:228-231). "One" was incomplete before this change too.
+
+**Scope:** every file is in its owner's lane (`ack-team owner`): worker for cmd/launcher/*, doc-writer for README.md and the example yaml, skill-author for both .claude/skills. No German in the touched text.
+
+**Unverified:**
+- Windows: compiled only. Not checked: the per-user %TEMP% privacy, RemoveAll right after the job closes, and a path with a space through claude.cmd.
+- A real Claude Code reading `--mcp-config <file>`.
+- I ran no k172 scenario through the built binary; the run() tests cover it.
+
+**Applies on main:** main is now dae0492 (k182 9c8c567, k173/k175 dae0492). `git apply --check` of the diff on main is clean, with no conflicting hunk and no 3-way merge needed. My green run is on 84bec97, not on the rebased tree. dae0492 touches README.md and unreagent-mcp-tools/SKILL.md, and k182 the supervisor's shutdown. Release-manager: re-run the check after the rebase.
+
+**Subject: confirmed.** "Pass the MCP config as a file, add no second prompt tool (k181, k172)".
+
+**Changes:** I found no Changes entries on k181. Proposed, under {{$NEXT}}. "No longer" fits both, since v0.0.9 passed inline JSON and appended the flag unconditionally.
+- New: "The embedded agent gets its MCP config as a file instead of inline JSON on its command line, so other local users can no longer read mcp.token or the extra servers' env values through ps or /proc. The launcher writes mcp-config.json into a private unreagent-* directory in the temp directory (0700/0600 on Unix, the per-user %TMP% on Windows), keeps it for the whole run and removes it at exit. A temp directory it cannot write to ends it at startup with exit 1."
+- Amend, don't add: the k44 entry at Changes:321-324 says "--mcp-config <redacted>", which is now stale. It should read "The logged agent command shows the launcher's own --mcp-config file path, any other --mcp-config value as <redacted>, and blanks the token in any other argument, …". The rest stays.
+- New: "With claudeIntegration, a headless agent whose agent.args already holds --permission-prompt-tool no longer gets the launcher's own as well. One naming mcp__unreagent__approve gets a log line saying so. One naming another tool gets the 'permissions are not enforced' WARN, also with claudeIntegration: false.
+
+Main agent's decisions 2026-11-21 on the review's findings:
+1. **README:731, the 'INFO' line.** Fixed by me. It now says the launcher logs a plain line, quotes the line's start, and says it is not a warning.
+2. **No test for restarts reusing the file.** Not blocking. New card k186 for unreagent-test-writer, after this card lands.
+3. **Ctrl-C before the signal handler.** Accepted for this card, the same class as a hard kill. New card k185 for unreagent-worker, low priority, main.go serial.
+4. **README:729-730, 'never gets the flag twice'.** Fixed by me. It now says 'the launcher does not add a second one'.
+5. **unreagent-core:123, 'Two deliberate exceptions'.** The skill-author is fixing it in this worktree.
+
+**Changes:** the reviewer's three proposals, which are a new k181 entry, an amendment of the stale k44 '--mcp-config <redacted>' entry, and a new k172 entry. No new code, so no new code review. After the skill fix: unreagent-release-manager, with a full check after the rebase onto main.
+
+Skill-author, review finding 5 fixed: .claude/skills/unreagent-core/SKILL.md:123-134 (invariant 6) now reads "Past config load, three deliberate exceptions": the MCP bind, the skill set (new, :130-133: setupSkills ends the run with exit 1 when the embedded set does not load or checkSkillDirs rejects it; a failed skills.dir write only warns), and the agent's MCP config (k181, now "The third"). I named them instead of stating a common rule, because the suggested rule ("a failure that would leave the agent without its tools, skills or prompt tool ends the run") is false: a failed skills.dir write (skills.go:97-102) and a serve failure after the bind (serveMCP) both leave the agent without some of those and only warn. Every early return err in run() checked: extractSubcommand :58 is the usage error (exit 2) and config.Load :71 is config refusal, both before the bind, which "past config load" leaves out of the list. The two sup.AddService returns (:213, :310) fail only on a duplicate service name, which cannot happen with the fixed names ue/agent, so neither is an exception. go test -count=1 ./internal/skills: ok. Card not moved.
+
+unreagent-release-manager: committed as 3fea8a6 (rebased onto cf77ca8, full check green, Changes entries added). Fast-forwarded into main.
