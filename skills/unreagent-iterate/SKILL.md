@@ -128,10 +128,13 @@ editor's last lines are in `logs`.
 ## ue_restart
 
 One step that does `ue_stop` and then `ue_start`: the same kill, then the same
-spawn-time report. It also works as a plain start when the editor is not
-running, and it resets `restarts` to 0 and removes `lastExit`. All the
-`ue_start` caveats apply. In particular, a new editor that never came up is
-the same `Error: service "ue" did not start: …` result.
+spawn-time report. While an automatic restart is pending, it takes that
+restart's place as `ue_start` does and spares the crash evidence; a separate
+`ue_stop` first would cancel the restart and not spare it (see Automatic
+restarts). It also works as a plain start when the editor is not running, and
+it resets `restarts` to 0 and removes `lastExit`. All the `ue_start` caveats
+apply. In particular, a new editor that never came up is the same
+`Error: service "ue" did not start: …` result.
 
 ## What a stop does to the process tree
 
@@ -197,10 +200,20 @@ attempts stays in `logs`.
 
 Before every start (the first one, a manual one, or an automatic one), the
 launcher runs two hooks. Both spare the evidence of a crash on a start that
-follows one: an automatic restart, and the first `ue_start` or `ue_restart`
-after the editor failed and was not restarted (given up on, `maxRestarts`
-used up, policy `never`). A `ue_start` while a restart is still pending is not
-such a start.
+follows one:
+
+- An automatic restart.
+- A `ue_start` or `ue_restart` while an automatic restart is still pending,
+  within `restartDelaySeconds` of an exit the policy restarts (a crash, and
+  under `always` a clean exit too) or of a failed spawn. It starts the editor
+  in place of that restart and spares the evidence the same way.
+- The first `ue_start` or `ue_restart` after the editor failed and was not
+  restarted (given up on, `maxRestarts` used up, policy `never`).
+
+A `ue_stop` during the restart delay cancels the pending restart. The
+`ue_start` after it is a plain manual start and does not spare the evidence.
+
+The hooks:
 
 - **`unreal.killCrashReporter`** (default on) kills `CrashReportClientEditor.exe`
   and `CrashReportClient.exe` by image name, so it hits every running crash
@@ -213,7 +226,11 @@ such a start.
   reports are in `Saved/Crashes/` in the project directory (`read_file`,
   `list_dir`, see `unreagent-files`). With the option on, read them before
   a start that does not follow a crash, such as a `ue_restart` of an editor
-  that came back up: that start empties the folder.
+  that came back up, or a `ue_start` after a `ue_stop` that cancelled a
+  pending restart: that start empties the folder. To keep a crash's dumps
+  past the next start, leave the restart to the launcher, or call `ue_start`
+  while `status` shows `running: false, desired: true`. Do not call
+  `ue_stop` before that `ue_start`.
 
 ## logs
 

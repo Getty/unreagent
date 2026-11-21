@@ -437,7 +437,8 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 // projectDir ("" for none). A start that follows a crash (followsCrash)
 // spares that crash's evidence: Saved/Crashes stays, and so does a crash
 // reporter, which may still be writing the report — the restart policy
-// starts the editor again about one restart delay after it ended. Skipping
+// starts the editor again about one restart delay after it ended, and a
+// start somebody asks for within that delay comes even sooner. Skipping
 // the kill cannot hold the restart up, where waiting for a reporter to finish
 // would need a bound and a way to tell it is done; and every other start
 // still kills it, so a stuck reporter window is gone by the second start
@@ -455,11 +456,13 @@ func editorPreStart(u config.UnrealConfig, projectDir string, kill func(), logge
 }
 
 // followsCrash reports whether st is a start that keeps the last crash's
-// evidence for diagnosis: the restart policy's, and the first start after the
-// editor failed and was not restarted — the one the give-up line asks for
-// (makeEditorExitHandler), before anybody has read the dumps.
+// evidence for diagnosis: the restart policy's, a start somebody asks for in
+// its place while it is pending (console start or r, ue_start, ue_restart
+// within the restart delay), and the first start after the editor failed and
+// was not restarted — the one the give-up line asks for
+// (makeEditorExitHandler). Each comes before anybody has read the dumps.
 func followsCrash(st supervisor.Start) bool {
-	return st.Automatic || st.AfterGiveUp
+	return st.Automatic || st.ReplacesRestart || st.AfterGiveUp
 }
 
 // killCrashReporter terminates a possibly stuck crash reporter window.
@@ -507,7 +510,10 @@ func cleanRecovery(projectDir string, st supervisor.Start, logger func(string)) 
 	if entries, err := os.ReadDir(crashes); err == nil && len(entries) > 0 {
 		if followsCrash(st) {
 			why := "automatic restart — the crash dump stays for diagnosis"
-			if !st.Automatic {
+			switch {
+			case st.ReplacesRestart:
+				why = "start in place of the pending automatic restart — the crash dump stays for diagnosis"
+			case !st.Automatic:
 				why = "first start since the editor failed and was not restarted — the crash dumps stay for diagnosis"
 			}
 			logger("Recovery: Saved/Crashes kept (" + why + ")")

@@ -103,8 +103,9 @@ Revision history for unreagent
     spawned: status shows lastError until a start succeeds, and lastExit (how
     the last run that ended on its own ended) until the next manual start.
   - cleanOnRestart keeps Saved/Crashes on a start that follows a crash: the
-    automatic restart, and the first start after the launcher gave up on the
-    editor. PackageRestoreData.json is removed before every start, and every
+    automatic restart, a start issued in its place during the restart delay,
+    and the first start after the launcher gave up on the editor.
+    PackageRestoreData.json is removed before every start, and every
     other start empties Saved/Crashes. Each editor give-up logs where the
     dumps are.
   - The crash-reporter kill skips a start that follows a crash, so a reporter

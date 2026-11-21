@@ -64,6 +64,11 @@ type Start struct {
 	// OnExit reports with Success false). Only StartService or RestartService
 	// start it then, so it is never Automatic.
 	AfterGiveUp bool
+	// ReplacesRestart is true for a StartService or RestartService that comes
+	// while the restart policy's start is pending — within RestartDelay of an
+	// exit or of a failed start — and so takes its place: that start does not
+	// come any more. It is never Automatic.
+	ReplacesRestart bool
 }
 
 // Exit tells ServiceSpec.OnExit how the service ended.
@@ -511,9 +516,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 
 	// start is only ever called while the service is desired (initial start,
-	// backoff, ctrlStart, ctrlRestart); automatic is passed on to PreStart.
-	start := func(automatic bool) {
-		pre := Start{Automatic: automatic, AfterGiveUp: afterGiveUp}
+	// backoff, ctrlStart, ctrlRestart); pre says which start it is, and is
+	// passed on to PreStart with AfterGiveUp filled in.
+	start := func(pre Start) {
+		pre.AfterGiveUp = afterGiveUp
 		afterGiveUp = false
 		if spec.PreStart != nil {
 			spec.PreStart(pre)
@@ -609,8 +615,15 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		if spec.StartDelay > 0 {
 			backoff, backoffAuto = time.After(spec.StartDelay), false
 		} else {
-			start(false)
+			start(Start{})
 		}
+	}
+
+	// replacesRestart reports whether a start somebody asks for now takes
+	// the place of the restart policy's pending start (Start.ReplacesRestart);
+	// the delayed first start is not one.
+	replacesRestart := func() bool {
+		return cmd == nil && backoff != nil && backoffAuto
 	}
 
 	for {
@@ -623,7 +636,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		case <-backoff:
 			backoff = nil
 			if desired && cmd == nil {
-				start(backoffAuto)
+				start(Start{Automatic: backoffAuto})
 			}
 
 		case err := <-waitChOrNil(waitCh):
@@ -664,9 +677,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			case ctrlStart:
 				desired = true
 				restarts, quickFails, lastExit = 0, 0, ""
+				pre := Start{ReplacesRestart: replacesRestart()}
 				backoff = nil
 				if cmd == nil {
-					start(false)
+					start(pre)
 				}
 			case ctrlStop:
 				desired = false
@@ -676,9 +690,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			case ctrlRestart:
 				desired = true
 				restarts, quickFails, lastExit = 0, 0, ""
+				pre := Start{ReplacesRestart: replacesRestart()}
 				backoff = nil
 				stop()
-				start(false)
+				start(pre)
 				if cmd != nil { // a failed start has logged its own lines
 					s.logf("[%s] restarted (manual)", spec.Name)
 				}

@@ -501,6 +501,68 @@ func TestRunCleanOnRestartKeepsCrashesOnAnAutomaticRestart(t *testing.T) {
 	}
 }
 
+// k153: a ue_start during the restart delay after a crash takes the place of
+// the restart policy's restart, but with cleanOnRestart it emptied
+// Saved/Crashes as any manual start does — the dump of the crash that just
+// happened went before anybody read it. That start keeps it, as the
+// automatic restart it replaces would (k77).
+func TestRunCleanOnRestartKeepsCrashesOnAStartDuringTheRestartDelay(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not on PATH")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick a free port: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"Demo.uproject": "{}",
+		"editor.sh":     crashingEditor,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The restart delay outlasts the test: only ue_start can start run 2.
+	yaml := strings.Replace(launcherYAML(filepath.Join(dir, "editor.sh"), "  enabled: false\n"),
+		"  killCrashReporter: false\n",
+		"  killCrashReporter: false\n  cleanOnRestart: true\n  restart: on-failure\n  restartDelaySeconds: 600\n", 1)
+	yaml = strings.Replace(yaml, "mcp:\n  enabled: false\n", "mcp:\n  enabled: true\n  address: "+addr+"\n", 1)
+	l := startLauncherIn(t, dir, yaml)
+	l.waitLine(t, "[ue] restart 1 in ")
+
+	resp, err := http.Post("http://"+addr+"/mcp", "application/json",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ue_start","arguments":{}}}`))
+	if err != nil {
+		t.Fatalf("ue_start: %v\n%s", err, l.stdout)
+	}
+	_ = resp.Body.Close()
+	var run2 []byte
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if run2, err = os.ReadFile(filepath.Join(dir, "run2")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the editor did not start again after ue_start:\n%s\nstderr: %s", l.stdout, l.stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := strings.TrimSpace(string(run2)); got != "Saved/Crashes/dump" {
+		t.Errorf("ue_start during the restart delay left %q in Saved, want only the crash dump (Saved/Crashes/dump)", got)
+	}
+	l.waitLine(t, "Saved/Crashes kept (start in place of the pending automatic restart")
+
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+}
+
 // crashLoopEditor is an editor stand-in for the give-up test. Its first three
 // runs each leave a crash dump in Saved/Crashes and fail at once, which the
 // fast-fail rule gives up on; the fourth run records what Saved/Crashes holds
@@ -711,7 +773,8 @@ func TestCrashReporterKillMatchesOnlyTheProgram(t *testing.T) {
 // restart policy's restart about one restart delay after a crash, and could
 // cut off a reporter still writing the report of that crash. A start that
 // keeps Saved/Crashes for diagnosis leaves the reporter alone too; every
-// other start kills it, and killCrashReporter: false never does.
+// other start kills it, and killCrashReporter: false never does. k153: so
+// does a start somebody asks for in place of the pending automatic restart.
 func TestEditorPreStartSparesTheCrashReporterAfterACrash(t *testing.T) {
 	on, off := true, false
 	for _, c := range []struct {
@@ -722,6 +785,7 @@ func TestEditorPreStartSparesTheCrashReporterAfterACrash(t *testing.T) {
 		{&on, supervisor.Start{}, 1},
 		{&on, supervisor.Start{Automatic: true}, 0},
 		{&on, supervisor.Start{AfterGiveUp: true}, 0},
+		{&on, supervisor.Start{ReplacesRestart: true}, 0},
 		{&off, supervisor.Start{}, 0},
 	} {
 		kills := 0

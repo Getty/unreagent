@@ -288,13 +288,15 @@ mcp:
 #   restartDelaySeconds: 3    # default 3 (0 = default); below 0 is a load error
 #   unattended: true          # -unattended: no crash dialog + no recovery prompt (default on)
 #   killCrashReporter: true   # kill a hanging CrashReportClient(Editor) before a start (default on),
-#                             # except a start that follows a crash (automatic restart, or the first
-#                             # start after the launcher gave up on the editor): the reporter may
-#                             # still be writing
+#                             # except a start that follows a crash (automatic restart, a start
+#                             # issued in place of a pending one, or the first start after the
+#                             # launcher gave up on the editor): the reporter may still be writing
 #   cleanOnRestart: false     # remove Saved/Autosaves/PackageRestoreData.json before every start (default off);
 #                             # Saved/Crashes is emptied before a start that does not follow a crash —
-#                             # kept on an automatic restart and on the first start after a give-up,
-#                             # so the crash dumps survive
+#                             # kept on an automatic restart, on a start issued in place of a pending
+#                             # one (during the restart delay) and on the first start after a give-up,
+#                             # so the crash dumps survive; a stop during the delay cancels the
+#                             # pending restart, so a start after it empties Saved/Crashes
 #
 # commands:
 #   cook:

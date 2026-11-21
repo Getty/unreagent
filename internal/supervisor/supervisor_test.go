@@ -178,6 +178,11 @@ func (p *preStarts) afterGiveUp() string {
 	return p.flags(func(st Start) bool { return st.AfterGiveUp })
 }
 
+// replacesRestart lists the ReplacesRestart flag of every call.
+func (p *preStarts) replacesRestart() string {
+	return p.flags(func(st Start) bool { return st.ReplacesRestart })
+}
+
 func (p *preStarts) flags(flag func(Start) bool) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -270,6 +275,136 @@ func TestPreStartSaysWhetherTheStartFollowsAGiveUp(t *testing.T) {
 		}
 		if got, want := pre.afterGiveUp(), "[false true true]"; got != want {
 			t.Fatalf("PreStart AfterGiveUp = %s, want %s: each start after a start that was not retried follows a give-up", got, want)
+		}
+	})
+}
+
+// waitRestartPending waits until the policy's restart of svc is pending: the
+// run has ended and Restarts has counted it. Both change in the loop turn that
+// arms the restart delay, so a control call after this lands within it.
+func waitRestartPending(t *testing.T, sup *Supervisor, restarts int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st := sup.Status()
+		if len(st) == 1 && !st[0].Running && st[0].Restarts == restarts {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("restart %d of svc did not become pending: %+v", restarts, st)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// k153: a StartService or RestartService during the restart delay takes the
+// place of the restart policy's start, but PreStart saw a start like any other
+// one somebody asks for, and cleanOnRestart emptied the crash dumps the
+// automatic restart would have kept. Such a start says it replaces the
+// pending restart; a start with none pending, and one during the delay of the
+// first start, do not.
+func TestPreStartSaysWhetherTheStartReplacesAPendingRestart(t *testing.T) {
+	t.Run("StartService during the restart delay, then after a clean exit", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		// Run 1 fails; the policy's restart waits out a delay longer than the
+		// test. Every later run exits 0, which on-failure does not restart.
+		spec, _ := runsSpec(t, "fo", 0)
+		spec.RestartDelay = time.Hour
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		waitRestartPending(t, sup, 1)
+		for i := 0; i < 2; i++ {
+			if _, err := sup.StartService("svc"); err != nil {
+				t.Fatalf("StartService: %v", err)
+			}
+			waitExit(t, exits, 10*time.Second, "the run StartService began did not end")
+		}
+		if got, want := pre.replacesRestart(), "[false true false]"; got != want {
+			t.Fatalf("PreStart ReplacesRestart = %s, want %s (first start, StartService during the restart delay, StartService after a clean exit)", got, want)
+		}
+		if got, want := pre.String(), "[false false false]"; got != want {
+			t.Fatalf("PreStart Automatic = %s, want %s: a start somebody asks for is never automatic", got, want)
+		}
+	})
+	t.Run("RestartService during the restart delay", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		spec, _ := runsSpec(t, "fo", 0)
+		spec.RestartDelay = time.Hour
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		waitRestartPending(t, sup, 1)
+		if _, err := sup.RestartService("svc"); err != nil {
+			t.Fatalf("RestartService: %v", err)
+		}
+		waitExit(t, exits, 10*time.Second, "the run RestartService began did not end")
+		if got, want := pre.replacesRestart(), "[false true]"; got != want {
+			t.Fatalf("PreStart ReplacesRestart = %s, want %s", got, want)
+		}
+	})
+	t.Run("StartService during the retry delay of a failed start", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("executable bits work differently on Windows")
+		}
+		bin := filepath.Join(t.TempDir(), "not-executable")
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		var pre preStarts
+		sup := New(nil)
+		startService(t, sup, ServiceSpec{
+			Name:         "svc",
+			Command:      bin,
+			Autostart:    true,
+			Restart:      "on-failure",
+			RestartDelay: time.Hour,
+			PreStart:     pre.record,
+		})
+		waitRestartPending(t, sup, 1)
+		// PreStart runs in the control loop before StartService gets its reply.
+		if _, err := sup.StartService("svc"); err != nil {
+			t.Fatalf("StartService: %v", err)
+		}
+		if got, want := pre.replacesRestart(), "[false true]"; got != want {
+			t.Fatalf("PreStart ReplacesRestart = %s, want %s: the policy's retry of a failed start is a pending restart too", got, want)
+		}
+	})
+	t.Run("StartService during the start delay", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		spec, _ := runsSpec(t, "o", 0)
+		spec.StartDelay = time.Hour
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		if _, err := sup.StartService("svc"); err != nil {
+			t.Fatalf("StartService: %v", err)
+		}
+		waitExit(t, exits, 10*time.Second, "the run StartService began did not end")
+		if got, want := pre.replacesRestart(), "[false]"; got != want {
+			t.Fatalf("PreStart ReplacesRestart = %s, want %s: a start delay is not a restart", got, want)
+		}
+	})
+	t.Run("StartService after a StopService during the restart delay", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		spec, _ := runsSpec(t, "fo", 0)
+		spec.RestartDelay = time.Hour
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		waitRestartPending(t, sup, 1)
+		// The stop cancels the pending restart and ends the crash episode:
+		// the start after it replaces nothing, so cleanOnRestart empties the
+		// crash dumps like any manual start.
+		if _, err := sup.StopService("svc"); err != nil {
+			t.Fatalf("StopService: %v", err)
+		}
+		if _, err := sup.StartService("svc"); err != nil {
+			t.Fatalf("StartService: %v", err)
+		}
+		waitExit(t, exits, 10*time.Second, "the run StartService began after the stop did not end")
+		if got, want := pre.replacesRestart(), "[false false]"; got != want {
+			t.Fatalf("PreStart ReplacesRestart = %s, want %s: a stop during the restart delay cancels the pending restart", got, want)
 		}
 	})
 }
