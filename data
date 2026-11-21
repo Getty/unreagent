@@ -1,0 +1,40 @@
+---
+claimed_at: 2026-11-21T04:48:03Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T04:48:17Z
+created: 2026-11-21T03:03:30Z
+depends_on:
+- 96
+id: 118
+priority: low
+started: 2026-11-21T03:33:15Z
+status: done
+tags:
+- hermes
+- bug
+title: hermes-setup drops every YAML document after the first in a Hermes config
+updated: 2026-11-21T04:48:17Z
+---
+
+Found by the k96 worker (2026-11-21), already true before k96: a Hermes config with several YAML documents (--- separators) loses everything after the first document when hermes-setup rewrites it, with no refusal and no warning. PyYAML (Hermes) refuses multi-document files anyway, so the impact is low, but a silent loss is the wrong failure.
+
+Done when: hermes-setup refuses a multi-document Hermes config with nothing written (like the other refusals in cmd/launcher/hermes.go), with a test. Lane: unreagent-worker. Depends on k96 (same file).
+
+Worker done (2026-11-21): a file with more than one YAML document is refused, nothing written, naming the line of the next document's ---; a bare trailing --- or ... is accepted (and dropped on rewrite). The check sits in the shared parser, so it also refuses a multi-document unreagent.local.yaml when a token has to be written there — accepted by the main agent. That Hermes uses safe_load is the card's claim, not verified. README follow-up by the doc-writer before review.
+
+Ready for review (2026-11-21): code + tests by the worker (worktree-agent-aa1f2e2fa22aeac6a, hermes.go, hermes_test.go); README hermes-setup section by the doc-writer, with main-agent prose fixes (the k96 entry marker never shipped in a release — v0.0.9 predates 8f24738 — so the README no longer mentions it; the multi-document rule now matches the test table: '--- ~' and '--- # note' are refused, a bare trailing '---' or '...' with comment lines after it is accepted).
+
+2026-11-21 04:16 Review (unreagent-reviewer, 2026-11-21): CHANGES NEEDED (README only; code approved). Files: cmd/launcher/hermes.go (parseYAMLFile, emptyDocument), cmd/launcher/hermes_test.go, README.md (hermes-setup) in worktree-agent-aa1f2e2fa22aeac6a, base 8f24738. The check is the same green run as on k116 (gofmt -l, go vet linux+windows, go test -count=1 ./..., -race -count=3 ./cmd/launcher, make linux, make windows, go mod verify). Mutations: counting a bare '---' as a document fails TestHermesSetupAcceptsEmptyTrailingDocument (5 cases) and one refusal case; removing the multi-document check fails all 6 refusal cases plus the local.yaml test. The code is fail-safe: every refused input holds a comment that yaml.v3 hangs on the second document, which the rewrite would drop.
+(1) README.md:711-712 "A bare trailing --- or ..., with or without comment lines after it, is not refused" is false for: 'model: x\n---\n\n# after blank\n' (blank line, then comment), 'model: x\n---\n...\n# c\n', 'model: x\n---\n---\n# c\n' -> all refused with "another one starts at line 2". Only a comment block directly after the '---' or '...' is accepted. Narrow the sentence (doc-writer), or have the code keep such comments (worker); either way, pin the blank-line case in TestHermesSetupAcceptsEmptyTrailingDocument or the refusal table. The error says "more than one YAML document" for what the user sees as a trailing comment; maybe say so in the README.
+(2) Nits: README.md:712 and 720 are not re-wrapped (115 and 97 columns); hermes_test.go:335 subtest name "leading and trailing --" means '---'.
+Also found (drift, not this card, worth a ticket): internal/config/config.go decodeYAML (~715) decodes only the first document of unreagent.yaml / unreagent.local.yaml, without a word — the silent loss k118 fixes for the rewrite, now at load (the k118 local.yaml test fixture's second document is ignored at load). fileExists (~750) uses os.Stat, so a looping or dangling unreagent.local.yaml is skipped at load without a warning.
+That Hermes refuses multi-document files is the card's claim, unverified.
+
+Back after review (2026-11-21): code approved. README sentence is too broad — a blank line, a '...' or a second '---' before a trailing comment makes yaml.v3 put the comment in a second document, which is refused (correctly). Main-agent decision: keep the code, narrow the README, pin the blank-line case in a test.
+
+Review fixes done (2026-11-21): the blank-line-then-comment case is pinned (refused at line 2); README now says a bare trailing --- or ... is accepted, and so is a comment directly below a single trailing ---, while a blank line, a ... or another --- before such a comment starts a second document, which is refused.
+
+2026-11-21 04:43 Re-review (unreagent-reviewer, 2026-11-21): APPROVE. Files: cmd/launcher/hermes.go (parseYAMLFile, emptyDocument), cmd/launcher/hermes_test.go, README.md (hermes-setup) in worktree-agent-aa1f2e2fa22aeac6a, base 8f24738. The check is the same green run as on k116 (gofmt -l, go vet linux+windows, go test -count=1 ./..., -race -count=3 ./cmd/launcher, make linux, make windows, go mod verify). The blank-line case is pinned in TestHermesSetupRefusesMultipleDocuments; the subtest is renamed. The narrowed README sentence matches probes of the shared parser: accepted — a trailing ---, ..., --- then ..., '---' with a trailing space then a comment, one or more comment lines directly below a single ---; refused at line 2 — a blank line, a '...' or another '---' before that comment, and '--- / # a / blank / # b'. Not stated, safe: a comment after a bare trailing '...' (even after a blank line) is accepted and kept. The lines are re-wrapped. No German.
+
+Committed as b04e79a on main (rebased onto 3ab0142, full check green after the rebase).
