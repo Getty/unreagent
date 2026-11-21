@@ -1384,6 +1384,69 @@ func TestMaterializeTwoRunsAtOnce(t *testing.T) {
 	}
 }
 
+// --- k164: leftovers the sweep cannot remove ------------------------------
+
+// A leftover the sweep cannot remove (a file held open by a virus scanner on
+// Windows; here a read-only directory) does not stop the sweep: every later
+// one still goes, and each that stays is named in the one WARN line. The
+// leftovers sort a, b, c, so b comes after the first that fails.
+func TestSweepRemovesEveryLeftoverItCan(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to")
+	}
+	saved := loadEmbeddedSkills
+	loadEmbeddedSkills = func() ([]skills.Skill, error) { return testSkills(), nil }
+	t.Cleanup(func() { loadEmbeddedSkills = saved })
+	dir := t.TempDir()
+	// Registered after TempDir, so it runs before TempDir's removal; the
+	// sweep renamed the held leftovers, so every directory is opened up.
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				_ = os.Chmod(p, 0o755)
+			}
+			return nil
+		})
+	})
+	held := []string{skillDirPrefix + ".tmp-a", skillDirPrefix + ".tmp-c"}
+	free := skillDirPrefix + ".tmp-b"
+	for _, name := range append([]string{free}, held...) {
+		mustWriteFile(t, filepath.Join(dir, name, "previous", skillFile), "left by an interrupted start")
+	}
+	for _, name := range held {
+		if err := os.Chmod(filepath.Join(dir, name), 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logger, lines := newLogCollector()
+	if _, err := setupSkills(&config.Config{Skills: skillsVia(true, true, dir)}, t.TempDir(), logger); err != nil {
+		t.Fatalf("setupSkills: %v; want a warning, not an error", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, free)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("%s is still there (%v); want the sweep to remove it although %s could not be", free, err, held[0])
+	}
+	if works := workDirs(t, dir); len(works) != len(held) {
+		t.Errorf("work directories after the run: %v; want only the %d held leftovers", works, len(held))
+	}
+	var warns []string
+	for _, l := range *lines {
+		if strings.Contains(l, "WARN skills not fully written") {
+			warns = append(warns, l)
+		}
+	}
+	if len(warns) != 1 || strings.Contains(warns[0], "\n") {
+		t.Fatalf("warnings %q; want one line", warns)
+	}
+	if c := strings.Count(warns[0], "permission denied"); c != len(held) {
+		t.Errorf("warning %q names %d failed removals; want %d", warns[0], c, len(held))
+	}
+	got := tree(t, dir)
+	maps.DeleteFunc(got, func(p, _ string) bool { return strings.HasPrefix(p, skillDirPrefix+".tmp-") })
+	if want := materialized(testSkills()); !maps.Equal(got, want) {
+		t.Errorf("skills.dir outside the held leftovers = %v; want the set in place, %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
 // --- run() wiring: the skill set and the load error ----------------------
 
 // loadFailEnv makes the launcher process of TestLauncherRunProcess load a

@@ -182,8 +182,9 @@ Revision history for unreagent
     to the directory name. Each skill is written whole into a work directory
     inside `skills.dir` and then renamed into place, so a failed write or two
     launchers starting at once no longer leave a half-written skill; a skill
-    that cannot be put in place keeps its previous copy (rarely none), and the
-    WARN names every failure on one line. A `skills.dir` that no work directory
+    that cannot be put in place keeps its previous copy (rarely none), an
+    unreagent-* directory that cannot be removed stays for the next start
+    without keeping the others, and the WARN names every failure on one line. A `skills.dir` that no work directory
     can be created in (read-only, full) is given up at once with one cause,
     instead of being retried for every skill. A skill with a section named like
     a Windows device (aux.md) is refused at start on every OS. If writing fails

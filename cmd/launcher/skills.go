@@ -339,13 +339,17 @@ func tryInstallSkillDir(dir, name string, docs map[string]string) (kept string, 
 // rename its new copy out of it into the skill's place while the removal is
 // still emptying it. Renamed first, either that launcher's rename comes first
 // and its copy is whole in place, or it fails and that launcher tries again.
-// An entry gone before it is renamed was taken by a second sweep.
+// An entry gone before it is renamed was taken by a second sweep. One that
+// cannot be renamed or removed (a file a virus scanner holds open) does not
+// stop the sweep: every other one is still tried, and each such error is
+// returned, joined; the next start tries it again.
 func sweepSkillDirs(dir string, keep map[string]bool) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
 	materializeHook("listed")
+	var errs []error
 	for _, e := range entries {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), skillDirPrefix) || keep[e.Name()] {
 			continue
@@ -353,17 +357,17 @@ func sweepSkillDirs(dir string, keep map[string]bool) error {
 		path := filepath.Join(dir, e.Name())
 		gone := filepath.Join(dir, skillDirPrefix+".tmp-"+rand.Text())
 		if err := os.Rename(path, gone); err != nil {
-			if _, statErr := os.Lstat(path); errors.Is(statErr, fs.ErrNotExist) {
-				continue
+			if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
+				errs = append(errs, err)
 			}
-			return err
+			continue
 		}
 		materializeHook("claimed")
 		if err := os.RemoveAll(gone); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // materializeHook is called between the steps of materializeSkills; tests
