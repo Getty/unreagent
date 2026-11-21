@@ -1,0 +1,64 @@
+---
+claimed_at: 2026-11-21T04:10:16Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T04:16:13Z
+created: 2026-08-24T23:43:29Z
+id: 69
+priority: medium
+started: 2026-11-21T02:34:15Z
+status: done
+tags:
+- bug
+title: Launcher exit code is always 0 after startup
+updated: 2026-11-21T04:17:33Z
+---
+
+main.go:44, :336: run() returns nil regardless of why the session ended. Observed: headless (-p) agent exits 3 -> onExit -> stop() -> launcher exit code 0. Also 0 when the agent or editor binary could not start (OnExit now fires via #34). Trigger: any scripted or CI headless run.
+Acceptance: makeAgentExitHandler records the agent's outcome; run() returns an error (exit 1) for agent failure or a terminal start failure; a signal-driven shutdown stays 0; test covers the headless non-zero case.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: run() returns nil after startup; makeAgentExitHandler receives success but records nothing. Decide together with k70 (exit semantics). Size M.
+
+
+**Decision 2026-11-21** (maintainer): k70 is decided as a fast-fail window; the exit code should reflect that terminal outcome.
+
+**Main-agent choices (2026-11-21, mine, not the maintainer's), from the worker's open questions:** (1) an editor that fails terminally with no agent configured ends the launcher (exit 1) only when MCP is off; with MCP on (incl. -no-agent / manualStart) the launcher keeps serving MCP so an external agent can read logs and retry ue_start, and logs the failure loudly. (3) the interactive exit code stays the agent's last outcome ('q' after a crash → 1). Worktree agent-a4deb084e697bd408 fast-forwarded to main 4b71fea by the main agent; k108's TestLogsLinesLimitsOutput (tools_test.go:222) still uses OnExit func(bool) and must move to supervisor.Exit.
+
+Done (2026-11-21), same worktree: session in lifecycle.go turns the outcome into run()'s error — exit 1 for an agent failure / give-up, and for an editor start failure with no agent and MCP off; MCP on keeps serving and logs one line; signal → 0; first reason wins. lifecycle_test.go runs the real run() (MCP off exit 1, MCP on still serving + SIGTERM 0), 9 mutations red; binary runs logged. tools_test.go:222 moved to supervisor.Exit after the base move. Docs: README exit-code table, example/README.md Windows-only note (main agent corrected it for MCP-on).
+
+2026-11-21 03:42 Review (unreagent-reviewer): CHANGES NEEDED, docs and one test. The code follows the recorded decisions.
+Check: same run as on k70 (gofmt, vet linux+windows, go test -count=1 ./..., race -count=5 on supervisor+launcher, make linux, make windows: all green; also green on main 8f24738 in a scratch copy).
+Mutations: the worker's 9 K69 mutations, re-run on a scratch copy, all fail the tests. My own R7 (run() passes success=true to the handler) and R10 (the outcome is never recorded) fail them too.
+1. [finding] README.md:313: 'the agent failed: a non-zero exit ... gives 1' promises too much for CI. Under the default restart: on-failure, a headless agent that exits non-zero after more than 10 s is restarted and re-runs its prompt without bound, so the launcher never exits with any code. The row should read 'a non-zero exit that is not restarted (restart: never, maxRestarts used up, or the fast-fail give-up)', and the CI section should recommend agent.restart: never for one-shot -p runs.
+2. [finding] README.md:313: 'quitting with q at the exit prompt'. The prompt offers [Enter], not q. After a crash, Enter, any other input, EOF and the 30 s timeout all give 1 (see TestPromptQuitReflectsTheAgentOutcome, 'Enter after a crash'). The timeout case matters for unattended runs.
+3. [finding, minor] README.md:316-317: 'a Ctrl-C that also kills the agent still gives 0' reads as a guarantee. cmd/launcher/lifecycle.go:82-84 says correctly that the race is narrowed, not closed. Write 'normally', or name the window that is left.
+4. [finding] cmd/launcher/lifecycle.go:56: the 'last run' rule is not pinned. Dropping 's.agentErr = nil', so that a later exit 0 no longer clears an earlier failure, leaves every test green. It needs a test case: crash, r, exit 0, Enter, expect nil.
+5. [note] lifecycle.go:112: 'With MCP off there is nothing left to work with'. Without an agent the stdin console still runs (start ue). The code follows the decision, but the stated reason is off, and a failing 'start ue' typed at that console now ends the launcher with exit 1.
+6. [note] The README exit table does not say that a config load error also exits 1 (pre-existing).
+Race: acceptable. For the agent's outcome to win, its exit must be reaped, pass through runService and OnExit, and end the session before Go's signal goroutine cancels ctx. Under the default on-failure, a signal-killed agent is restarted, not handed to OnExit, so the window exists only for restart: never, maxRestarts used up, or a run at the give-up threshold. The code comment documents this honestly.
+Re-exec tests (TestLauncherRunProcess): the child gets no -test.paniconexit0, so os.Exit(0) is safe. The child's cwd is a t.TempDir. The MCP port comes from a closed listener (a small TOCTOU, acceptable). On a failure, Cleanup kills only the launcher, so a 'sleep 20' orphan can live up to 20 s, but it holds none of the test's pipes. The tests skip on Windows and are fit for ubuntu CI.
+example/README.md note verified with dist/unreagent on Linux: 3 fast failures, the give-up line, tools/list HTTP 200, SIGTERM gives 0, no ping left behind.
+Scope: example/README.md belongs to unreagent-worker (OWNERS example/) but was edited by the main agent. The content is correct; this is an ownership finding.
+Also found (out of scope, ticket candidate): a failed MCP listen ('address already in use') does not stop the launcher, and the editor handler then logs 'keeps serving MCP' with no server running.
+Windows: compile-only, unverified (Ctrl-C to a foreground agent, the console).
+
+**Back for fixes (2026-11-21), review requested changes:** 'last run counts' unpinned (lifecycle.go:56: crash, r, exit 0, Enter → 0); comment at :112 states the wrong reason (the stdin console is still there; the decision stands) → worker. README:313 exit table — 'a non-zero exit that is not restarted', recommend agent.restart: never for one-shot -p runs; the prompt offers [Enter], and after a crash Enter / other input / EOF / 30s timeout all give 1; hedge the Ctrl-C race (narrowed, not closed) → doc-writer. example/README.md (OWNERS: example/ → unreagent-worker) was a plain-prose correction by the main agent, content confirmed correct by the reviewer.
+
+Review fixes done (2026-11-21): 'last run counts' pinned (crash, r, exit 0, Enter → nil; K69-M10); editor-handler comment states the real reason; decision comments now read 'Design choice for kNN … (see kNN)'; agent-exit log line now 'Agent failed and will not be restarted automatically.' README exit table (not restarted cases, agent.restart: never for one-shot -p, [Enter]/EOF/timeout after a crash, race hedged, no-agent/MCP-off widened to the StartFailed rule) by the doc-writer.
+
+2026-11-21 04:10 Re-review (unreagent-reviewer): READY, with one minor wording finding that does not block the commit. Windows is compile-only and unverified (Ctrl-C to a foreground agent, the console).
+Check: same run as on k70 (gofmt, vet linux and windows, go test -count=1 ./..., race -count=5 on supervisor and launcher, make linux, make windows): all green.
+Mutations: all 10 K69 mutations in the worker's mutate_k69_k71.sh fail the tests, including K69-M10 (my R4, caught by the 'crash, r, exit 0, Enter' case).
+Round-1 findings, all fixed:
+- README.md:313-319 now lists the not-restarted cases and recommends agent.restart: never for one-shot -p/CI runs.
+- After a crash, Enter, other input, EOF and the 30 s timeout all give 1.
+- The Ctrl-C race is hedged ('normally gives 0, but in a narrow race ...').
+- README.md:314 is widened to the StartFailed rule and matches supervisor.go.
+- The editor-handler comment (lifecycle.go:106-115) now states the real reason.
+- The 'Design choice for kNN ... (see kNN)' comments are in place.
+- The new agent log line, 'Agent failed and will not be restarted automatically.', is true: OnExit fires only when there is no automatic restart.
+1. [finding, minor] cmd/launcher/lifecycle.go:121, :124 and the error at :125 still say 'The editor could not be started' (and, with MCP on, 'was given up on'). Under the widened rule these lines also fire for an editor that started and failed within 10 s under restart: never or a used-up maxRestarts. Seen with dist/unreagent: '[ue] started (pid ...)', '[ue] exited (exit 1)', '[ue] no automatic restart (policy=never)', then 'The editor could not be started ...'. The error text 'nothing is left to run' also still carries the reason that the comment has dropped. Suggested wording: 'The editor did not get going (failed start, or failed within 10 s of its start)'. Owner: unreagent-worker.
+Still applies from round 1: example/README.md ownership (edited by the main agent; the content is correct).
+
+Committed as 3ab0142
