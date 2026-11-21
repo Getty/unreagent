@@ -799,7 +799,26 @@ What `hermes-setup` does, in order:
    Hermes config. The launcher reads the token back on the next start, so it
    survives restarts and keeps matching the bearer header Hermes sends. The
    edit of `unreagent.local.yaml` keeps its comments and other keys; the new
-   `mcp.token` key carries a short comment.
+   `mcp.token` key carries a short comment. If an existing
+   `unreagent.local.yaml` is open to group or others (any group or other
+   permission bit set, typically 0644), `hermes-setup` tightens it to 0600 as
+   it writes the token, since the file now holds the bearer token, and says so
+   after the "New bearer token generated" line:
+
+   ```
+   unreagent.local.yaml was open to group or others (mode 0644); tightened it to 0600, since it now holds the bearer token.
+   ```
+
+   The mode is set on the temp file before the rename, so the token is never
+   on disk under the old bits. A new file is created 0600, and a file that is
+   already closed (0600, 0400) keeps its mode without a message. Only this
+   token write tightens. A token already in the file is not touched: one you
+   wrote yourself, or one `hermes-setup` 0.0.9 or earlier wrote into a 0644
+   file. For those, run `chmod 600 unreagent.local.yaml` yourself.
+   The Hermes config, which holds the same bearer but belongs to another
+   program, keeps its mode. Unix only: on Windows the mode bits do not decide
+   who can read a file (it inherits its directory's ACL), so nothing is
+   tightened there.
 8. In the Hermes config, the entry `mcp_servers.unreagent` is edited in place,
    or appended as the last server if it is new; a new `mcp_servers` block goes
    at the end of the file. unreagent owns two keys of the entry, `url` and
@@ -916,9 +935,11 @@ The `.bak` holds the exact original if you want any of it back.
   covers the token edit of `unreagent.local.yaml` (it then reads `more than
   mcp.token`, and the line starts with `add the token to <path>: `); a
   value it cannot name ends at `more than mcp_servers.unreagent` alone.
-  A block scalar inside the `mcp_servers.<name>` entry itself is not named:
-  the message reads `the result would not hold the new
-  mcp_servers.unreagent`.
+  The same check names a block scalar inside the `mcp_servers.<name>` entry
+  itself, as `the result would not hold the new mcp_servers.unreagent: the
+  value at mcp_servers.unreagent.description would change (...)`, with the
+  same fix. Only a token edit, or a difference it cannot place, keeps the bare
+  `the result would not hold the new ...` message.
 - the Hermes config has a duplicate key anywhere, or cannot be parsed: the
   message is `Hermes config <path> not parseable: ...`;
 - the Hermes config holds more than one YAML document (a `---` followed by
@@ -980,9 +1001,11 @@ generated and saved. The error names the directory. A symlinked config file
 is followed and its target replaced, so the link stays a link; a dangling
 one is refused (see above). A path that goes through a symlinked directory is
 used as given. A replaced file keeps its permission
-bits and a new file gets mode 0600 (modes do not apply on Windows; the
+bits and a new file gets mode 0600, except that an existing
+`unreagent.local.yaml` open to group or others is tightened to 0600 when the
+token is written into it (step 7). Modes do not apply on Windows; the
 rename-replace step there is the same code path, but has only been compiled,
-not run).
+not run.
 
 **Recovering after 0.0.9 or earlier.** Those releases moved the Hermes
 config to `<path>.bak` and wrote a new file holding only the unreagent entry. If

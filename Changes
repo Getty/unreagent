@@ -10,8 +10,13 @@ Revision history for unreagent
     on that entry. It refuses entries it cannot edit safely (anchored or
     aliased mcp_servers, even an empty one, anchors inside the old entry) and
     a dangling symlink at the Hermes config. Both files are written
-    atomically, keep their permissions and follow symlinks; a new token is saved to unreagent.local.yaml only
-    once the merge has succeeded.
+    atomically and follow symlinks; a new token is saved to
+    unreagent.local.yaml only once the merge has succeeded. They keep their
+    permissions, except that an unreagent.local.yaml open to group or others
+    is tightened to 0600 when hermes-setup saves a new token into it, and the
+    output says so (Unix only). A token that 0.0.9 or earlier saved into an
+    existing unreagent.local.yaml kept that file's mode and is not rewritten:
+    chmod 600 the file yourself.
   - hermes-setup refreshes only url and headers.Authorization in its entry and
     keeps the other keys, headers and comments you added there. It matches
     Authorization ignoring case, and refuses an entry that is a stdio server
@@ -19,9 +24,10 @@ Revision history for unreagent
     edit in place (not a mapping, an alias, or brought in by a merge key).
   - hermes-setup refuses a Hermes config that holds more than one YAML
     document, instead of dropping all but the first.
-  - hermes-setup names the value it refuses to rewrite (a folded block
-    scalar with a more-indented line, a literal one that starts with a blank
-    line) and how to fix it, and refuses early, with the key named, a quoted
+  - hermes-setup names the value it refuses to rewrite, outside its own
+    mcp_servers.unreagent entry or inside it (a folded block scalar with a
+    more-indented line, a literal one that starts with a blank line) and how
+    to fix it, and refuses early, with the key named, a quoted
     !!merge "<<" and an alias or tagged key where it looks for mcp_servers,
     the entry, url, headers or Authorization (and for mcp or token in
     unreagent.local.yaml).

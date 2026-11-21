@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -153,12 +154,16 @@ func hermesSetup(args []string, out io.Writer) error {
 	// write then fails, the saved token is the first half of the setup: a
 	// re-run reuses it and finishes.
 	if tokenGenerated {
-		if err := writeFileAtomic(localPath, localOut); err != nil {
+		was, err := writeFileAtomic(localPath, localOut, true)
+		if err != nil {
 			return fmt.Errorf("write token to %s: %w (Hermes config left untouched)", localPath, err)
 		}
 		fmt.Fprintln(out, "New bearer token generated and written to unreagent.local.yaml.")
+		if was != 0 {
+			fmt.Fprintf(out, "unreagent.local.yaml was open to group or others (mode %04o); tightened it to 0600, since it now holds the bearer token.\n", uint32(was))
+		}
 	}
-	if err := writeFileAtomic(hermesPath, hermesOut); err != nil {
+	if _, err := writeFileAtomic(hermesPath, hermesOut, false); err != nil {
 		if tokenGenerated {
 			return fmt.Errorf("write Hermes config: %w (the new token is already saved in %s; re-run hermes-setup to finish)", err, localPath)
 		}
@@ -770,7 +775,8 @@ func authorizationKey(headers interface{}) string {
 // must parse, hold want at path, and hold everything else as before did. It
 // catches what the node edit and yaml.v3's encoder could break unnoticed, such
 // as an alias left without its anchor. A change outside path is named by where
-// it is (changedPath), with the fix the user can make by hand.
+// it is (changedPath), with the fix the user can make by hand, and so is one
+// inside it, below a want that is a mapping or a list.
 func checkEdit(before map[string]interface{}, out []byte, want interface{}, path ...string) error {
 	var after map[string]interface{}
 	if err := yaml.Unmarshal(out, &after); err != nil {
@@ -783,6 +789,13 @@ func checkEdit(before map[string]interface{}, out []byte, want interface{}, path
 		got = m[k]
 	}
 	if !sameValue(got, want) {
+		// The values the edit sets are new plain string nodes, which the
+		// encoder writes back as they are, so a value that differs at path
+		// is one of the user's, kept as parsed, that the encoder writes back
+		// differently (see below).
+		if changedPath(want, got) != "" {
+			return reencoded("the result would not hold the new "+where, pathTo(where, want, got))
+		}
 		return fmt.Errorf("the result would not hold the new %s", where)
 	}
 	if old, rest := withoutPath(before, path...), withoutPath(after, path...); !sameValue(old, rest) {
@@ -791,11 +804,17 @@ func checkEdit(before map[string]interface{}, out []byte, want interface{}, path
 		// blank line to a folded block scalar with a more-indented line, and
 		// drops the leading blank line of a literal one.
 		if at := changedPath(old, rest); at != "" {
-			return fmt.Errorf("the result would change more than %s: the value at %s would change (the YAML writer re-encodes it differently, e.g. a block scalar); rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup", where, at)
+			return reencoded("the result would change more than "+where, at)
 		}
 		return fmt.Errorf("the result would change more than %s", where)
 	}
 	return nil
+}
+
+// reencoded is checkEdit's refusal of a value the YAML writer would write back
+// differently: what goes wrong, then the path to the value and the fix.
+func reencoded(what, at string) error {
+	return fmt.Errorf("%s: the value at %s would change (the YAML writer re-encodes it differently, e.g. a block scalar); rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup", what, at)
 }
 
 // changedPath returns the path to the first value that differs between a and
@@ -979,21 +998,29 @@ func writeTarget(path string) (string, error) {
 // path, so a kill mid-write leaves the old file whole. A symlinked file is
 // followed and its target replaced, so the link stays a link; a dangling one
 // is refused (see writeTarget). A replaced file keeps its permission bits; a
-// new one gets 0600, since it may hold a token. The directory must be writable
-// for the temp file; there is no in-place fallback.
-func writeFileAtomic(path string, data []byte) error {
+// new one gets 0600, since it may hold a token. secret says that data holds
+// one: a replaced file whose bits let group or others at it then gets 0600 as
+// well, and the mode it had is returned (0 when nothing was tightened). The
+// temp file gets the final mode before the rename, so the secret is never on
+// disk under the old bits. On Windows the bits do not decide who can read the
+// file (it inherits its directory's ACL), so nothing is tightened there. The
+// directory must be writable for the temp file; there is no in-place fallback.
+func writeFileAtomic(path string, data []byte, secret bool) (os.FileMode, error) {
 	path, err := writeTarget(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	mode := os.FileMode(0o600)
+	mode, was := os.FileMode(0o600), os.FileMode(0)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
+	}
+	if secret && runtime.GOOS != "windows" && mode&0o077 != 0 {
+		mode, was = 0o600, mode
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create a temp file in directory %s: %w", dir, err)
+		return 0, fmt.Errorf("create a temp file in directory %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // in case a step below fails
@@ -1009,7 +1036,10 @@ func writeFileAtomic(path string, data []byte) error {
 		err = cerr
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return 0, err
+	}
+	return was, nil
 }

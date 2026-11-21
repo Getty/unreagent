@@ -255,18 +255,31 @@ helpers in `cmd/launcher/hermes.go`:
   writes nothing. It first refuses a quoted `!!merge "<<"` key, or an `mcp` or
   `token` key written as an alias or with a tag, and `checkEdit` then confirms
   the result parses and changed nothing but `mcp.token`.
-- `writeFileAtomic` is the house writer for user config: a temp file in the
-  same directory, synced, then renamed over the target, so a crash mid-write
-  leaves the old file whole. It follows a symlink instead of replacing it and
-  refuses a dangling one. A new file is created as `0600`, but an existing one
-  keeps its permission bits, so a token added to a `0644`
-  `unreagent.local.yaml` stays readable by others.
+- `writeFileAtomic(path, data, secret)` is the house writer for user config: a
+  temp file in the same directory, synced, then renamed over the target, so a
+  crash mid-write leaves the old file whole. It follows a symlink instead of
+  replacing it and refuses a dangling one. A new file is created as `0600`; a
+  replaced one keeps its permission bits, unless `secret` is set and they let
+  group or others in (`mode & 0o077 != 0`): then it becomes `0600` and the old
+  mode is returned (`0` when nothing was tightened) for the caller to report.
+  The mode goes on the temp file before the rename, so the secret is never on
+  disk under the old bits. Unix only: on Windows the file inherits its
+  directory's ACL, the bits do not decide who can read it, and nothing is
+  tightened.
 
 `hermesSetup` builds every edit before it writes anything, then saves the
 token before the Hermes config, so Hermes never holds a token the launcher
-does not know.
+does not know. Only the token write into `unreagent.local.yaml` passes
+`secret`, and the command prints the old mode when it tightened the file. The
+Hermes config holds the same bearer but belongs to another program, so its
+write keeps its mode (a warning for it is k169). A token already in the file
+is never rewritten, so its mode is never touched: one the user wrote by hand,
+or one `hermes-setup` 0.0.9 or earlier saved with `os.WriteFile(..., 0o600)`,
+which keeps an existing file's mode. An upgrade user may therefore already
+hold the token in a `0644` file; the README tells them to `chmod 600` it.
 
 Any future secret follows the same pattern: the git-ignored local file, a
-node edit checked by `checkEdit`, and `writeFileAtomic`. `localConfigWithToken`
-only ever sets `mcp.token` (its key checks and `checkEdit` are pinned to
-`mcp`/`token`), so generalize it first rather than copying it.
+node edit checked by `checkEdit`, and `writeFileAtomic` with `secret` set.
+`localConfigWithToken` only ever sets `mcp.token` (its key checks and
+`checkEdit` are pinned to `mcp`/`token`), so generalize it first rather than
+copying it.

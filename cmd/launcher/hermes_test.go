@@ -1134,36 +1134,41 @@ func TestHermesSetupFollowsSymlinks(t *testing.T) {
 	}
 }
 
+// assertMode checks the permission bits of the file at path.
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != want {
+		t.Errorf("%s has mode %04o, want %04o", filepath.Base(path), got, want)
+	}
+}
+
 // k96: a file that is replaced keeps its permission bits; a file that is
-// created holds a token and gets 0600.
+// created holds a token and gets 0600. k167 makes one exception, an
+// unreagent.local.yaml open to group or others that gets the token (see
+// TestHermesSetupTightensOpenLocalConfig); the Hermes config holds the token,
+// too, but keeps its mode, and so does a local file closed to them.
 func TestHermesSetupKeepsFileMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits are not kept on Windows")
-	}
-	assertMode := func(t *testing.T, path string, want os.FileMode) {
-		t.Helper()
-		fi, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := fi.Mode().Perm(); got != want {
-			t.Errorf("%s has mode %v, want %v", filepath.Base(path), got, want)
-		}
 	}
 
 	t.Run("existing files", func(t *testing.T) {
 		f := newHermesFixture(t, "", userHermesConfig)
 		localPath := localOverridePath(f.cfgPath)
 		writeFile(t, localPath, "# machine overrides\n")
-		for _, p := range []string{localPath, f.hermesPath} {
-			if err := os.Chmod(p, 0o644); err != nil {
+		for p, mode := range map[string]os.FileMode{localPath: 0o400, f.hermesPath: 0o644} {
+			if err := os.Chmod(p, mode); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if _, err := f.run(t); err != nil {
 			t.Fatal(err)
 		}
-		assertMode(t, localPath, 0o644)
+		assertMode(t, localPath, 0o400)
 		assertMode(t, f.hermesPath, 0o644)
 	})
 
@@ -1177,9 +1182,53 @@ func TestHermesSetupKeepsFileMode(t *testing.T) {
 	})
 }
 
+// k167: the generated token goes into an existing unreagent.local.yaml whose
+// mode lets group or others at it (the usual 0644 of a hand-made file): the
+// file comes out 0600, and the output names it with the mode it had. One
+// that keeps them out keeps its mode, and nothing is said.
+func TestHermesSetupTightensOpenLocalConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits do not govern who can read a file on Windows (it inherits the directory's ACL); nothing is tightened there")
+	}
+	const says = "tightened it to 0600"
+	for _, c := range []struct {
+		mode os.FileMode
+		want string // the output line, "" for none
+	}{
+		{0o644, "unreagent.local.yaml was open to group or others (mode 0644); tightened it to 0600, since it now holds the bearer token."},
+		{0o640, "unreagent.local.yaml was open to group or others (mode 0640); tightened it to 0600, since it now holds the bearer token."},
+		{0o600, ""},
+	} {
+		t.Run(fmt.Sprintf("%04o", c.mode), func(t *testing.T) {
+			f := newHermesFixture(t, "", userHermesConfig)
+			localPath := localOverridePath(f.cfgPath)
+			writeFile(t, localPath, "# machine overrides\n")
+			if err := os.Chmod(localPath, c.mode); err != nil {
+				t.Fatal(err)
+			}
+
+			out, err := f.run(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertMode(t, localPath, 0o600)
+			if lookup(readYAMLMap(t, localPath), "mcp", "token") == nil {
+				t.Errorf("unreagent.local.yaml holds no mcp.token:\n%s", readFile(t, localPath))
+			}
+			if c.want != "" && !strings.Contains(out, c.want+"\n") {
+				t.Errorf("output does not say the file was tightened (%q):\n%s", c.want, out)
+			}
+			if c.want == "" && strings.Contains(out, says) {
+				t.Errorf("output reports a tightening of a 0600 file:\n%s", out)
+			}
+		})
+	}
+}
+
 // k96: the token write needs the project directory writable for its temp
 // file. A read-only one is refused, with no in-place write as a fallback, and
-// the error names the directory.
+// the error names the directory. k167: the 0644 file the token would have
+// tightened keeps its mode, since the mode goes onto the temp file only.
 func TestHermesSetupReadOnlyProjectDir(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a directory the test cannot write to (POSIX permissions, not root)")
@@ -1188,6 +1237,9 @@ func TestHermesSetupReadOnlyProjectDir(t *testing.T) {
 	localPath := localOverridePath(f.cfgPath)
 	const local = "# machine overrides\n"
 	writeFile(t, localPath, local)
+	if err := os.Chmod(localPath, 0o644); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
 	if err := os.Chmod(f.dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -1203,6 +1255,7 @@ func TestHermesSetupReadOnlyProjectDir(t *testing.T) {
 	if got := readFile(t, localPath); got != local {
 		t.Errorf("unreagent.local.yaml was changed:\n%s", got)
 	}
+	assertMode(t, localPath, 0o644)
 	if got := readFile(t, f.hermesPath); got != userHermesConfig {
 		t.Errorf("Hermes config was changed:\n%s", got)
 	}
@@ -1225,7 +1278,7 @@ func TestWriteFileAtomicKeepsSymlinkedDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(target, 0o755) }) // before TempDir's cleanup
 
-	err := writeFileAtomic(filepath.Join(link, "unreagent.local.yaml"), []byte("a: 2\n"))
+	_, err := writeFileAtomic(filepath.Join(link, "unreagent.local.yaml"), []byte("a: 2\n"), false)
 	if err == nil {
 		t.Fatal("expected an error for a read-only directory, got nil")
 	}
@@ -1544,6 +1597,23 @@ func TestCheckEdit(t *testing.T) {
 		}
 	}
 
+	// k165: only a difference found below a mapping or list want is named. A
+	// scalar want (mcp.token) and a difference changedPath cannot place (the
+	// entry missing) keep the bare refusal, word for word.
+	for _, c := range []struct {
+		out  string
+		want interface{}
+		path []string
+		msg  string
+	}{
+		{"model: x\nmcp_servers:\n  github: {command: npx}\nmcp: {token: other}\n", "t", []string{"mcp", "token"}, "the result would not hold the new mcp.token"},
+		{"model: x\nmcp_servers:\n  github: {command: npx}\n", entry, []string{"mcp_servers", "unreagent"}, "the result would not hold the new mcp_servers.unreagent"},
+	} {
+		if err := checkEdit(before, []byte(c.out), c.want, c.path...); fmt.Sprint(err) != c.msg {
+			t.Errorf("checkEdit(%q) = %v, want the bare %q", c.out, err, c.msg)
+		}
+	}
+
 	// NaN counts as equal to NaN, in a list and under a key that is not a
 	// string, too; a NaN that turns into a number is still a change.
 	var withNaN map[string]interface{}
@@ -1634,6 +1704,35 @@ func TestHermesSetupNamesTheValueTheWriterWouldChange(t *testing.T) {
 			}
 			for _, want := range []string{
 				"the result would change more than mcp_servers.unreagent: the value at " + c.path + " would change (the YAML writer re-encodes it differently, e.g. a block scalar)",
+				"rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+			assertNothingWritten(t, f, c.config)
+		})
+	}
+}
+
+// k165: a value of that kind inside the entry hermes-setup edits, one of the
+// user's keys of mcp_servers.unreagent, is named the same way: the entry would
+// not come out as wanted, and the message says where and what to do.
+func TestHermesSetupNamesTheValueTheWriterWouldChangeInTheEntry(t *testing.T) {
+	for name, c := range map[string]struct{ config, path string }{
+		"folded with a more-indented line":   {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    description: >\n      Tools:\n        - issues\n", "mcp_servers.unreagent.description"},
+		"literal starting with a blank line": {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers:\n      X-Note: |\n\n        hello\n", "mcp_servers.unreagent.headers.X-Note"},
+		"in a list":                          {"mcp_servers:\n  unreagent:\n    notes:\n      - plain\n      - |\n\n        hello\n", "mcp_servers.unreagent.notes[1]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, "", c.config)
+
+			_, err := f.run(t)
+			if err == nil {
+				t.Fatalf("hermes-setup accepted an entry yaml.v3 does not write back as read, and wrote:\n%s", readFile(t, f.hermesPath))
+			}
+			for _, want := range []string{
+				"the result would not hold the new mcp_servers.unreagent: the value at " + c.path + " would change (the YAML writer re-encodes it differently, e.g. a block scalar)",
 				"rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup",
 			} {
 				if !strings.Contains(err.Error(), want) {
