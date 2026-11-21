@@ -1,0 +1,51 @@
+---
+claimed_at: 2026-11-21T11:43:21Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T11:43:21Z
+created: 2026-08-24T23:25:59Z
+id: 57
+priority: low
+started: 2026-11-21T11:12:10Z
+status: done
+tags:
+- config
+- mcp
+title: mcp.address with an empty or wildcard host is pasted into the client URL
+updated: 2026-11-21T11:43:21Z
+---
+
+main.go:190 builds mcpURL as http:// + cfg.MCP.Address + /mcp and Config.validate never touches MCP.Address. mcp.address: :8765 -- an ordinary Go listen address -- yields http://:8765/mcp, which is handed to the agent via --mcp-config and written into every writeConfig target. 0.0.0.0:8765, which README recommends at line 429, yields http://0.0.0.0:8765/mcp; whether that is dialable is platform-dependent and untested on Windows. Related: #45 (listen error handling), #42 (field not substituted).
+Acceptance: split host/port and substitute 127.0.0.1 for an empty or wildcard host when building the client-facing URL; validate the address at load time.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: run() builds 'http://' + mcp.address + '/mcp'; validate() never checks mcp.address. A config helper makes it Linux-testable. Size S.
+
+**Handed out 2026-11-21** to unreagent-worker, own worktree on 90c07ae. Main-agent decisions: (1) one client-URL helper in internal/config (e.g. MCPConfig.ClientURL()), used by main.go (--mcp-config, writeConfig) and hermes.go (Hermes entry, printed url) — no second place builds the URL; (2) an empty or wildcard host becomes the loopback of the same family (0.0.0.0 / empty → 127.0.0.1, :: → [::1]); a named host or a specific IP stays as written; (3) validate() refuses an mcp.address that is not host:port or whose port is not 1–65535 (port 0 would give the client a URL to a random port), naming the value. hermes.go hunks are small; whoever lands later (k134, k124 touch hermes.go) rebases.
+
+2026-11-21 11:16 Worker started on 90c07ae (own worktree). Plan: behavior-preserving refactor to MCPConfig.ClientURL() first, then red tests, then the fix. mergeHermesServer takes the URL instead of the raw address, so hermes.go has exactly the four URL hunks (104, 113, 169, 579).
+
+2026-11-21 11:20 Red then green: TestMCPClientURL (6 wildcard rows red against the concatenation; the 6 named-host rows pin 'stays as written' and are green either way), TestMCPAddressRefused (13 rows, all red: Load accepted every one), TestMCPAddressCheckedOnlyWhenUsed (hermes half red), TestHermesSetupWritesTheClientURL (entry + printed url red), TestRunHandsOutALoopbackURLForAWildcardMCPAddress (--mcp-config, .mcp.json and listening line red). TestMCPAddressAccepted is a guard against an over-strict check and cannot be red without the fix. Worker decisions: (a) the address check runs when mcp.enabled OR agent.hermes.enabled — hermes-setup writes the URL without looking at mcp.enabled; (b) the listening line now reads 'MCP server listening on <address> — clients connect to <url>' so a 0.0.0.0 bind is still visible in the log; k141's test waits on the new prefix; (c) mergeHermesServer takes the URL, not the address.
+
+2026-11-21 11:22 Done, tree commit-ready in the worker worktree (not committed). Changed: internal/config/config.go — MCPConfig.ClientURL() (SplitHostPort; empty/unspecified host -> 127.0.0.1, or ::1 for an IPv6 unspecified; other hosts as written; JoinHostPort keeps IPv6 bracketed) and validMCPAddress in validate() (not host:port, or port not 1-65535 incl. 0, service names, signs -> 'mcp.address invalid: "<v>" (...; want host:port, e.g. 127.0.0.1:8765)'), checked when mcp.enabled || agent.hermes.enabled. cmd/launcher/main.go — mcpURL = cfg.MCP.ClientURL(); listening line 'MCP server listening on <address> — clients connect to <url>'. cmd/launcher/hermes.go — four URL hunks only (104, 113, 169, 579); mergeHermesServer takes the URL. Order unchanged: validate runs in config.Load, before listenMCP and before any write; k45's 'no port' case is now refused by Load (same assertions pass). Tests: internal/config/mcp_test.go (new), TestHermesSetupWritesTheClientURL, TestRunHandsOutALoopbackURLForAWildcardMCPAddress; k141 test waits on the new line prefix. Verified: gofmt -l empty, go vet ./... and GOOS=windows go vet ./... clean, go test -count=1 ./... and -race ./... all ok, make linux, make windows, CGO_ENABLED=0 GOOS=windows build ok. Windows not run: dialing 127.0.0.1/::1 for a wildcard bind on Windows is unverified. Docs for doc-writer (README mcp row ~558, exit codes ~337, bind error ~1086, remote access ~1099, writeConfig ~88; unreagent.example.yaml mcp.address comment) and the unreagent-config skill step 8 for skill-author: wording in the worker report. Proposed subject: 'Hand clients a loopback URL for a wildcard mcp.address, validate the address (k57)'.
+
+Docs done in worktree (README mcp row, exit codes, bind error, remote access, writeConfig; example yaml mcp.address); not committed. Wildcard-bind loopback on Windows unverified.
+
+skill-author: unreagent-config step 8 now names the mcp.address rule (validMCPAddress, checked on mcp.enabled or agent.hermes.enabled) and MCPConfig.ClientURL() as the only client-URL builder; unreagent-core invariant 6 notes that config load refuses a malformed address before the bind. No shipped skill names unreagent's MCP URL. gofmt clean, go test ./internal/skills ok.
+
+**Review 2026-11-21 (unreagent-reviewer): READY, nothing blocking.** Worktree on 90c07ae, uncommitted. Files: internal/config/config.go, internal/config/mcp_test.go (new), cmd/launcher/main.go, cmd/launcher/hermes.go, cmd/launcher/main_test.go, cmd/launcher/hermes_test.go (worker); README.md, unreagent.example.yaml (doc-writer); .claude/skills/unreagent-config/SKILL.md, .claude/skills/unreagent-core/SKILL.md (skill-author). Every path is inside its owner's OWNERS lane (ack-team owner). No German in the touched text.
+Check run by me, all green: gofmt -l cmd internal skills (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -count=1 -race ./..., make linux, make windows, go mod verify. k141 test -count=100 (100 PASS, 0 skip). New launcher tests -count=20 -race and the config tests -count=50: no flake.
+Red without the fix (mutations on a scratch copy): with the ClientURL concatenation and no address check, TestMCPClientURL, TestMCPAddressRefused, TestMCPAddressCheckedOnlyWhenUsed, TestHermesSetupWritesTheClientURL and TestRunHandsOutALoopbackURLForAWildcardMCPAddress go red. Reverting each call site alone also goes red: hermes.go:104, hermes.go:113 (checkEdit refuses) and hermes.go:169 each turn the Hermes test red, and main.go:223 turns the run test red. The old listening line turns the k141 test and the run test red. Changing the gate to mcp-only or always turns CheckedOnlyWhenUsed red. Dropping n==0 turns Refused red. Mapping :: to 127.0.0.1 turns ClientURL red.
+Hermes: a built binary rewrites an entry an older launcher wrote (url http://0.0.0.0:8765/mcp) to http://127.0.0.1:8765/mcp. Timeout, headers and comments are kept, and a second run leaves the file byte-identical. No refusal and no loop: mergeHermesServer sets url whatever it was, and hermesEntryWant expects the same URL.
+Gate: with mcp.enabled false and hermes off, a garbage address is ignored. No listen, no --mcp-config, no writeConfig even with -write-mcp-config, no listening line, and ClientURL does not panic. Checked with the binary.
+Findings, non-blocking (owner unreagent-worker unless noted):
+(1) internal/config/config.go:208/214 + 756: an IPv6 zone passes validate and goes into the URL unescaped. [fe80::1%eth0]:8765 becomes http://[fe80::1%eth0]:8765/mcp, which url.Parse rejects (RFC 6874 needs %25, and WHATWG/Node takes no zone at all). [::%eth0]:8765 is not recognised as a wildcard. Before k57 it was the same, so this is not a regression. Suggest a follow-up card: refuse a zone in validMCPAddress.
+(2) config.go:756: only the port is checked, not the host. user@host:8765, a/b:8765, h#x:8765 and a quoted leading space load, and the URL then names another host or does not parse. The launcher still fails loud at the bind (no such host). Only hermes-setup with mcp off would write such a URL. Contrived; fold it into the same card.
+(3) nit, config.go:763: the hint shows no IPv6 form, so ::1:8765 says want host:port, e.g. 127.0.0.1:8765 and not [::1]:8765.
+(4) nit, doc-writer, README.md:560: the mcp row hard-codes http://127.0.0.1:8765/mcp; example yaml says <port>.
+Rebase: a 3-way simulation in a scratch clone gives k124 clean with k57 in either order. k134 with k57 conflicts in one hunk: k134's mergeHermesServer doc comment sits right above k57's signature change (hermes.go:541). The resolution is k134's comment plus k57's (doc, name, url, token). With k134+k124+k57 combined, vet and go test are green. Order: k134, then k124, then k57 (one-hunk rebase).
+Windows unverified (only cross-compiled): a :8765, 0.0.0.0:8765 or [::]:8765 bind, Claude Code reaching 127.0.0.1 or [::1], the em dash in the startup line, hermes-setup rewriting an old entry, and the load-error exit 1 in window mode.
+
+**Main agent 2026-11-21 after the review:** ready; README mcp row now says http://127.0.0.1:<port>/mcp (reviewer nit 4, fixed by the main agent). Zone ids, host check and IPv6 hint (findings 1-3) filed as a new card. Landing order k134 → k57 (one-hunk rebase at the mergeHermesServer doc comment: keep k134's comment, k57's signature); k124 merges cleanly in either order.
+
+Committed 00bde37 on main (rebased onto 7e0c39e, one hunk resolved at the mergeHermesServer doc comment). Full check green on the commit; Windows compile-only, unverified.
