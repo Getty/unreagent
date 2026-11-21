@@ -1,0 +1,27 @@
+---
+class: standard
+completed: 2026-11-21T01:00:37Z
+created: 2026-08-22T04:36:45Z
+id: 39
+priority: high
+started: 2026-11-21T00:35:30Z
+status: done
+tags:
+- config
+- bug
+- data-loss
+title: hermes-setup wipes the user's Hermes config
+updated: 2026-11-21T01:01:24Z
+---
+
+main.go:1466 renames the existing config to .bak, and loadHermesYAML at :1475 is called after that rename, so it hits ENOENT and returns an empty map. The written file then contains only the unreagent MCP server entry. Verified by the audit: an input with api_key, model and another mcp_servers entry produced a file holding only the unreagent entry.
+The .bak guard makes the second run skip the rename, so the damage is silent and one-shot -- precisely when the user has a real config. It contradicts mergeHermesServer's own doc comment and README:353-355. Acceptance: the document is read before the rename (or copied rather than moved), a regression test covers a config with foreign keys, and the CLI path is exercised once on a real binary since the audit could only call the function from a test.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, HIGHEST SEVERITY (silent data loss): runHermesSetup renames the existing config to .bak before loadHermesYAML reads it, so the merge starts from an empty map and the user's config is replaced; the .bak guard keeps the loss on a second run. No hermes tests exist. Merge with k53 (same function). Linux test: temp config, run, assert keys preserved. Size S.
+
+Worker done, worktree branch worktree-agent-a62c7528a80113117 (.claude/worktrees/agent-a62c7528a80113117), uncommitted, based on c013f77. hermesSetup (seam: runHermesSetup -> hermesSetup(args, out)) now reads and merges before backing up; the backup is a byte-exact copy opened with O_EXCL, so an existing .bak is never overwritten (protects users whose original already sits in .bak; run 2 keeps run 1's backup). Also refuses an mcp_servers that is not a string-keyed mapping (silently dropped other servers before) and treats a null/~/--- config as empty (panic exposed by the reordering). cmd/launcher/hermes_test.go red->green, plus old vs new Linux binary run. Windows runtime (O_EXCL, rename over an open file) unverified.
+
+Review (unreagent-reviewer): APPROVE. Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go (worktree branch worktree-agent-a62c7528a80113117 on c013f77). Check run by reviewer: gofmt -l . clean; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux ok; make windows ok. Red on c013f77 (hermes_test.go + output seam only): KeepsExistingConfig, SecondRunKeepsConfigAndFirstBackup, RefusesUnmergeableServers fail for the stated reason (user keys gone, .bak created, no error). NeverOverwritesExistingBackup and EmptyDocuments pass on the old code by design (guards for the new order); mutation shows each pins its line: O_EXCL->O_TRUNC fails SecondRun+NeverOverwrites, dropping the nil-map check (hermes.go:229) fails EmptyDocuments, the old type assertion in mergeHermesServer fails RefusesUnmergeable. Real Linux binary, old vs new, both arg orders: old keeps only the unreagent entry; new keeps model/api_key/mcp_servers.github, .bak byte-exact at 0600. Paths: parse error and merge refusal return before backup and write (hermes.go:97-103); backup failure returns before write (:107-111); write failure leaves original + .bak (writeYAMLAtomic temp+rename unchanged, :305-332). Additions are in scope: the mcp_servers refusal is the same silent-drop bug in the same function; the null-doc check is required by the new order. Windows (O_EXCL as CREATE_NEW, rename over an existing or open config) UNVERIFIED, compiled only. Non-blocking findings: (1) hermes.go:107-117/239-245: once a .bak exists, a later run rewrites the config by re-marshal with no byte copy, so comments/key order added after the first run are lost (data keys survive); reproduced on the binary; pre-existing, unchanged by this diff -> follow-up card. (2) No test pins the len(raw)>0 guard at hermes.go:107: removing it keeps all tests green but leaves a 0-byte .bak after a fresh install that blocks every later backup; one 'no .bak for an absent config' assertion, recommended before commit. (3) README.md:520-533 does not mention the refusal or that the rewritten file drops comments (original in .bak) -> unreagent-doc-writer. (4) The Changes entry should tell users of <=0.0.9 their original may sit in <path>.bak. (5) Pre-existing, out of scope: persistGeneratedToken (hermes.go:179-208) rewrites unreagent.local.yaml non-atomically, drops its comments, and runs before the Hermes config is validated (:82-87) -> follow-up card.
+
+Committed in 07e0218
