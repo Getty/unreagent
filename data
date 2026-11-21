@@ -1,0 +1,141 @@
+---
+class: standard
+completed: 2026-11-21T14:20:29Z
+created: 2026-08-22T04:38:14Z
+id: 44
+priority: medium
+started: 2026-11-21T13:27:11Z
+status: done
+tags:
+- config
+- security
+title: Generated MCP config is world-readable and the token is logged verbatim
+updated: 2026-11-21T14:20:29Z
+---
+
+main.go:1192: writeMCPConfigs writes the bearer token into the generated config with mode 0644. The example target is a dotfile in the project root that users routinely commit. persistGeneratedToken at main.go:1568 gets this right with 0600; this path does not.
+main.go:228: the startup line logs the full agent command including the --mcp-config JSON, so the bearer token and any secrets in extraServers env values land verbatim in unreagent.log. In window mode that file sits in the project directory, and the gitignore snippet the README recommends at :155-158 does not list it. Acceptance: 0600 on the generated config, the mcp-config value redacted in the log line, unreagent.log added to the recommended ignore list, and a warning when a write target inside the project tree carries a token.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: writeMCPConfigs writes 0o644 (persistGeneratedToken uses 0o600); run() logs the full agent args including the --mcp-config JSON with the token; the README gitignore snippet lacks unreagent.log. main.go + README. Linux test for the file mode and for a redaction helper. Size S/M.
+
+Main agent's decision (2026-11-21):
+- The generated MCP config is written 0600. An existing file open to group or others is tightened too, since os.WriteFile keeps an existing file's mode; say so in the log.
+- The --mcp-config value is redacted in the agent-command log line, as are the bearer token and the extraServers env values wherever they show up.
+- unreagent.log goes into the README's recommended ignore list.
+- The in-tree warning is quiet unless it is precise. When the target is inside the project tree, the token is set, and git is on PATH, run git check-ignore -q on the target. Warn only on exit 1 (the file is not ignored). Skip silently on any other result: no git, not a work tree, or an error.
+- Don't touch hermes.go: k167's writeFileAtomic change is pending commit.
+
+2026-11-21 13:31 Worker started on main ce12dc2. Plan: writeMCPConfigs opens the target 0600 without truncating, tightens an existing file open to group/others to 0600 (fchmod before the token goes in; refuses the target if the chmod fails) and logs it, Unix only; pure helper redacts the --mcp-config value (next arg and = form) plus the token in any other agent arg for the 'Agent command:' line; in-tree warning via git check-ignore -q with a timeout, exit 1 only. Leftover log paths checked: supervisor logs no service args, status JSON has no args, waitForEndpoint already strips userinfo/query.
+
+2026-11-21 13:37 Implemented in cmd/launcher/mcpconfig.go (writePrivateFile, redactAgentArgs, unignoredTokenFile reusing relToRoot), two call-site lines in run(), README ignore list gets unreagent.log* (covers the rotated unreagent.log.1, which after an upgrade holds the previous release's unredacted line). New cmd/launcher/mcpconfig_test.go; every new test was red against signature stubs first (mode 0644, log holds token and env value, git never asked), green now; a relative-path case was checked against a mutation that drops filepath.Abs. Full check suite next.
+
+2026-11-21 13:40 For the dispatcher (not done here, outside this card's lane): (1) README goes stale in: the mcp.writeConfig paragraph under the MCP section (0600, tighten, git warning, no mode handling on Windows), the prose after the .gitignore block (explain unreagent.log*: window-mode log in the project dir, logs from earlier releases hold the token), the agent row and window-mode text (agent command logged with --mcp-config <redacted>), the -write-mcp-config flag row, the bearer-auth paragraph; unreagent.example.yaml writeConfig comment too (doc-writer). (2) Skills unreagent-core invariant 3 and unreagent-windows say only taskkill and reg query run without a job object: git check-ignore now does too; unreagent-core's mcpconfig.go row needs writePrivateFile/redactAgentArgs/unignoredTokenFile (skill-author). (3) Candidate for this board: hermes.go writeFileAtomic keeps an existing unreagent.local.yaml's 0644 when it adds the token, the same class of bug as this card; check whether k167 covers it. Sharing later: a private atomic writer that tightens could serve both writePrivateFile and writeFileAtomic once k167 is committed. (4) Residual, left as is: waitForEndpoint logs scheme/host/path of an extra server's UNREAL_MCP_URL env value by design (k87, userinfo and query stripped); a headless agent's own output lines are logged and could echo its config; the in-tree WARN goes to the log only, not to stderr in window mode.
+
+2026-11-21 13:41 Done, uncommitted on main ce12dc2 (README.md, cmd/launcher/main.go, cmd/launcher/mcpconfig.go, new cmd/launcher/mcpconfig_test.go). MCP config targets are opened 0600 without truncating; an existing file open to group/others is fchmod-ed to 0600 before the content goes in, with a log line naming the old mode; a failed chmod leaves the file whole and is a WARN (Unix only, runtime.GOOS). The Agent command line shows --mcp-config <redacted> (next arg and = form), and the token anywhere else in the args. With a token, a target inside the project dir gets git check-ignore -q (5 s timeout, run in the target's dir, output discarded); only exit 1 warns, the timeout is ruled out first because a killed process exits 1 on Windows. Verified on Linux: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux, make windows and CGO_ENABLED=0 windows build ok; end-to-end with the built Linux binary and real git (0644 tightened plus WARN, then .gitignore entry means no WARN). Windows path compile-only: no mode handling there, timeout/exit-1 guard not run. Untested: the chmod-failure branch (needs a file owned by another user); the new-file mode test catches a regression only under a umask that leaves group/other read (022 here).
+
+**Decision 2026-11-21 (main agent), on the worker's open points:**
+- **The in-tree warning** (a config holding the token that git does not ignore) also goes to `alert`, the stderr writer, like the permissions WARN. In window mode the console belongs to the agent, and a line that only reaches unreagent.log is a warning nobody sees.
+  - This is a small worker change in mcpconfig.go/main.go, for example handing `alert` to writeMCPConfigs, or returning the line.
+  - The tightening line stays log-only, since it reports a fix, not something the user must act on.
+- **Kept as is:**
+  - extraServers env values are not scrubbed outside `--mcp-config`;
+  - `waitForEndpoint` keeps logging scheme, host and path (k87);
+  - a headless agent's own output is not filtered;
+  - the untested chmod-failure branch;
+  - the umask caveat on the new-file test.
+- **writePrivateFile and hermes.go's writeFileAtomic as one shared helper:** that becomes its own card, after k44 and k169.
+- **The docs follow in parallel:**
+  - unreagent-doc-writer: README and unreagent.example.yaml, on the worker's list;
+  - unreagent-skill-author: unreagent-core (mcpconfig.go row, git check-ignore without a job object) and unreagent-windows.
+
+Docs done (doc-writer), uncommitted in worktree agent-a3977872281c36495, README.md + unreagent.example.yaml only. README: mcp.writeConfig paragraph (0600, tighten + old mode logged, chmod failure leaves file untouched + WARN, Unix only, in-tree git check-ignore WARN to log and stderr, quiet cases); text after .gitignore block (why unreagent.log* incl. .log.1, tokens in logs up to 0.0.9; fixed 'last line' reference to name the tmp-* line); agent row + window-mode item (Agent command redacted); bearer-auth paragraph; -write-mcp-config row. Example yaml: writeConfig comment (list-replace note already present). Not verified against the final stderr wiring, which the worker is still changing.
+
+2026-11-21 skill-author: project skills updated, uncommitted in the k44 worktree (.claude/skills/unreagent-core/SKILL.md, .claude/skills/unreagent-windows/SKILL.md). Both no-Job-Object passages (core invariant 3, windows "Job Objects" section) now list git check-ignore (unignoredTokenFile) next to taskkill and reg query. Core's mcpconfig.go row names writePrivateFile (0600, Unix only), unignoredTokenFile and redactAgentArgs. Left out on purpose: where the in-tree WARN goes (log plus alert), because that wiring is still in progress, and the skills only reference the code. Checked: gofmt -l cmd internal skills empty (snapshot, with the worker's files mid-edit); go test -count=1 ./internal/skills ok. No test reads .claude/skills (internal/config/skills_test.go only checks the default dir string). For the worker: the smokeTestMCP doc comment in cmd/launcher/bridge.go (~line 261) still says only taskkill/pkill and reg query run without a job object.
+
+2026-11-21 13:49 Fix round done (uncommitted, same worktree). writeMCPConfigs takes alert as its last parameter; run() passes its alert (stderr in window mode, nil when the log is the console). The in-tree WARN goes to the log and, with alert set, once to alert with the 'unreagent: ' prefix, as the permissions WARN does; the tightening line stays log-only. TestWriteMCPConfigsWarnsAboutAnUnignoredTokenFile now covers alert set (exactly that one line, even with a 0644 file whose tightening is logged), alert nil (one WARN in the log, nothing on a swapped-in os.Stderr) and ignored (nothing anywhere). Red before the fix (alert empty); a mutation that falls back to os.Stderr for a nil alert fails the nil case. smokeTestMCP's doc comment in bridge.go now lists git check-ignore (unignoredTokenFile) next to taskkill/pkill and reg query; comment only. Check, on the worktree including the doc-writer's and skill-author's edits: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... and go test -count=1 -race ./... ok; make linux, make windows and a CGO_ENABLED=0 windows build ok. Windows path compile-only.
+
+**Review 2026-11-21 (unreagent-reviewer): CHANGES NEEDED.** Worktree agent-a3977872281c36495, base ce12dc2, also applied onto main 519f5fd.
+
+Files reviewed: cmd/launcher/main.go, mcpconfig.go, bridge.go (comment), new mcpconfig_test.go, README.md, unreagent.example.yaml, .claude/skills/unreagent-core and unreagent-windows SKILL.md.
+
+Check, run by me on scratch copies of the worktree and of main 519f5fd + this diff: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -count=1 -race ./... ok; make linux, make windows and a CGO_ENABLED=0 windows build ok. Both copies green. The diff applies cleanly on 519f5fd: README hunks 4-6 at offset 23, no conflict with k153/k167 in lifecycle.go or hermes.go. Under umask 022 all six k44 tests run, none skip.
+
+Findings, most important first:
+1. **Test red under umask 077 (must fix, unreagent-worker).** cmd/launcher/mcpconfig_test.go:280: TestWriteMCPConfigsWarnsAboutAnUnignoredTokenFile assumes mustWriteFile (filetools_test.go:134, 0o644) leaves a 0644 file. Under umask 077 the file is 0600, nothing is tightened, and :308-310 fails all three subtests on the unchanged code. The rest of the suite is green under umask 077, so this test is the only one red there. Fix: os.Chmod(path, 0o644) after mustWriteFile, as TestWriteMCPConfigsTightensAFileOpenToOthers does at :67.
+2. **The run() wiring of the in-tree WARN has no test (should fix in the same round).** main.go:307. Three mutations pass the whole cmd/launcher suite: alert replaced by nil, ueProjectDir by "", and cfg.MCP.Token != "" by true. So nothing pins the decision that the WARN reaches stderr in window mode, or the card's acceptance that a token file inside the project warns. A hand probe with the built binary and a fake git shows the current wiring works, but no test holds it. Suggestion: extend TestRunKeepsTheMCPSecretsOutOfTheLauncherLog (already window mode) with writeConfig [{path: .mcp.json}] and a fake git that exits 1, first on PATH. Then assert one WARN in unreagent.log and one "unreagent: WARN" line on stderr.
+3. **Docs: stderr only in window mode (unreagent-doc-writer).** README.md:106 says "in the log and on stderr". README.md:1261 and unreagent.example.yaml:241 say "(log and stderr)". But alert is nil when the log is the console (main.go:153-156). Probe in console mode: the WARN is on stdout only and stderr is empty. Use the README's own wording, "(in window mode also on stderr)", as at README.md:1330.
+4. Docs nit, same pass: README.md:107-108 lists the quiet cases but leaves out the most common one, a project that is not a git work tree (exit 128).
+5. Optional: mcpconfig.go:77 advises "add it to .gitignore". A file git already tracks also exits 1, even when .gitignore lists it (checked in a throwaway repo: tracked and listed gives 1). The WARN is right, but there the fix is git rm --cached.
+
+Checked and fine:
+- **Redaction.** Both forms work: "--mcp-config X" becomes <redacted>, "--mcp-config=X" becomes "--mcp-config=<redacted>". So do a hand-wired value before the launcher's and the token in another argument. The input slice is not modified. The agent still gets the real arguments: the run test reads the agent's argv, and so did the probe. Mutations dropping the redaction, the = case or the token replacement each fail a test.
+- **Relative target.** filepath.Abs runs before relToRoot, and git runs in the target's directory. Mutations dropping Abs or cmd.Dir fail the tests.
+- **Exit codes.** Exit 0 and exit 128 are silent. A mutation warning on any non-zero exit fails the exit-128 case. The token gate is pinned too.
+- **Windows timeout ordering, read only.** In Go 1.26, Wait prefers the ExitError over the context error (os/exec/exec.go:940-945). Windows Kill is TerminateProcess(h, 1) (os/exec_windows.go:73), so a git killed at the timeout looks like a real exit 1. The ctx.Err() check at mcpconfig.go:187 runs before the deferred cancel, so it is correct. A mutation dropping it passes on Linux, where SIGKILL gives -1. **Windows path: unverified, compile-only.**
+- **Accepted residuals, confirmed.** TestWriteMCPConfigsCreatesTheFilePrivate cannot catch a revert to 0644 under umask 077: that mutation passes there. The chmod-failure branch is untested.
+- **README and example yaml against the code.** 0600, tightening, the old mode in the log, the chmod failure leaving the file alone with a WARN, Unix only, the 5 s timeout, unreagent.log* and the 0.0.9 wording (matches k167's Changes entry) all agree, apart from points 3 and 4. The overlay rule for writeConfig is stated at README.md:97 and unreagent.example.yaml:233: a list, replaced whole.
+- **Skills against the code.** The unreagent-core mcpconfig.go row and invariant 3, and the unreagent-windows Job Objects passage, match the code. git check-ignore is the only new exec.Command without a job object.
+- **Scope.** Every path is in its owner's OWNERS lane: worker for cmd/launcher/*, doc-writer for README and the example yaml, skill-author for .claude/skills. hermes.go is untouched. No German in touched text. git diff --check is clean.
+
+Out of scope, for the main agent: the token is still in the agent's argv (--mcp-config JSON), which other local users can read through /proc/<pid>/cmdline on Unix. This is not k44's acceptance. A candidate card: Claude Code takes a file path for --mcp-config, so a 0600 file could carry the token.
+
+Subject and Changes: the card has no proposal from the worker. Proposed subject (69 chars): "Write MCP configs 0600 and keep the bearer token out of the log (k44)". Body: one line per file (mcpconfig.go writePrivateFile/redactAgentArgs/unignoredTokenFile; main.go two call sites; bridge.go comment; mcpconfig_test.go; README; example yaml; two skills). Proposed Changes entry, a new topic under {{$NEXT}} with no card id:
+  - mcp.writeConfig and -write-mcp-config files are written 0600; an existing
+    file open to group or others is tightened first, and the log names its old
+    mode (Unix only). With mcp.token set, a file inside the project that git
+    does not ignore gets a WARN, in window mode also on stderr.
+  - The logged agent command shows --mcp-config <redacted> and blanks the
+    token in any other argument, so unreagent.log no longer holds the token or
+    the extra servers' env values. The recommended .gitignore lists
+    unreagent.log*: a log of 0.0.9 or earlier can hold the token.
+
+Decision 2026-11-21 (main agent) on the review: findings 1 and 2 (umask test, wiring test for main.go:307) go to the worker. Finding 5 is yes: the WARN mentions git rm --cached for a file git already tracks. The main agent fixed findings 3 and 4 itself in README.md (:105-109, the -write-mcp-config row) and unreagent.example.yaml: stderr only in window mode, the non-work-tree case, git rm --cached. The token on the agent's command line (/proc/<pid>/cmdline) gets its own card.
+
+2026-11-21 14:07 Review round done (uncommitted, same worktree; README.md and unreagent.example.yaml untouched by me). Finding 1: TestWriteMCPConfigsWarnsAboutAnUnignoredTokenFile chmods the planted file to 0644 after writing it; umask 077 go test -count=1 ./cmd/launcher is green. Finding 2: new TestRunWarnsOnStderrAboutAnUnignoredTokenFile in mcpconfig_test.go runs the launcher in window mode with a .uproject in the run directory, a writeConfig target and a fake git (exit 1) first on PATH. Inside the project with a token: one WARN in unreagent.log, one on stderr. No token, or the target outside the project: none in either. Each mutation of main.go:307 fails it: alert to nil (stderr 0, want 1), ueProjectDir to empty (log and stderr 0, want 1), token check to true (no-token case 1, want 0). The line was restored and checked against the diff. Finding 5: the WARN reads as decided, '... add it to .gitignore (and git rm --cached it if git already tracks it), or the token can end up in a commit'; the unignoredTokenFile comment says a tracked file exits 1 too. Check: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... and go test -count=1 -race ./... ok; umask 077 cmd/launcher ok; make linux, make windows and a CGO_ENABLED=0 windows build ok. Windows path compile-only.
+
+**Re-review 2026-11-21 (unreagent-reviewer): READY.** Worktree agent-a3977872281c36495 (base ce12dc2), also applied onto main 14a0449. Narrow scope: only what changed since my review. Since then: mcpconfig_test.go (chmod in the in-tree test, new TestRunWarnsOnStderrAboutAnUnignoredTokenFile), mcpconfig.go (WARN text, unignoredTokenFile comment), README.md and unreagent.example.yaml (main agent's prose). main.go, bridge.go and both skills are byte-identical to the reviewed state.
+
+Check, run by me on scratch copies of the worktree and of 14a0449 + this diff, go1.26.6. Both copies green: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -count=1 -race ./... ok; umask 077 go test -count=1 ./cmd/launcher ok; make linux, make windows and a CGO_ENABLED=0 windows build ok.
+
+- **Finding 1 (umask), fixed.** mcpconfig_test.go:281 chmods the planted file to 0644. The cmd/launcher suite is green under umask 077. All seven k44 tests also pass under umask 077, offline, with none skipped.
+- **Finding 2 (run() wiring), fixed.** Each of my three main.go:307 mutations now fails TestRunWarnsOnStderrAboutAnUnignoredTokenFile:
+  - alert set to nil: stderr 0, want 1.
+  - ueProjectDir set to "": log 0 and stderr 0, want 1.
+  - the token check set to true: the no-token case gives log 1 and stderr 1, want 0.
+  - The file was restored and compared afterwards. The test holds its claim: it pins the project dir, the token gate and the alert writer.
+  - No network or real git needed. I ran the compiled test binary in an unshare -rn namespace with loopback only, and PATH held only sh, sleep and false, with no git. All three in-tree tests (unit, writeMCPConfigs, run) passed. The MCP port is freeLoopbackAddr; writeMCPConfigs (main.go:307) runs before the 'MCP server listening' line (:365) the test waits for. So there is no race.
+- **Finding 5, done.** The WARN says to add the file to .gitignore, and to git rm --cached it if git already tracks it. The unignoredTokenFile comment notes that a tracked file exits 1 too. I checked that behaviour last round with a throwaway repo. English only.
+- **Findings 3+4 (main agent's prose) against the code, correct.**
+  - README.md:105-109: alert is set only when the log is not stdout (main.go:153-156), so 'in window mode also on stderr' holds. The quiet cases match unignoredTokenFile: no git, exit 128, outside the project, the 5 s timeout. git rm --cached matches the WARN.
+  - The -write-mcp-config row: the flag appends to cfg.MCP.WriteConfig (main.go:103), so the same writeMCPConfigs path covers it.
+  - unreagent.example.yaml:236-242 is right too, token condition included.
+  - Two optional nits, not blocking:
+    - (a) The -write-mcp-config row (README.md:1299 on main) does not say the WARN needs mcp.token set. 'a target inside the project that git does not ignore gets a WARN' reads as unconditional.
+    - (b) The quiet list at README.md:107-109 leaves out 'no project known': unreal.project is unset and no .uproject is found, so ueProjectDir is empty.
+- **Applies on main 14a0449.** git apply -3 is clean with no conflicting hunk: README hunks 4-6 move by 36 lines; main.go, mcpconfig.go and the example yaml apply as they are. git diff --cached --check is clean. The merged README reads coherently next to k167/k169's hermes 0600 text (README.md:1037-1041), with no contradiction.
+- **Windows path: unverified, compile-only.** That covers the timeout ctx guard ahead of exit 1, and the mode handling skipped on Windows. The k44 tests skip on Windows.
+
+For the release-manager:
+- **Subject:** Write MCP configs 0600 and keep the bearer token out of the log (k44)
+- **Body:** one line per file:
+  - mcpconfig.go: writePrivateFile, redactAgentArgs, unignoredTokenFile, and the WARN to log and alert.
+  - main.go: two call sites.
+  - bridge.go: comment only.
+  - New mcpconfig_test.go.
+  - README and unreagent.example.yaml: docs.
+  - unreagent-core and unreagent-windows: SKILL.md.
+- **Changes:** two new bullets under {{$NEXT}}, no card id:
+  - mcp.writeConfig and -write-mcp-config files are written 0600; an existing
+    file open to group or others is tightened first, and the log names its old
+    mode (Unix only). With mcp.token set, a file inside the project that git
+    does not ignore gets a WARN, in window mode also on stderr: add it to
+    .gitignore, and git rm --cached it if git already tracks it.
+  - The logged agent command shows --mcp-config <redacted> and blanks the
+    token in any other argument, so unreagent.log no longer holds the token or
+    the extra servers' env values. The recommended .gitignore lists
+    unreagent.log*: a log of 0.0.9 or earlier can hold the token.
+
+Main agent: both optional README nits from the re-review fixed (README ~107-110: the quiet case "no project is known"; the -write-mcp-config row: the WARN only with mcp.token set). Prose only; next step release-manager after k37 lands.
+
+2026-11-21 14:20 Committed as 21555d2 on main (ff-merged from the worktree). Check green on ce9ef4a: gofmt, vet, GOOS=windows vet, test, -race, umask 077 cmd/launcher, make linux and windows. main.go conflict at the AddService call site resolved by keeping k37's err form plus the redacted log line. Windows runtime unverified.
