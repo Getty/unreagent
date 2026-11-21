@@ -1,0 +1,171 @@
+---
+claimed_at: 2026-11-21T07:34:29Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:34:43Z
+created: 2026-08-21T23:22:44Z
+depends_on:
+- 9
+- 10
+id: 12
+priority: high
+started: 2026-11-21T05:10:52Z
+status: done
+tags:
+- skills
+- subsystem
+title: 'Materialization: write skills to <dir>/unreagent-<name>/'
+updated: 2026-11-21T07:34:43Z
+---
+
+Write each embedded skill to disk when skills.materialize is on, so any agent can consume the documents directly off the filesystem.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 6.3.
+Agent: unreagent-worker.
+
+Acceptance:
+- writes <dir>/unreagent-<name>/SKILL.md plus its sub-documents
+- the unreagent- prefix is load-bearing: on each start, prefixed directories are REPLACED, unprefixed sibling directories are left completely alone
+- a prefixed directory not in the current embedded set is REMOVED, so renamed or dropped skills do not linger
+- runs when skills.enabled && skills.materialize; errors surface, they do not get swallowed
+- writes under the project directory -- keep the path from escaping <dir>
+
+Depends on #9 and #10.
+
+--- Note from #8 (2026-08-22) ---
+NAMING COLLISION, decide before implementing. Spec section 6.3 writes each skill to <dir>/unreagent-<name>/, but the Class D skill names in spec section 7 already begin with unreagent-. The first two now exist on disk as skills/unreagent-files/ and skills/unreagent-runtimes/, so the rule as written produces <dir>/unreagent-unreagent-files/.
+
+Options: strip-or-skip the prefix when the name already carries it (keeps the guarantee that every managed directory starts with unreagent-, which is what the replace/remove logic keys on), or rename the four Class D skills. The prefix logic is load-bearing for 'replace my own, never touch foreign directories' -- whichever way this goes, the rule must stay a single unambiguous predicate.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, open design question: the shipped dirs skills/unreagent-files and skills/unreagent-runtimes already carry the unreagent- prefix, so prefixing doubles it. Suggested rule: dir = name if it starts with unreagent-, else unreagent-<name>. See also k1's <Project>/Skills/ note. Depends on k9, k10; edits main.go. Size M.
+
+**From k9 (2026-11-21):** Skill.Body has no frontmatter — write the raw embedded SKILL.md from inside internal/skills rather than rebuilding it. Under the suggested prefix rule (dir = name if it starts with unreagent-, else unreagent-<name>) ue-x and unreagent-ue-x map to the same directory: reject that collision. Load does not reject names or sub-documents that collide on case-insensitive Windows filesystems (Nodes.md vs nodes.md).
+
+Decision 2026-11-21 (main agent): directory = the skill name when it already starts with unreagent-, else unreagent-<name>; two skills mapping to the same directory (ue-x and unreagent-ue-x), or colliding case-insensitively, are a load error. One predicate for 'managed': the directory name starts with unreagent-.
+
+Started 2026-11-21 as one delivery bundle (k10 config → k11 MCP tool → k12 materialization), one worker, worktree on main c0045e2; its tests are to cover the acceptance of k15/k16/k17 so those can close with the commit. Decisions on k1 and k12 apply (prefix rule, dir default .claude/skills, configurable).
+
+Worker finished in worktree-agent-af98a3815ee9336cb (base c0045e2): skills: config section with -no-skills-mcp, the skills MCP tool (name + optional section), materialization into skills.dir with the k12 directory rule; k15/k16/k17 acceptance covered by tests (mapping in the worker report). Worker decisions: a load or collision error stops the start, a failed write only warns; collisions ignore case on every OS; only real unreagent-* directories count as ours; a relative skills.dir resolves against the agent working directory. Docs and project skills follow, then review.
+
+Ready for review with docs, project skills and the overlay test, in worktree-agent-af98a3815ee9336cb.
+
+2026-11-21 06:23 Review (unreagent-reviewer), branch worktree-agent-af98a3815ee9336cb on c0045e2: CHANGES NEEDED. The code held every attack, but the guards that keep it off foreign data are not tested, plus one README fix.
+Read: cmd/launcher/skills.go (materializeSkills, checkSkillDirs, isPlainName, setupSkills), skills_test.go; internal/skills Source (byte-identical to the diff in the skill-author's worktree, worktree-agent-add09259cbb0b8bdd); the README Skills section, spec section 6.3, the unreagent-skill-authoring skill.
+Attacks, all run in a scratch copy. All safe:
+- a symlinked unreagent-x pointing outside: left alone, target intact
+- a symlink named like a skill directory: Mkdir fails with EEXIST and warns; nothing is written through it
+- a file named unreagent-x: left alone
+- skills.dir itself a symlink: followed, which is the user's choice
+- skills.dir set to the project root, holding the .uproject, the yaml files, the log, Content/, .claude/, and Unreagent-mine/ and UNREAGENT-X/: only unreagent-* directories were touched
+- a removed directory holding a symlink that points out: the link goes, the target stays
+- names '..', '', 'unreagent-..' and 'a\b', sections '..', '' and NUL: each stays inside dir or errors
+- 300 concurrent pairs: no foreign data lost, but 5 left a partial set, once while the launcher that succeeded logged 'materialized'
+All validation is complete before the first RemoveAll.
+Blocking, tests (unreagent-worker per OWNERS, or the test-writer lane):
+1. skills.go:170: Mkdir changed to MkdirAll passes the whole suite, and so does ignoring the Mkdir error. Under that mutation, a symlink named unreagent-alpha that points at a user's directory gets that directory's SKILL.md overwritten (shown in scratch). Add a test: such a symlink makes materialization error, and the target stays unchanged.
+2. skills.go:161: making ownership ignore case (ToLower) passes. TestMaterializeLeavesForeignEntriesAlone (skills_test.go:312) has no Unreagent-x or UNREAGENT-X directory; add both.
+3. skills.go:161: counting a symlink to a directory as ours (os.Stat) passes. Add a symlinked unreagent-x that is not in the set and must survive as a link.
+Non-blocking:
+4. Checking a directory only against the previous one passes, because TestCheckSkillDirsRejectsCollisions uses two-skill sets. Add {ue-x, ue-y, unreagent-ue-x}.
+5. An unreagent-* sibling of skills.dir in the root of TestMaterializeKeepsEveryWriteInsideDir would pin 'never outside dir'.
+6. run() ignoring setupSkills' error (main.go:205) passes. Load errors are pinned only at the setupSkills level.
+Blocking, doc (doc-writer): README.md:885-887 says the editor and agent 'start without the files'. That is wrong in two ways. A write that fails partway leaves the launcher's old directories removed and the skills before the failure written. A failing RemoveAll leaves the previous start's files in place. The skills.go:94 log line 'skills not written' reads the same way. Optional: Lstat every target before the first RemoveAll, so a foreign entry in the way leaves dir as it was; the docstring at skills.go:136-137 would then also hold for that case.
+Design, for the maintainer to judge (not blocking; nothing shipped is affected): the k12 directory rule writes ue-x's SKILL.md, which says name: ue-x byte for byte, into unreagent-ue-x/. The Agent Skills spec requires name to match the parent directory. All 4 shipped names already start with unreagent-, so nothing breaks today. Suggested ticket: require shipped skill names to start with unreagent- (a Load rule, skill-author lane). Directory and name would then always match, and the ue-x vs unreagent-ue-x collision class would disappear.
+Windows UNVERIFIED (compiled only, never run):
+- case-insensitive NTFS: a foreign Unreagent-files next to the shipped unreagent-files makes Mkdir fail, so the start warns and leaves a partial set
+- junctions: relies on Go 1.23+ reporting mount points without ModeDir, so IsDir() is false
+- IsLocal on reserved names: k137
+k17 coverage: all 5 acceptance items are met (TestMaterializeWritesEverySkill, ReplacesItsOwnDirectories, RemovesDroppedSkills, LeavesForeignEntriesAlone, sub-documents through testSkills). The card's own 'test it as such' is not, while 1-3 survive.
+Mutations (mine, on the delete path and the collision check): 6 killed (removing dir itself; validation moved after removal; 4 on the collision check). 6 survived: the 3 blocking ones above, ignoring the Mkdir error, the parent sweep (5) and the non-adjacent collision (4). I did not rerun the worker's 36.
+Scope: internal/skills was placed by the worker, but it is identical to the owner's diff. Discard the skill-author's worktree after the commit. The approve paragraph in the unreagent-mcp-tools skill falls outside the card; it is accurate against tools.go:165-167.
+Lane drift, in main's files: CLAUDE.md and unreagent-rules.md still route 'the skills subsystem' to unreagent-skill-author, and so does that agent's description, while OWNERS now gives cmd/launcher/skills.go to the worker.
+Check: same as noted on k10.
+
+README.md updated: line 233 (skills.dir usage wording), ~870-880 (what materialization owns), ~893-905 (failure modes). Left in review.
+
+**Decisions 2026-11-21** (main agent, from the k10–k12 review):
+- Finding 5: materialization sets the frontmatter name: to the directory name whenever the unreagent- prefix is added (ue-x → unreagent-ue-x/SKILL.md with name: unreagent-ue-x). Name and directory then match as the Agent Skills spec requires, and the name does not clash with a user's own ue-x. A skill already named unreagent-* is written byte for byte. The MCP tool keeps the shipped names. Rejected: renaming every shipped skill to unreagent-* (churn across the Class A skills, long MCP names). Assigned to unreagent-worker.
+- Finding 3: no restructuring of the write order. The WARN becomes 'skills not fully written to <dir>: <cause> — its unreagent-* directories may be missing, incomplete or left from an earlier start' (worker), and the README says the same (doc-writer).
+- Findings 1/2 and the test gaps in 6 (Mkdir vs MkdirAll and the ignored error, case-sensitive ownership, a symlink not counted as ours, non-neighbour collision, the main.go:298 skill set, setupSkills error stops run): unreagent-test-writer after the worker.
+- Lane drift: CLAUDE.md, unreagent-rules.md and the skill-author agent file now give cmd/launcher/skills.go to the worker (main agent, in this worktree).
+- Two launchers on one project leaving a partial set: separate card.
+
+Correction, README.md actual ranges: 233-234 (skills.dir usage), 869-878 (what materialization owns), 890-904 (failure modes). Card stays in review.
+
+2026-11-21 06:46 Round 2 (unreagent-worker), worktree-agent-af98a3815ee9336cb, both decisions implemented in cmd/launcher/skills.go:
+- Finding 5: materializedSource (skills.go:206) sets the frontmatter name value to the directory name when the prefix is added (ue-x -> name: unreagent-ue-x). Every other byte stays as embedded, and a name: line in the body is left alone. A skill already named unreagent-* is written byte for byte, without being parsed. Locating the name: internal/skills exports no position in the frontmatter (splitFrontmatter is unexported), so the frontmatter block is Source minus Body, the loader's own split. yaml.v3, already a dependency of cmd/launcher (mappingEntry from hermes.go), finds the value. The text at that position must be the name, plain or in its quotes, or materialization errors (block scalar, escape, tag). The rename is prepared in the existing validation loop (skills.go:146-161), so a refusal leaves dir as it was. The write order is unchanged.
+- Finding 3: the WARN (skills.go:96) now reads verbatim 'WARN skills not fully written to <dir>: <cause> — its unreagent-* directories may be missing, incomplete or left from an earlier start', matching README.md:897.
+- Tests in cmd/launcher/skills_test.go:
+  - new: TestMaterializeNamesTheSkillLikeItsDirectory (plain, quoted with comment and CRLF, double-quoted, a body with --- and name:, unreagent-* written byte for byte even with a folded name) and TestMaterializeRefusesANameItCannotRewrite (7 refusals, each pinned to its reason; dir unchanged);
+  - changed: the materialized() oracle; TestSetupSkillsWarnsWhenMaterializationFails pins the new text;
+  - fixed test data in KeepsEveryWriteInsideDir and RefusesCollisionsBeforeWriting: their hand-built skills had unusable Sources, so the rename refused them first and hid the guard each test pins.
+  - Red before the implementation, green after. 54 mutations (round 1 plus 18 new), all killed.
+- Checked against main's 9 Class A skills (ue-assets ... ue-widgets) in a scratch copy: all 13 materialize, and the output reloads under Load's rules (name equals directory) with the same body, description and sections. Each SKILL.md differs only in its name line.
+- Follow-up, skill-author: the Skill.Source comment in internal/skills/skills.go ('what materialization writes') is no longer exact for unprefixed names.
+- Check: gofmt, vet (linux, windows), go test ./..., go test -race ./cmd/launcher, make windows — all green. Windows behaviour unverified.
+Left in review.
+
+Round 3 (unreagent-test-writer), tests only, cmd/launcher/skills_test.go + lifecycle_test.go (loadFailEnv hook in TestLauncherRunProcess). Each test red under its mutation, green on the tree: TestMaterializeDoesNotWriteThroughASymlinkedSkillDirectory kills os.Mkdir->MkdirAll, ignored Mkdir error, and os.Stat/follow ownership; TestMaterializeOwnershipIsCaseSensitive kills ToLower ownership; TestMaterializeDoesNotFollowASymlinkWithThePrefix kills os.Stat/follow ownership; TestCheckSkillDirsRejectsCollisions (two new non-adjacent cases) kills previous-only collision compare; TestRunRegistersTheSkillsToolWithTheLoadedSkills (real launcher process, tools/call skills over HTTP) kills the empty skill set to registerTools; TestRunStopsWhenTheSkillSetDoesNotLoad (injected load failure, exit 1) kills ignoring setupSkills error in run(). Symlink tests skip where symlinks cannot be created. Checks green: gofmt, vet linux+windows, go test, -race cmd/launcher, make windows. Windows path unverified. Left in review.
+
+2026-11-21 07:10 Review round 2 (unreagent-reviewer), worktree-agent-af98a3815ee9336cb: CHANGES NEEDED. The code is ready; the open items are docs, plus the flaky test noted on k11.
+Code: materializedSource (cmd/launcher/skills.go:206) and the WARN (skills.go:96) are as decided. The rename is prepared in the validation loop (146-161), so a refusal leaves dir as it was.
+Mutations I re-ran myself:
+- All round-1 survivors are now killed: ToLower ownership, Stat ownership, MkdirAll, ignored Mkdir error, previous-only collision check, the empty set to registerTools, the ignored setupSkills error.
+- 8 new mutations on the rename, all killed: no rewrite, text check skipped, quotes dropped, line off by one, error ignored, CutSuffix failure ignored, dir check inverted, the unprepared source written.
+- One survivor, non-blocking: an extra sweep of unreagent-* directories in dir's parent. No test puts one there.
+Shipped set on main e66eb98, in a scratch rebase:
+- All 13 skills materialize.
+- Each SKILL.md differs from Source only in its name line (unreagent-* names: not at all), and sections are byte for byte.
+- The output reloads under the loader (name equals directory) with equal description, body, tool and class lists and sections.
+Hook: UNREAGENT_TEST_SKILLS_LOAD_FAIL is read only in lifecycle_test.go (TestLauncherRunProcess). The string is in the test binary, not in dist/unreagent or dist/unreagent.exe, so production cannot reach it.
+Findings:
+1. .claude/skills/unreagent-skill-authoring/SKILL.md:47-51 still says materialization writes Skill.Source byte for byte and "Nothing is rebuilt". That is now true only for unreagent-* names. The file also lacks the author rule the rename adds: name: must be a plain or quoted scalar on one line, or materialization refuses the whole set. Owner: unreagent-skill-author.
+2. docs/superpowers/specs/2026-08-21-skill-subsystem-design.md lacks the name-rewrite decision at 234-236 (section 6.1, "Decided (k12)": written byte for byte instead of rebuilt) and at 286 (section 6.3, "SKILL.md is written from Skill.Source"). Owner: unreagent-doc-writer.
+3. Scope: the internal/skills/skills.go:33 comment was edited by the main agent, but OWNERS gives internal/skills/ to unreagent-skill-author. The text is correct; have the owner take it over, or record the exception.
+4. The flaky TestRunRegistersTheSkillsToolWithTheLoadedSkills, see k11. It blocks the joint commit.
+Checked and fine:
+- The main agent's prose (CLAUDE.md:87, .claude/rules/unreagent-rules.md:26, .claude/agents/unreagent-skill-author.md, the OWNERS comment) is consistent and in English.
+- README.md 233-234, 869-878 and 890-904 match the code verbatim: the WARN text, the rename, the on-disk names.
+k17 coverage: the prefix rules, ownership (case-sensitive, real directories only, symlinks not followed), replacement and removal, foreign entries kept, every write inside dir, collisions (non-adjacent too), the rename and its refusals, and the setupSkills paths.
+Rebase onto e66eb98 (scratch): one conflict, in the README.md MCP tools table. Main rewrote the file-tools row (k73 offset/limit) and the branch adds the skills row. Keep main's row and add the skills row; the full check is green after that.
+Check as on k10. Windows behaviour unverified: NTFS case-insensitive collisions, junctions, IsLocal on reserved names (k137 open). Concurrent launchers: k139.
+
+unreagent-doc-writer: review finding 2 done in docs/superpowers/specs/2026-08-21-skill-subsystem-design.md (worktree-agent-af98a3815ee9336cb), not committed. Section 6.1 lines 234-243: the k12 Source decision now records the name rewrite on prefix add, unreagent-* written byte for byte, MCP names unchanged, rejected alternative (rename every shipped skill). Section 6.3 lines 293-297: SKILL.md bullet corrected, plus the plain-or-quoted single-line name rule and the refuse-whole-set-before-writing case. Wording matches README.md 869-878.
+
+Round 3b (unreagent-test-writer), skills_test.go only: TestRunRegistersTheSkillsToolWithTheLoadedSkills no longer flaky: it retries the POST for up to 10s and fails with the last error (the launcher logs 'MCP server listening' before the port is bound; main.go untouched). Result: -count=50 50/50 green; the empty-skill-set mutation at main.go registerTools fails 20/20. New TestMaterializeLeavesTheParentOfDirAlone: an unreagent-x directory beside skills.dir survives; red under a mutation that also sweeps unreagent-* in filepath.Dir(dir), green without. Checks green: gofmt, vet linux+windows, go test, -race cmd/launcher. Left in review.
+
+Review round 2 findings 1 and 3 (unreagent-skill-author), worktree-agent-af98a3815ee9336cb:
+- .claude/skills/unreagent-skill-authoring/SKILL.md:47-56: the "what lands on disk" point now says the name: value is set to the directory name when the prefix is added (ue-tasks -> unreagent-ue-tasks) and every other byte stays; an unreagent-* skill is written byte for byte (materializedSource); the skills tool keeps the shipped names.
+- SKILL.md:62-68, new author rule: name: is a plain or quoted value on one line. A block scalar, an escape, a tag or an anchor: Load accepts it, materialization refuses the whole set before writing (WARN, the start goes on), go test ./cmd/launcher fails over the shipped set. Only names that gain the prefix are checked; write every skill this way.
+- SKILL.md:69-71, new: refer to other skills by the shipped name (ue-tasks); on disk it is unreagent-ue-tasks/, the body is not rewritten.
+- SKILL.md:101-102, Format name bullet: adds "plain or quoted, on one line (Delivery)".
+- internal/skills/skills.go:33, Source comment, taken over; final wording is the skill-author's: "SKILL.md byte for byte as embedded, frontmatter included; materialized unchanged for an unreagent-* name, else with name: set to unreagent-<name>". The previous "set to its directory name" read as the embedded directory (which Name already equals) and left out the unreagent-* case.
+- Verified against materializedSource in a scratch copy: accepted are plain, single- and double-quoted, a trailing comment, the value on the next line, a flow mapping; refused are folded, literal, tag, tag plus quotes, anchor, a quoted value over two lines. A shipped ue-probe with a folded name: go test ./internal/skills green; go test ./cmd/launcher red in TestMaterializeWritesEverySkill, TestSetupSkillsMaterializesTheShippedSet and TestRunNoSkillsMCPWinsOverTheLocalOverlay. Plain-name control green.
+- Test gap, test-writer, non-blocking: TestMaterializeRefusesANameItCannotRewrite does not pin the tag or anchor refusal (seen only in the probe).
+- Left alone: the "Covered today" list (SKILL.md:189-196) does not name the rename or round-3 tests; incomplete, not wrong.
+- Check: go test -count=1 ./internal/skills ok; gofmt -l cmd internal skills empty; go vet ./internal/skills clean.
+Card stays in review.
+
+2026-11-21 07:30 Review round 3 (unreagent-reviewer), worktree-agent-af98a3815ee9336cb: READY.
+Round-2 findings, each fixed:
+- .claude/skills/unreagent-skill-authoring/SKILL.md:47-56, 62-71 and 101-102 now state the rename, the author rule and shipped vs on-disk names, and match the code. Its claim that go test ./cmd/launcher fails over the shipped set holds: TestMaterializeWritesEverySkill materializes skills.Load().
+- docs/superpowers/specs/2026-08-21-skill-subsystem-design.md §6.1 :234-243 and §6.3 :293-297 now carry the decision.
+- internal/skills/skills.go:33 was rewritten by its owner and is accurate.
+- The parent-sweep gap is closed by TestMaterializeLeavesTheParentOfDirAlone.
+cmd/launcher/skills.go is the worker's intended state. Against my byte copy of the round-2 tree, the only change is the preamble line :254, so nothing was reverted. The rename code is identical to what round 2's mutations ran on. skills_test.go only gains the new test and the retry, and lifecycle_test.go is unchanged.
+Mutations, re-run myself, 16 of 16 killed: ToLower ownership, Stat ownership, MkdirAll, ignored Mkdir error, parent sweep, previous-only collision check, the empty set to registerTools, the ignored setupSkills error, and the 8 on the rename.
+Shipped set on current main c0a5178 (2e27485 plus k22/k23, 19 skills):
+- All 19 materialize. Each SKILL.md differs from Source only in its name line (unreagent-*: not at all), and sections are byte for byte.
+- The output reloads under the loader (name equals directory) with equal fields.
+- Every shipped SKILL.md has a plain `name: <dir>` on line 2, LF endings.
+Refused forms, not blocking. I probed the code: a tag, a tag on a quoted value, an anchor, an alias (*a), an escape and a folded value are refused. A flow mapping, a quoted key, a tab, a trailing comment and an explicit ? key are rewritten correctly. Every document states the rule itself, plain or quoted on one line, and the lists are only examples. The README lists no forms at all, which is right for users. Optional edits for one follow-up card:
+- spec :296-297 (doc-writer): add "an anchor or an alias" and mark the list as examples;
+- cmd/launcher/skills.go:204 comment (worker): the same addition;
+- authoring SKILL.md:64 (skill-author): add the alias;
+- TestMaterializeRefusesANameItCannotRewrite (test-writer): add tagged, anchored and aliased name cases, each refused as not plain.
+Other nits, not blocking: two test comments are now inexact, cmd/launcher/skills_test.go:262-263 ("SKILL.md exactly as embedded") and internal/skills/skills_test.go:256 ("Source is what materialization writes").
+Rebase onto c0a5178 (scratch): the same single conflict as before, in the README.md MCP tools table. Keep main's file-tools row and add the skills row; after that the full check and -count=20 on the run test are green.
+Check as on k10. Windows behaviour unverified (k137 open). Concurrent launchers: k139.
+
+Committed as b78a5fc
