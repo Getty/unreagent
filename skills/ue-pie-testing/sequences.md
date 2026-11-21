@@ -212,7 +212,9 @@ and at the start and end of the run; section `log` covers reading them.
   the Take Recorder does when PIE ends is the engine's business and has not
   been verified. It needs UE 5.7 or later. A failure, such as
   `TakeRecorder requires UE 5.7+`, does not fail the run; it shows only in
-  the manifest's `diag` and in the log.
+  the manifest's `diag` and in the log. Skill `ue-sequencer` has
+  `take_status` and `take_stop`, to check for and stop a take that is still
+  recording, and `open` and `scrub`, to look at the recorded sequence.
 
 ## Pitfalls
 

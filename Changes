@@ -205,6 +205,12 @@ Revision history for unreagent
     PIE session and DataTable rows with game_framework, including its 16
     operation aliases). Written from the UE LLM Toolkit source, not yet
     exercised against a running editor.
+  - New shipped skills ue-lighting (spawn and edit lights, the sky light, the
+    sky atmosphere, height fog and post-process volumes in the open level with
+    lighting, including which property keys it reads and that unknown keys are
+    skipped silently) and ue-sequencer (open a Level Sequence, scrub it, read
+    its state, and drive the Take Recorder with sequencer). Written from the UE
+    LLM Toolkit source, not yet exercised against a running editor.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.

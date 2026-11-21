@@ -379,6 +379,10 @@ engine infrastructure.
 - `ue-assets`: `asset_search` for class and asset paths, `asset save_all`, and
   properties on assets.
 - `ue-blueprints`: Blueprint classes, defaults and variables.
+- `ue-lighting`: the `lighting` tool, which spawns the four standard lights
+  and sets light, sky light, sky atmosphere, fog and post-process values by
+  fixed key names. Its set operations list the keys they applied; its two
+  spawns do not.
 - `unreagent-iterate`: what an editor stop or restart does to unsaved changes.
 - The plugin's background notes on actors in C++, served by
   `unreal_get_ue_context` with category `actor`

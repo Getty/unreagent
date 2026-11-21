@@ -277,6 +277,10 @@ Capture without `asset_path` while PIE runs, or use `gameplay_debug`
   files.
 - `ue-assets`: `asset_search`, for the path of the asset to capture.
 - `ue-level-actors`: placing the actors you want to look at.
+- `ue-lighting`: lights, fog and post-process volumes, whose effect a capture
+  shows.
+- `ue-sequencer`: opening a Level Sequence and scrubbing it to a frame before
+  a level-viewport capture.
 - `ue-tasks`: the task envelope and bridge timeouts.
 - `unreagent-runtimes`: `run_python`, for the HTTP sketch.
 - `unreagent-files`: `read_file`, which returns text only.
