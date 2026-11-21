@@ -1,7 +1,7 @@
 # Skill subsystem — design
 
 **Date:** 2026-08-21
-**Status:** approved for implementation (subsystem + skill classes A and D)
+**Status:** approved for implementation (subsystem + skill classes A and D; Class C added 2026-11-21, k5)
 
 ## 1. Context
 
@@ -367,6 +367,21 @@ is in-repo and checkable, so these can be written and reviewed offline.
 | `ue-tasks` | `task_submit`, `task_status`, `task_result`, `task_list`, `task_cancel` |
 | `ue-context` | `get_ue_context` (bridge tool; points at the plugin's own contexts/domains) |
 
+**Class C — toolkit-only domains with no VibeUE precedent.** Each has a
+dedicated toolkit tool with its operations in an in-repo header, the same
+criterion as Class A; it had been deferred only because there was no VibeUE
+text to adapt.
+
+| Skill | Toolkit tools |
+|---|---|
+| `ue-character` | `character` |
+| `ue-character-data` | `character_data` |
+| `ue-game-framework` | `game_framework` |
+| `ue-lighting` | `lighting` |
+| `ue-sequencer` | `sequencer` |
+| `ue-control-rig` | `control_rig` |
+| `ue-retarget` | `retarget` |
+
 **Class D — unreagent's own tools.** No external source covers these; they are
 the skills only this project can supply.
 
@@ -377,7 +392,7 @@ the skills only this project can supply.
 | `unreagent-files` | `read_file`, `list_dir`, `write_file`, `edit_file` |
 | `unreagent-runtimes` | `run_python`, `run_node` — host-side runtimes, explicitly *not* UE Python |
 
-23 skills.
+30 skills: 19 Class A, 7 Class C, 4 Class D.
 
 ### Deferred
 
@@ -390,16 +405,7 @@ are near-portable as-is (`pcg/SKILL.md` states "No VibeUE service wrapper is
 needed — the Python API is complete"), so this class is cheaper than its size
 suggests once an editor is available.
 
-**Class C — toolkit-only domains with no VibeUE precedent**: `character`,
-`character_data`, `lighting`, `game_framework`, `control_rig`, `sequencer`,
-`retarget`. Roughly 7 skills.
-
-> **Open decision.** Class C was deferred alongside B because it has no
-> template to adapt. By the criterion actually used to draw the line — a
-> dedicated tool with a documented schema in-repo — Class C qualifies for
-> offline authoring exactly as Class A does. Folding it into the current batch
-> would add ~7 skills without needing an editor. Flagged rather than assumed,
-> since the approved scope was A and D.
+Class C was folded into the offline-writable batch (k5, 2026-11-21).
 
 ## 8. Testing
 
@@ -439,13 +445,13 @@ change stops the lint instead of thinning it.
 
 ## 9. Risks
 
-- **Unverified content.** Class A skills are written against C++ headers, not
-  against a running editor. A header can describe an operation whose runtime
+- **Unverified content.** Class A and Class C skills are written against C++ headers,
+  not against a running editor. A header can describe an operation whose runtime
   behaviour differs. Mitigation: keep skills to documented operations and
   observed patterns; revisit once an editor is available.
 - **Toolkit drift.** Tool names and operations change upstream. Mitigated by
   the lint in §8, which fails loudly rather than leaving skills quietly wrong.
-- **Binary size.** 23 skills of prose is a modest addition to the `.exe`;
+- **Binary size.** 30 skills of prose is a modest addition to the `.exe`;
   monitor rather than pre-optimize.
 - **Writing into the project directory.** Materialization writes under
   `<Project>/.claude/`. The prefix rule keeps it from touching anything it does

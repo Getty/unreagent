@@ -30,12 +30,12 @@ this subsystem exists to prevent.
 
 ## Scope discipline
 
-The approved batch is Class A (a dedicated toolkit tool with an in-repo schema)
-and Class D (unreagent's own tools). Class B — anything reachable only through
-raw UE Python — waits for a running editor; `unreal_status` currently reports
-NOT CONNECTED, so there is nothing to verify against. Class C is flagged as an
-open decision in the design document: if you believe a Class C skill is
-offline-writable, say so and file a ticket. Do not quietly widen the batch.
+The approved batch is Class A and Class C (a dedicated toolkit tool with an
+in-repo schema; Class C joined on 2026-11-21, k5) and Class D (unreagent's own
+tools). Class B — anything reachable only through raw UE Python — waits for a
+running editor; `unreal_status` currently reports NOT CONNECTED, so there is
+nothing to verify against. If you believe a Class B skill is offline-writable,
+say so in your report. Do not quietly widen the batch.
 
 Report back per skill: which header you read, which operations you covered, and
 anything the header left ambiguous.

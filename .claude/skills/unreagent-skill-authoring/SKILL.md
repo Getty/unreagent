@@ -164,7 +164,7 @@ names `skills.enabled: false` as the way out).
    and usually declares its `Info.Name`; for a few tools (Asset, Lighting,
    Material, Niagara) the name sits in `MCPTool_X.cpp` instead. This is the
    only in-repo, checkable source of truth for tool schemas, and it is why
-   Class A skills can be written offline at all.
+   Class A and Class C skills can be written offline at all.
 2. **`MCPToolRegistry.cpp`** — the definitive list of registered tools. It
    registers classes (`FMCPTool_X`); each tool's name is that class's
    `Info.Name`, in `Tools/MCPTool_X.h` or, for a few, `Tools/MCPTool_X.cpp`.
@@ -187,9 +187,9 @@ root). When it is set, the lint looks nowhere else: a path without
 Write skills only for what can be verified **without a running editor**. A skill
 documenting an API nobody has exercised produces text of unknown correctness —
 exactly the failure the skills exist to prevent. In practice: a dedicated
-toolkit tool with a documented schema in-repo (Class A) and unreagent's own
-tools (Class D) are in scope. Domains reachable only through raw UE Python
-(Class B) wait for an editor.
+toolkit tool with a documented schema in-repo (Class A, and since k5 Class C)
+and unreagent's own tools (Class D) are in scope. Domains reachable only
+through raw UE Python (Class B) wait for an editor.
 
 When a header describes an operation whose runtime behavior is uncertain, state
 the documented contract and stop — do not invent examples that look tested.
