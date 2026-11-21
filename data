@@ -1,0 +1,42 @@
+---
+claimed_at: 2026-11-21T13:02:29Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T13:02:41Z
+created: 2026-11-21T12:05:49Z
+id: 164
+priority: low
+started: 2026-11-21T12:48:55Z
+status: done
+tags:
+- skills
+title: sweepSkillDirs stops at the first leftover it cannot remove
+updated: 2026-11-21T13:02:41Z
+---
+
+From the k139 review (finding 3). sweepSkillDirs in cmd/launcher/skills.go returns at the first unreagent-.tmp-* entry it cannot remove, so later leftovers in skills.dir stay until a start where the first one goes away (e.g. a file held open by AV on Windows). Done: try every leftover, join the errors into the one warning, with a test that a second leftover is removed although the first cannot be. Lane: unreagent-worker; after the k137/k139/k143 bundle lands.
+
+Main agent: handed out together with k167+k165, in a separate worktree (skills.go is disjoint from hermes.go).
+
+Worker result (uncommitted, worktree agent-a13e08d100e2967ce, base main 7f1d0c5).
+
+Change: cmd/launcher/skills.go sweepSkillDirs collects every rename/RemoveAll error and goes on to the next entry, returning errors.Join(errs...). An entry gone before its rename (taken by a second sweep) is still skipped silently. materializeSkills already appends the sweep error to its own join, and setupSkills turns the newlines into '; ', so every failed leftover lands in the one existing WARN line. The doc comment says so. No new message text.
+
+Test: TestSweepRemovesEveryLeftoverItCan (cmd/launcher/skills_test.go, new section k164). It runs through setupSkills with leftovers unreagent-.tmp-a, -b and -c, where a and c are read-only with a file inside. It asserts that b is removed, only the two held leftovers remain, the set is in place, there is one WARN line, and 'permission denied' appears twice. Without the fix it fails three ways: b is still there, this run's own work dir is left too, and the warning names 1 failure. Skips on Windows and as root, the same as the existing read-only tests.
+
+Not covered: the rename-fails branch. On Linux a rename in the same parent cannot be made to fail for one entry without root, so only the RemoveAll branch is exercised. A Windows AV-held file most likely fails at that rename, so the Windows path is compiled (GOOS=windows vet, make windows) but unverified.
+
+Check, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -race -count=1 ./cmd/launcher; make linux; make windows.
+
+Proposed subject: Let the skills sweep try every leftover it cannot remove (k164)
+Changes: amend the unreleased materialization bullet under {{$NEXT}}: '... keeps its previous copy (rarely none), a leftover unreagent-* directory that cannot be removed no longer keeps the others from going, and the WARN names every failure on one line.
+
+Review (unreagent-reviewer): READY. Files: cmd/launcher/skills.go (sweepSkillDirs + doc comment, 342-370), cmd/launcher/skills_test.go (TestSweepRemovesEveryLeftoverItCan, 1387-1448); both owned by unreagent-worker, nothing outside them. Check run by me in the worktree, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -race -count=1 ./cmd/launcher; make linux; make windows.
+Mutations (scratch copy, worktree untouched): original sweep -> new test FAILS (b still there; 3 work dirs instead of 2; WARN names 1 failure). RemoveAll error dropped -> FAILS (no WARN). Only errs[0] returned -> FAILS (1 of 2). Vanished entry reported as error -> TestMaterializeWithASecondRunInEveryGap and TestMaterializeTwoRunsAtOnce FAIL, so the skip-silently case is still pinned. WARN seen in a passing run: one line, both unlinkat ... permission denied causes separated by '; ' through setupSkills skills.go:100-101. Code now matches the design spec ('no failure stops the sweep').
+Windows: rename-fails branch compiled only (vet + make windows), test skips on Windows - unverified, as the worker says.
+Findings (none blocking the code):
+1. Changes (materialization bullet under {{$NEXT}}, ~line 176-190): the proposed 'no longer keeps the others from going' describes a journey users never saw - materialization is unreleased (skills.go is not in v0.0.9), and the commit-style rule is destination, not 'no longer'. Suggest: '...keeps its previous copy (rarely none), an unreagent-* directory that cannot be removed stays for the next start without keeping the others, and the WARN names every failure on one line.'
+2. Commit subject: 'try every leftover it cannot remove' reads as if only the stuck ones are tried. Adjusted: 'Let the skills sweep go on past a leftover it cannot remove (k164)'.
+3. Worker note, minor: 'this run's own work dir is left too' is not what happens. MkdirTemp names are digits and sort before .tmp-a, so this run's work dirs are swept before the stuck one. The 3 leftovers are a (renamed), b and c, so the second failing assertion has the same cause as the first. The test still fails without the fix.
+
+Committed as 22bee2b
