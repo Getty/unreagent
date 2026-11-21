@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -668,5 +669,134 @@ func TestRunWarnsOnStderrAboutAnUnignoredTokenFile(t *testing.T) {
 				t.Errorf("stderr has the WARN %d times, want %d:\n%s", alerts, want, stderr)
 			}
 		})
+	}
+}
+
+// restartingAgentScript is an agent stand-in that finds its --mcp-config
+// file, appends "ok <path>" or "missing <path>" to <script>.starts, one line
+// per start, and exits 0 at once.
+const restartingAgentScript = `#!/bin/sh
+p=
+while [ $# -gt 0 ]; do
+  [ "$1" = --mcp-config ] && p=$2
+  shift
+done
+if [ -f "$p" ]; then echo "ok $p"; else echo "missing $p"; fi >> "$0.starts"
+`
+
+// startLauncherWithStdin is startLauncherIn with a pipe as the launcher's
+// stdin, so a test can type console commands.
+func startLauncherWithStdin(t *testing.T, dir, yaml string) (*launcherRun, io.WriteCloser) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the configs use sleep and the tests send SIGTERM")
+	}
+	for _, bin := range []string{"sleep", "sh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not on PATH", bin)
+		}
+	}
+	path := filepath.Join(dir, "unreagent.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	l := &launcherRun{lines: make(chan string, 256), stdout: &syncLog{}, done: make(chan struct{})}
+	l.cmd = exec.Command(exe, "-test.run=^TestLauncherRunProcess$")
+	l.cmd.Dir = dir
+	l.cmd.Env = append(os.Environ(), runConfigEnv+"="+path, runArgsEnv+"=")
+	l.cmd.Stderr = &l.stderr
+	in, err := l.cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	out, err := l.cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := l.cmd.Start(); err != nil {
+		t.Fatalf("start launcher: %v", err)
+	}
+	go func() {
+		sc := bufio.NewScanner(out)
+		for sc.Scan() {
+			l.stdout.log(sc.Text())
+			l.lines <- sc.Text()
+		}
+		close(l.lines)
+		l.err = l.cmd.Wait()
+		close(l.done)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-l.done:
+		default:
+			_ = l.cmd.Process.Kill()
+			<-l.done
+		}
+	})
+	return l, in
+}
+
+// k186: the config file outlives the agent's exit. run() removes its
+// directory only when it returns, so every later start of the agent finds
+// the file at the same --mcp-config path. The agent here ends with exit 0 and
+// is not restarted by its policy, which is what makes the supervisor call
+// OnExit (it does not for an automatic restart); each next start is the
+// console's "start agent". An OnExit that removed the directory (the
+// reviewer's 'rmonexit' mutant of k181) leaves the second start "missing".
+// The directory is gone once run() has returned.
+func TestRunRestartedAgentFindsTheSameMCPConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(t.TempDir(), "tmp")
+	if err := os.Mkdir(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmp)
+	agent := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(agent, []byte(restartingAgentScript), 0o755); err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+	yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n  window: false\n  claudeIntegration: true\n  startDelaySeconds: 1\n  restart: on-failure\n  onExit: leave\n"), freeLoopbackAddr(t))
+	l, stdin := startLauncherWithStdin(t, dir, yaml)
+	defer stdin.Close()
+
+	const starts = 3
+	var want string
+	for n := 1; n <= starts; n++ {
+		if n > 1 {
+			if _, err := io.WriteString(stdin, "start agent\n"); err != nil {
+				t.Fatalf("type 'start agent': %v", err)
+			}
+		}
+		// OnExit logs this as its last step, so a directory removed
+		// earlier in OnExit is gone by then.
+		l.waitLine(t, "agent.onExit=leave")
+		got := strings.Split(strings.TrimSpace(mustReadFile(t, agent+".starts")), "\n")
+		if len(got) != n {
+			t.Fatalf("after start %d the agent recorded %d starts: %q\n%s", n, len(got), got, l.stdout)
+		}
+		if n == 1 {
+			want = strings.TrimPrefix(got[0], "ok ")
+			if want == got[0] || filepath.Base(want) != "mcp-config.json" || filepath.Dir(filepath.Dir(want)) != tmp {
+				t.Fatalf("first start: %q; want \"ok %s\"\n%s", got[0], filepath.Join(tmp, "unreagent-*", "mcp-config.json"), l.stdout)
+			}
+		}
+		if got[n-1] != "ok "+want {
+			t.Errorf("start %d: %q, want %q (the file the first start found)", n, got[n-1], "ok "+want)
+		}
+	}
+
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+	if left, err := os.ReadDir(tmp); err != nil || len(left) != 0 {
+		t.Errorf("after the launcher ended, its temp directory holds %v (%v); want the config's directory removed", left, err)
 	}
 }
