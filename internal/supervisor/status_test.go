@@ -131,3 +131,59 @@ func TestStartErrorIsReportedAndClearedOnSuccess(t *testing.T) {
 		t.Fatalf("Status after a successful start = %+v, want the old start error cleared", st)
 	}
 }
+
+// pollStatus returns the service's status once ok accepts it, and fails with
+// what never happened when it does not within the timeout.
+func pollStatus(t *testing.T, sup *Supervisor, what string, ok func(ServiceStatus) bool) ServiceStatus {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st := sup.Status()
+		if len(st) == 1 && !st[0].Unresponsive && ok(st[0]) {
+			return st[0]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status never showed %s; last: %+v", what, st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// k126, k156: ue_restart resets the restart state like ue_start does, so the
+// exit of the run it replaces is not reported next to the new run. The first
+// run fails with exit 1 and is not restarted (restart never); the run
+// RestartService starts keeps running.
+func TestRestartServiceClearsLastExit(t *testing.T) {
+	sup := New(nil)
+	spec, _ := runsSpec(t, "fs", time.Minute)
+	spec.Restart = "never"
+	exits := startService(t, sup, spec)
+	waitExit(t, exits, 10*time.Second, "the first run's failure was not reported")
+	if st := pollStatus(t, sup, "lastExit of the failed first run", func(st ServiceStatus) bool { return st.LastExit != "" }); st.LastExit != "exit 1" || st.Running {
+		t.Fatalf("status after the first run failed = %+v, want lastExit \"exit 1\" and not running", st)
+	}
+
+	st, err := sup.RestartService("svc")
+	if err != nil {
+		t.Fatalf("RestartService: %v", err)
+	}
+	if !st.Running || st.LastExit != "" {
+		t.Fatalf("RestartService = %+v, want the new run running and the last exit cleared", st)
+	}
+	if st := sup.Status(); len(st) != 1 || st[0].LastExit != "" {
+		t.Fatalf("Status after RestartService = %+v, want no lastExit while the new run is up", st)
+	}
+}
+
+// k126, k156: a restart by the restart policy is the same service carrying on,
+// so the exit that caused it stays visible while the new run is up — only a
+// restart or start somebody asked for clears it.
+func TestPolicyRestartKeepsLastExit(t *testing.T) {
+	sup := New(nil)
+	spec, _ := runsSpec(t, "fs", time.Minute)
+	startService(t, sup, spec)
+	st := pollStatus(t, sup, "the policy's restart running", func(st ServiceStatus) bool { return st.Running && st.Restarts == 1 })
+	if st.LastExit != "exit 1" {
+		t.Fatalf("status while the restarted run is up = %+v, want lastExit \"exit 1\" kept from the run before", st)
+	}
+}

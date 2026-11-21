@@ -211,3 +211,38 @@ func TestPromptNamesAFailedAgentStart(t *testing.T) {
 		t.Fatalf("a start that failed is shown as a crash; console:\n%s", fc.out)
 	}
 }
+
+// k120, k156: newConsole decides the window-mode switch. A launcher whose log
+// is a file (window mode's unreagent.log) must answer on the console as well
+// as in the log; one whose log is the console must answer once, through the
+// log. The loop tests above set logSeparate by hand; this one pins how
+// newConsole derives it from the log it is given.
+func TestNewConsoleAnswersOnTheConsoleOnlyWhenTheLogIsElsewhere(t *testing.T) {
+	t.Run("the log is a file", func(t *testing.T) {
+		out := &syncBuffer{}
+		logFile, err := os.Create(filepath.Join(t.TempDir(), "unreagent.log"))
+		if err != nil {
+			t.Fatalf("create log: %v", err)
+		}
+		t.Cleanup(func() { _ = logFile.Close() })
+		var logged []string
+		newConsole(strings.NewReader(""), out, logFile).reply(func(l string) { logged = append(logged, l) }, "answer")
+		if got := out.String(); got != "answer\n" {
+			t.Fatalf("console output = %q, want the answer on the console when the log is a separate file", got)
+		}
+		if len(logged) != 1 || logged[0] != "answer" {
+			t.Fatalf("logged = %q, want the answer in the launcher log too", logged)
+		}
+	})
+	t.Run("the log is the console", func(t *testing.T) {
+		out := &syncBuffer{}
+		var logged []string
+		newConsole(strings.NewReader(""), out, out).reply(func(l string) { logged = append(logged, l) }, "answer")
+		if got := out.String(); got != "" {
+			t.Fatalf("console output = %q, want nothing written directly: the log is the console and carries the answer", got)
+		}
+		if len(logged) != 1 || logged[0] != "answer" {
+			t.Fatalf("logged = %q, want the answer once, through the log", logged)
+		}
+	})
+}
