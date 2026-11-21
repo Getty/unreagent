@@ -1,0 +1,38 @@
+---
+class: standard
+completed: 2026-11-21T01:20:52Z
+created: 2026-08-22T04:37:58Z
+id: 43
+priority: medium
+started: 2026-11-21T00:36:48Z
+status: done
+tags:
+- config
+- bug
+title: Unresolved engine or project produces garbage paths instead of an error
+updated: 2026-11-21T01:21:15Z
+---
+
+config.go:262: resolveEngine and resolveProject return an empty string on failure and the replacer substitutes it, so unreal.editor becomes /Engine/Binaries/Win64/UnrealEditor.exe, the compile command becomes /Engine/Build/BatchFiles/Build.bat and package args carry an empty -project=. main.go:131 warns once and the launcher proceeds into a restart loop against a non-existent binary.
+Same root cause downstream: main.go:451-455 and 566-570 let the file tools root themselves at the launcher CWD when files.root resolves empty, and the startup line at :142 prints the root as an empty path. main.go:137-143 also logs that the file tools are active when mcp.enabled is false, although registerTools is never called. Acceptance: an unresolved placeholder that some field still needs is a load-time error; the file tools refuse to register on an empty root; the log line is gated on mcp.enabled.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: resolveEngine/resolveProject return '' and the replacer substitutes it; the startup log is not gated on mcp.enabled; file tools fall back to the agent workdir when files.root is empty and are still registered. Config half (validate) merges with k41/k42; main.go half (log gate, file-tool guard) is serial. Size M.
+
+Worker done, worktree branch worktree-agent-a34fb3202df96dbbc (.claude/worktrees/agent-a34fb3202df96dbbc), uncommitted, based on c013f77; tests in internal/config/load_test.go, red captured before the fix. substitute records each field with a 'used' condition; an empty placeholder in a used field is a load error naming field and placeholder. Unused: built-in compile/package dropped with a WARN (Info.SkippedCommands), files.root cleared. run() in main.go refuses -files with an empty root and gates the file-tools line on mcp.enabled. Behaviour change: no engine + default unreal.editor now fails at load (hermes-setup too); example/unreagent.yaml still loads (TestExampleDemoConfigLoads). Two overlay_test.go fixtures now set UE_ROOT, YAML and assertions unchanged. The 'no engine' tests assume a host without UE installed.
+
+2026-11-21 01:04 Review (unreagent-reviewer), same tree: CHANGES NEEDED. Check run as on k42, all green. Red/green verified: run against HEAD code (with an Info.SkippedCommands shim so it compiles), every new load_test.go test fails for its stated reason, except the two controls and the unreal.args pin. overlay_test.go: only the two t.Setenv(UE_ROOT) lines changed; the YAML and the assertions are untouched. Without those lines both tests fail with '${ENGINE} is unresolved ... used by unreal.editor' and nothing else, so the fixture change is legitimate and the overlay semantics are unchanged.
+F2 internal/config/load_test.go:187,190,192. The three 'no engine' subtests fail on a host with an engine installed (reproduced by placing an engine under a default glob path). No existing knob can force 'no engine': UE_ROOT and engineRoot can only set an engine. Cheap hermetic fix: a seam in resolveEngine (config.go:623, e.g. var autodetect = autodetectEngine), stubbed to return '' in those tests. A skip guard on autodetectEngine("") != "" is the test-only fallback. k102 tracks this, but the tests are new here, so fix it in this round.
+F3 (low) config.go:464,468. runtimes.node.npm counts as used only when runtimes.node.enabled is set, but prepareNodeBridge (cmd/launcher/bridge.go:98) runs it for a node extraServer whenever mcp.enabled is set. An unresolved ${ENGINE} there gives a garbage npm path and no load error.
+Non-blocking: hermes-setup now fails at load when there is no engine and unreal.editor is the default (verified with dist/unreagent), although it uses none of the editor fields; add that to the k101/k97 docs. files.enabled with mcp.enabled false and no project is a load error although run() would only warn 'not served', and -no-agent does not relax the agent.* checks; both are conservative and acceptable. The tools.go:136-139 fallback is now unreachable (k102). The run() changes have no unit test; verified with the binary instead: the demo config loads and serves MCP with WARNs for compile/package, -files on the demo refuses with a WARN, files with mcp off logs 'not served', files with mcp on logs the root.
+
+Fixes for the review done (same worktree branch). F2: seam var autodetect = autodetectEngine; noEngine(t) stubs it, so the no-engine tests pass even with a fake engine under the default install path (red before). F3: runtimes.node.npm counts as used when the node runtime is enabled or MCP is on with a node-started extra server (hasNodeExtraServer mirrors prepareMCPBridges; comment says change both). TestNpmIsUsedByNodeExtraServers red->green.
+
+2026-11-21 01:17 Re-review (unreagent-reviewer), same tree: APPROVE. Check run as on k42, all green.
+F2 is fixed. The seam is minimal: one package var (internal/config/config.go:648) and one call site in resolveEngine, plus the noEngine(t) helper (load_test.go:43), which restores the var via t.Cleanup. No test in the package uses t.Parallel. Fake-engine reproduction (an engine placed under the default install path): the previous state fails the three no-engine subtests; the fixed tree passes the whole config package.
+F3 is fixed. npm counts as used when the node runtime is enabled or MCP is on with a node-started extra server (config.go:486, hasNodeExtraServer at :541). TestNpmIsUsedByNodeExtraServers fails on the previous state ('Load succeeded' for the node and NODE.EXE cases), and the http-only and mcp-off controls pass.
+The duplicated node predicate (config.go:541 vs cmd/launcher/bridge.go:60) is acceptable for now, not a finding: it is one line, the comment says to change both, and over-approximating 'used' is conservative. Preferred later: export the predicate from config and call it from bridge.go so it cannot drift; that can go on k102.
+Nit: config.go:408 is a 132-char comment line inside an otherwise wrapped paragraph.
+The earlier non-blocking notes (hermes-setup without an engine, docs for k101/k97) still stand. On a rebase onto 077439a the run() hunk merges cleanly; main only dropped perm().
+
+Committed as 2e72af4 on main (one commit with k41, k42, k43, k47)
