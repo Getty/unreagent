@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-11-21T02:32:26Z
+created: 2026-08-24T23:25:48Z
+id: 55
+priority: medium
+started: 2026-11-21T01:41:14Z
+status: done
+tags:
+- mcp
+- windows
+- bug
+title: Smoke-test bridge process bypasses the Job Object and is killed without its
+  tree
+updated: 2026-11-21T02:32:37Z
+---
+
+smokeTestMCP at main.go:934 uses a raw exec.CommandContext instead of the supervisor, so unlike supervisor.runOnce (NewJob + Assign) the bridge process is never attached to a Job Object with KILL_ON_JOB_CLOSE. cmd.Process.Kill at :961 terminates only the direct child. A node bridge that spawns workers leaks grandchildren on every launcher start, and a launcher crash during the smoke test leaves the bridge running -- the no-zombie guarantee CLAUDE.md calls load-bearing. Unverified on Windows (reasoning from job_windows.go and the missing call site).
+Acceptance: the smoke test runs through the supervisor or inside its own Job Object; Windows behaviour labelled unverified unless smoke-tested there.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: smokeTestMCP uses a raw exec.CommandContext + Process.Kill(), no Job Object; the supervisor is not passed in. Windows grandchild leak unverified from Linux. Merge with k54/k68. Size M.
+
+Worker done (same worktree as k54): smokeTestMCP runs the bridge in a supervisor.NewJob() job (KILL_ON_JOB_CLOSE, same assignment path as elsewhere), closes the job before killing the child, WARN if job create/assign fails; cmd.WaitDelay = 2s bounds pipes held by a grandchild (a real Linux hang). TestSmokeTestMCPReturnsWhileGrandchildHoldsOutput red (>10s) -> green (2.0s). Windows tree kill compiled, not run.
+
+Review (unreagent-reviewer, same worktree): APPROVE WITH NITS. Checked: cmd/launcher/bridge.go smokeTestMCP, cmd/launcher/bridge_test.go, cmd/launcher/mcpcheck_test.go; same check run as k54, all green. The job comes from supervisor.NewJob/Assign/Close (the same Win32 path, not a second copy; job_windows.go untouched, so the 22f8ca6 syscall.Call fix still holds). The job is closed before Kill, and both happen on every path after Start. Start failure closes the job. Create or assign failure logs a WARN and the test still runs (nil-safe Job). WaitDelay=2s works without a ctx (stdlib: the timer starts when Wait sees the exit, then it closes the parent pipes and joins the copiers, so reading stderr afterwards is race-free). The background reader ends when Wait closes stdout (Windows: FD.Close cancels pipe I/O via CancelIoEx, read in the Go 1.26 source). Mutation: removing WaitDelay turns TestSmokeTestMCPReturnsWhileGrandchildHoldsOutput red at 10s. TestSmokeTestMCPOk/Crash ran (node present). Nits: (1) mcpcheck_test.go:28 the touched line keeps the German fixture name 'kaputt'; translate it ('broken'). (2) Linux only: a forking bridge now costs the 2s WaitDelay on the OK path and on Ctrl-C (seen end to end: SIGINT -> exit 2012ms, grandchild left running; no job objects on Linux, as job_other.go says). (3) A failed NewJob logs two WARNs (create, then assign 'no job object'). runOnce does the same, so this is consistent. WINDOWS-ONLY, UNVERIFIED (compiled only, needs a Windows smoke test): the bridge's grandchildren killed by the job close; no bridge left behind after a launcher crash; a fast-exiting bridge may log a spurious 'job assign failed' WARN (AssignProcessToJobObject on an exited process).
+
+Re-review after the fix pass: APPROVE. The fixture 'kaputt' is now 'broken' (mcpcheck_test.go:28). The test scripts record their PIDs, and t.Cleanup kills them, the grandchild included. The cleanup is registered after t.TempDir, so it runs before the dir is removed. The PID-reuse window is milliseconds: negligible. The smokeTestMCP job code is unchanged since my first review. Same green check run as noted on k54. Mutation: removing WaitDelay still fails TestSmokeTestMCPReturnsWhileGrandchildHoldsOutput at 10s. No leftover processes from these tests after the runs. Still open, not blocking the commit, needed before release: a Windows smoke test, since the job-object tree kill of the bridge's grandchildren and nothing surviving a launcher crash are compiled only, UNVERIFIED.
+
+Committed as fc5f9ec on main
