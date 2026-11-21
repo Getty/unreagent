@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-11-21T11:37:27Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:39:56Z
+created: 2026-11-21T06:02:10Z
+id: 137
+priority: low
+started: 2026-11-21T07:44:45Z
+status: done
+tags:
+- skills
+- windows
+title: Reject Windows device names as skill section names
+updated: 2026-11-21T12:40:07Z
+---
+
+From k10-k12 (skill-author). A section named like a Windows device (aux.md, con.md, nul.md) makes filepath.IsLocal fail on Windows 10 (RtlIsDosDeviceName_U), so isPlainName rejects it and the whole skill set is skipped with only a WARN, leaving the previous start's files on disk. Linux tests cannot see it and Windows 11 accepts the name. Fix: reject such section names in checkSkillDirs (cmd/launcher/skills.go) on every platform, reusing reservedDeviceName from k76 (filetools.go), with a test over a fake set; the unreagent-skill-authoring skill already tells authors not to use them. Lane: unreagent-worker. No shipped skill has such a section today.
+
+2026-11-21 07:56 Worker: checkSkillDirs now refuses a section file named like a Windows device (reservedDeviceName from filetools.go, no second list) on every OS; the error names the skill and the file, and setupSkills stops the start with it, as for a collision. New test TestCheckSkillDirsRejectsWindowsDeviceNames over a fake set (aux, CON, nul, Prn, com1, LPT9, COM¹, conin$, con.backup, 'aux ' refused; console, auxiliary, com10, nullable, lpt, my-aux accepted) plus a case in TestSetupSkillsLoadErrorStopsTheStart; both red before the fix, green after.
+
+2026-11-21 08:13 Behaviour change to document: a device-named section now stops the start with a load error, on every OS and whichever delivery path is on, the same as a collision. Before, it only skipped the materialization with a WARN, and only on Windows 10. Stale text for the owning agents: (a) .claude/skills/unreagent-skill-authoring/SKILL.md, the bullet 'No section named after a Windows device' (~:78-82), which says the whole materialization is skipped with a WARN; reservedDeviceName also covers conin$/conout$, superscript digits and any extension (con.backup). (b) README Skills 'Failure modes' lists what stops the start; add the device-named section. (c) Spec §6.3. A shipped device-named section would fail go test ./cmd/launcher through the shipped-set loop in TestCheckSkillDirsRejectsCollisions. Checks: gofmt, go vet (Linux and GOOS=windows), go test -count=1 ./..., go test -race ./cmd/launcher ./internal/..., make linux, make windows, all green. Windows path compile-checked only.
+
+2026-11-21 08:14 Done: checkSkillDirs refuses a section file named like a Windows device on every OS (reservedDeviceName, no second list); the error stops the start. TestCheckSkillDirsRejectsWindowsDeviceNames plus a case in TestSetupSkillsLoadErrorStopsTheStart were red before and are green now. Full check green; Windows compile-checked only. Stale docs are listed in the notes.
+
+Docs done with k139: README Skills 'Failure modes' and spec §6.3 name the device-named section as a load error on every OS.
+
+Skill-author part done (not committed). .claude/skills/unreagent-skill-authoring/SKILL.md:82-88: the device-name bullet now says checkSkillDirs refuses it like a collision, a load error that stops the start on every OS and whichever path is on; the list matches reservedDeviceName (conin$, conout$, superscript digits, any further extension such as con.backup) and points to it in cmd/launcher/filetools.go. Also :59-63 (k139): each skill is written into an unreagent-.tmp-* work directory and renamed into place (installSkillDir), other prefixed dirs are swept (sweepSkillDirs); :202-203 coverage list adds concurrent/crash runs and device-named sections. .claude/skills/unreagent-core/SKILL.md:53: skills.go row names installSkillDir and sweepSkillDirs. Checks in the worktree: gofmt -l cmd internal skills clean, go vet ./... clean, go test -count=1 ./internal/skills ok.
+
+Reviewer verdict (bundle k137+k139+k143): k137 READY.
+Checked cmd/launcher/skills.go:105-139 (checkSkillDirs calls reservedDeviceName, no second list), TestCheckSkillDirsRejectsWindowsDeviceNames and the new case in TestSetupSkillsLoadErrorStopsTheStart. Mutation: with the reservedDeviceName check switched off, both tests are red. The docs match the code: README.md:910-914, spec §6.3:292-295, .claude/skills/unreagent-skill-authoring/SKILL.md:83-87. All in English, no ticket ids in the README.
+Check, run by me in the worktree and in a scratch copy with the diff applied on main 90c07ae: gofmt -l cmd internal skills is clean; go vet ./... and GOOS=windows go vet ./... are clean; go test -count=1 ./... and go test -count=1 -race ./... are green; make linux and make windows are ok. The Windows 10 device-name behaviour is UNVERIFIED (compile only).
+Nit (doc-writer): README.md:913 is one unwrapped 103-character line inside a paragraph wrapped at 80.
+Changes: no entry of its own. No user can see the change: a device-named section can only come from a shipped skill, and that now fails go test.
+
+Committed in 9bd5b84 on main (bundle k137+k139+k143). Windows UNVERIFIED (compile only); smoke items remain: directory rename onto/over existing, open handle in a skill dir, Defender/OneDrive on fresh copy, two sweeps with RemoveAll, device-named section.
