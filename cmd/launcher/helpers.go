@@ -18,7 +18,7 @@ import (
 
 // warnIfMissing warns when path names nothing that could be started, by the
 // rules exec.Command applies when the service starts: a bare name is looked
-// up on PATH, anything else is checked by pathFound — as given, and on
+// up on PATH, anything else is checked by pathProblem — as given, and on
 // Windows also with a PATHEXT extension added.
 func warnIfMissing(logger func(string), label, path string) {
 	if filepath.Base(path) == path {
@@ -31,23 +31,42 @@ func warnIfMissing(logger func(string), label, path string) {
 		}
 		return
 	}
-	if !pathFound(path) {
-		logger(fmt.Sprintf("WARN %s: path not found: %s", label, path))
+	if why := pathProblem(path); why != "" {
+		logger(fmt.Sprintf("WARN %s: path %s: %s", label, why, path))
 	}
 }
 
-// pathFound reports whether path, which has a directory part, names a file
-// that exec.Command finds. On Windows exec adds a PATHEXT extension to a path
-// that has none, so C:/UE/Engine/Binaries/Win64/UnrealEditor starts
+// pathProblem says why path, which has a directory part, names nothing that
+// exec.Command starts: "not found", "is a directory" or "is not executable";
+// it is "" when exec starts it. On Windows exec adds a PATHEXT extension to a
+// path that has none, so C:/UE/Engine/Binaries/Win64/UnrealEditor starts
 // UnrealEditor.exe; exec.LookPath applies that rule to a path with
-// separators and does not search PATH for it. Elsewhere exec adds nothing,
-// and the path must exist as given.
-func pathFound(path string) bool {
+// separators and does not search PATH for it, and whatever it refuses is
+// "not found". Elsewhere exec adds nothing: the path must exist as given and
+// be a file this process may execute. That is decided as exec.LookPath
+// decides it, by access(2) for the process's effective user rather than by
+// whether any execute bit is set (LookPath falls back to that only where
+// access is unavailable), so a file that only another user may execute
+// warns too: execve refuses it as well.
+func pathProblem(path string) string {
 	if runtime.GOOS == "windows" {
-		_, err := exec.LookPath(path)
-		return err == nil
+		if _, err := exec.LookPath(path); err != nil {
+			return "not found"
+		}
+		return ""
 	}
-	return fileExists(path)
+	fi, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return "not found"
+	case fi.IsDir():
+		return "is a directory"
+	}
+	// With a "/" in path, LookPath checks only that file, not PATH.
+	if _, err := exec.LookPath(path); err != nil {
+		return "is not executable"
+	}
+	return ""
 }
 
 func fileExists(path string) bool {

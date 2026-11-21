@@ -221,6 +221,10 @@ Revision history for unreagent
     on Windows: the check resolves the path the way starting it does. A
     directory or a file without such an extension now warns there, since it
     does not start either.
+  - Outside Windows, an unreal.editor path that is a directory or a file it
+    has no execute permission for now warns "path is a directory" or "path is
+    not executable" at start, instead of nothing; starting it fails with
+    permission denied.
   - Numeric tool arguments must be whole numbers within the int64 range:
     read_file offset=1.5 is refused instead of read as 1, and offset=1e20 is
     refused instead of silently reading the whole file (likewise logs

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -138,6 +139,70 @@ func TestWarnIfMissingAddsNoExtensionElsewhere(t *testing.T) {
 	warnIfMissing(func(s string) { got = append(got, s) }, "unreal.editor", exe)
 	if len(got) != 0 {
 		t.Fatalf("%q exists but warnIfMissing warned: %q", exe, got)
+	}
+}
+
+// k147: outside Windows warnIfMissing checked a path with os.Stat alone, so a
+// directory or a file without an execute bit passed as unreal.editor,
+// although exec.Command then fails with permission denied. Each now warns,
+// naming its cause; an executable file still passes. Starting each path with
+// exec.Command checks the expectations against exec itself. A file that
+// group and others may execute but its owner, this test, may not is refused
+// by execve: the check goes by this user's permission, not by any execute
+// bit.
+func TestWarnIfMissingNamesWhyAPathDoesNotStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows whatever exec.LookPath refuses warns as not found; see TestWarnIfMissingAppliesPathExtOnWindows")
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "UnrealEditor")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(dir, "UnrealEditor.sh")
+	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "Binaries") // its execute bits make it searchable, not startable
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	others := filepath.Join(dir, "Others.sh")
+	if err := os.WriteFile(others, []byte("#!/bin/sh\n"), 0o611); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(others, 0o611); err != nil { // past the umask, which may clear group and other bits
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, path, want string
+		notRoot          bool
+	}{
+		{"executable file", exe, "", false},
+		{"file without an execute bit", plain, "WARN unreal.editor: path is not executable: " + plain, false},
+		{"directory", sub, "WARN unreal.editor: path is a directory: " + sub, false},
+		{"x for group and other, not owner", others, "WARN unreal.editor: path is not executable: " + others, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.notRoot && os.Geteuid() == 0 {
+				t.Skip("root may execute any file with an execute bit")
+			}
+			if err := exec.Command(tc.path).Run(); (err != nil) != (tc.want != "") {
+				t.Fatalf("the test's premise is wrong: exec.Command(%q).Run() = %v", tc.path, err)
+			}
+			var got []string
+			warnIfMissing(func(s string) { got = append(got, s) }, "unreal.editor", tc.path)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("exec.Command starts %q, but warnIfMissing warned: %q", tc.path, got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("exec.Command cannot start %q\n got  %q\n want %q", tc.path, got, []string{tc.want})
+			}
+		})
 	}
 }
 
