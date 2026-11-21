@@ -1,0 +1,300 @@
+---
+claimed_at: 2026-11-21T12:36:14Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:40:20Z
+created: 2026-11-21T06:28:11Z
+id: 139
+priority: low
+started: 2026-11-21T07:44:56Z
+status: done
+tags:
+- skills
+- bug
+title: Two launchers on one project can leave a partial materialized skill set
+updated: 2026-11-21T12:40:33Z
+---
+
+Found in the k10–k12 review (mutation and stress run): materializeSkills removes every unreagent-* directory in skills.dir and then rewrites them. Two launchers started on the same project at once raced in 5 of 300 runs and left a partial set, once while the winning launcher logged 'materialized'. No foreign data was lost. Options: write into a temp dir per skill and rename into place, or a lock file in skills.dir. Done: concurrent runs never end with a partial set without a WARN; a test pins it. Lane: unreagent-worker. Depends on the k10–k12 commit.
+
+2026-11-21 08:12 Worker result (cmd/launcher/skills.go, skills_test.go; not committed).
+
+Decision (main agent's, recorded here as the main agent's): stage each skill in a temp directory inside skills.dir and rename it into place, instead of a lock file (a lock file needs stale-lock handling and behaves differently on Windows).
+
+My choices on top of it:
+- Temp names carry the prefix on purpose: work dirs are unreagent-.tmp-* (os.MkdirTemp). They are ours by the one existing predicate and never part of the set, so the sweep removes them, and so does the next start for anything a crash left. No second ownership rule; the README promise "never touches anything else" stays true. A shipped skill cannot collide with one, because MkdirTemp only picks names that do not exist yet.
+- New and old copy sit one level down (<work>/<name>, <work>/previous), so no copy of a current skill is ever at <dir>/*/SKILL.md, where agents look.
+- Sequence per skill (installSkillDir, up to 3 attempts): MkdirTemp work, then Mkdir work/<name> and write every file. Then Lstat the target: a file or symlink is errNotOurs, refused at once with no retry. A real dir is renamed to work/previous. Then work/<name> is renamed to the target. It is never renamed onto the target: Windows cannot rename a directory onto an existing one, and Linux only onto an empty one. An attempt fails when a second launcher put its copy in place first, or its sweep took the work dir; it is retried from a fresh work dir.
+- Sweep (sweepSkillDirs, after all installs): every prefixed real dir not in the set is first renamed to a fresh unreagent-.tmp-<random> name and only then removed with RemoveAll. Removing a peer's in-flight work dir in place could race its rename of the staged copy into the skill's place, emptying the live skill through the open directory. An entry already gone was taken by a peer's sweep and is skipped.
+- A skill that fails does not stop the others or the sweep; the first error is returned, so the existing WARN fires. Otherwise a foreign symlink in the way would stop every start before its sweep and leave one work dir per start.
+
+What a crash leaves, by step (no "materialized" line in any case):
+- after MkdirTemp: an empty unreagent-.tmp-* dir.
+- while staging: the work dir with a partial new copy one level down; the skill's own dir is still the previous whole copy.
+- between moving the old copy aside and renaming the new one in: that one skill is missing; the work dir holds both whole copies.
+- after the rename: the new copy in place; the work dir holds the previous one.
+- mid-set: a mix of new and previous copies, each whole.
+- mid-sweep: entries not yet renamed, renamed, or partly removed.
+Every directory in place is always a whole copy (previous or new). Everything left carries the prefix and is not in the set, so the next start removes it. One accepted window: a crash between the sweep's rename and its removal leaves a dropped skill readable under unreagent-.tmp-* until the next start. Before the sweep it was visible under its own name anyway.
+
+Tests (red before on the old code, with the hook added there first):
+- TestMaterializeWithASecondRunInEveryGap (deterministic): a full second run inside every gap of the first, via materializeHook. Old code: "mkdir unreagent-alpha: file exists", and the second run's fresh unreagent-ue-beta was removed (the reported shape).
+- TestMaterializeTwoRunsAtOnce: 2 goroutines x 40 rounds over the shipped set; both must succeed and the set must be whole. Old code: red in most rounds.
+- TestMaterializeAfterACrashAtEveryStep: panic at every hook step. Every dir in place is whole, no copy of a current skill sits outside its dir, and the next run leaves exactly the set. It passed on the old code; it guards the new design.
+- TestMaterializeDoesNotWriteThroughASymlinkedSkillDirectory now also requires the other skill written and no work dir left.
+
+Mutation check:
+- 6 of 7 are red: no retry; staging at depth 1; sweep sparing .tmp names; stopping at the first failure; no not-ours check; a vanished entry treated as an error.
+- Removing in place instead of rename-first is caught only by the stress test (several of 800 rounds red: "directory not empty" and a wrong tree). A hook between steps cannot reach inside RemoveAll.
+
+Checks:
+- gofmt clean; go vet ./... and GOOS=windows go vet ./... clean.
+- go test -count=1 ./... green; go test -race ./cmd/launcher ./internal/... green.
+- -race -count=20 and -count=50 of the skills tests green.
+- make linux, make windows, and CGO_ENABLED=0 GOOS=windows build all ok.
+
+Windows: compile-checked only, UNVERIFIED. MoveFileEx semantics for the directory renames; a file held open inside a skill dir, or an AV scan, makes the rename fail. That is retried, then WARNs, and the previous copy stays whole. The old RemoveAll-first could leave half a directory. RemoveAll overlap between two sweeps was reasoned on Linux's removeall_at only.
+
+Known limit, not fixed: two launchers of different versions (different sets) on one project still remove each other's extra skills. That needs a lock.
+
+Docs now stale, for the owning agents:
+- README Skills "Failure modes": "a write that fails partway has already removed the old directories..." is no longer true; each skill is replaced whole.
+- README: mention unreagent-.tmp-* during a start.
+- Spec §6.3: add the decided sequence.
+
+2026-11-21 08:14 Done: each skill dir is staged in an unreagent-.tmp-* work dir and renamed into place (old copy moved aside into the work dir first, retried up to 3 times); the sweep renames before it removes. Concurrent runs end with the whole set, or WARN. Deterministic gap test, crash-at-every-step test, 2-goroutine stress test, extended symlink test; mutation results, crash table and Windows caveats are in the notes. Full check green; Windows UNVERIFIED (compile only).
+
+Docs (doc-writer, uncommitted in the worktree): README.md Skills section — 'On every start' bullets (work dirs unreagent-.tmp-*, next start removes leftovers) and 'Failure modes' (device-named section stops the start; partway-failure sentence rewritten; different-version gap). Spec docs/superpowers/specs/2026-08-21-skill-subsystem-design.md §6.3 Decided list: device-name rule and the rename sequence/sweep/crash/gap bullets. §6.1 does not state write order, unchanged.
+
+Reviewer verdict (bundle k137+k139+k143): k139 CHANGES NEEDED. One small test fix; the design itself is sound.
+F1 (worker, required): TestMaterializeAfterACrashAtEveryStep only stops a run at the five materializeHook points, and none of them falls between the staged writes (cmd/launcher/skills.go:250-255). So it cannot see a partial copy in place, which is the property k139 is about. Per the worker's note it passed on the old code. A mutation that renames an empty work/<name> into place and then writes the files into the target passes every test, including the 40-round stress test. Fix: call materializeHook after each os.WriteFile in the staging loop. I checked this in a scratch copy: with that hook, the current code stays green, and the in-place mutation turns TestMaterializeAfterACrashAtEveryStep red.
+F2 (worker, the note is wrong, the code is not): the k139 Windows note says a failed rename keeps the previous copy whole. That holds only when the aside rename fails (the old copy is held open). If the rename-in fails after the aside rename succeeded (for example, AV holding a freshly staged file), the skill is missing, and the sweep then deletes the work dir that holds the previous copy. README.md:921-923 already says "rarely none", so it matches. Optional follow-up card: when the rename-in fails, rename work/previous back. Also, the three attempts follow each other with no pause, so a short Windows lock likely outlasts all of them.
+F3 (worker, optional): sweepSkillDirs (skills.go:288-310) returns at the first entry that fails. On Windows, a dropped skill held open then leaves the rest of this run's work dirs to the next start. Harmless, because they sit one level down.
+Confirmed:
+- Crash safety holds at every step, by reasoning, including the steps without a hook: every copy is written one level down, and only whole copies are renamed into <dir>/<name>.
+- -count=5 -race over TwoRunsAtOnce, SecondRunInEveryGap, AfterACrashAtEveryStep and the symlink test is green, both in the worktree and in the copy applied on 90c07ae.
+- These mutations are red, as the note says: no retry (TwoRunsAtOnce, SecondRunInEveryGap); no not-ours check (the symlink test); the sweep sparing .tmp names (5 tests); stopping at the first failure (the symlink test); removing in place instead of renaming first (only the stress test catches it, in 2 of 20x40 rounds).
+- Not-ours: the predicate is the prefix, not who created the directory. A real unreagent-* or unreagent-.tmp-* directory that a user made is removed, as the README documents ("Do not put your own skills under an unreagent- name"). Files, symlinks and other-case names are left alone (Lstat and DirEntry type). Since Go 1.23 a Windows junction is ModeIrregular, so it is left alone too (UNVERIFIED).
+Applies on 90c07ae: skills.go, README, the spec, the skill-authoring skill and internal/skills apply cleanly; skills_test.go applies cleanly with a 3-way merge. .claude/skills/unreagent-core/SKILL.md:53 conflicts with main's new lifecycle.go row: keep main's lifecycle row and this bundle's skills.go row. The full check is green on the applied copy.
+Check: as noted on k137, green in both trees.
+Windows is UNVERIFIED (compile only). Smoke items: MoveFileEx renaming a directory when the target exists; a file held open in the old copy; Explorer or a second agent's file watcher holding a handle on a skill dir; Defender or OneDrive on freshly written files; two sweeps removing the same tree with RemoveAll.
+
+**Decision (main agent) 2026-11-21 on the review:** back to the worker for (1) materializeHook after each staged write so the crash test can catch an in-place write, (2) restore work/previous when the rename-in fails (no missing skill; no sweep of that work dir in the same run), (3) a short bounded pause between the three attempts. Worker rebases onto main (unreagent-core:53 conflict: keep main's lifecycle row, this bundle's skills.go row). README :913 rewrap by the main agent; skill-authoring :69 short line goes with the k18 skill-author round. Changes: fold into the existing materialization entry with the reviewer's sentence; k137 and k143 need no entry.
+
+Worker fix round (items 1-5 of the main agent's decision). Not committed. Base: main 29a605c. Main moved past 7e0c39e during the round (k57, k124). I re-applied the bundle with a 3-way apply: clean, and every changed line is identical. The unreagent-core table keeps main's lifecycle.go row and this bundle's skills.go row. The worktree holds no commit and nothing is staged.
+
+1. Hook after each staged write. materializeHook("written") now runs after each os.WriteFile in the staging loop. The separate "staged" step is gone, because the last "written" falls in the same gap.
+- With the reviewer's F1 mutation (rename an empty work/<name> into place, then write the files into the target), TestMaterializeAfterACrashAtEveryStep turns red: "crash at step 5 (written): unreagent-ue-beta holds map[SKILL.md:...]", at steps 5 and 6.
+- The same mutation without the hook in the loop leaves the crash test green. That is the gap F1 described.
+- The real code is green.
+
+2. Move back on a failed rename-in (main agent's decision). When the rename-in fails after the previous copy was moved aside, the launcher renames <work>/previous back into place. Then one of three things happens:
+- The move back works. The attempt fails, and the previous copy is whole in place before the next attempt.
+- The move back fails, and either the previous copy is gone (a second launcher's sweep took the work dir) or a second launcher's copy is in place. Nothing is kept, and the next attempt runs.
+- The move back fails otherwise. The previous copy stays whole in <work>/previous and the attempts for that skill end. This run's sweep spares that work dir, the error says where the copy is, and the next start's sweep removes it.
+My choices:
+- The attempts end once a copy is kept, with no further retry. Two renames in that directory have just failed, and a later attempt that did get in would leave a kept copy nobody needs. This keeps at most one kept dir per skill.
+- materializeSkills now returns every error joined (errors.Join), not only the first, so every kept location reaches the WARN. setupSkills prints them on one line, separated by "; ".
+
+3. Pauses between attempts (main agent's decision). The new variable is skillRetryPauses = {50ms, 200ms}, so there are len+1 = 3 attempts, the same count as before. The skillInstallAttempts constant is gone. Tests that make attempts fail set 1ms/2ms through setRetryPauses.
+
+New tests:
+- TestMaterializeMovesThePreviousCopyBackWhenTheRenameInFails: the place holds the previous copy whole between the attempts.
+- TestMaterializeTriesAgainWhenItsWorkDirectoryIsTaken: no false "kept" message, and the next attempt installs the skill.
+- TestMaterializeKeepsThePreviousCopyItCannotMoveBack: the work dir is set to 0555 at "aside". The test checks that the error names <work>/previous, that this copy is whole, that it survives the sweep, that the skill is not in place, and that the other skill is new. It skips on Windows and as root; here it ran and was not skipped.
+- TestInstallSkillDirPausesBetweenAttempts: 3 attempts, and each gap is at least its pause. It also pins the shipped pauses: growing, at most 1s in total.
+- TestSetupSkillsWarnsOnOneLineForEverySkillThatFails: one WARN line that names every failed skill.
+I also fixed a stale comment in TestSetupSkillsWarnsWhenMaterializationFails; it dated from before k139.
+
+Mutations: 18 in total, 16 red at -count=1.
+- M1 no retry: red.
+- M3 staging at depth 1: red.
+- M4 sweep spares .tmp names: red.
+- M5 stop at the first failure: red.
+- M6 no not-ours check: red.
+- M7 a vanished entry is an error: red.
+- M8 in-place write: red.
+- M9 no move back: red.
+- M10 sweep takes the kept dir: red.
+- M11 retry after a copy was kept: red.
+- M12 no pause: red.
+- M13 the first pause twice: red.
+- M14 first error only: red.
+- M15 WARN with raw newlines: red.
+- M16 keep although a peer's copy is in place: red, in the stress test.
+- M17 claim "kept" although the work dir is gone: red.
+- M2 (the sweep removes in place): only statistical, as before. Green at -count=1, red at -count=20 of TestMaterializeTwoRunsAtOnce.
+- M8b (in place, no hook in the loop): the crash test stays green. This records the F1 gap.
+
+Line text, for checking the README "Failure modes" passage:
+- The WARN format is unchanged: "WARN skills not fully written to <dir>: <cause> — its unreagent-* directories may be missing, incomplete or left from an earlier start". <cause> is now every error, joined by "; "; before, it was the first error only.
+- New cause text when the move back fails: "rename <work>/<name> <dir>/<name>: <err>, and moving the previous copy back failed too (rename <work>/previous <dir>/<name>: <err>): it is kept in <work>/previous until the next start removes it". Here <work> is <dir>/unreagent-.tmp-<random>.
+
+Windows. This corrects my earlier note, which wrongly said a failed rename keeps the previous copy whole. Compile-checked only, UNVERIFIED:
+- If the aside rename fails (a handle is open in the current copy without delete sharing), nothing has moved and the previous copy stays whole in place. The next attempts follow after 50ms and then 200ms. After the third attempt, the WARN names the cause, and the previous copy is still in place.
+- If the rename-in fails after the aside succeeded (for example, a scanner holding a file of the new copy), the previous copy is moved back. It is whole in place before the next attempt.
+- If the move back fails as well, the skill is missing from its place for this session. Its previous copy is whole in <dir>/unreagent-.tmp-*/previous, which this run's sweep spares and the WARN names. The next start removes it and puts the skill back. A second launcher running at the same time also sweeps it, but that launcher's own copy of the skill is then in place.
+- Smoke items for a Windows box: the three cases above; an open handle without FILE_SHARE_DELETE inside a skill dir; Defender or OneDrive on a just-written copy.
+
+Not done: the optional F3. sweepSkillDirs still returns at the first entry it cannot remove, and the rest wait for the next start.
+
+Docs for the doc-writer (I did not edit them):
+- Spec §6.3: "retried from a fresh work directory, up to three times" should become "up to three attempts in all, with pauses of 50 ms and 200 ms between them". Add the move back and the kept copy.
+- Spec: "the first error is returned and logged as the warning" should become "every error is returned, joined, and logged in the one warning line, separated by '; '".
+- README "Failure modes": "keeps its previous copy (rarely none)" still holds. It could add that in that rare case the warning names where the previous copy is kept (inside an unreagent-.tmp-* directory) until the next start removes it.
+- Drift: "incomplete" in the WARN no longer fits a single skill directory, which is never partial now. It still fits the set. I left it unchanged so it stays word for word what the README quotes; any rewording should change both together.
+
+Checks, run on 29a605c:
+- gofmt -l cmd internal skills: empty. make fmt vet: clean.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: green.
+- go test -race ./cmd/launcher ./internal/...: green.
+- -count=5 -race over the 9 k139 tests (stress, gap, crash, symlink and the 5 new ones): green, nothing skipped.
+- -count=20 -race over all skills tests: green.
+- make linux, make windows, and a CGO_ENABLED=0 GOOS=windows build: ok.
+
+Fix round done: materializeHook after each staged write (the in-place mutation now turns the crash test red), the previous copy is moved back when the rename-in fails (if that fails too, it is kept in <work>/previous, spared by this run's sweep and named in the WARN), pauses of 50 ms and 200 ms between the attempts, every error joined on one WARN line. The Windows note is corrected. Re-applied cleanly on main 29a605c. Full check green; Windows UNVERIFIED (compile only). Not committed.
+
+**Decision (main agent) 2026-11-21 on fix round 2:** the worker's three own choices are accepted (stop attempts for a skill once a copy is kept; join all errors; one-line warning with '; '). Optional F3 (sweep stops at the first entry it cannot remove) stays out of this bundle — own card. Doc-writer now updates spec §6.3 and README Failure modes, plus the README:913 rewrap; then re-review.
+
+doc-writer: spec §6.3 (retry attempts + pauses, move-back, kept copy, all errors joined) and README Failure modes (kept copy named in warning, errors joined) updated; README line 960 rewrapped, no words changed.
+
+Re-review, fix round 2 (bundle k137+k139+k143, worktree rebased on main 29a605c, uncommitted). k139 CHANGES NEEDED: one small required fix. Everything the decision asked for is in place and holds.
+
+R1 (unreagent-worker, required): a read-only skills.dir now stalls every start. That is the README's own example of a failed write. MkdirTemp fails for every skill, and each failure is retried after 50 ms and 200 ms. Probe with the 23 shipped skills: materializeSkills took 5.77 s before the WARN (23 x 250 ms, so it grows with the set). The cause on the WARN line is 2,200 bytes: the same mkdirtemp error 23 times. Before k139 this failed at once with one error. A failed MkdirTemp in skills.dir is never a peer or a scanner lock: a peer's sweep never removes the dir itself, and nothing can lock a name that does not exist yet. So a failed MkdirTemp should end the attempts at once, as errNotOurs does (cmd/launcher/skills.go:240, :258-261). Repeating one identical cause is the worker's call. Add a test that pins it, with no pause on that path.
+
+Checked, all hold:
+- F1 hook: materializeHook("written") runs after each staged WriteFile (skills.go:270-275). In a scratch copy I applied the in-place mutation once: an empty work/<name> renamed in, then the files written into the target. TestMaterializeAfterACrashAtEveryStep went red: "crash at step 5 (written): unreagent-ue-beta holds ...", at steps 5 and 6. The copy was restored byte for byte, and the worktree diff checksum is unchanged.
+- Restore path (skills.go:295-311). Peer swept (previous gone): retried, covered by TriesAgainWhenItsWorkDirectoryIsTaken. Peer's copy in place: retried, and this run's sweep drops the old copy. Kept: attempts end, keep[] spares that work dir in this run's sweep (KeepsThePreviousCopyItCannotMoveBack ran 5x, not skipped). The error text matches the test and the docs. Same-version runs: a skill only goes missing through a failed attempt, and that run WARNs.
+- Pauses: {50ms, 200ms}, 3 attempts. No t.Parallel anywhere in cmd/launcher; the overrides are set before the goroutines start; -race is green.
+- Joined errors: errors.Join, and setupSkills replaces "\n" with "; " (skills.go:99-100). TestSetupSkillsWarnsOnOneLineForEverySkillThatFails pins it.
+- unreagent-core:52-53 keeps main's lifecycle.go row and adds the bundle's skills.go row. Owners per ack-team: all in-lane. No German in the diff.
+- Docs against the code: README:941-977 and spec §6.3:292-320 match word for word: the WARN line, the cause text, the location <dir>/unreagent-.tmp-*/previous, 3 attempts, 50/200 ms, "; ".
+
+Optional (not blocking):
+- O1 (worker; docs only if wanted): a race my probe confirmed. Peer B's copy is in place, A moves it aside, then A's rename-in and move back both fail for a non-peer reason (a scanner). A keeps the copy, and B's sweep, still running, removes A's kept work dir. Result: the skill is missing, A's WARN names a kept path that is gone, and B logs "materialized". It needs two non-peer rename failures plus a concurrent start. A still WARNs, so the Done criterion holds. The worker's note "that launcher's own copy of the skill is then in place" is not true in this order. README:973-976 and spec :308-309 say "the next start removes it"; a concurrent start can remove it earlier.
+- O2 (doc-writer): spec:316 is one 107-character line, and :312 is short ("The sweep"). README:958 is short (63 characters; "extension" fits on it).
+- O3 (doc-writer): the spec quote :310 reads "... and moving"; the code writes "<rename err>, and moving" (comma).
+
+Check, run by me in the worktree: gofmt -l cmd internal skills is empty. go vet ./... and GOOS=windows go vet ./... are clean. go test -count=1 ./... and go test -race -count=1 ./... are green. -race -count=5 over the materialize, install and setup tests (stress, gap, crash, symlink, move-back, taken, kept, pauses, one-line WARN) is green, none skipped. make linux and make windows are ok.
+Windows UNVERIFIED (compile only). Smoke items: an open handle without FILE_SHARE_DELETE in the current copy (the aside fails, and the copy must stay in place after 3 attempts); Defender or OneDrive on a just-written copy (the rename-in fails, and the move back must restore); both failing (kept under unreagent-.tmp-*/previous, named in the WARN); a read-only skills.dir (time to the WARN); Explorer or a file watcher holding a skill dir; two sweeps with RemoveAll over one tree.
+k137 and k143: unchanged since READY, and still green on 29a605c.
+Commit subject: "Put each materialized skill in place whole and refuse device-named sections (k137, k139, k143)".
+
+**Decision (main agent) 2026-11-21 on re-review 2:** R1 back to the worker (a failed MkdirTemp ends the attempts at once and stops the remaining skills; one cause; test). O1 accepted as residual risk (two rename failures plus a concurrent launcher; A still warns) — worker corrects its Windows note; main agent reworded README :973-977 and spec §6.3 ('a later start removes it; a launcher starting at the same moment can remove it sooner'). O2 (wraps at spec :312/:316, README :958) and O3 (comma in the spec quote) fixed by the main agent. Commit subject: the reviewer's 'Put each materialized skill in place whole and refuse device-named sections (k137, k139, k143)'; Changes: the reviewer's two sentences.
+
+Worker fix for R1 (main agent's decision) and the O1 note correction. Only skills.go and skills_test.go were touched. Not committed. Base: main 29a605c.
+
+R1. A work directory that cannot be created (read-only skills.dir, no space) now ends the run at once:
+- tryInstallSkillDir wraps a failed os.MkdirTemp in the new sentinel errNoWorkDir.
+- installSkillDir does not retry on it, the same way it handles errNotOurs, so there is no pause.
+- materializeSkills tries no further skill after it and reports the cause once, with how many skills were not written.
+- My choice: the sweep still runs afterwards. It is a separate step: on a read-only dir it finds nothing to remove or fails on its own, and on a full disk it can still free space.
+- My choice: keep is now filled with the whole set before the first install. A skill skipped after the break therefore keeps its copy through the sweep. No test reaches this: on Linux I could not make MkdirTemp fail while renames still work. It is correct by construction, and dropping it is a mutation the tests would miss.
+
+New test: TestSetupSkillsGivesUpAtOnceWhenNoWorkDirectoryCanBeCreated.
+- Setup: a 0555 skills.dir, the test set, and retry pauses set to 1s.
+- It requires one WARN line, the cause exactly once, "(2 of 2 skills not written)", and a return in under 1s.
+- It skips on Windows and as root. Here it ran and was not skipped.
+- Red against the previous code: it took 4.0s, and the WARN repeated "mkdir <dir>/unreagent-.tmp-<random>: permission denied" once per skill, with no count.
+- Mutations: retrying on errNoWorkDir is red; going on to the further skills is red. M5 and M14 are still red.
+
+WARN text that changed. The line format is the same. For this case the cause is now one entry instead of one per skill:
+WARN skills not fully written to <dir>: cannot create a work directory: mkdir <dir>/unreagent-.tmp-<random>: permission denied (N of M skills not written) — its unreagent-* directories may be missing, incomplete or left from an earlier start
+N counts the skill that failed and every skill after it. When the first skill fails, N = M.
+
+O1 (accepted residual risk, note only). This corrects my previous note, which said that a concurrent second launcher's own copy "is then in place". That does not hold in this order:
+1. Launcher B's copy is in place.
+2. Launcher A moves it aside into its work dir as "previous".
+3. Both of A's renames fail for a non-peer reason, so A keeps that copy in <work>/previous.
+4. B's still-running sweep then removes A's kept work dir.
+5. The skill is missing until the next start, and A's WARN names a location that may already be gone.
+This needs two rename failures plus a concurrent launcher. A still warns.
+
+Corrected Windows statement (compile-checked only, UNVERIFIED), for a failed move back: the skill is missing from its place for this session. Its previous copy is whole in <dir>/unreagent-.tmp-*/previous, which this run's sweep spares and the WARN names. The next start removes it and puts the skill back. A second launcher running at the same time can remove it earlier, without its own copy of the skill being in place (the order above). The other Windows points from the previous note stand.
+
+Checks, all on 29a605c:
+- gofmt -l cmd internal skills: empty.
+- make fmt vet: clean.
+- GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: green.
+- go test -race ./cmd/launcher ./internal/...: green.
+- -count=5 -race over the 10 k139 tests (stress, gap, crash, symlink, move-back, taken work dir, kept copy, pauses, one-line WARN, the new read-only test): green, nothing skipped.
+- make linux, make windows, and a CGO_ENABLED=0 GOOS=windows build: ok.
+I did not rerun the reviewer's 23-skill shipped-set probe. The new test covers the same path with the 2-skill test set.
+
+R1 fixed: a failed MkdirTemp (errNoWorkDir) ends the run at once, with no retry, no pause and no further skills, and gives one cause with '(N of M skills not written)'. keep holds the whole set before the first install. The new read-only test was red before (4.0 s, the cause once per skill) and is green now. O1: Windows note corrected. Full check green; Windows UNVERIFIED (compile only). Not committed.
+
+Re-review 3, the R1 fix (bundle k137+k139+k143, worktree on main 29a605c, uncommitted). k139 CHANGES NEEDED: one small test. R1 itself is fixed and holds. The worker's choice is correct, and it can be tested.
+
+R2 (unreagent-worker, required, test only): nothing pins the worker's choice to fill keep with the whole set before the first install (cmd/launcher/skills.go:189-194). The worker's note says no test can reach it, because MkdirTemp cannot be made to fail while renames still work. The existing hook can do that:
+- Use previousStart(t, dir, testSkills()) and chmod dir 0555 before materializeSkills.
+- Use setMaterializeHook to chmod 0755 again at step "listed", so the sweep can rename and remove.
+- Skill 1 fails with errNoWorkDir, and skill 2 is never tried.
+- Assert that unreagent-ue-beta/SKILL.md (the earlier start's copy) is still there, that unreagent-dropped is gone, and that the error says "(2 of 2 skills not written)". Skip it on Windows and as root.
+I ran this probe in a scratch copy. It is green on the worktree code. With the keep fill moved into the loop (keep[name] set as each skill is tried), it is red: "previous copy of ue-beta swept". The full skills suite stays green under that mutation, so the gap is real.
+It matters on a disk that is full but still lets you rename and remove (ext4: mkdir fails with ENOSPC). Without the fill, this run's sweep would delete every untried skill's copy, and the agent would get none. Spec §6.3:305 documents it ("every skill in place is spared by the sweep").
+
+Checked, holds:
+1. errNoWorkDir path:
+- tryInstallSkillDir wraps a failed MkdirTemp (skills.go:277-280).
+- installSkillDir returns on it without a pause (:257).
+- materializeSkills appends one cause with "(N of M skills not written)" and breaks (:201-205).
+- Probe with the 23 shipped skills in a 0555 dir: WARN after 0.01 s (it was 5.77 s), 329 bytes, the cause once, "(23 of 23 skills not written)".
+- Mutation spot check, retry on errNoWorkDir: TestSetupSkillsGivesUpAtOnceWhenNoWorkDirectoryCanBeCreated goes red ("took 2.00s; want it to give up without a pause"). Restored.
+2. Whole-set keep, normal case: every skill is tried, so the keep the sweep reads (after the loop) is the same as before: the set plus any work dirs that hold a kept copy. A skill dropped from the release is not in all, and a stale unreagent-.tmp-* is not in the set, so both are still swept (RemovesDroppedSkills and the crash and leftover tests are green). Concurrent launchers: keep is local to the run and read only by its own sweep. The normal case is unchanged. In the give-up case this run spares more, which is only more careful toward a peer. The different-version gap is unchanged.
+3. Sweep after errNoWorkDir: harmless.
+- Read-only dir: the sweep finds nothing, or adds its own true cause. Probe: "(2 of 2 skills not written); rename <dir>/unreagent-dropped <dir>/unreagent-.tmp-...: permission denied".
+- Full disk: the sweep can free space and spares the whole set.
+- A peer's in-flight work dir is treated as in any run; the peer retries.
+4. Docs against the code:
+- README :971-974: three attempts, giving up at once, "(N of M skills not written)". These match.
+- Spec :303-307: errNoWorkDir, no retry, no further skills, one cause, 50 and 200 ms pauses. These match.
+
+Optional (not blocking):
+- D1 (doc-writer): spec :311 is a broken rewrap. "otherwise" sits alone on an 11-character line.
+- D2 (doc-writer): spec :320 "A skill that fails does not stop the others or the sweep" now contradicts :303-305. Suggest "Apart from that, a skill that fails ...".
+- D3 (doc-writer): README :973 "the cause ends with `(N of M skills not written)`" is not always the end of <cause>: a failed sweep (probe above) or an earlier skill's error can follow or precede it. The spec's "one cause ending in" is accurate; the README could say "that cause ends with".
+- D4 (doc-writer, cosmetic): README :959 is 66 characters, and "without" fits on it.
+- O1 (worker): N counts the failing skill and the ones after it. An earlier skill that failed for another reason is not in N, so the count can understate what is missing. Both errors are on the line, so nothing is hidden. Also, on NTFS a full disk may first fail in WriteFile, not in MkdirTemp (a small directory is resident in the MFT). That path still retries with pauses for each skill (up to ~250 ms each). UNVERIFIED.
+
+Applies on main 095bcc4: git apply --check -3 of the full diff in a scratch worktree applies all 7 files cleanly. The scratch worktree was removed.
+
+Check, run by me in the worktree:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./... and go test -race -count=1 ./...: green.
+- -race -count=5 over the materialize, install and setup tests: 135 PASS, 0 FAIL, 0 SKIP. The new read-only test ran 5 times and was not skipped.
+- make linux and make windows: ok.
+The tree was untouched (the diff checksum matches before and after).
+Windows UNVERIFIED (compile only). Additional smoke item: a full NTFS volume (time to the WARN).
+
+k137 and k143 are unchanged, READY.
+
+Changes, adjusted to cover the give-up case (fold into the materialization entry): "Each skill is now written whole into a work directory inside `skills.dir` and then renamed into place, so a failed write or two launchers starting at once no longer leave a half-written skill; a skill that cannot be put in place keeps its previous copy (rarely none), and the WARN names every failure on one line. A `skills.dir` that no work directory can be created in (read-only, full) is given up at once with one cause, instead of being retried for every skill.
+
+**Decision (main agent) 2026-11-21 on the focused re-review:** R2 (test that the full spare list keeps old copies of untried skills after errNoWorkDir) back to the worker, per the reviewer's recipe. D1-D4 fixed by the main agent (spec §6.3 rewrap, the 'does not stop the others' sentence now names the errNoWorkDir exception, README :959 wrap, README 'one cause ending in'). O1 stays as is. Changes: the reviewer's round-3 wording. After R2: release-manager directly (test-only delta), serial after k145 and k60.
+
+Worker fix for R2. Only skills_test.go was edited. Not committed. Base: main 29a605c.
+
+New test: TestMaterializeSparesTheSkillsItNeverTried. It is my own test; I did not copy the reviewer's probe.
+- Setup: previousStart over testSkills(), then skills.dir set to 0555 before materializeSkills. A hook sets it back to 0755 at step "listed", so the sweep can still rename and remove.
+- The first skill fails with errNoWorkDir, and the second is never tried.
+- It asserts that the error is errNoWorkDir and says "(2 of 2 skills not written)". It asserts that both skills' copies from the earlier start survive whole, which includes unreagent-ue-beta/SKILL.md, and that unreagent-dropped is gone.
+- It skips on Windows and as root. Here it ran and was not skipped.
+
+Mutation: I filled the spare list inside the loop, as each skill is tried. The test turned red: "unreagent-ue-beta holds map[]; want its copy from the earlier start map[SKILL.md:an older unreagent-ue-beta stale.md:no longer shipped]". skills.go was then restored byte-identical; its sha256 is ef9c04fa… before and after.
+
+Checks, all on 29a605c:
+- gofmt -l cmd internal skills: empty.
+- make fmt vet: clean.
+- GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: green.
+- go test -race ./cmd/launcher ./internal/...: green.
+- -count=5 -race over the 11 k139 tests (stress, gap, crash, symlink, move-back, taken work dir, kept copy, pauses, one-line WARN, read-only dir, and the new spare-list test): green, nothing skipped.
+- make linux, make windows, and a CGO_ENABLED=0 GOOS=windows build: ok.
+Windows UNVERIFIED (compile only). Docs not touched.
+
+R2 done: TestMaterializeSparesTheSkillsItNeverTried pins that the spare list holds the whole set before the first install. It is red when the list is filled inside the loop; skills.go was restored byte-identical. Full check green; Windows UNVERIFIED. Not committed.
+
+Committed in 9bd5b84 on main (bundle k137+k139+k143). Windows UNVERIFIED (compile only); smoke items remain: directory rename onto/over existing, open handle in a skill dir, Defender/OneDrive on fresh copy, two sweeps with RemoveAll, device-named section.
