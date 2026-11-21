@@ -295,6 +295,76 @@ agent:
 	}
 }
 
+// k60: the MCP server's Origin allowlist could be replaced only in code
+// (SetAllowedOrigins), which run() never called, so a browser-based MCP client
+// served from a non-loopback origin was refused with no way to allow it. A
+// non-empty mcp.allowedOrigins replaces the built-in loopback allowlist and is
+// named in the log; absent or empty keeps the built-in one, silently.
+func TestRunAppliesMCPAllowedOrigins(t *testing.T) {
+	loopback := []string{"http://localhost:3000", "http://127.0.0.1:9"}
+	for _, tc := range []struct {
+		name, origins    string // the mcp.allowedOrigins line, "" for none
+		allowed, refused []string
+		logged           string // the allowlist line, "" for none
+	}{
+		{"absent", "", loopback, []string{"https://ide.example.com"}, ""},
+		{"empty", "  allowedOrigins: []\n", loopback, []string{"https://ide.example.com"}, ""},
+		{
+			"set", "  allowedOrigins: [\"https://ide.example.com\", \"http://192.168.1.20:8080\"]\n",
+			[]string{"https://ide.example.com", "HTTPS://IDE.EXAMPLE.COM", "http://192.168.1.20:8080"},
+			append([]string{"https://evil.example"}, loopback...),
+			"MCP server: browser Origins allowed: https://ide.example.com, http://192.168.1.20:8080 (mcp.allowedOrigins, replacing the built-in loopback origins)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := freeLoopbackAddr(t)
+			yaml := withMCP(launcherYAML("sleep", "  enabled: false\n"), addr)
+			yaml = strings.Replace(yaml, "  address: \""+addr+"\"\n", "  address: \""+addr+"\"\n"+tc.origins, 1)
+			l := startLauncher(t, yaml)
+			l.waitLine(t, "MCP server listening on "+addr+" ")
+
+			status := func(origin string) int {
+				req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/mcp",
+					strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Origin", origin)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("POST with Origin %s: %v\n%s", origin, err, l.stdout)
+				}
+				_ = resp.Body.Close()
+				return resp.StatusCode
+			}
+			for _, o := range tc.allowed {
+				if got := status(o); got != http.StatusOK {
+					t.Errorf("Origin %s: status %d; want 200", o, got)
+				}
+			}
+			for _, o := range tc.refused {
+				if got := status(o); got != http.StatusForbidden {
+					t.Errorf("Origin %s: status %d; want 403", o, got)
+				}
+			}
+			out := l.stdout.String()
+			if line, ok := afterMarker(out, "MCP server: browser Origins"); tc.logged == "" && ok {
+				t.Errorf("logged an allowlist with none configured: %q", line)
+			} else if tc.logged != "" && !strings.Contains(out, tc.logged) {
+				t.Errorf("log does not name the allowlist, want the line %q:\n%s", tc.logged, out)
+			}
+
+			if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("SIGTERM: %v", err)
+			}
+			if code := l.exitCode(t); code != 0 {
+				t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+		})
+	}
+}
+
 // k88: an EngineAssociation that names no usable engine fell back to the
 // highest installed one silently — the editor then opens the project in a
 // newer engine and offers to convert it. run() now warns, naming the

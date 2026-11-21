@@ -159,6 +159,29 @@ mcp:
   # entry (`unreagent hermes-setup`) and into the embedded agent (Claude
   # Code) automatically — no manual copy needed.
   # token: "changeme-please-rotate"
+  # Browser Origins the MCP server accepts. Default: absent, which means the
+  # built-in allowlist: http/https on localhost, 127.0.0.1 and [::1], any port.
+  # Only browser-based MCP clients send an Origin header; a request without
+  # one (Claude Code, Hermes, curl) is always accepted, and mcp.token stays the
+  # access control. A non-empty list REPLACES the built-in allowlist, so list
+  # a loopback client too if it still needs access. Each entry is an origin as
+  # the browser sends it: scheme://host[:port], http or https. Refused (load
+  # error naming the index and value, checked while mcp.enabled is on): path
+  # (not even "/"), query, fragment, user info, wildcards, an explicit default
+  # port (https://h:443), leading zeros in the port, a non-ASCII host (use
+  # punycode), "null", file/ftp/ws/wss. A browser extension is accepted as
+  # exactly scheme://host, no port or path: chrome-extension://<id>,
+  # moz-extension://<uuid>, vscode-webview://<id>.
+  # IP hosts must be in the form a browser sends, or they never match:
+  # dotted-quad IPv4 without leading zeros (127.1, 0x7f.0.0.1 and
+  # 2130706433 are refused, write http://127.0.0.1), IPv6 bracketed and
+  # compressed (http://[::1], not [0:0:0:0:0:0:0:1]), no zone.
+  # Exact, case-insensitive match; no placeholders are substituted.
+  # A LIST: unreagent.local.yaml replaces it whole;
+  # "allowedOrigins: []" or "~" there clears it (built-in allowlist is back).
+  # allowedOrigins:
+  #   - https://ide.example.com
+  #   - http://localhost:5173
   # Additional in-editor MCP servers the agent uses to work IN the engine
   # (e.g. UE LLM Toolkit: Node bridge -> HTTP server in the editor on port 3000).
   # Passed together with the unreagent server in --mcp-config.

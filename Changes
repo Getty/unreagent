@@ -250,6 +250,17 @@ Revision history for unreagent
     UNREAL_MCP_URL ones included, show only scheme, host and path, never user
     info or query; an https URL without a port is probed on 443 instead of
     80, and the watch ends silently on shutdown.
+  - New mcp.allowedOrigins: the browser origins the MCP server accepts in an
+    Origin header, so a browser-based MCP client can be served from a
+    non-loopback origin. Absent or empty keeps the built-in loopback
+    allowlist; a non-empty list replaces it, and unreagent.local.yaml
+    replaces the list whole. Checked only while mcp.enabled is on. Each entry
+    must be an origin as a browser sends it, or the load fails naming the
+    index and the cause: http or https as scheme://host[:port] (no default
+    port, a punycode host, an IP host in its canonical form such as
+    127.0.0.1 or [::1]), or a browser extension as exactly scheme://host
+    (chrome-extension://<id>, moz-extension://<uuid>). null, wildcards,
+    paths and the schemes file, ftp, ws and wss are refused.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

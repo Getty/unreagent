@@ -217,11 +217,15 @@ func TestOriginAllowlistOverride(t *testing.T) {
 		{"loopback no longer implied", "http://localhost:3000", http.StatusForbidden},
 		{"foreign", "https://evil.example", http.StatusForbidden},
 		{"absent", "", http.StatusOK},
+		// k60: a browser extension's page sends its own scheme; the
+		// allowlist matches it like any other origin.
+		{"allowlisted extension", "chrome-extension://abcdefghijklmnop", http.StatusOK},
+		{"other extension", "chrome-extension://ponmlkjihgfedcba", http.StatusForbidden},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := newTestServer(t)
-			s.SetAllowedOrigins([]string{"https://ide.example.com"})
+			s.SetAllowedOrigins([]string{"https://ide.example.com", "chrome-extension://abcdefghijklmnop"})
 			w := post(t, s, `{"jsonrpc":"2.0","id":1,"method":"ping"}`, header("Origin", tc.origin))
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d", w.Code, tc.wantStatus)

@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -184,6 +186,15 @@ type MCPConfig struct {
 	// behavior and local-only setups). Recommended as soon as the MCP server
 	// listens on an address other than 127.0.0.1.
 	Token string `yaml:"token"`
+	// AllowedOrigins, if non-empty, replaces the MCP server's built-in Origin
+	// allowlist (http/https on localhost, 127.0.0.1 or ::1, any port): a POST
+	// that carries an Origin header must carry one of these. Each entry is a
+	// browser origin — scheme://host[:port] with http or https, or
+	// scheme://host for a browser extension — compared with the whole header
+	// case-insensitively, no wildcards (validOrigin). Empty
+	// or absent keeps the built-in list. A request without an Origin header (a
+	// non-browser MCP client) is accepted either way.
+	AllowedOrigins []string `yaml:"allowedOrigins"`
 	// ExtraServers are MCP server definitions passed through raw, in the format of
 	// Claude Code's .mcp.json (fields type/url/command/args/env/headers …).
 	// Placeholders like ${PROJECT_DIR} are substituted in all string values.
@@ -471,9 +482,10 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 // and project directories, files.root, skills.dir, commands (command, args,
 // dir), every string in mcp.extraServers and the mcp.writeConfig paths. Everything
 // else stays literal on purpose: names and keys (env names, hermes.serverName),
-// enums, mcp.address and mcp.token (no placeholder forms part of either, and a
-// token must never change under the user's hands), descriptions (prose), and
-// engineRoot and unreal.project, from which the placeholders are derived.
+// enums, mcp.address, mcp.allowedOrigins and mcp.token (no placeholder forms
+// part of any of them, and a token must never change under the user's hands),
+// descriptions (prose), and engineRoot and unreal.project, from which the
+// placeholders are derived.
 //
 // A placeholder that resolved to "" is an error in every field the launcher
 // will use: the result would be a garbage path such as
@@ -707,6 +719,13 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	if c.MCP.Enabled {
+		for i, origin := range c.MCP.AllowedOrigins {
+			if err := validOrigin(origin); err != nil {
+				return fmt.Errorf("mcp.allowedOrigins[%d] invalid: %q (%v; want scheme://host[:port] (http or https) or scheme://host for a browser extension, e.g. https://ide.example.com)", i, origin, err)
+			}
+		}
+	}
 	for i, out := range c.MCP.WriteConfig {
 		switch out.Format {
 		case "", "mcp_json", "vscode":
@@ -772,6 +791,183 @@ func validMCPAddress(address string) error {
 		return fmt.Errorf("mcp.address invalid: %q (port must be a number from 1 to 65535; want host:port, e.g. 127.0.0.1:8765)", address)
 	}
 	return nil
+}
+
+// validOrigin refuses an mcp.allowedOrigins entry that no browser sends as an
+// Origin header. The MCP server compares the header with each entry as a whole
+// string (case-insensitively, nothing else), so such an entry would never
+// match. A web page's origin is scheme://host[:port] with http or https:
+// nothing after the host and port, no user info, the host in ASCII (an
+// internationalized name as punycode, xn--…), an IP address in its one
+// canonical form (canonicalIP), the port as a plain number and left out when
+// it is the scheme's default — https://example.com, never
+// https://example.com:443. A browser extension's page sends its own scheme and
+// host, chrome-extension://<id> or moz-extension://<uuid>, with no port and
+// nothing after the host. The other schemes a browser parses specially (file,
+// ftp, ws, wss) never appear in an Origin header, nor does a scheme without a
+// host; "null" does, from every sandboxed frame and local file, so allowing it
+// would allow them all. The server knows no wildcards, so a "*" is refused
+// rather than compared literally.
+func validOrigin(origin string) error {
+	if origin == "" {
+		return errors.New("empty entry")
+	}
+	if strings.Contains(origin, "*") {
+		return errors.New("wildcards are not supported, list each origin")
+	}
+	if strings.EqualFold(origin, "null") {
+		return errors.New(`"null" is the Origin of every sandboxed frame and local file, it cannot be allowed`)
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return err
+	}
+	web := u.Scheme == "http" || u.Scheme == "https"
+	switch {
+	case u.Scheme == "":
+		return errors.New("missing scheme")
+	case u.Scheme == "file" || u.Scheme == "ftp" || u.Scheme == "ws" || u.Scheme == "wss":
+		return fmt.Errorf("a browser sends no Origin with scheme %s, only http, https or a browser extension's own", u.Scheme)
+	case u.User != nil:
+		return errors.New("no user info allowed")
+	case u.Path != "":
+		return errors.New("no path allowed, not even a trailing /")
+	case u.RawQuery != "" || u.ForceQuery:
+		return errors.New("no query allowed")
+	case strings.Contains(origin, "#"):
+		return errors.New("no fragment allowed")
+	case u.Hostname() == "":
+		return errors.New("missing host")
+	}
+	if port := u.Port(); port != "" || strings.HasSuffix(u.Host, ":") {
+		if !web {
+			return fmt.Errorf("no port allowed with scheme %s, only http and https take one", u.Scheme)
+		}
+		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 || strconv.FormatUint(n, 10) != port {
+			return errors.New("port must be a number from 1 to 65535, without leading zeros")
+		}
+		if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+			return fmt.Errorf("drop the default port :%s, a browser leaves it out of the Origin header", port)
+		}
+	}
+	for i := 0; i < len(u.Host); i++ {
+		if u.Host[i] >= 0x80 {
+			return errors.New("non-ASCII host, write it as punycode (xn--…), the form a browser sends")
+		}
+	}
+	return canonicalIP(u.Hostname(), web)
+}
+
+// canonicalIP refuses an IP host written in any form but the one a browser
+// sends. A bracketed host (url.Parse has checked it is an IPv6 address) goes
+// out compressed in lowercase as netip writes it — [::1], never
+// [0:0:0:0:0:0:0:1] — except an IPv4-mapped one, which a browser writes in
+// hex, [::ffff:7f00:1], not [::ffff:127.0.0.1]; it never carries a zone. For
+// http and https a host that browserIPv4 reads as an IPv4 address goes out as
+// a dotted quad: 127.1, 0x7f.0.0.1 and 2130706433 all as 127.0.0.1. Any other
+// host is a name.
+func canonicalIP(host string, web bool) error {
+	if strings.Contains(host, ":") {
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			return err
+		}
+		if addr.Zone() != "" {
+			return errors.New("no IPv6 zone allowed, a browser sends none")
+		}
+		want := addr.String()
+		if addr.Is4In6() {
+			b := addr.As16()
+			want = fmt.Sprintf("::ffff:%x:%x", uint16(b[12])<<8|uint16(b[13]), uint16(b[14])<<8|uint16(b[15]))
+		}
+		if !strings.EqualFold(host, want) {
+			return fmt.Errorf("non-canonical IPv6 host, write it as [%s], the form a browser sends", want)
+		}
+		return nil
+	}
+	if !web {
+		return nil
+	}
+	addr, isIP, octal := browserIPv4(host)
+	switch {
+	case !isIP:
+		return nil
+	case !addr.IsValid():
+		return errors.New("numeric host but no IPv4 address a browser accepts, write a dotted quad such as 192.168.1.20")
+	case host != addr.String():
+		msg := "non-canonical IPv4 host, write it as " + addr.String() + ", the form a browser sends"
+		if octal {
+			msg += " (a part with a leading 0 is octal)"
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// browserIPv4 reads host as a browser reads the host of an http or https URL
+// (the WHATWG URL Standard's IPv4 parser). A host whose last label, after one
+// trailing dot, is a decimal number or a 0x hex number is an IPv4 address
+// (isIP); any other host is a name. Such an address has one to four
+// dot-separated parts, each decimal, octal with a leading 0 or hex with 0x;
+// each part but the last is one byte, the last fills the remaining bytes. An
+// address that breaks these rules, a URL the browser refuses, comes back
+// invalid. octal reports a part read as octal.
+func browserIPv4(host string) (addr netip.Addr, isIP, octal bool) {
+	parts := strings.Split(host, ".")
+	if len(parts) > 1 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	last := parts[len(parts)-1]
+	if _, _, err := ipv4Number(last); last == "" || (strings.Trim(last, "0123456789") != "" && err != nil) {
+		return addr, false, false
+	}
+	if len(parts) > 4 {
+		return addr, true, false
+	}
+	var v uint64
+	for i, p := range parts {
+		n, oct, err := ipv4Number(p)
+		if err != nil {
+			return netip.Addr{}, true, octal
+		}
+		octal = octal || oct
+		if i < len(parts)-1 {
+			if n > 255 {
+				return netip.Addr{}, true, octal
+			}
+			v += n << (8 * (3 - i))
+		} else {
+			if n >= 1<<(8*(5-len(parts))) {
+				return netip.Addr{}, true, octal
+			}
+			v += n
+		}
+	}
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}), true, octal
+}
+
+// ipv4Number reads one part of an IPv4 host as a browser does: hex after 0x,
+// octal after a leading 0, decimal otherwise; a bare "0x" or "0" is 0.
+func ipv4Number(s string) (n uint64, octal bool, err error) {
+	if s == "" {
+		return 0, false, errors.New("empty part")
+	}
+	base := 10
+	switch {
+	case len(s) >= 2 && (s[:2] == "0x" || s[:2] == "0X"):
+		base, s = 16, s[2:]
+	case len(s) >= 2 && s[0] == '0':
+		base, s = 8, s[1:]
+	}
+	if s == "" {
+		return 0, base == 8, nil
+	}
+	n, err = strconv.ParseUint(s, base, 64)
+	return n, base == 8, err
 }
 
 // validDelay rejects a negative delay. A negative value used to act as a zero

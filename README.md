@@ -272,8 +272,9 @@ agent: { command: "C:/.../claude.cmd" }    # if claude is not on PATH
 The overlay is applied by YAML decode, **not** a deep merge: a scalar replaces
 the base value only when the local file sets it; a **list** replaces the base
 list as a whole (`unreal.args`, `agent.args`, `permissions.allow` / `deny`,
-`mcp.writeConfig`); a **map** merges by key, and each entry you give replaces
-the base entry whole (`agent.env`, `commands`, `mcp.extraServers`). So
+`mcp.writeConfig`, `mcp.allowedOrigins`); a **map** merges by key, and each
+entry you give replaces the base entry whole (`agent.env`, `commands`,
+`mcp.extraServers`). So
 `agent.env: { HOME: "C:/Path/To/Home" }` adds or changes `HOME` and keeps the
 other variables of the base file, while a command defined in both files comes
 out with the local definition only — you cannot override just its `args`.
@@ -596,7 +597,7 @@ you which of the remaining causes applies.
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535, anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535, anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
 | `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
@@ -1099,8 +1100,8 @@ guessing:
   or `::1`, any port) — a defence against a web page in the user's browser
   driving the launcher (CSRF/DNS-rebinding). Requests without an `Origin`
   header — every non-browser MCP client, including Claude Code and `curl` —
-  are unaffected. The allowlist is not yet configurable, so a browser-hosted
-  client on another origin cannot be pointed at unreagent today.
+  are unaffected; `mcp.token` stays the access control. The allowlist is
+  configurable, see below.
 - `initialize` negotiates `protocolVersion` against `2025-06-18` (default)
   and `2025-03-26`; any other value is answered with the default rather than
   echoed back, since this server implements only the Streamable-HTTP
@@ -1109,6 +1110,70 @@ guessing:
   `ReadTimeout` 60s, `IdleTimeout` 120s. `WriteTimeout` is 4h — the ceiling
   for a single tool call, so a long-running `run_command` (e.g. a full UE
   build) has room; it is a backstop, not a request budget.
+
+#### Allowing a browser-based MCP client (`mcp.allowedOrigins`)
+
+Only browser-hosted MCP clients send an `Origin` header. To serve one from a
+non-loopback origin, list it:
+
+```yaml
+mcp:
+  allowedOrigins:
+    - https://ide.example.com
+    - http://localhost:5173   # keep a loopback client working, see below
+```
+
+- **Absent by default.** Without the option the built-in allowlist applies:
+  `http`/`https` on `localhost`, `127.0.0.1` and `[::1]`, any port.
+- **It replaces, it does not add.** A non-empty list replaces the built-in
+  allowlist, so list every origin you still need, loopback ones included
+  (`http://localhost:5173` above). Origins not on the list get `403`.
+- **Entry form.** Each entry is an origin exactly as the browser sends it:
+  `scheme://host[:port]` with `http` or `https`. Refused: a path (not even
+  `/`), a query, a fragment, user info and wildcards. Leave out the default
+  port (`https://h`, not `https://h:443`) and leading zeros in a port, and
+  write an international host as punycode (`https://xn--...`). Matching is
+  exact on the whole string and ignores case. No placeholders are
+  substituted.
+- **Browser extensions.** Any other scheme with a host is accepted as exactly
+  `scheme://host`, with no port, user info, path, query, fragment or
+  wildcard: `chrome-extension://<id>`, `moz-extension://<uuid>`,
+  `vscode-webview://<id>`. Still refused, each with its own cause: `null`
+  (every sandboxed frame sends it), a missing scheme, and `file`, `ftp`, `ws`
+  and `wss`, which a browser never sends as an Origin.
+- **IP hosts in canonical form.** A browser rewrites an IP host before it
+  sends the Origin, so write the rewritten form or the entry never matches.
+  IPv4 is a dotted quad without leading zeros; `127.1`, `0x7f.0.0.1`,
+  `2130706433` and `192.168.001.020` (octal to a browser) are refused with
+  the form to write instead. IPv6 is bracketed, lowercase and compressed
+  (`http://[::1]:5173`, not `[0:0:0:0:0:0:0:1]`), an IPv4-mapped address is
+  the hex form `[::ffff:7f00:1]`, and a zone is refused.
+- **Overlay.** In `unreagent.local.yaml` the list replaces the base list
+  whole; it does not append. `allowedOrigins: []` or `~` there clears it and
+  brings the built-in loopback allowlist back.
+- **Scope.** Requests without an `Origin` header (Claude Code, Hermes, `curl`)
+  are always accepted; the list changes nothing for them. Set `mcp.token` when
+  a non-loopback origin may reach the server.
+
+An invalid entry is a load error naming its index, value and cause, checked
+only while `mcp.enabled` is on. A trailing `/` in the first entry:
+
+```
+Error: mcp.allowedOrigins[0] invalid: "https://ide.example.com/" (no path allowed, not even a trailing /; want scheme://host[:port] (http or https) or scheme://host for a browser extension, e.g. https://ide.example.com)
+```
+
+A non-canonical IP host in the first entry:
+
+```
+Error: mcp.allowedOrigins[0] invalid: "http://127.1:5173" (non-canonical IPv4 host, write it as 127.0.0.1, the form a browser sends; want scheme://host[:port] (http or https) or scheme://host for a browser extension, e.g. https://ide.example.com)
+```
+
+When a list is set the startup log names it:
+`MCP server: browser Origins allowed: https://ide.example.com, http://localhost:5173 (mcp.allowedOrigins, replacing the built-in loopback origins)`.
+A browser client that gets `403 Forbidden` has an origin that is not on the
+list. Compare what the browser sends with the entry: `http` vs `https`, a
+different port, a loopback origin you left off the list (the built-in ones are
+gone once the list is set), or a different extension id. Uppercase is fine.
 
 ## CLI flags
 

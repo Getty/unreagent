@@ -96,12 +96,25 @@ placeholder system exists.
    or whose port is not a number from 1 to 65535 (`validMCPAddress`:
    `net.Listen` would take port 0 or a service name, but the client URL
    names the port as written; an empty address is already `127.0.0.1:8765`
-   from step 4). The `agent.*` checks run only
+   from step 4), an `mcp.allowedOrigins` entry that is no Origin header a
+   browser sends (`validOrigin`: the server compares each entry with the
+   whole header, case-insensitively and without wildcards, so only that
+   form can match — http and https as `scheme://host[:port]` with a port
+   from 1 to 65535, no leading zeros and no default `:80`/`:443`, any other
+   scheme with a host (a browser extension's) as exactly `scheme://host`,
+   and an IP host as a browser writes it (`canonicalIP`: an http/https IPv4
+   as a dotted quad, IPv6 compressed, IPv4-mapped in hex, no zone); an
+   empty entry, a `*`, `null`, a missing scheme or host,
+   `file`/`ftp`/`ws`/`wss`, user info, a path (even a trailing `/`), a
+   query or fragment and a non-ASCII host (write punycode) are refused too;
+   the list has no default, empty or absent keeps the server's built-in
+   loopback origins).
+   The `agent.*` checks run only
    when `agent.enabled`, except serverName, which runs on
    `agent.hermes.enabled` alone — the only flag `hermes-setup` checks; the
    address check when `mcp.enabled` or `agent.hermes.enabled` (`hermes-setup`
-   writes the client URL with the server off, too); the skills check only
-   when `skills.enabled`.
+   writes the client URL with the server off, too); the origins check only
+   when `mcp.enabled`; the skills check only when `skills.enabled`.
 
    Clients never get `mcp.address` as written: only the listener does.
    `MCPConfig.ClientURL()` is the one builder of the client URL — the
@@ -152,9 +165,9 @@ condition under which it counts as *used*:
 Everything else stays literal on purpose: `engineRoot` and `unreal.project`
 (the placeholders are derived from them), names and keys (`agent.env` names,
 `agent.hermes.serverName`, extra-server names), enums, `mcp.address`,
-`mcp.token` (a token must never change under the user's hands) and command
-descriptions. The doc comment on `substitute` lists both sides — keep it in
-step with the code.
+`mcp.allowedOrigins`, `mcp.token` (a token must never change under the
+user's hands) and command descriptions. The doc comment on `substitute`
+lists both sides — keep it in step with the code.
 
 An unresolved placeholder (resolved to `""`) in a used field is a load error:
 the result would be a garbage path such as

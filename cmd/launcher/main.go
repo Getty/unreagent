@@ -319,6 +319,11 @@ func run() error {
 			srv.SetToken(cfg.MCP.Token)
 			logger("MCP server: bearer auth enabled (mcp.token is set)")
 		}
+		// Empty keeps the server's built-in loopback allowlist.
+		if len(cfg.MCP.AllowedOrigins) > 0 {
+			srv.SetAllowedOrigins(cfg.MCP.AllowedOrigins)
+			logger("MCP server: browser Origins allowed: " + strings.Join(cfg.MCP.AllowedOrigins, ", ") + " (mcp.allowedOrigins, replacing the built-in loopback origins)")
+		}
 		registerTools(srv, sup, cfg, agentWorkdir, skillSet, logger)
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", srv)
