@@ -1,0 +1,34 @@
+---
+claimed_at: 2026-11-21T07:38:14Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:42:14Z
+created: 2026-11-21T05:19:30Z
+id: 130
+priority: low
+started: 2026-11-21T07:19:32Z
+status: done
+tags:
+- windows
+- config
+title: Do not warn about an absolute editor path without .exe on Windows
+updated: 2026-11-21T07:42:25Z
+---
+
+Found in the k119 review, pre-existing. On Windows, unreal.editor set to an absolute path without the .exe extension (e.g. C:/UE/Engine/Binaries/Win64/UnrealEditor) logs "path not found", although exec.Command resolves it via PATHEXT. Fix: in the existence check in cmd/launcher/helpers.go, on Windows also try the path with the PATHEXT extensions before warning, matching what os/exec does (exec.LookPath accepts a path with separators and applies PATHEXT). Done when the warning matches exec.Command on both platforms and a Windows-only test pins it (compile-checked; behaviour unverified until the Windows box).
+
+Fix in cmd/launcher/helpers.go: new pathFound() behind the path branch of warnIfMissing. On Windows it uses exec.LookPath(path), which for a path with separators runs the same lookPathExts/findExecutable exec.Command uses (PATHEXT appended when no extension, no PATH search). Elsewhere it keeps fileExists (os.Stat), deliberately: LookPath on Unix also checks the execute bit and would print 'path not found' for an existing non-executable file, so Linux behaviour stays byte-for-byte. Tests in helpers_test.go: TestWarnIfMissingAppliesPathExtOnWindows (skips off Windows; compile-checked via GOOS=windows go vet and go test -c, NOT run: behaviour unverified until the Windows box) and TestWarnIfMissingAddsNoExtensionElsewhere (Linux: path without .exe next to UnrealEditor.exe still warns, exact message; green before and after; a hand-rolled path+'.exe' mutant turns it red). Side effect on Windows only: a directory as unreal.editor now warns (LookPath rejects directories), which matches exec. Drift for the unreagent board (not in scope): on Linux an existing but non-executable unreal.editor path is not warned although exec fails with permission denied; dev-box only, low value.
+
+Ready for review. Changed: cmd/launcher/helpers.go (pathFound), cmd/launcher/helpers_test.go (2 tests). Check green on Linux: gofmt, vet (linux+windows), go test ./..., -race ./cmd/launcher, make linux, make windows. The Windows test only compiles here; Windows behaviour unverified, not tested. Tree uncommitted in worktree agent-a3fb6a25904aeed94, bundled with k133.
+
+Review (unreagent-reviewer), worktree agent-a3fb6a25904aeed94, files cmd/launcher/helpers.go + cmd/launcher/helpers_test.go, uncommitted on c0a5178. VERDICT: ready. Windows behaviour UNVERIFIED (compile-only): TestWarnIfMissingAppliesPathExtOnWindows skips on Linux; built with GOOS=windows go vet and GOOS=windows go test -c only. Run it on the Windows box before calling it tested.
+Check run by me, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -race ./cmd/launcher; make linux; make windows; GOOS=windows go test -c ./cmd/launcher.
+LookPath semantics, read against Go 1.26.6 os/exec (lp_windows.go, exec.go): a path with separators goes lookPathExts -> findExecutable: PATHEXT appended when there is no extension, no PATH search, and ErrDot cannot occur (only the bare-name branch sets it; the k119 branch of warnIfMissing is unchanged). exec.Command resolves the same way: absolute -> lookExtensions(name, "") -> lookPathExts; relative with separators -> lookExtensions(path, cmd.Dir) at Start, and the ue service sets no Dir, so cwd-relative like LookPath. A path that already has .exe is stat-checked (exists: no warning; missing: warns). Simulating the copied separator branch on Linux confirmed: .../UE_5.4/.../UnrealEditor -> UnrealEditor.exe (a dot in a parent directory does not count as an extension), a directory and an existing extension-less file -> not found. The side effect is right: exec cannot start a directory or an extension-less file either. One divergence, negligible: for a path whose extension is in PATHEXT, lookExtensions returns it unchecked while LookPath also tries X.exe.exe.
+Mutations (scratch copy; the worktree was not touched and still matches md5): 6 effective. Killed 2: .exe appended on every OS, pathFound always true. Survived 4 on Linux, as expected: the fix reverted to os.Stat, call site back to fileExists, LookPath on every OS, inverted guard. Only the skipped Windows test can tell the fix from its revert.
+Findings, none blocking:
+1. Changes entry: accurate for the PATHEXT case, but it leaves out the new Windows-only warning for a directory or an extension-less file as unreal.editor. Suggest: "...; a directory or a file without such an extension now warns, since it does not start either." The commit should say Windows behaviour is unverified.
+2. nit helpers.go:19: "anything else must exist as given" is no longer true on Windows.
+3. nit helpers_test.go:117: "The Windows lookup must not reach these platforms" claims more than the test shows. LookPath on every OS survives; what the test pins is "no extension added off Windows".
+4. For the main agent: the drift the worker named (on Linux an existing non-executable file or directory as unreal.editor is not warned, although exec fails) is not on the board yet.
+
+Committed as 6a6f8b5 (k130 and k133 in one commit), fast-forwarded onto main. Windows PATHEXT behaviour (k130) unverified until the Windows box.
