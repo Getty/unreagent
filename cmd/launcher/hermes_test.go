@@ -1728,6 +1728,32 @@ func TestHermesSetupChecksTheEditBeforeWriting(t *testing.T) {
 	}
 }
 
+// k144: checkEdit has to stay wired into localConfigWithToken. The input is a
+// local config whose other key holds a folded block scalar with a
+// more-indented line: it passes every early check (parseable, plain keys, mcp
+// absent), the node edit leaves the scalar alone, and only the vendored
+// yaml.v3 (v3.0.1) writes it back with an extra blank line. Without the
+// checkEdit call the edited file would be returned. Like the k125 test, this
+// input rests on the encoder: a yaml.v3 that writes the scalar back unchanged,
+// or a workaround for it in the edit, needs another input here that only
+// checkEdit refuses.
+func TestLocalConfigWithTokenChecksTheEdit(t *testing.T) {
+	const local = "address: 127.0.0.1:8765\nnotes: >\n  Rules:\n    - be brief\n    - be kind\n"
+	path := filepath.Join(t.TempDir(), "unreagent.local.yaml")
+	writeFile(t, path, local)
+
+	out, err := localConfigWithToken(path, "user-token-0123456789")
+	if err == nil {
+		t.Fatalf("localConfigWithToken accepted a config yaml.v3 does not write back as read, and returned:\n%s", out)
+	}
+	if want := "the result would change more than mcp.token"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q is not checkEdit's refusal (%q)", err, want)
+	}
+	if want := "the value at notes"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not name the changed value (%q)", err, want)
+	}
+}
+
 // assertNothingWritten checks that a refused run left the fixture as it was:
 // the Hermes config holds hermesConfig, and neither directory holds anything
 // new — no .bak, no temp file, no unreagent.local.yaml with a generated token.
