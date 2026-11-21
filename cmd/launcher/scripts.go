@@ -69,10 +69,7 @@ func scriptAction(sup *supervisor.Supervisor, command string, pre []string, dir,
 		if err != nil {
 			return errResult(err)
 		}
-		return mcp.ToolResult{
-			Text:    commandReply(res, toolOutputLines),
-			IsError: res.ExitCode != 0,
-		}
+		return commandResult(res)
 	}
 }
 

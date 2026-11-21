@@ -242,9 +242,9 @@ Revision history for unreagent
     took any name, wrote some as a key that YAML reads as something else, and
     refused "<<" with an error that did not name the option. A bad name now
     stops every config load, a normal start included, not only hermes-setup.
-  - run_command, run_python and run_node say when they cut the output: a
-    line "[... N lines omitted]" leads the last 300 lines, and N also counts
-    the lines dropped from the middle of an output past 2 MiB. That gap now
+  - Successful run_command, run_python and run_node calls say when they cut
+    the output: a line "[... N lines omitted]" leads the last 300 lines, and N
+    also counts the lines dropped from the middle of an output past 2 MiB. That gap now
     reads "[... N bytes omitted]".
   - logs says when its 500-line buffer has dropped lines a request asks for:
     the reply starts with "[... N lines omitted; the log keeps only the last
@@ -301,13 +301,18 @@ Revision history for unreagent
     the flag wired into agent.args by hand. With agent.claudeIntegration: false
     no prompt tool is passed at all. unreagent.example.yaml now ships
     permissions.enabled: false.
-  - run_command, run_python, run_node and logs hold a reply to 48 KiB: past
-    that its oldest output goes, the start of a single long line too, and a
-    line "[... N bytes omitted; a reply holds at most 48 KiB]" below any lines
+  - A successful run_command, run_python or run_node call and logs hold a
+    reply to 48 KiB: past that its oldest output goes, the start of a single
+    long line too, and a line "[... N bytes omitted; a reply holds at most 48 KiB]" below any lines
     marker says how much, the middle dropped from an output past 2 MiB
     included. A run_* reply could reach about 2 MiB before, a logs
     reply hundreds of MiB; 48 KiB stays under the 50,000 characters past which
-    Claude Code moves a reply into a file.
+    Claude Code moves a reply into a file. A failing run_command, run_python
+    or run_node call replies within 10 KB instead: the first 4 KiB of the
+    output, where the first errors are, a marker counting what is left out,
+    then as much of the end as fits. Claude Code cuts an error reply over
+    about 11,000 characters to its first and last 5,000, which dropped the
+    first errors of a failing build.
   - A stop, start or restart (ue_stop, ue_start, ue_restart, the console's
     stop, start and r) that meets the process ending on its own, or its
     automatic restart coming due, is carried out instead of the exit

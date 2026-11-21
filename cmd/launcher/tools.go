@@ -92,9 +92,12 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	// cap above the end of the output, so the cap nearly always cuts it away,
 	// and the note names that drop itself. Its lines count in the line marker
 	// when the last lines lie below it (LinesBefore), its bytes in the byte
-	// marker when the cut takes it (capReply, k175).
+	// marker when the cut takes it (capReply, k175). A failed command's
+	// reply is shaped by capFailed instead, small enough that Claude Code
+	// does not cut its middle (k177).
 	cutNote := "A cut is marked by a line: [... N lines omitted] at the top, then [... N bytes omitted; " + replyCutReason + "] where the oldest bytes of the rest went, of a single long line too. " +
-		"Past 2 MiB the middle of the output is dropped as well, and those counts include it."
+		"Past 2 MiB the middle of the output is dropped as well, and those counts include it. " +
+		fmt.Sprintf("A failing call's reply instead keeps the first and last part of the output within %d KB.", failedReplyBytes/1000)
 
 	cmdNames := sup.CommandNames()
 	srv.AddTool(mcp.Tool{
@@ -119,10 +122,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 			if err != nil {
 				return errResult(err)
 			}
-			return mcp.ToolResult{
-				Text:    commandReply(res, toolOutputLines),
-				IsError: res.ExitCode != 0,
-			}
+			return commandResult(res)
 		},
 	})
 

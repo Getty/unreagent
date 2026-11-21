@@ -77,32 +77,65 @@ file parameter, no argv, no stdin, no environment parameter and no timeout
 parameter.
 
 The launcher writes `code` to a file **inside the runtime's working directory**,
-runs it there, deletes it, and returns:
+runs it there, deletes it, and returns a reply shaped by the exit code, as
+`run_command`'s is (`unreagent-build`). A script that exits 0 returns:
 
 ```
-exit <code>
+exit 0
 
 [... N lines omitted]
 [... B bytes omitted; a reply holds at most 48 KiB]
 <the last 300 lines of stdout and stderr, merged, at most 48 KiB>
 ```
 
-The result is marked as an error when the exit code is non-zero. stdout and
-stderr go into one buffer and cannot be told apart afterwards, so label your own
-output if the distinction matters. Only the last 300 lines survive: a script
-that printed more gets the `[... N lines omitted]` line (`[... 1 line omitted]`
-for one) and loses those N lines. The reply as a whole holds at most 48 KiB:
-when those lines are longer, their oldest bytes go too, and
+A script that exits non-zero returns an error result of at most 10,000 bytes,
+the `exit` line and the marker included:
+
+```
+exit <code>
+
+<the first lines of stdout and stderr, merged, up to 4 KiB>
+[... N lines omitted]
+<as many of the last lines as fit>
+```
+
+stdout and stderr go into one buffer and cannot be told apart afterwards, so
+label your own output if the distinction matters.
+
+**On success** only the last 300 lines survive: a script that printed more
+gets the `[... N lines omitted]` line (`[... 1 line omitted]` for one) and
+loses those N lines. The reply as a whole holds at most 48 KiB: when those
+lines are longer, their oldest bytes go too, and
 `[... B bytes omitted; a reply holds at most 48 KiB]` follows the `exit` line
 and any lines marker. The first line you see can then start mid-line, and a
-single line longer than 48 KiB comes back as its end only. Output past 2 MiB
-also loses its middle, as `run_command` output does, and the markers count it
-too (`unreagent-build`).
+single line longer than 48 KiB comes back as its end only.
 
-Either marker means the oldest output is gone, and a rerun prints the same.
-Narrow the script instead: print only the lines you need, a count, or a
-summary. Printing a large payload is not a way to retrieve it — write it to a
-file under the project root and read it with `read_file` instead.
+**On failure** the output comes back whole when it fits in the 10,000 bytes
+with the `exit` line, even past 300 lines. Otherwise you get its first whole
+lines within 4 KiB, then `[... N lines omitted]`, which counts every line
+left out, then as many of its last whole lines as fit. A single line longer
+than its share is cut, the first one to its start, the last one to its end,
+and the marker then counts bytes instead:
+`[... B bytes omitted; a failing call's reply holds at most 10 KB]`. The
+limit is lower than for a success because Claude Code cuts an error result
+over about 11,000 characters to its first and last 5,000.
+
+Output past 2 MiB also loses its middle, as `run_command` output does, and
+the markers count it too (`unreagent-build`).
+
+Any marker means output is gone: the launcher keeps none of it, and a rerun
+prints the same. Narrow the script instead: print only the lines you need, a
+count, or a summary. Printing a large payload is not a way to retrieve it —
+write it to a file under the project root and read it with `read_file`
+instead.
+
+A script that can fail should put the error that decides it at the start or
+at the end of its output, where a failing reply keeps it. An uncaught
+exception does that on its own: the traceback or stack prints last. Write
+long diagnostics to a file and read it back with `read_file` rather than
+print them. Python buffers stdout when, as here, it is not a terminal, so a
+line written to `sys.stderr` can land above stdout printed before it: keep
+the deciding line on one stream, or print with `flush=True`.
 
 | | `run_python` | `run_node` |
 |---|---|---|

@@ -10,7 +10,8 @@ description: >
 
 `run_command` runs one command from a fixed list that the launcher's config
 declares. The command runs on the launcher's host. The tool waits for it to
-finish and returns its exit code and the tail of its output. This is how you
+finish and returns its exit code and its output; a long output is cut to its
+end, or, when the command failed, to its start and its end. This is how you
 compile and package. There is no other build tool here, and you cannot pass a
 command line of your own.
 
@@ -62,8 +63,10 @@ redirection do not exist. The environment is inherited from the launcher.
 `name` (string, required) is the only parameter. There is no argument list,
 no timeout and no working-directory parameter.
 
+The exit code decides the shape of the reply. A command that exits 0 returns:
+
 ```
-exit <code>
+exit 0
 
 [... N lines omitted]
 [... B bytes omitted; a reply holds at most 48 KiB]
@@ -72,9 +75,28 @@ exit <code>
 
 The `[... N lines omitted]` line is there only when the command printed more
 than 300 lines, the `[... B bytes omitted; …]` line only when those lines are
-more than a reply holds. The result is marked as an error when the exit code
-is non-zero. Decide success by the exit code, not by the text. `exit -1` means
-the launcher could not determine an exit code.
+more than a reply holds.
+
+A command that exits non-zero returns an error result of at most 10,000
+bytes, the `exit` line and the marker included:
+
+```
+exit <code>
+
+<the first lines of stdout and stderr, merged, up to 4 KiB>
+[... N lines omitted]
+<as many of the last lines as fit>
+```
+
+When the `exit` line and the whole output fit in 10,000 bytes, the output
+comes back whole instead, with no marker, even past 300 lines. The limit is
+lower than for a success because Claude Code cuts an error result over about
+11,000 characters to its first and last 5,000. 10,000 bytes are at most
+10,000 characters, so the launcher's reply reaches you as it was sent, and
+what it leaves out is marked and counted.
+
+Decide success by the exit code, not by the text. `exit -1` means the
+launcher could not determine an exit code.
 
 These errors come back before anything runs:
 
@@ -86,21 +108,35 @@ These errors come back before anything runs:
 
 ## Reading the result
 
-- **Only the last 300 lines come back.** When the command printed more, they
-  are led by `[... N lines omitted]` (`[... 1 line omitted]` for one). The N
-  lines are gone.
-- **A reply holds at most 48 KiB**, the `exit` line and the markers included.
-  When the last 300 lines are longer (about 160 bytes a line on average),
-  their oldest bytes go as well, and
+- **A successful reply holds only the last 300 lines.** When the command
+  printed more, they are led by `[... N lines omitted]` (`[... 1 line
+  omitted]` for one). The N lines are gone.
+- **A successful reply holds at most 48 KiB**, the `exit` line and the
+  markers included. When the last 300 lines are longer (about 160 bytes a
+  line on average), their oldest bytes go as well, and
   `[... B bytes omitted; a reply holds at most 48 KiB]` follows the `exit`
   line and any lines marker. Whole lines go first, then the start of the
   oldest line kept: you see at most 300 lines, and the first one can start
   mid-line. A single line longer than 48 KiB comes back as its end only. The
   cut never splits a UTF-8 character. The B bytes are gone.
+- **A failing reply holds the start and the end.** When the `exit` line and
+  the output are more than 10,000 bytes, the head is the output's first whole
+  lines within 4 KiB, then comes `[... N lines omitted]`, then the tail: as
+  many of the last whole lines as fit in the rest, about 5.8 KB when the head
+  is full. N counts every line between head and tail. They are gone. No
+  300-line limit applies to a failing reply.
+- **A failing reply cuts a line only when it is longer than its share.** A
+  first line over 4 KiB leaves the head as its start; a last line that does
+  not fit leaves the tail as its end. The marker then counts bytes instead:
+  `[... B bytes omitted; a failing call's reply holds at most 10 KB]`. The
+  cut never splits a UTF-8 character.
 - **Past 2 MiB the middle is dropped as well.** While the command runs, the
   launcher keeps only the first and the last MiB of its output, and the
-  markers count the dropped middle too: N whole lines, then B bytes, are
-  everything above what you see. When the last MiB holds more than 300 lines
+  markers count the dropped middle too. In a failing reply, the head comes
+  from the first MiB and the tail from the last, so the marker between them
+  stands where the middle was dropped, and N (or B) includes it. In a
+  successful reply, N whole lines, then B bytes, are everything above what
+  you see. When the last MiB holds more than 300 lines
   (its first line, which can begin in the dropped part, counts as one), the
   300 lines all come from it: N includes the dropped lines, and B counts bytes
   of the 300 only. When it holds 300 or fewer, the lines reach back into the
@@ -108,7 +144,9 @@ These errors come back before anything runs:
   above them, and B includes the dropped bytes. In the rare reply that still
   shows the launcher's own `[... D bytes omitted]` line, that line names the
   middle, B leaves it out, and the reply can hold up to 302 lines, that line
-  included.
+  included. A failing reply shows that line only when the output ends in
+  nearly a MiB of line breaks, with no text after them; the marker above it
+  then leaves the middle out.
 - **Nothing else is retained.** The launcher discards the output once the call
   returns. `logs` holds no command output. The launcher log records only two
   lines per run:
@@ -117,21 +155,23 @@ These errors come back before anything runs:
 - **stdout and stderr are merged** and cannot be told apart.
 
 For `compile`, errors print as they occur, and other compile actions keep
-running after the first failure. In a long failing build, the first error can
-be among the omitted lines. If the result starts with `[... N lines omitted]`
-or carries the 48 KiB marker, and what you see looks like a follow-on error,
-for example an unknown type that a missing include would explain, the cause
-may be among them. Fix what you can see and compile again. A build with fewer
-errors is more likely to fit.
+running after the first failure. A failing build's reply holds the first
+4 KiB of its output, which takes in the first errors when they come that
+early, and its end. Errors printed in between are among the omitted lines. If
+what you see looks like a follow-on error, for example an unknown type that a
+missing include would explain, the cause may be among them. Fix what you can
+see and compile again. A build with fewer errors is more likely to fit.
 
-You cannot narrow a `run_command` run: it takes no arguments, and a rerun of
-the same state cuts the same way. Output that must be read whole belongs in a
-file. Only the user can arrange that, with a script added as a command that
-writes the output to a file under the project; `read_file` (`unreagent-files`)
-then reads it in pieces.
+What a reply leaves out is not kept anywhere, and you cannot narrow a
+`run_command` run: it takes no arguments, and a rerun of the same state cuts
+the same way. Output that must be read whole belongs in a file. Only the user
+can arrange that, with a script added as a command that writes the output to
+a file under the project; `read_file` (`unreagent-files`) then reads it in
+pieces.
 
-For `package`, the output runs to thousands of lines, and you see its end:
-whether the run failed, and in which stage.
+For `package`, the output runs to thousands of lines. A successful run shows
+its end; a failing one its first 4 KiB and its end: that the run failed, and
+in which stage.
 
 ## Duration, timeouts and calls that do not come back
 
@@ -197,10 +237,12 @@ There, a run's children are not killed with it.
 | `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
 | `Error: start failed: exec: …/Engine/…` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
 | `exit` non-zero, with `Unable to build while Live Coding is active` | the editor is running with Live Coding | `ue_stop`, then compile again |
-| `exit` non-zero, an omitted marker, and the errors look like follow-ons | the first errors are among the omitted lines or bytes | fix what is visible, then compile again |
+| `exit` non-zero, an omitted marker, and the errors look like follow-ons | their cause is among the omitted lines or bytes | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
-| `[... N lines omitted]` after the `exit` line | the first N lines of the output were cut | they are gone. Rerun only if you must |
-| `[... B bytes omitted; a reply holds at most 48 KiB]` after the `exit` line or the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut (past 2 MiB, B can include the dropped middle); the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
+| `exit` non-zero, `[... N lines omitted]` between the first lines and the last | the output was more than a failing reply's 10,000 bytes; the N lines between its first 4 KiB and its end were cut (past 2 MiB, N includes the dropped middle) | they are gone, and a rerun of the same state cuts the same way. Fix what is visible and compile again; for the whole output, the user adds a command that writes it to a file, read with `read_file` |
+| `[... B bytes omitted; a failing call's reply holds at most 10 KB]` | a single line was longer than its share of a failing reply: a first line over 4 KiB is cut to its start, a last line that does not fit to its end | as for the lines marker above |
+| `exit 0`, then `[... N lines omitted]` | the first N lines of a successful run's output were cut | they are gone. Rerun only if you must |
+| `exit 0`, then `[... B bytes omitted; a reply holds at most 48 KiB]`, alone or below the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut (past 2 MiB, B can include the dropped middle); the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
 | the call never returns, or the client times out | no timeout exists, and the run continues on the host | do not retry. Watch the launcher log for `[cmd:<name>] done` |
 | a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
 

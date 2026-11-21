@@ -103,8 +103,9 @@ went through is confirmed in window mode only, by `console.show`
 k151), not by `startFailure`, which stays the failure text. The other
 tools — `status`, `logs`, `run_command` — call the supervisor from their own
 closure; a one-shot tool returns what `run_command` and `scriptAction` return,
-`commandReply(res, toolOutputLines)`, with `IsError` on a non-zero exit.
-`commandReply` (`helpers.go`) is `exit N`, a blank line and the last 300
+`commandResult(res)` (`helpers.go`): `commandReply(res, toolOutputLines)` on
+exit 0, `failedReply(res)` with `IsError` on any other exit.
+`commandReply` is `exit N`, a blank line and the last 300
 lines, led by an `omittedMarker` line `[... N lines omitted]` when there were
 more. It first widens n with `CommandResult.Window(n)`, so the lines shown
 never start on a line the supervisor's dropped middle splits: when its 2 MiB
@@ -136,6 +137,29 @@ each. `read_file` does not go through `capReply`: `readFileLimit`
 description and `limit` schema are built from that constant (k173).
 `tailLines` alone, without a marker, is for log excerpts (`bridge.go`,
 `lifecycle.go`), not tool replies.
+
+A failed command's reply is held far lower (k177): Claude Code cuts an error
+result over about 11,000 characters to its first and last 5,000, and the
+middle it drops is where a failing build's first errors stand. `failedReply`
+takes the whole `Output`, not the 300-line window, since one marker between
+head and tail can count every line left out only when nothing goes above the
+head, and hands it to `capFailed(top, lines, gap, dropped, total)`. That holds
+the reply, `exit N` and the marker included, to `failedReplyBytes` (10,000
+bytes, so at most 10,000 characters), with the marker's room reserved at its
+longest. An output that fits comes back whole, past 300 lines too. Otherwise
+it keeps a head, the first whole lines within `failedHeadBytes` (4 KiB), the
+line `[... N lines omitted]`, and a tail, the last whole lines that fit in
+the rest. Only a single line longer than its share is cut, the first to its
+start, the last to its end, never inside a UTF-8 sequence; the marker then
+counts bytes, `bytesMarker(n, failedCutReason)`:
+`[... N bytes omitted; a failing call's reply holds at most 10 KB]`. `total`
+is `LinesBefore(0)`, the whole output's line count, and the byte count adds
+`dropped`, so both counts are of the output's own lines and bytes, a middle
+the supervisor dropped included, never of the gap line or the line breaks
+around it. The tail holds the gap line together with the partial lines on
+both sides or starts below them, as `Window` keeps them. `cutNote`
+(`tools.go`), shared by the three run tools' descriptions, states both shapes
+from the constants.
 
 `status` sends `sup.Status()` as it is. A service whose loop misses
 `supervisor.CtrlTimeout` comes back as `"unresponsive": true`, plus
