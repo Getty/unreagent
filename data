@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-11-21T10:22:09Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T10:22:09Z
+created: 2026-11-21T03:11:04Z
+depends_on:
+- 69
+id: 121
+priority: low
+started: 2026-11-21T08:45:01Z
+status: done
+tags:
+- lifecycle
+- bug
+title: Agent exit prompt builds a new bufio.Scanner per prompt
+updated: 2026-11-21T10:22:19Z
+---
+
+Found by the k69 worker (2026-11-21): the agent exit prompt creates a new bufio.Scanner on stdin each time; a scanner can buffer past the line it returns, so with piped stdin later input can be lost. A terminal is not affected. Done when: one reader is shared for the session, with a pipe test. Lane: unreagent-worker. Touches cmd/launcher/lifecycle.go — after k69/k70/k71 lands.
+
+2026-11-21 08:59 Worker: cause confirmed with a red test (TestPipedInputReachesThePromptAndThenTheConsole: one piped write 'k/status/q', the prompt's Scanner took all three lines, the console never saw 'q'). Fix: console.in is now one lineReader made once in run() (newConsole) and shared by the exit prompt, the k-console and run()'s own commandLoop. It reads a byte at a time and never past the line it returns, so nothing is lost between prompt and console, nor at the k71 handover to the foreground agent, which reads the same stdin itself. Pin: TestConsoleReaderTakesNoMoreThanItsLine. Windows console reads 1 UTF-16 unit per ReadConsole call this way: compile-only, unverified.
+
+2026-11-21 09:20 Worker: done as noted above, unchanged since. Checks green on the final tree: gofmt, go vet (linux + GOOS=windows), go test ./..., go test -race, make linux, make windows. Windows console reads (one UTF-16 unit per ReadConsole) are compile-only, unverified. Ready for review.
+
+2026-11-21 Worker: rebased onto ce31def (k45/k123/k141, k88); no change to the fix. Checks green on the rebased tree; the k141 tests and the pipe tests pass with -count=50. Still in review.
+
+2026-11-21 10:17 Review (unreagent-reviewer): verdict READY. Check: same reviewer run as noted on k120 (gofmt -l, go vet linux + windows, go test and -race, make linux, make windows, go mod verify, k141 listening test -count=100, new tests -race -count=20; all green). Red without the fix: a bufio.Scanner per prompt in promptAgentExit fails TestPipedInputReachesThePromptAndThenTheConsole; a readLine that buffers ahead fails TestConsoleReaderTakesNoMoreThanItsLine as well. No finding. Windows: one UTF-16 unit per ReadConsole call (lineReader.readLine, cmd/launcher/lifecycle.go:61) is compile-only, unverified; smoke-test typed and piped input, non-ASCII input and the k71 handover to the foreground agent.
+
+Committed in b8e300c (Windows behaviour compiled only, unverified on a real .exe)
