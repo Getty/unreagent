@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-21T06:15:30Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T06:15:45Z
+created: 2026-11-21T05:16:21Z
+id: 129
+priority: low
+started: 2026-11-21T05:35:58Z
+status: done
+tags:
+- skills
+- docs
+title: 'skills/unreagent-files and README: follow-up nits after k49/k76'
+updated: 2026-11-21T06:15:45Z
+---
+
+From the k49/k76 re-review (2026-11-21). skills/unreagent-files/SKILL.md: (1) :87-88 calls Source/../Config/x.ini fine — on Linux it only works when Source exists (the path is walked, not cleaned first); a relative link that climbs out of the root and back in is refused too. (2) :82-83 says a root behind a link may be spelled either way — not for a Windows junction root, which Go no longer resolves. (3) :67-69 says an empty files.root falls back to the agent working directory — wrong and older than k49: empty means ${PROJECT_DIR}, and an unresolved root turns the file tools off (cmd/launcher/main.go:134). README "File-tool confinement" says the tools never leave files.root but lacks the hard-link / bind-mount caveat the skill carries. Lanes: unreagent-skill-author (skill), unreagent-doc-writer (README).
+
+Folded into the k73 doc pass (main agent): the skill-author and doc-writer edit skills/unreagent-files and the README file-tools text anyway, in worktree-agent-aba4ff26e883f66ef; k129 is committed with k73.
+
+Skill (skill-author) and README (doc-writer) nits done in worktree-agent-aba4ff26e883f66ef, together with k73.
+
+Review 2026-11-21 (unreagent-reviewer), worktree branch worktree-agent-aba4ff26e883f66ef on 9792365; files: skills/unreagent-files/SKILL.md, README.md (File-tool confinement). VERDICT: ready (commit together with k73, the same files carry the k73 findings). Check: the same run as k73, all green (gofmt, vet linux+windows, test, race, make linux/windows); go test ./internal/skills ok. Verified against code and Go 1.26 os.Root on Linux: empty files.root gets ${PROJECT_DIR} (config.go applyDefaults); files.enabled with an unresolved root stops Load with '${PROJECT_DIR} is unresolved (...) but used by files.root', and -files only disables the tools with the WARN line quoted verbatim (main.go:134-136); Source/../Config/x.ini is walked (Source missing gives 'openat ...: no such file or directory', Source a file gives 'not a directory', Source a dir works); Cfg -> ../MyGame/Config is refused with the link error; a relative link inside works; a hard link to a file outside is read (README/skill caveat holds). Junction root: filepath.EvalSymlinks does not evaluate mount points since Go 1.23 (winsymlink, go.mod says go 1.26), so the real-location spelling is refused; reasoned from the Go docs, UNVERIFIED on Windows. Nits, no action needed: README 'a file that may live elsewhere' is looser than the skill's 'wherever its other names live'; SKILL.md:70 runs past the wrap width.
+
+committed as 9e624eb on main
