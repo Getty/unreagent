@@ -1,0 +1,73 @@
+---
+claimed_at: 2026-11-21T07:33:37Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:33:49Z
+created: 2026-08-21T23:22:33Z
+id: 10
+priority: high
+started: 2026-11-21T07:33:49Z
+status: done
+tags:
+- skills
+- config
+title: 'config: skills: section + --no-skills-mcp override'
+updated: 2026-11-21T07:33:49Z
+---
+
+Add the skills: section to internal/config, following the conventions of the existing files: and runtimes: sections.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 5.
+Agent: unreagent-worker.
+
+Acceptance:
+- fields enabled (default true), mcp (default true), materialize (default false), dir (default ${PROJECT_DIR}/.claude/skills)
+- dir runs through the existing ${ENGINE}/${PROJECT} substitution
+- enabled:false disables both paths; mcp:false + materialize:false is a config ERROR reported at load time, not a silent no-op
+- both mcp and materialize true is legal
+- CLI flag --no-skills-mcp in cmd/launcher sets mcp:false AND materialize:true; check the ordering against the unreagent.local.yaml overlay so the flag wins
+- unreagent.example.yaml gains the section with comments
+
+Note: the local.yaml overlay replaces maps by YAML decode rather than deep-merging -- say so if the section grows list-valued options.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: no skills field, no --no-skills-mcp flag. Touches internal/config/config.go, cmd/launcher/main.go, unreagent.example.yaml (doc-writer). No dependencies. k15 follows. Size M.
+
+Started 2026-11-21 as one delivery bundle (k10 config → k11 MCP tool → k12 materialization), one worker, worktree on main c0045e2; its tests are to cover the acceptance of k15/k16/k17 so those can close with the commit. Decisions on k1 and k12 apply (prefix rule, dir default .claude/skills, configurable).
+
+Worker finished in worktree-agent-af98a3815ee9336cb (base c0045e2): skills: config section with -no-skills-mcp, the skills MCP tool (name + optional section), materialization into skills.dir with the k12 directory rule; k15/k16/k17 acceptance covered by tests (mapping in the worker report). Worker decisions: a load or collision error stops the start, a failed write only warns; collisions ignore case on every OS; only real unreagent-* directories count as ours; a relative skills.dir resolves against the agent working directory. Docs and project skills follow, then review.
+
+Correction (main agent): skills is a struct, not a map — unreagent.local.yaml overlays it field by field (each key set replaces only that key), pinned by TestLocalOverlaySkillsFieldByField and TestLocalOverlaySkillsDisabled (internal/config/overlay_test.go, added for k15). Docs (README, example, spec) by unreagent-doc-writer, project skills by unreagent-skill-author, OWNERS comment and the k93 hazard list by me; cmd/launcher/skills.go stays with unreagent-worker.
+
+Ready for review with docs, project skills and the overlay test, in worktree-agent-af98a3815ee9336cb.
+
+2026-11-21 06:22 Review (unreagent-reviewer), branch worktree-agent-af98a3815ee9336cb on c0045e2: CHANGES NEEDED, one README line only. The code and tests are ready.
+Read: internal/config/config.go, skills_test.go, load_test.go, overlay_test.go; cmd/launcher/main.go (the flag), skills.go (applyNoSkillsMCP); README.md, unreagent.example.yaml, spec section 5, the unreagent-config skill.
+Finding (doc-writer): README.md:233 says skills.dir counts as used with 'skills.materialize or -no-skills-mcp'. That is wrong. The flag is applied after Load, so an unresolved dir is cleared and only warns, which is what README.md:245-248 says two bullets later. Drop 'or -no-skills-mcp'.
+What I judged sound: the *bool defaults; ViaMCP and ViaFiles; the both-off check, gated on enabled, with a message that names all three knobs; the dir counting as used only while ViaFiles, and being cleared when it is unused and unresolved; the flag being applied after Load. One case to know about: a config with both paths off still fails to load even with -no-skills-mcp, because flags never rescue a load error. That matches how the other flags behave, so it is not a finding.
+k15 coverage, all 4 items met: TestSkillsDefaults; TestApplyNoSkillsMCP plus TestRunNoSkillsMCPWinsOverTheLocalOverlay (drives the real run() with a local overlay); TestSkillsBothPathsOffIsRejected; TestSkillsLegalCombinations and TestLocalOverlaySkillsDisabled. The README overlay sentence (README.md:272) matches TestLocalOverlaySkillsFieldByField.
+Mutations (mine): 8 on config plus 1 on the flag, all killed.
+Check, run in a scratch copy (worktree and its dist/ untouched): gofmt -l cmd internal skills is empty; go vet ./... and GOOS=windows go vet ./... are clean; go test -count=1 ./... ok; go test -race ./cmd/launcher ./internal/... ok; make linux, make windows and a CGO_ENABLED=0 Windows build ok; go mod verify ok.
+Rebase onto main c649355, tried in scratch: one conflict, in the README.md MCP tools table (k49/k76 rewrote the file-tools row). Resolve by keeping main's row and adding the skills row. main.go, config.go and tools.go merge cleanly, and the full check is green on the rebased tree.
+
+README.md updated: line 233 (skills.dir usage wording), ~870-880 (what materialization owns), ~893-905 (failure modes). Left in review.
+
+Correction, README.md actual ranges: 233-234 (skills.dir usage), 869-878 (what materialization owns), 890-904 (failure modes). Card stays in review.
+
+Correction, README.md ranges: 233-234, 869-878, 890-904. Stays in review.
+
+2026-11-21 07:08 Review round 2 (unreagent-reviewer), worktree-agent-af98a3815ee9336cb (uncommitted, base c0045e2): READY.
+- Files: internal/config/config.go, internal/config/skills_test.go, load_test.go, overlay_test.go; cmd/launcher/main.go (-no-skills-mcp), applyNoSkillsMCP in cmd/launcher/skills.go; unreagent.example.yaml; README.md.
+- Round-1 finding fixed: README.md:233-234 now says skills.dir needs skills.enabled with skills.materialize.
+- k15 coverage: defaults, both paths off rejected, legal combinations, unresolved dir cleared when unused, overlay field by field and disabled (config); TestApplyNoSkillsMCP and TestRunNoSkillsMCPWinsOverTheLocalOverlay (flag override). All green.
+- Check, run myself in a scratch copy of the worktree: gofmt -l cmd internal skills empty; go vet ./... on linux and GOOS=windows; go test -count=1 ./... ok; go test -race ./cmd/launcher ./internal/... ok; make linux; make windows (PE32+); CGO_ENABLED=0 windows build; go mod verify. Same set green on a scratch rebase onto main e66eb98.
+- Windows behaviour unverified (cross-compiled only).
+- Commits together with k11/k12; the blocking finding for the joint commit is the flaky run test noted on k11.
+
+2026-11-21 07:28 Review round 3 (unreagent-reviewer), worktree-agent-af98a3815ee9336cb (uncommitted, base c0045e2): READY, unchanged since round 2.
+Check, run myself:
+- On a scratch copy of the worktree: gofmt -l cmd internal skills printed nothing; go vet ./... on linux and GOOS=windows; go test -count=1 ./... ok; go test -race ./cmd/launcher ./internal/... ok; make linux; make windows (PE32+); CGO_ENABLED=0 windows build; go mod verify.
+- On a scratch rebase onto current main c0a5178 (it includes 2e27485): the same set, all green.
+Windows behaviour unverified (cross-compiled only).
+
+Committed as b78a5fc
