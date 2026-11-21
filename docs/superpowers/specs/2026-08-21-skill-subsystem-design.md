@@ -9,8 +9,10 @@
 servers: its own (`status`, `ue_*`, `logs`, `run_command`, `run_python`,
 `run_node`, `read_file`, …) plus the in-editor plugin's. What it does **not**
 hand over is any knowledge of *how* to use them. There is currently no
-prompt, skill, or instruction path at all — `cmd/launcher/main.go:204-219`
-appends `--mcp-config` and `--permission-prompt-tool`, nothing else.
+prompt, skill, or instruction path at all — `run()` in `cmd/launcher/main.go`
+appends only MCP and permission flags (`--mcp-config`, `--strict-mcp-config`,
+`--permission-prompt-tool` or `--dangerously-skip-permissions`); nothing
+reaches the agent as a prompt, skill or instruction.
 
 The consequence is the failure mode the UE plugin ecosystem already knows well:
 an agent facing 43 editor tools guesses property names and spirals into
@@ -160,7 +162,7 @@ launcher, an editor, or a network.
 
 ### 6.2 The `skills` MCP tool
 
-Registered in `cmd/launcher/main.go` alongside the existing tools, following
+Registered in `registerTools` (`cmd/launcher/tools.go`) alongside the existing tools, following
 the `mcp.Tool` shape in `internal/mcp/mcp.go`.
 
 - `Description` — generated via `DescribeAll`, listing every skill.
@@ -285,9 +287,9 @@ stays green.
   `<Project>/.claude/`. The prefix rule keeps it from touching anything it does
   not own, and the path is configurable.
 
-## 10. Note on an unrelated finding
+## 10. Note on an unrelated finding (resolved)
 
-The existing MCP tool descriptions in `cmd/launcher/main.go` are still German
-("Liest eine Textdatei aus dem UE-Projekt…"), which contradicts the language
-rule in `CLAUDE.md`; commit 4b3ff55 evidently missed them. Out of scope here,
-recorded so it is not lost.
+When this spec was written, the MCP tool descriptions were still German,
+contradicting the language rule in `CLAUDE.md`. They are English now: the
+descriptions in `cmd/launcher/tools.go` and `cmd/launcher/filetools.go` carry no
+German text. Nothing is left to do here.

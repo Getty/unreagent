@@ -12,9 +12,23 @@
 #                     EngineAssociation (Launcher version or a registered
 #                     source build), then the highest installed version found
 #                     via the registry / Epic default paths
-#    ${PROJECT}       full path to the .uproject (auto-detected alongside)
+#    ${PROJECT}       full path to the .uproject: unreal.project if set,
+#                     otherwise the first .uproject next to this file
 #    ${PROJECT_DIR}   directory containing the .uproject
 #    ${PROJECT_NAME}  name of the .uproject without extension
+#
+#  Placeholders are replaced in: unreal.editor/args; agent.command/args/env
+#  values/workdir; agent.hermes.configPath; permissions.allow/deny; the
+#  runtimes' uv/node/npm/project; files.root; commands.<name>.command/args/dir;
+#  every string in mcp.extraServers; the mcp.writeConfig paths. They are NOT
+#  replaced in unreal.project, engineRoot, mcp.address, mcp.token, names/keys
+#  and enums. There is no escape syntax: a literal ${PROJECT} in a Bash(...)
+#  rule or in agent.args is replaced too.
+#  A placeholder that cannot be resolved (engine or .uproject not found) in a
+#  field that is in use is a LOAD ERROR. Exceptions: the built-in compile and
+#  package commands are then left out with a warning, and with
+#  files.enabled: false an unresolved files.root only disables -files
+#  (with files.enabled: true it is a load error).
 #
 #  Machine-specific overrides (engine path, claude path …) belong in a
 #  git-ignored  unreagent.local.yaml  — example at the very bottom.
@@ -22,7 +36,7 @@
 
 agent:
   enabled: true
-  command: claude
+  command: claude                # default: claude
   # Automatically appends --mcp-config (+ --permission-prompt-tool) to the
   # claude invocation — no manual setup needed.
   claudeIntegration: true
@@ -42,6 +56,16 @@ agent:
   #   shutdown: always stop the whole stack (UE + MCP + launcher) immediately
   #   leave: keep everything running (warning only) — manual Ctrl-C needed
   # onExit: ask
+  # Seconds to wait before the agent is first started, and between restarts.
+  # 0 or unset = the default; below 0 is a load error (the floor of 1 keeps a
+  # crashing agent from restarting in a tight loop).
+  # startDelaySeconds: 5       # default 5
+  # restartDelaySeconds: 3     # default 3
+  # env: extra environment variables for the agent (values take placeholders).
+  # A map: unreagent.local.yaml merges it by key, so it adds or changes
+  # variables and keeps the others.
+  # env:
+  #   SOME_VARIABLE: "value"
 
 permissions:
   enabled: true
@@ -118,6 +142,9 @@ mcp:
   # servers defined here stay. (Lists, e.g. unreal.args, are replaced as a whole.)
   # Also write the MCP config as file(s) (for external clients like
   # your own Claude session, Cursor, VS Code). Also via flag: -write-mcp-config
+  # writeConfig: a LIST (unreagent.local.yaml replaces it as a whole). format is
+  # mcp_json (default) or vscode — anything else is a load error. A relative
+  # path is resolved against agent.workdir (default: the project directory).
   # writeConfig:
   #   - { path: ".mcp.json", format: mcp_json }       # Claude Code / Cursor / Claude Desktop
   #   - { path: ".vscode/mcp.json", format: vscode }  # VS Code
@@ -125,24 +152,37 @@ mcp:
 # Hermes Agent (Nous Research) as an alternative agent. Activation is
 # explicit via the sub-command `unreagent hermes-setup` — no auto-merge on
 # normal start. Setup writes our MCP server (with bearer token) into
-# $HERMES_HOME/config.yaml (default ~/.hermes/config.yaml).
+# $HERMES_HOME/config.yaml (default ~/.hermes/config.yaml). The Hermes config
+# is re-serialized (comments and key order are not kept); the original is
+# copied once to <config>.bak and that backup is never overwritten. Like a
+# normal start, hermes-setup needs a resolvable engine (UE_ROOT / engineRoot).
 # agent:
 #   hermes:
 #     enabled: true
 #     # serverName: unreagent     # key under mcp_servers
-#     # configPath: ""            # empty = $HERMES_HOME/config.yaml or ~/.hermes/config.yaml
+#     # configPath: ""            # empty = $HERMES_HOME/config.yaml or ~/.hermes/config.yaml (takes placeholders)
 
 # ------------------------------------------------------------
 # unreal: and commands: are OPTIONAL. The editor path as well as the
 # "compile" and "package" commands are derived automatically from
 # ${ENGINE} + ${PROJECT}. Only override when needed:
 #
+# compile and package exist only when both ${ENGINE} and ${PROJECT} resolve;
+# otherwise they are skipped with a warning at start. A command of the same
+# name defined here replaces the built-in.
+#
 # unreal:
+#   # The .uproject to open. Absolute, or relative to the directory of THIS
+#   # config file; it must exist, and it takes NO placeholders (they are
+#   # derived from it). Default: the first .uproject next to the config.
+#   # project: "MyGame/MyGame.uproject"
 #   # args REPLACES the default ["-stdout", "-FullStdOutLogOutput"] (the .uproject
-#   # is always prepended) — give the full list. A list in local.yaml replaces it too.
+#   # is always prepended) — give the full list. A list in local.yaml replaces it
+#   # too. Unset or "args: ~" = the default; "args: []" = no extra arguments.
 #   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
 #   restart: on-failure
 #   maxRestarts: 5
+#   restartDelaySeconds: 3    # default 3 (0 = default); below 0 is a load error
 #   unattended: true          # -unattended: no crash dialog + no recovery prompt (default on)
 #   killCrashReporter: true   # kill a hanging CrashReportClientEditor.exe (default on)
 #   cleanOnRestart: false     # clear Saved/Autosaves/PackageRestoreData.json + Saved/Crashes before start
@@ -157,7 +197,8 @@ mcp:
 # ============================================================
 #  Example  unreagent.local.yaml  (do NOT commit — git-ignored):
 #
-#    engineRoot: "D:/UE/UE_5.7"        # if auto-detect fails
+#    engineRoot: "D:/UE/UE_5.7"        # if auto-detect fails (a relative path
+#                                      # resolves against the working directory)
 #    agent:
 #      command: "C:/Path/To/claude.exe"  # claude not in PATH
 # ============================================================

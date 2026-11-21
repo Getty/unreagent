@@ -102,8 +102,8 @@ documented escape hatch. Do not make these behaviors unconditional.
 
 ## Testing on Linux
 
-You cannot exercise Job Objects, the taskbar flash, or registry-based engine
-detection on the dev box. Verify what you can: the `!windows` half compiles and
-behaves, the shared logic has tests, and `GOOS=windows GOARCH=amd64 go build`
-succeeds. Then say plainly that the Windows path is unverified — do not claim
-it works because it compiled.
+You cannot exercise Job Objects or registry-based engine detection on the dev
+box. Verify what you can: the `!windows` half compiles and behaves, the shared
+logic has tests, and `GOOS=windows GOARCH=amd64 go build` succeeds. Then say
+plainly that the Windows path is unverified — do not claim it works because it
+compiled.

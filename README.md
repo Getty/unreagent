@@ -81,7 +81,11 @@ as Unreal MCP is passed through unchecked.
 
 The same config can additionally be written to a file for **external clients**
 (your own Claude session, Cursor, VS Code). Via `mcp.writeConfig` (a list of
-`{path, format}`, format `mcp_json` or `vscode`) or the flag
+`{path, format}`, format `mcp_json` (the default) or `vscode`; any other
+format is a load error —
+`mcp.writeConfig[0].format invalid: "json" (allowed: mcp_json, vscode)`; a
+relative `path` is resolved against the agent working directory, normally the
+project directory; the overlay replaces the list as a whole) or the flag
 `-write-mcp-config <path>`. Handy with `-no-agent`: the launcher writes the
 `.mcp.json` and keeps UE + MCP running, you connect externally.
 
@@ -187,8 +191,60 @@ mcp:         { enabled: true }
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> the `.uproject`'s `EngineAssociation` (Launcher version, or a registered source build) -> the highest installed version found via the registry / Epic default paths |
-| `${PROJECT}` / `${PROJECT_DIR}` / `${PROJECT_NAME}` | `.uproject` next to the config (auto-detect) |
+| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> the `.uproject`'s `EngineAssociation` (Launcher version, or a registered source build) -> the highest installed version found via the registry / Epic default paths. A relative `UE_ROOT` / `engineRoot` is resolved against the **working directory** and made absolute |
+| `${PROJECT}` | `unreal.project` if set (absolute, or relative to the **config directory**; the file must exist), otherwise the first `.uproject` next to the config |
+| `${PROJECT_DIR}` / `${PROJECT_NAME}` | directory of that `.uproject` / its file name without the extension |
+
+A relative `-config <path>` is resolved against the working directory and made
+absolute first, so every placeholder value ends up an absolute path.
+
+**Where placeholders are replaced.** In `unreal.editor` and `unreal.args`;
+`agent.command`, `agent.args`, the `agent.env` values, `agent.workdir` and
+`agent.hermes.configPath`; `permissions.allow` / `permissions.deny`; the
+runtimes' executables and project directories (`runtimes.python.uv` /
+`project`, `runtimes.node.node` / `npm` / `project`); `files.root`; every
+`commands.<name>` `command`, `args` and `dir`; every string inside
+`mcp.extraServers`; and the `mcp.writeConfig` paths. There is no escape
+syntax: a shell-style `${PROJECT}` inside a `Bash(...)` rule or in `agent.args`
+is replaced as well.
+
+**Where they are not.** `unreal.project` (the placeholders are derived from it;
+a `${...}` there is a load error), `engineRoot`, `mcp.address`, `mcp.token`,
+names and keys (`agent.hermes.serverName`, the `agent.env` names, the command
+names), descriptions and every enum stay literal.
+
+**An unresolved placeholder is a load error.** If the engine or the `.uproject`
+cannot be found and a field the launcher will actually use still contains the
+placeholder, loading stops instead of continuing with a path such as
+`/Engine/Binaries/Win64/UnrealEditor.exe` or an allow rule `Edit(/*)`:
+
+```
+${ENGINE} is unresolved (engine not found — set UE_ROOT or engineRoot in unreagent.local.yaml) but used by unreal.editor
+${PROJECT} is unresolved (no .uproject found next to the config — set unreal.project) but used by commands.cook.args[1]
+```
+
+A field counts as used when its section is enabled (`agent.*` needs
+`agent.enabled`, `agent.hermes.configPath` needs `agent.hermes.enabled`,
+`permissions.*` needs `permissions.enabled`, a runtime needs its `enabled`
+(`runtimes.node.npm` also counts when an extra server is started with `node`),
+`mcp.extraServers` and `mcp.writeConfig` need `mcp.enabled`, `files.root` needs
+`files.enabled`). `unreal.*`, `agent.workdir` and your own `commands` always count.
+Two exceptions never fail the load:
+
+- The built-in `compile` and `package` commands are **left out with a warning**
+  when the engine or the project does not resolve
+  (`WARN built-in command compile not offered: it needs the engine and the .uproject`);
+  they then do not appear in `status` or `run_command`. A command of that name
+  you define yourself is always kept and is checked like any other.
+- With `files.enabled: false`, an unresolved `files.root` is cleared instead of
+  rejected, and `-files` is then refused at startup
+  (`WARN file tools disabled: files.root names a placeholder that is unresolved`).
+  Set `unreal.project` or an explicit `files.root`.
+
+Without an engine and with the default `unreal.editor`, the launcher therefore
+stops at load, and so does `unreagent hermes-setup`, although it does not start
+the editor. Point `UE_ROOT` / `engineRoot` at an installation, or set
+`unreal.editor` to a literal path.
 
 Machine-specific overrides go in a **git-ignored `unreagent.local.yaml`**,
 which is overlaid on top of `unreagent.yaml`:
@@ -198,6 +254,15 @@ which is overlaid on top of `unreagent.yaml`:
 engineRoot: "D:/UE/UE_5.7"                 # if auto-detect fails (path is an example)
 agent: { command: "C:/.../claude.cmd" }    # if claude is not on PATH
 ```
+
+The overlay is applied by YAML decode, **not** a deep merge: a scalar replaces
+the base value only when the local file sets it; a **list** replaces the base
+list as a whole (`unreal.args`, `agent.args`, `permissions.allow` / `deny`,
+`mcp.writeConfig`); a **map** merges by key, and each entry you give replaces
+the base entry whole (`agent.env`, `commands`, `mcp.extraServers`). So
+`agent.env: { HOME: "C:/Path/To/Home" }` adds or changes `HOME` and keeps the
+other variables of the base file, while a command defined in both files comes
+out with the local definition only — you cannot override just its `args`.
 
 Recommended `.gitignore` entry in the UE project:
 
@@ -396,13 +461,13 @@ runs no check on HTTP entries, `unreagent.log` will not say which.
 
 | Section | Purpose |
 |---|---|
-| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable) |
-| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
+| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
-| `unreal` | *optional* — editor args, restart policy (`never` / `on-failure` / `always`) |
-| `commands` | *optional* — your own one-shot commands (compile / package are built-in) |
-| `engineRoot` | *usually only in local.yaml* — engine path override |
+| `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`never` / `on-failure` / `always`), `restartDelaySeconds` (0 = default 3; negative is a load error) |
+| `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
+| `engineRoot` | *usually only in local.yaml* — engine path override; relative is resolved against the working directory |
 
 ### No process zombies (Windows)
 
@@ -519,18 +584,48 @@ unreagent hermes-setup      # merges MCP entry into ~/.hermes/config.yaml
 
 What `hermes-setup` does, in order:
 
-1. Resolves the target config: explicit `agent.hermes.configPath` →
-   `$HERMES_HOME/config.yaml` → `~/.hermes/config.yaml`.
-2. If `mcp.token` is empty, generates 32 random bytes (hex) and writes
+1. Loads the unreagent config. This needs an engine like a normal start does
+   (see "Portability" above): without one, `hermes-setup` stops with the
+   `${ENGINE} is unresolved ...` load error, although it never starts the
+   editor. Set `UE_ROOT` or `engineRoot` in `unreagent.local.yaml`.
+2. Checks `agent.hermes.enabled`. If it is not set, it prints
+   "nothing to do" and exits 0.
+3. If `mcp.token` is empty, generates 32 random bytes (hex) and writes
    `mcp.token:` into `unreagent.local.yaml` (git-ignored). The launcher
-   reads it back on the next start, so the token survives restarts.
-3. Backs up an existing Hermes config to `<path>.bak` (once; never
-   overwrites a previous backup).
-4. Sets `mcp_servers.unreagent: { url, headers: { Authorization: Bearer } }`
+   reads it back on the next start, so the token survives restarts. The file
+   is re-serialized, so its comments are lost.
+4. Resolves the target config: explicit `agent.hermes.configPath` (it takes the
+   path placeholders) → `$HERMES_HOME/config.yaml` → `~/.hermes/config.yaml`.
+5. Reads the existing Hermes config and merges into it: every other key and
+   every other MCP server stays. A missing, empty or `null` file counts as an
+   empty config.
+6. Backs up the original, byte for byte, to `<path>.bak` — **once**. An
+   existing `<path>.bak` is never overwritten, so it keeps the oldest copy.
+   (No backup is made for a missing or empty file.)
+7. Sets `mcp_servers.unreagent: { url, headers: { Authorization: Bearer } }`
    in the Hermes config. A second run **overwrites** the entry rather than
    duplicating it — the operation is idempotent.
-5. Writes the file atomically (temp + rename) so a crash mid-write cannot
+8. Writes the file atomically (temp + rename) so a crash mid-write cannot
    leave a half-written config.
+
+The file is re-serialized, so **comments and key order in the Hermes config are
+not preserved**; only the data survives, and a one-line
+`# unreagent-managed ...` marker is put on top. Keep anything you want to
+retain verbatim in the `.bak`.
+
+If `mcp_servers` is not a mapping with string keys — a list, or a key YAML
+reads as a number — `hermes-setup` refuses with
+`Hermes config <path> left untouched: mcp_servers is not a mapping of server names ...`
+and the Hermes config is left untouched (no backup, no write). The same goes for
+a Hermes config that cannot be parsed. A token generated in step 3 may already
+be saved in `unreagent.local.yaml` by then; the re-run reuses it. Fix the block
+by hand and re-run.
+
+**Recovering after 0.0.9 or earlier.** Those releases moved the Hermes
+config to `<path>.bak` and wrote a new file holding only the unreagent entry. If
+that happened to you, the original is in `config.yaml.bak` next to the config
+(`~/.hermes/` by default); later runs never overwrite that
+backup. Copy it back, then run `hermes-setup` again — it now merges.
 
 The MCP server enforces `Authorization: Bearer <token>` whenever
 `mcp.token` is set — including for the embedded Claude Code agent, which
@@ -591,16 +686,16 @@ guessing:
 
 | Flag | Effect |
 |---|---|
-| `-config <path>` | alternative path to `unreagent.yaml` |
+| `-config <path>` | alternative path to `unreagent.yaml`; a relative path is made absolute against the working directory before anything is derived from it |
 | `-no-agent` | **do not** start the agent — only UE + MCP server. An external agent (your own Claude Code session) then connects to the MCP server. |
-| `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. |
+| `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. Refused with a warning (file tools stay off) when `files.root` contains a placeholder that did not resolve — set `unreal.project` or an explicit `files.root`. |
 | `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). |
 
 ## Sub-commands
 
 | Sub-command | Purpose |
 |---|---|
-| `unreagent hermes-setup` | One-shot merge of the unreagent MCP server into Hermes Agent's `config.yaml` (idempotent; auto-generates `mcp.token` if missing). See "Hermes Agent" above. |
+| `unreagent hermes-setup` | One-shot merge of the unreagent MCP server into Hermes Agent's `config.yaml` (idempotent; auto-generates `mcp.token` if missing; needs a resolvable engine, like a normal start). See "Hermes Agent" above. |
 
 ### How the agent runs (three modes)
 

@@ -10,7 +10,7 @@ description: >
 # unreagent — MCP tools
 
 `internal/mcp/mcp.go` is a hand-rolled MCP server: JSON-RPC 2.0 over a single
-HTTP POST endpoint, ~300 lines, no SDK. It implements exactly `initialize`,
+HTTP POST endpoint, no SDK. It implements exactly `initialize`,
 `notifications/initialized`, `notifications/cancelled`, `ping`, `tools/list`,
 `tools/call`. That is the whole protocol surface the agents need — resist
 growing it speculatively.
@@ -72,9 +72,13 @@ Descriptions are **English**, like everything that ships — every description i
 
 ## Long-running work
 
-`serviceAction` and `scriptAction` are the two adapters that turn supervisor
-operations into tool handlers. Reuse them rather than calling the supervisor
-directly from a closure — they already normalize status output and errors.
+Two adapters turn supervisor operations into tool handlers: `serviceAction`
+(`tools.go`) serves the service lifecycle tools `ue_start` / `ue_stop` /
+`ue_restart`, and `scriptAction` (`scripts.go`) the code-execution tools
+`run_python` / `run_node`. Reuse them for a tool of the same kind. The other
+tools — `status`, `logs`, `run_command` — call the supervisor from their own
+closure; a one-shot tool returns what `run_command` and `scriptAction` return,
+`exit N` plus `tailLines(output, 300)`, with `IsError` on a non-zero exit.
 
 Commands are one-shot and blocking (`RunCommand` / `RunOnce`); a UE `compile`
 takes minutes and the agent's MCP client is waiting the whole time. If you add
@@ -97,5 +101,8 @@ curl -s -X POST http://127.0.0.1:8765/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 -m json.tool
 ```
 
-`cmd/launcher/mcpcheck_test.go` covers the handshake path; extend it rather
+The server's own protocol — `initialize`, `tools/list`, `tools/call`, batches,
+bearer auth, origin checks — is tested in `internal/mcp/mcp_test.go`;
+`cmd/launcher/mcpcheck_test.go` tests only the bridge smoke test
+(`smokeTestMCP` against a fake stdio server). Extend the matching file rather
 than writing a new harness.

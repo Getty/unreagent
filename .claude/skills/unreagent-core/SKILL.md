@@ -54,7 +54,7 @@ anything nearby:
 | `firstString(args, keys…)` | `helpers.go` | first present key out of several aliases |
 | `errResult(err)` | `helpers.go` | the MCP error result every handler returns |
 | `serviceAction(sup, name, fn)` | `tools.go` | wraps a service call into a tool handler |
-| `scriptAction(sup, cmd, pre, dir, ext, label)` | `scripts.go` | wraps a one-shot command into a tool handler |
+| `scriptAction(sup, cmd, pre, dir, ext, label)` | `scripts.go` | the `run_python` / `run_node` handler: writes the agent's code to a script in the runtime's working directory and runs it via `RunOnce` (`run_command` calls `RunCommand` directly) |
 
 The package only *looks* orthogonal to the three packages below it. A change
 that skips these helpers ends up with a second, subtly different way to do the
@@ -106,13 +106,14 @@ A Linux-only build proves nothing about the actual shipping target.
 
 ## Testing reality
 
-Only two test files exist (`internal/supervisor/supervisor_test.go`,
-`cmd/launcher/mcpcheck_test.go`). There is no mock harness and no fixture system —
-tests use the stdlib `testing` package, real temp dirs, and real short-lived
-processes. New tests follow that style rather than introducing a framework.
+Every package has tests next to the code it covers
+(`git ls-files '*_test.go'` lists them). There is no mock harness and no fixture
+system — tests use the stdlib `testing` package, real temp dirs, and real
+short-lived processes. New tests follow that style rather than introducing a
+framework.
 
-Windows-only code paths (Job Objects, taskbar flash, registry engine detection)
-cannot be exercised on the Linux dev box. Test the platform-independent logic and
+Windows-only code paths (Job Objects, registry engine detection) cannot be
+exercised on the Linux dev box. Test the platform-independent logic and
 guard the rest behind build tags; do not fake `syscall` to reach coverage.
 
 ## Where the product is documented

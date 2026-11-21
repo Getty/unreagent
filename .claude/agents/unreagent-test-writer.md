@@ -26,10 +26,10 @@ wrong, stop and ask. Apply the conventions above silently.
 Hard rules:
 
 - **Stdlib `testing` only.** No assertion library, no mock framework, no fixture
-  system. The existing tests (`internal/supervisor/supervisor_test.go`,
-  `cmd/launcher/mcpcheck_test.go`) are the house style; match them.
-- **Never fake `syscall` to reach Windows-only code.** Job Objects, the registry
-  engine lookup and the taskbar flash are unreachable on the Linux dev box. Test
+  system. The existing tests (`git ls-files '*_test.go'`; e.g.
+  `internal/supervisor/supervisor_test.go`) are the house style; match them.
+- **Never fake `syscall` to reach Windows-only code.** Job Objects and the
+  registry engine lookup are unreachable on the Linux dev box. Test
   the platform-independent logic, let the `//go:build !windows` half carry its
   no-op contract, and state plainly that the Windows path is untested.
 - **No sleeps as synchronization.** Processes under test are real and short-lived;
