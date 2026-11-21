@@ -1,0 +1,130 @@
+---
+class: standard
+completed: 2026-11-21T15:03:30Z
+created: 2026-11-21T13:51:28Z
+id: 179
+priority: medium
+started: 2026-11-21T14:17:59Z
+status: done
+tags:
+- supervisor
+- bug
+title: A stop that meets a due restart timer still starts the process once
+updated: 2026-11-21T15:03:56Z
+---
+
+Found by the k37 worker, outside that card's scope.
+
+**Problem:** in `internal/supervisor/supervisor.go`, a stop that arrives together with a due automatic-restart timer can still start the process once before it is stopped. The loop takes the timer first, starts the run, then handles the stop. There is no `OnExit`, and the service ends up stopped, but the editor or agent comes up for a moment, which costs a UE editor start and stop.
+
+**Expected:** like k37 item 1, a waiting stop wins. Before acting on a due restart timer, the loop checks once, without blocking, for a waiting control message. A stop cancels the restart.
+
+**Context:** builds on k37's `handle()` closure and `exitTaken` hook. Lane: unreagent-worker (supervisor), with a regression test that drives the timer without sleeps.
+
+Extension from the k37 review: a start or restart that is already waiting when the process exits still lets OnExit fire first. For a headless agent, a console "r agent" that races the agent's exit still shuts the launcher down. Same pattern as the stop/timer race: check the waiting control message before the decision.
+
+Decision 2026-11-21 (main agent): before a due restart timer fires, the loop checks for a waiting control message without blocking. A waiting stop cancels the restart, and nothing starts. A waiting start or restart replaces the timer's restart, following k153's path. If a start or restart is already waiting when the process exits, it counts as the user's action: lastExit is recorded, OnExit does not fire, and the start or restart is carried out, so a racing console 'r agent' no longer ends a headless launcher. Tests run without timing, through hooks or channels.
+
+Worker started: reading supervisor.go loop (backoff case, exit branch, handle()), k37/k153/k70 tests. Plan: non-blocking ctrl check + test seam in the backoff case; exit branch skips OnExit for a waiting start/restart.
+
+Worker done, ready for review. Worktree agent-a935a15f5aa02c886 on ce9ef4a, uncommitted, 2 files: internal/supervisor/supervisor.go, internal/supervisor/control_test.go. main.go, cmd/launcher and the job close in stop() and the exit branch are untouched.
+
+Fix 1, timer (supervisor.go:725, case <-backoff): new test seam Supervisor.backoffTaken (nil in production, :165), then the same non-blocking check k37 does at the exit. A waiting stop, start or restart goes through handle() instead of the timer's start: the stop cancels it and nothing spawns; a start or restart runs while backoff is still set, so it gets ReplacesRestart exactly as k153 defines it (crash evidence kept), and it is never Automatic. A waiting status is answered after the timer's start, as on the next turn. The delayed first start goes through the same path (a start waiting then is a plain start, not ReplacesRestart).
+
+Fix 2, exit with a waiting start or restart (:797, :809): takenOver suppresses OnExit only. Everything else counts the exit as before. Choices, mine:
+- lastExit: set to the exit, then cleared by the start or restart as StartService and RestartService always do. So the reply shows no lastExit, the same as for a call that comes right after the exit. I did not keep lastExit across the call: that would contradict the documented "ue_start and ue_restart remove it" (iterate SKILL.md:55, README:1129). If "recorded in lastExit" meant it should survive the call, that is a small change plus a doc amendment. Your call.
+- k70 fast-fail: the exit is counted (countRun) and may trigger the give-up line; the call then resets quickFails and restarts as any manual start does (TestManualStartResetsTheFailCount covers the reset).
+- k153/k128 crash episode: where the policy restarts the exit, the backoff is still armed and the call takes its place (ReplacesRestart). Where it does not (restart: never, maxRestarts used up, give-up), afterGiveUp is still set and the call's start says AfterGiveUp. Either way the dumps of the crash that just happened are kept, the same as when OnExit fired and the user then restarted.
+- The launcher: OnExit not firing also means sess.agentExited is not called for that run; the agent is running again, so the exit code follows its next run.
+Docs in the code updated: ServiceSpec.OnExit, Start.ReplacesRestart, the exit-branch comment.
+
+Tests (control_test.go): helper runWithQueuedCall (:219) puts a call into a buffered ctrl channel at a seam, like k37's test; no sleeps drive the race.
+- TestControlCallWaitingWithADueRestart (:288), subtests stop/start/restart/status, driven by backoffTaken.
+- TestStartOrRestartWinsOverAnExitReadyWithIt (:332), subtests start and restart under restart: never, plus start under on-failure, driven by exitTaken. The only wait is a 200 ms negative check that OnExit stays silent, as in k37's test.
+Red without the fix, via go test -overlay (scratch copies, tree untouched):
+- v1, the hook kept but no check in the backoff case: stop/start/restart red ("PreStart Automatic = [false true], want [false]"; restart [false true false]).
+- v2, status also takes the timer's place: status red.
+- v3, OnExit not gated (the k37 state): both restart-never subtests red ("OnExit fired ({Success:false StartFailed:true})").
+- v4, no restart armed when a call takes over: the on-failure subtest red (AfterGiveUp instead of ReplacesRestart).
+- v5, no afterGiveUp when a call takes over: both restart-never subtests red.
+The on-failure subtest and the status subtest are green on the k37 code too. They pin the k153 consistency and the status path, which is why they are shown red under the v4 and v2 mutations instead.
+
+Check, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -count=1 -race ./internal/supervisor ./cmd/launcher; the new tests plus k37's at -race -count=20; make linux; make windows; and a CGO_ENABLED=0 GOOS=windows build. Windows: the change is platform-neutral loop logic and the job handling is untouched, but none of it ran on Windows. Unverified, compile only.
+
+Docs: no README, skills/unreagent-iterate or .claude/skills/unreagent-core line describes either race. Iterate SKILL.md:93 ("Restart pending: the editor starts now instead of waiting"), :213-221 (a start in place of a pending restart, a stop cancelling it) and :55 (lastExit) stay true. Nothing for the doc-writer or the skill-author.
+
+Proposed subject: Let a waiting call beat a due restart and an exit's OnExit (k179)
+Proposed Changes entry ({{$NEXT}}, next to k37's stop entry, or folded into it):
+  - A stop that meets the automatic restart coming due cancels it, so the
+    editor is no longer spawned just to be killed; a start or restart that
+    meets it takes its place. A start or restart (ue_start, ue_restart,
+    console start, r) that meets the process ending on its own is carried
+    out without the exit handling, so a console "r agent" that races a
+    headless agent's exit no longer shuts the launcher down.
+
+Main agent: the worker's lastExit reading is accepted. The exit is recorded, then cleared by the start or restart as always, which matches skills/unreagent-iterate:55 and README:1129. The k70 count and the k153 crash evidence are handled as the worker describes. On to review.
+
+Review (unreagent-reviewer), worktree agent-a935a15f5aa02c886, 2 files: internal/supervisor/supervisor.go, internal/supervisor/control_test.go. Verdict: CHANGES NEEDED, tests only. supervisor.go is correct as it stands and needs no change.
+
+Check, run by me, all green: gofmt -l cmd internal skills (empty); go vet ./... for GOOS linux and windows; go test -count=1 ./...; go test -count=1 -race ./internal/supervisor ./cmd/launcher; the two new tests plus k37's at -race -count=20; make linux; make windows. Main has moved on to 602304e, and internal/supervisor is unchanged since ce9ef4a. The patch applies cleanly there (git apply --check). With the two files laid over 602304e via -overlay, vet (both GOOS), go test ./... and a CGO_ENABLED=0 GOOS=windows build are green. Windows: compile only, so unverified. The loop logic is platform-neutral, and the diff does not touch job.Close() in stop() or in the exit branch.
+
+What I checked and confirmed:
+- Timer (supervisor.go:725-753). A waiting stop cancels the timer's start, and nothing spawns. A waiting start or restart starts once with ReplacesRestart, because backoff is still set when handle() runs. At the delayed first start it is a plain start, not ReplacesRestart. A waiting status is answered after the timer's start, which leaves the outcome unchanged. The break leaves the outer select, which is correct.
+- Exit (:797, :809). takenOver gates OnExit only. A real crash with nothing waiting still reaches OnExit: in mutation r3 (OnExit only when a message waits), TestFastFailGivesUp, TestFastFailCountResetsAfterALongerRun, TestCleanExitResetsTheFailCount and TestManualStartResetsTheFailCount all go red. A waiting status does not suppress OnExit. My probe passes on the fix.
+- Load-bearing behaviour, all kept: k37 stop-wins, k153 ReplacesRestart, k128 afterGiveUp, the k70 count (counted, then reset by the call) and KILL_ON_JOB_CLOSE.
+- Launcher effect. For a headless agent, the console "r agent" or "start agent" racing the agent's exit no longer reaches sess.end(), so the launcher keeps running. sess.agentExited is skipped for that run, and the next run sets it. For the editor, the crash-dumps line in makeEditorExitHandler is skipped for that exit. That is acceptable: the editor is being started again, and PreStart still keeps the dumps (AfterGiveUp or ReplacesRestart).
+- backoffTaken is unexported and nil in production, and it is set only in tests. Its cost is one nil check per timer.
+- Tests. Mutations r1, r4, r5, r7 and r8 each turn a new subtest red: timer fix reverted, ReplacesRestart lost at the timer, status answered before the start, OnExit not gated, a stop handled after the timer's start. -race -count=20 is stable. The 200 ms check (control_test.go:366) is a negative check: under load it can only miss, never flake red. In practice r7 goes red after 0.01s, because the OnExit goroutine is launched before the call is answered.
+
+Findings:
+1. (must, test gap) control_test.go:332-370 does not pin the status boundary at the exit. Mutation r2, `takenOver := pending != nil` (a waiting status also suppresses OnExit), is GREEN on the whole supervisor suite. My probe catches it: restart never, status queued at exitTaken, OnExit must fire. Status is the call most likely to meet an exit, since an agent polls MCP status and the console has `s`. A later widening of takenOver would therefore drop the editor's crash handling without any test noticing, including the session end when there is no agent and MCP is not serving. Fix: add a status case under restart: never. It expects OnExit to fire (waitExit, a positive check with no timing risk), Running false and LastExit "exit 1". This is the counterpart of the status subtest on the timer side (:296).
+2. (should, test gap) control_test.go:288 does not test the delayed first start, although the backoffTaken doc (supervisor.go:162-165) and the worker's note name it. Mutation r6, the check only `&& backoffAuto`, is GREEN. My probe (pattern "s", StartDelay 10ms, stop queued at backoffTaken, expecting no PreStart and not desired) catches it. This path is the agent's agent.startDelaySeconds. Fix: a StartDelay stop case, and optionally a start case expecting ReplacesRestart [false].
+3. (follow-up, out of scope) supervisor.go:719-725: ctx.Done meeting a due backoff is the same random pick. At shutdown the loop can still run PreStart and spawn the editor once before ctx.Done stops it on the next turn. This is pre-existing and not k179's claim. Worth a card of its own.
+4. (info) The worker's mkvariants.py v1 pattern no longer matches the final source, because `break` now has a trailing comment, so the script exits on it. I re-derived it as r1 on the final file, and the result is the same red.
+Route 1 and 2 to unreagent-worker (OWNERS: control_test.go is the worker's).
+
+Subject: confirmed. "Let a waiting call beat a due restart and an exit's OnExit (k179)" is 65 characters.
+Changes: fold it into k37's unreleased bullet (Changes:296-298, one topic, one entry) instead of adding a second one. Also drop the "no longer" journey wording. Proposed replacement:
+  - A stop, start or restart (ue_stop, ue_start, ue_restart, the console's
+    stop, start and r) that meets the process ending on its own, or its
+    automatic restart coming due, is carried out instead of the exit
+    handling and that restart: a stop leaves the service stopped with
+    nothing started, a start or restart starts it once. A headless launcher
+    keeps running through either, also when "r agent" races the agent's exit.
+
+Worker, review findings 1 and 2 done, tests only. supervisor.go is unchanged since the review. Only internal/supervisor/control_test.go changed.
+
+1. TestStartOrRestartWinsOverAnExitReadyWithIt has a new subtest, "status, restart never". A status waits at exitTaken. The reply must show running false, desired true and lastExit "exit 1", and only the first start may come (PreStart Automatic, AfterGiveUp and ReplacesRestart all [false]). OnExit must fire with Exit{StartFailed: true}. That is a positive waitExit with no timing risk. The table now carries automatic, running, lastExit and onExit per case, and the doc comment says that only a start or restart takes the exit over.
+2. TestControlCallWaitingWithADueRestart has two new subtests for the delayed first start (pattern "s", StartDelay 10ms, call queued at backoffTaken):
+   - "stop at the delayed first start": no PreStart at all, not desired, not running.
+   - "start at the delayed first start": one plain start, ReplacesRestart [false], Automatic [false], running.
+   Subtests are now named per case, and the failure message says "when the timer came due".
+
+Red under -overlay (scratch copies, tree untouched; mkvariants.py's v1 pattern fixed for the final source, as review item 4 noted):
+- v6 `takenOver := pending != nil`: "status, restart never" red ("OnExit did not fire within 10s: a status waiting at the exit suppressed OnExit").
+- v7 the check only with `&& backoffAuto`: "stop at the delayed first start" red ("PreStart Automatic = [false], want []").
+- v8 replacesRestart() without `&& backoffAuto`: "start at the delayed first start" red ("ReplacesRestart = [true], want [false]"). Under v7 that subtest stays green, because the start then runs as the timer's start and the waiting start is a no-op with the same flags. The stop subtest is the one that pins v7.
+- v1 to v5 re-run on the final source: red as before, and v1 now also turns the delayed-stop subtest red.
+
+Check, all green: gofmt -l cmd internal skills (empty; gofmt realigned one struct comment); go vet ./... for GOOS linux and windows; go test -count=1 ./...; go test -count=1 -race ./internal/supervisor ./cmd/launcher; and at -race -count=20 TestControlCallWaitingWithADueRestart, TestStartOrRestartWinsOverAnExitReadyWithIt, TestStopWinsOverAnExitReadyWithIt and TestPreStartSaysWhetherTheStartReplacesAPendingRestart (129s). The whole supervisor package was not run at -count=20: one -race pass takes about 36 s, so 20 would take about 12 minutes, over the time box. Windows: compile only (vet with GOOS=windows), unverified.
+
+Not done here: review finding 3 (ctx.Done meeting a due backoff can still spawn once at shutdown) is for a new card on the unreagent board, worker lane. Changes: I take the reviewer's folded replacement for k37's bullet.
+
+Re-review (unreagent-reviewer), test round. Worktree agent-a935a15f5aa02c886, 2 files: internal/supervisor/supervisor.go, internal/supervisor/control_test.go (both unreagent-worker per OWNERS). Verdict: READY. Windows: compile only, so unverified.
+
+State: supervisor.go's diff is byte-identical to the patch I reviewed. Only control_test.go changed. No untracked files. HEAD is still ce9ef4a.
+
+Findings 1 and 2: closed. I derived the mutations myself rather than running the worker's script, and ran them via -overlay on scratch copies:
+- takenOver := pending != nil: 'status, restart never' goes red (control_test.go:381, OnExit did not fire). Every other subtest stays green.
+- the timer check only with && backoffAuto: 'stop at the delayed first start' goes red (:319, PreStart Automatic = [false], want []).
+- replacesRestart() without && backoffAuto: 'start at the delayed first start' goes red (:322, ReplacesRestart = [true], want [false]).
+- timer check removed, message re-queued for the next turn: stop, start and restart go red at the timer, and so does the delayed-first-start stop.
+Timing: control_test.go has no time.Sleep. The new cases wait on the call's reply, which is queued at the seam. The status case's OnExit check is a positive waitExit. The 200 ms wait is the existing negative check, which can only miss, never flake red. StartFailed relies on the 10 s FastFailWindow with an exit-at-once helper, as fastfail_test.go:260 already does. -race -count=10 on TestControlCallWaitingWithADueRestart and TestStartOrRestartWinsOverAnExitReadyWithIt: 120/120 PASS, no race reported.
+
+Check, run by me, all green: gofmt -l cmd internal skills (empty); go vet ./... for GOOS linux and windows; go test -count=1 ./...; go test -count=1 -race ./internal/supervisor; make linux; make windows.
+
+On main 4ac817d: git apply --3way --check applies both files cleanly, with no conflicting hunk. Main has moved since ce9ef4a in internal/config, cmd/launcher, README, Changes, unreagent.example.yaml and .claude, but not in internal/supervisor. With the two files laid over 4ac817d via -overlay, vet (linux and windows), go test -count=1 ./... and a CGO_ENABLED=0 GOOS=windows build are green.
+
+Subject confirmed: 'Let a waiting call beat a due restart and an exit's OnExit (k179)', 65 characters. Changes: fold it into k37's unreleased bullet, still at Changes:296-298 on main, with the wording from my previous note, unchanged. Finding 3 is k182 and stays out. Nit, no action needed: in the delayed-first-start cases runsSpec runs twice and the first spec is thrown away (control_test.go:308-311). On to unreagent-release-manager.
+
+Committed as 1d30fb6, fast-forwarded onto main. Check green in the worktree on 4ac817d: gofmt, vet linux and windows, go test, race on internal/supervisor, make linux and windows. Windows: compile only, unverified.
