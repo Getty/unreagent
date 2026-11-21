@@ -30,6 +30,8 @@ internal/skills/	unreagent-skill-author
 .claude/skills/unreagent-mcp-tools/	unreagent-skill-author
 .claude/skills/unreagent-windows/	unreagent-skill-author
 .claude/skills/unreagent-skill-authoring/	unreagent-skill-author
+.claude/skills/unreagent-permissions/	unreagent-skill-author
+.claude/skills/unreagent-ue/	unreagent-skill-author
 
 # User-facing documentation
 README.md	unreagent-doc-writer

@@ -6,6 +6,7 @@ briefing:
   skills:
     - unreagent-core
     - unreagent-permissions
+    - unreagent-ue
     - superpowers:test-driven-development
     - kanban-issues-karr-ticket
 ---

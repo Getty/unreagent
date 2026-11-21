@@ -3,8 +3,9 @@ name: unreagent-windows
 description: >
   Windows-specific mechanics of unreagent — cross-compiling from Linux, build
   tags, Job Objects and raw Win32 calls via syscall, the .exe resource
-  (icon/version/manifest), code signing, and UE's unattended/crash-reporter
-  handling. Use when touching platform-guarded files, the resource, or signing.
+  (icon/version/manifest) and code signing. Use when touching platform-guarded
+  files, the resource, or signing. What UE itself does (-unattended, the crash
+  reporter): skill unreagent-ue.
 ---
 
 # unreagent — Windows mechanics
@@ -93,29 +94,20 @@ and `signing/import-cert.ps1` are checked in so users can silence the "Unknown
 Publisher" warning once. Metadata does not remove that warning; only a
 signature does.
 
-## UE-specific Windows behavior
+## UE-specific behavior
 
-Two editor dialogs block unattended operation, and both are handled at start:
+What `-unattended` does, what the crash reporter is, where crash artefacts
+land and which of that is verified: skill `unreagent-ue`. Which starts spare a
+crash's evidence is launcher logic: `followsCrash` and `editorPreStart` in
+`cmd/launcher/lifecycle.go`.
 
-- `-unattended` (config `unreal.unattended`, default true) suppresses the crash
-  dialog *and* both recovery systems (PackageAutoSaver, disaster recovery) in
-  UE 5.7 — the unclean state is discarded rather than prompted about.
-- `killCrashReporter` (default true) kills `CrashReportClientEditor.exe` and
-  `CrashReportClient.exe` before every (re)start except one that follows a
-  crash, whose reporter may still be writing — belt and suspenders, see
-  `editorPreStart` and `crashReporterKillers()` in
-  `cmd/launcher/lifecycle.go`. `followsCrash` names those starts: an
-  automatic restart, a start that takes the place of a pending one
-  (`Start.ReplacesRestart`: a `StartService` / `RestartService` within the
-  restart delay of a crash or of a failed start), and the first start after
-  the editor was given up on. A stop in the delay cancels the pending
-  restart, so the start after it kills the reporter. Off Windows it is a
-  `pkill -f` anchored to the program name: `pkill -x` never matches (Linux cuts
-  the process name to 15 characters), and a bare `-f CrashReportClient` kills
-  any process whose arguments mention the name. Keep the anchors.
+Two rules stay here because they are about this code, not about UE:
 
-If a human is working in the editor in parallel, `unattended: false` is the
-documented escape hatch. Do not make these behaviors unconditional.
+- Off Windows the reporter kill is a `pkill -f` anchored to the program name
+  (`crashReporterKillers`, whose comment has the reasons). Keep the anchors.
+- `unreal.unattended`, `unreal.killCrashReporter` and `unreal.cleanOnRestart`
+  stay switchable: `unattended: false` is the documented escape hatch for a
+  human working in the editor. Do not make these behaviors unconditional.
 
 ## Testing on Linux
 

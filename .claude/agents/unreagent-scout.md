@@ -7,6 +7,7 @@ briefing:
   skills:
     - unreagent-core
     - unreagent-permissions
+    - unreagent-ue
     - unreagent-mcp-tools
     - unreagent-config
     - unreagent-windows
