@@ -120,7 +120,18 @@ Revision history for unreagent
     to the agent, so the console and the agent never both read stdin. The exit
     prompt and the console share one reader, so piped input reaches both.
   - In window mode the launcher console answers on the console (command list,
-    status, command results, errors) as well as in unreagent.log.
+    status, command results, errors) as well as in unreagent.log. A start,
+    stop or restart that went through is confirmed there too ("ue is running
+    (pid N)", "ue restarted (pid N)", "ue stopped"), and so are the leave and
+    shutdown lines of agent.onExit.
+  - In window mode unreagent.log now also holds the startup lines (config,
+    engine, project and their warnings, such as a fallback engine), which used
+    to reach the console only. They keep the times they were logged at.
+  - A failed agent start that the restart policy retries shows one line per
+    retry on the console in window mode: "unreagent: Agent did not start:
+    <error> — retry N[/M] in D". The launcher log names the retry of any
+    failed start ("[name] restart N[/M] in D"), as it already does after an
+    exit.
   - In window mode the previous session's log is kept as unreagent.log.1; if
     it cannot be moved aside, the new session is appended to it. A log that
     cannot be created is reported on the console instead of being skipped

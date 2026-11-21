@@ -45,6 +45,16 @@ func (c console) reply(logger func(string), line string) {
 	logger(line)
 }
 
+// show puts line on the console when the launcher log is elsewhere, for what
+// the log holds in a line of its own already: the supervisor's started,
+// stopped and restarted lines (k151). With the log on the console, that line
+// is the answer, and nothing is written beside it.
+func (c console) show(line string) {
+	if c.logSeparate {
+		fmt.Fprintln(c.out, line)
+	}
+}
+
 // lineReader is the session's one reader of the console input. It reads a
 // byte at a time and never past the line it returns: a bufio.Scanner buffers
 // ahead, and with piped input the lines it took past its own were lost to the
@@ -263,11 +273,13 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 			return
 		}
 
+		// The onExit lines go to the console too (k151): in window mode the
+		// agent has handed it back.
 		switch cfg.Agent.OnExit {
 		case config.OnExitLeave:
-			logger("agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher.")
+			con.reply(logger, "agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher.")
 		case config.OnExitShutdown:
-			logger("agent.onExit=shutdown — stopping everything.")
+			con.reply(logger, "agent.onExit=shutdown — stopping everything.")
 			stop()
 		default: // ask
 			if !interactive {
@@ -320,6 +332,18 @@ func agentEnded(sup *supervisor.Supervisor, success bool) string {
 	return "Agent crashed."
 }
 
+// agentRetryLine is the console's line for a failed agent start that the
+// restart policy retries (k152), worded as agentEnded names the start the
+// policy gives up on: one per retry, and none for that last one, which the
+// exit prompt names instead.
+func agentRetryLine(r supervisor.Retry) string {
+	limit := ""
+	if r.MaxRestarts > 0 {
+		limit = fmt.Sprintf("/%d", r.MaxRestarts)
+	}
+	return fmt.Sprintf("Agent did not start: %s — retry %d%s in %s", r.Err, r.Restart, limit, r.Delay)
+}
+
 // promptAgentExit shows the selection menu under ended (agentEnded) on the
 // real console (not the logger — in window mode the launcher logs go to the
 // file) and returns the choice. After 30s without input, "stop everything"
@@ -358,13 +382,20 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 	// act runs a lifecycle command and names what went wrong, as serviceAction
 	// does for ue_start / ue_stop / ue_restart: an error, or — for a command
 	// that starts — a service not running afterwards, with the start error.
-	act := func(fn func(string) (supervisor.ServiceStatus, error), name string, starts bool) {
+	// One that went through says on the console (console.show) what the
+	// service is now: done ("is running", "restarted", "stopped") and the pid
+	// of a running one.
+	act := func(fn func(string) (supervisor.ServiceStatus, error), name string, starts bool, done string) {
 		st, err := fn(name)
 		switch {
 		case err != nil:
 			reply("Error: " + err.Error())
 		case starts && !st.Running:
 			reply("Error: " + startFailure(name, st))
+		case st.Running:
+			con.show(fmt.Sprintf("%s %s (pid %d)", name, done, st.PID))
+		default:
+			con.show(name + " " + done)
 		}
 	}
 	reply("Commands: 'status' | 'r' (restart all) | 'r <name>' | 'stop <name>' | 'start <name>' | 'c <name>' | 'q'")
@@ -395,11 +426,11 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 				if fields[1] == foreground {
 					return true
 				}
-				act(sup.RestartService, fields[1], true)
+				act(sup.RestartService, fields[1], true, "restarted")
 			} else {
 				for _, n := range sup.ServiceNames() {
 					if n != foreground {
-						act(sup.RestartService, n, true)
+						act(sup.RestartService, n, true, "restarted")
 					}
 				}
 				if foreground != "" {
@@ -408,14 +439,14 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 			}
 		case "stop":
 			if len(fields) > 1 {
-				act(sup.StopService, fields[1], false)
+				act(sup.StopService, fields[1], false, "stopped")
 			}
 		case "start":
 			if len(fields) > 1 {
 				if fields[1] == foreground {
 					return true
 				}
-				act(sup.StartService, fields[1], true)
+				act(sup.StartService, fields[1], true, "is running")
 			}
 		case "c", "cmd":
 			if len(fields) > 1 {

@@ -54,6 +54,23 @@ type ServiceSpec struct {
 	// carried out instead. It is called in its own goroutine, so it may
 	// block / control the supervisor.
 	OnExit func(Exit)
+	// OnStartRetry fires for a start that failed (the program cannot be
+	// executed, …) when the restart policy retries it after RestartDelay;
+	// not for one the policy gives up on, which OnExit reports. It is called
+	// on the service's loop, before the loop answers anything else: it must
+	// return quickly and must not call the supervisor.
+	OnStartRetry func(Retry)
+}
+
+// Retry tells ServiceSpec.OnStartRetry about a failed start that is retried.
+type Retry struct {
+	// Err is why the start failed, as ServiceStatus.LastError says it.
+	Err string
+	// Restart is the retry's number among the restarts (ServiceStatus.Restarts),
+	// MaxRestarts and Delay the spec's.
+	Restart     int
+	MaxRestarts int
+	Delay       time.Duration
 }
 
 // Start tells ServiceSpec.PreStart which start is coming.
@@ -677,6 +694,11 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			countRun(true)
 			if desired && shouldRestart(spec, restarts, false) && !giveUp() {
 				restarts++
+				// As after an exit: the log says that a retry comes (k152).
+				s.logf("[%s] restart %d%s in %s", spec.Name, restarts, maxStr(spec), spec.RestartDelay)
+				if spec.OnStartRetry != nil {
+					spec.OnStartRetry(Retry{Err: lastErr, Restart: restarts, MaxRestarts: spec.MaxRestarts, Delay: spec.RestartDelay})
+				}
 				backoff, backoffAuto = time.After(spec.RestartDelay), true
 				return
 			}

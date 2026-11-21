@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -32,6 +33,9 @@ import (
 
 // version is set in the release build via -ldflags "-X main.version=<tag>".
 var version = "dev"
+
+// now is the clock of the launcher log's timestamps; the run() tests step it.
+var now = time.Now
 
 func main() {
 	if err := run(); err != nil {
@@ -62,8 +66,17 @@ func run() error {
 	}
 
 	logOut := io.Writer(os.Stdout)
+	// early keeps what logger writes until window mode's launcher log opens,
+	// for run() to replay there (k150): config, engine and project lines and
+	// their warnings come before the switch and went to the console alone.
+	// nil from the switch on, and once it is clear there is no log file.
+	early := new(bytes.Buffer)
 	logger := func(line string) {
-		fmt.Fprintf(logOut, "%s  %s\n", time.Now().Format("15:04:05"), line)
+		text := fmt.Sprintf("%s  %s\n", now().Format("15:04:05"), line)
+		_, _ = io.WriteString(logOut, text)
+		if early != nil {
+			early.WriteString(text)
+		}
 	}
 
 	cfg, info, err := config.Load(*cfgPath)
@@ -139,6 +152,8 @@ func run() error {
 		}
 		logPath = filepath.Join(dir, "unreagent.log")
 		if f := openLauncherLog(logPath, os.Stderr); f != nil {
+			// Stamped already: they keep the times they were logged at.
+			_, _ = early.WriteTo(f)
 			logOut = f
 			defer f.Close()
 			fmt.Printf("unreagent %s\n", version)
@@ -147,6 +162,8 @@ func run() error {
 			fmt.Println()
 		}
 	}
+	// Before the goroutines that log start below: logger reads early unlocked.
+	early = nil
 	// In window mode the launcher log is a file and the console the agent's,
 	// so a line the user must see is also written to alert, stderr; otherwise
 	// the log is the console already and alert stays nil.
@@ -304,6 +321,13 @@ func run() error {
 			OnExit: func(e supervisor.Exit) {
 				if onAgentExit != nil {
 					onAgentExit(e.Success)
+				}
+			},
+			// The supervisor's lines name the retry in the log; in window
+			// mode the console gets one line per retry as well (k152).
+			OnStartRetry: func(r supervisor.Retry) {
+				if alert != nil {
+					fmt.Fprintln(alert, "unreagent: "+agentRetryLine(r))
 				}
 			},
 		}); err != nil {

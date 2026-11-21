@@ -329,6 +329,58 @@ func TestStartErrorGivesUpWithoutMaxRestarts(t *testing.T) {
 	}
 }
 
+// k152: a failed start that the policy retries is reported to OnStartRetry,
+// once per retry, with the start error and the retry's number. The start the
+// policy gives up on is OnExit's, and a restart after an exit follows no
+// failed start, so neither calls it. The hook runs on the loop, so every call
+// is in by the time OnExit fires.
+func TestOnStartRetryReportsEachRetriedStartError(t *testing.T) {
+	t.Run("start error", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("executable bits work differently on Windows")
+		}
+		bin := filepath.Join(t.TempDir(), "not-executable")
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		retries := make(chan Retry, 8)
+		sup := New(nil)
+		exits := startService(t, sup, ServiceSpec{
+			Name: "svc", Command: bin, Autostart: true, Restart: "on-failure",
+			MaxRestarts: 2, RestartDelay: 10 * time.Millisecond,
+			OnStartRetry: func(r Retry) { retries <- r },
+		})
+		waitExit(t, exits, 10*time.Second, "a start that fails every time was retried without bound")
+		lastErr := sup.Status()[0].LastError
+		if !strings.Contains(lastErr, bin) {
+			t.Fatalf("lastError = %q, want the start error naming %s", lastErr, bin)
+		}
+		if got := len(retries); got != 2 {
+			t.Fatalf("OnStartRetry fired %d times, want once per retry: 2 (maxRestarts)", got)
+		}
+		for i := 1; i <= 2; i++ {
+			want := Retry{Err: lastErr, Restart: i, MaxRestarts: 2, Delay: 10 * time.Millisecond}
+			if got := <-retries; got != want {
+				t.Fatalf("retry %d reported as %+v, want %+v", i, got, want)
+			}
+		}
+	})
+	t.Run("exits", func(t *testing.T) {
+		retries := make(chan Retry, 8)
+		sup := New(nil)
+		spec, _ := runsSpec(t, "f", 0) // exit 1 at once, until the fast-fail give-up
+		spec.OnStartRetry = func(r Retry) { retries <- r }
+		exits := startService(t, sup, spec)
+		waitExit(t, exits, 10*time.Second, "a service failing at every start was restarted without bound")
+		if got := restartsOf(t, sup); got != fastFailLimit-1 {
+			t.Fatalf("restarts = %d, want %d: the premise is restarts after exits", got, fastFailLimit-1)
+		}
+		if got := len(retries); got != 0 {
+			t.Fatalf("OnStartRetry fired %d times for restarts after an exit, want none: %+v", got, <-retries)
+		}
+	})
+}
+
 // StartFailed separates "never got going" from "ran and then ended": only the
 // first means the service is not coming up at all. A start that fails in
 // Start reports it whichever way the retries end. (A quick crash reports it

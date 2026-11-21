@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -12,7 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +55,11 @@ func TestLauncherRunProcess(t *testing.T) {
 			}
 			return acceptFails{ln}, nil
 		}
+	}
+	if os.Getenv(clockStepEnv) != "" {
+		var ticks atomic.Int64
+		start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)
+		now = func() time.Time { return start.Add(time.Duration(ticks.Add(1)) * time.Minute) }
 	}
 	os.Args = []string{os.Args[0], "-config", path}
 	if extra := os.Getenv(runArgsEnv); extra != "" {
@@ -948,6 +956,145 @@ func TestRunWarnsWhenTheLauncherLogCannotBeCreated(t *testing.T) {
 	}
 }
 
+// clockStepEnv makes TestLauncherRunProcess step the clock of the launcher's
+// log lines by a minute per line, so that no two lines carry the same time.
+const clockStepEnv = "UNREAGENT_TEST_CLOCK_STEP"
+
+// stampedLine is a launcher log line: its time, two spaces, the text.
+var stampedLine = regexp.MustCompile(`^\d\d:\d\d:\d\d  `)
+
+// k150: in window mode the lines logged before the switch to unreagent.log —
+// config, engine and project, and their warnings, such as k88's fallback
+// engine — went to the console alone, and a user reading the log after a
+// window-mode start could not tell why that engine was chosen. They still go
+// to the console, and they open the log, byte for byte: with the time each was
+// logged at, not the switch's. The clock steps a minute per line, so a line
+// stamped again on its way into the log would show.
+func TestRunReplaysTheStartupLinesIntoTheLauncherLog(t *testing.T) {
+	t.Setenv("UE_ROOT", "")
+	t.Setenv(clockStepEnv, "1")
+	dir := t.TempDir()
+	// As in TestRunWarnsWhenTheEngineAssociationIsNotInstalled: off Windows
+	// the Epic default path resolves under the launcher's working directory.
+	engine := "C:/Program Files/Epic Games/UE_5.9"
+	mustWriteFile(t, filepath.Join(dir, filepath.FromSlash(engine), "Engine", "Binaries", "Win64", "UnrealEditor.exe"), "")
+	mustWriteFile(t, filepath.Join(dir, "Demo.uproject"), `{"EngineAssociation": "5.7"}`)
+	l := startLauncherIn(t, dir, launcherYAML("sleep", `  enabled: true
+  command: sleep
+  args: ["20"]
+  window: true
+  claudeIntegration: false
+  startDelaySeconds: 1
+`))
+	l.waitLine(t, "takes over this window") // printed right after the switch
+	logPath := filepath.Join(dir, "unreagent.log")
+	waitFileLine(t, logPath, "[agent] started (pid")
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+
+	// After the switch the console gets the banner and no log line.
+	var early []string
+	for _, line := range strings.Split(l.stdout.String(), "\n") {
+		if stampedLine.MatchString(line) {
+			early = append(early, line)
+		}
+	}
+	if len(early) < 2 || early[0][:8] == early[1][:8] {
+		t.Fatalf("want startup lines with a time each of their own on the console:\n%s", l.stdout)
+	}
+	if !slices.ContainsFunc(early, func(l string) bool { return strings.Contains(l, "WARN") && strings.Contains(l, "EngineAssociation") }) {
+		t.Fatalf("no EngineAssociation WARN among the startup lines:\n%s", strings.Join(early, "\n"))
+	}
+	logged := logContent(t, logPath)
+	head := strings.Join(early, "\n") + "\n"
+	if !strings.HasPrefix(logged, head) {
+		t.Fatalf("unreagent.log does not open with the startup lines as the console showed them\nconsole:\n%s\nlog:\n%s", head, logged)
+	}
+	if !strings.Contains(logged[len(head):], "[agent] started (pid") {
+		t.Fatalf("the lines logged after the switch do not follow the startup lines:\n%s", logged)
+	}
+}
+
+// k152: a failed agent start that the restart policy retried said nothing on
+// the console in window mode — the start error sat in unreagent.log — so the
+// user saw nothing until the policy gave up and the exit prompt named the
+// error (k126). Each retried start now leaves one line on the console
+// (stderr, as the other alerts), naming the error and the retry. The start
+// the policy gives up on leaves none: the prompt names it, as before. That
+// holds whether maxRestarts ends the retries or, without one, the fast-fail
+// give-up (k70): one line per retry, the log's restart lines, and no more.
+func TestRunNamesEachRetriedAgentStartOnTheConsole(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		maxRestarts int
+	}{
+		{"maxRestarts 2", 2},
+		{"maxRestarts 0, the fast-fail give-up", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// Not executable: Start fails, and the policy retries it.
+			agent := filepath.Join(dir, "agent")
+			if err := os.WriteFile(agent, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			l := startLauncherIn(t, dir, launcherYAML("sleep", fmt.Sprintf(`  enabled: true
+  command: "%s"
+  window: true
+  claudeIntegration: false
+  startDelaySeconds: 1
+  restartDelaySeconds: 1
+  maxRestarts: %d
+`, agent, tc.maxRestarts)))
+			// stdin is empty: the exit prompt reads EOF and stops everything.
+			if code := l.exitCode(t); code != 1 {
+				t.Fatalf("exit code %d, want 1 for an agent that never started:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			logged := logContent(t, filepath.Join(dir, "unreagent.log"))
+			const failed = "[agent] start failed: "
+			var startErr string
+			attempts := 0
+			for _, line := range strings.Split(logged, "\n") {
+				if _, e, ok := strings.Cut(line, failed); ok {
+					startErr = e
+					attempts++
+				}
+			}
+			if attempts < 2 {
+				t.Fatalf("%d failed start(s) in the log, want a retry at least:\n%s", attempts, logged)
+			}
+			if restarts := strings.Count(logged, "[agent] restart "); restarts != attempts-1 {
+				t.Fatalf("the log has %d restart lines for %d failed starts, want one for each but the last:\n%s", restarts, attempts, logged)
+			}
+			if tc.maxRestarts > 0 && attempts != tc.maxRestarts+1 {
+				t.Fatalf("%d failed starts, want the start and maxRestarts %d retries:\n%s", attempts, tc.maxRestarts, logged)
+			}
+			stderr := l.stderr.String()
+			const notice = "unreagent: Agent did not start: "
+			if got := strings.Count(stderr, notice); got != attempts-1 {
+				t.Fatalf("stderr has %d retry lines for %d failed starts, want one per retry:\n%s", got, attempts, stderr)
+			}
+			limit := ""
+			if tc.maxRestarts > 0 {
+				limit = fmt.Sprintf("/%d", tc.maxRestarts)
+			}
+			for i := 1; i < attempts; i++ {
+				want := fmt.Sprintf("%s%s — retry %d%s in 1s\n", notice, startErr, i, limit)
+				if !strings.Contains(stderr, want) {
+					t.Fatalf("stderr does not have %q:\n%s", want, stderr)
+				}
+			}
+			if got := strings.Count(l.stdout.String(), "Agent did not start: "+startErr); got != 1 {
+				t.Fatalf("the exit prompt named the failed start %d times, want once:\n%s", got, l.stdout)
+			}
+		})
+	}
+}
+
 // --- the exit prompt and the launcher console, on a fake console ---
 
 // fakeConsole is a console the test types into line by line. io.Pipe hands a
@@ -1029,22 +1176,28 @@ func agentSession(t *testing.T, command string, args ...string) (*session, *fake
 // launcher log.
 func agentSessionOn(t *testing.T, con console, command string, args ...string) (*session, *supervisor.Supervisor, *syncLog) {
 	t.Helper()
+	return agentSessionWith(t, con, config.OnExitAsk, command, args...)
+}
+
+// agentSessionWith is agentSessionOn with agent.onExit set to onExit.
+func agentSessionWith(t *testing.T, con console, onExit string, command string, args ...string) (*session, *supervisor.Supervisor, *syncLog) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := newSession(ctx, cancel)
 	logs := &syncLog{}
 	sup := supervisor.New(logs.log)
-	var onExit func(bool)
+	var handler func(bool)
 	sup.AddService(supervisor.ServiceSpec{
 		Name:      "agent",
 		Command:   command,
 		Args:      args,
 		Autostart: true,
 		Restart:   "never",
-		OnExit:    func(e supervisor.Exit) { onExit(e.Success) },
+		OnExit:    func(e supervisor.Exit) { handler(e.Success) },
 	})
 	cfg := &config.Config{}
-	cfg.Agent.OnExit = config.OnExitAsk
-	onExit = makeAgentExitHandler(ctx, sess, sup, cfg, logs.log, true, con)
+	cfg.Agent.OnExit = onExit
+	handler = makeAgentExitHandler(ctx, sess, sup, cfg, logs.log, true, con)
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
 	t.Cleanup(func() { cancel(); wg.Wait() })

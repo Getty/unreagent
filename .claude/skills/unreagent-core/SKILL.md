@@ -37,19 +37,30 @@ Dependency direction is strictly downward: `main` knows the packages below it,
 and they know nothing of each other and nothing of `main`. A supervisor that
 imports `mcp` is a design error, not a shortcut.
 
+Besides the logger it is built with (`supervisor.New(logger)`), the
+supervisor reaches back into `run()` only through the hooks on `ServiceSpec`.
+`PreStart(Start)` runs before every start (the editor's `editorPreStart`). `OnExit(Exit)` runs in its own goroutine when a desired
+service ends or fails its start and is not restarted automatically.
+`OnStartRetry(Retry)` (k152) fires once per failed start that the policy
+retries — not for a start that is not retried (the one the policy gives up on,
+a program not found: `OnExit` reports those), and not for a restart after an
+exit. The supervisor logs `[name] restart N[/M] in D` on that path, as after
+an exit. `OnStartRetry` runs on the service's loop: it returns quickly and
+never calls the supervisor.
+
 ## The wiring package
 
 `cmd/launcher/` carries the wiring, one file per concern:
 
 | File | What it holds |
 |---|---|
-| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, MCP bind (`listenMCP`), service and command registration, MCP serving (`serveMCP`), shutdown — plus the sub-command table (`subcommands`, `extractSubcommand`; an unknown word is a `usageError`, which `main` exits 2 for) and small helpers (`hasArg`, …) |
+| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, MCP bind (`listenMCP`), the window-mode log switch (the lines logged before it are kept in `early` and replayed into `unreagent.log` as stamped, so they keep their times, k150), service and command registration, MCP serving (`serveMCP`), shutdown — plus the sub-command table (`subcommands`, `extractSubcommand`; an unknown word is a `usageError`, which `main` exits 2 for), small helpers (`hasArg`, …) and `now`, the clock the logger stamps with (the `run()` tests step it) |
 | `tools.go` | `registerTools` (every MCP tool except the file tools), `serviceAction`, `startFailure` |
 | `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` (each target 0600 via `writePrivateFile`, Unix only; `unignoredTokenFile` warns when git does not ignore one holding the token), `writeAgentMCPConfig` / `removeAgentMCPConfig` (the embedded agent's `--mcp-config` file, k181: `mcp-config.json` in an `os.MkdirTemp` directory, 0600 in 0700 on Unix, the per-user `%TEMP%` on Windows; never inline JSON on its command line, which every local user can read), `redactAgentArgs` for the logged agent command (it shows the launcher's own config path, and replaces every other `--mcp-config` value, a hand-wired path too) |
-| `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt), the stdin console loop, the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
+| `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt; `agentRetryLine`, the line for a retried failed start), the stdin console loop (`commandLoop`; `console.reply` answers on the console and in the log, `console.show` on the console only and only when the log is elsewhere, for an outcome the supervisor has logged already), the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
 | `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills` (`installSkillDir`, `sweepSkillDirs`), the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
 | `hermes.go` | the `hermes-setup` sub-command |
@@ -113,7 +124,11 @@ was split by concern.
    One-line WARNs before the agent starts write to `alert` directly: the inert
    permissions in `run()`, k44's token file in `writeMCPConfigs`; so does
    `removeAgentMCPConfig` at exit, for an agent config directory it could not
-   remove.
+   remove, and so does the agent's `OnStartRetry` in `run()` (k152): one line
+   per retried failed start,
+   `unreagent: Agent did not start: <err> — retry N[/M] in D`
+   (`agentRetryLine`), none for the start the policy gives up on, which the
+   exit prompt names.
    `alertWarnings(logger, alert, logPath)` (`main.go`) wraps a logger for
    warnings that can come while the agent's terminal UI owns the console: the
    log gets every line in full, `alert` only a WARN's first line, plus

@@ -97,7 +97,10 @@ tool meant to leave the service running passes `starts` true: `StartService` /
 in their snapshot did not start, and the result is `IsError` naming
 `ServiceStatus.LastError` — the bare snapshot would read as success. Its text
 comes from `startFailure` (`tools.go`), which the launcher console's `start` /
-`r` answers share (`commandLoop`); keep the two on it. The other
+`r` answers share (`commandLoop`); keep the two on it. A console command that
+went through is confirmed in window mode only, by `console.show`
+(`<name> is running (pid N)`, `<name> restarted (pid N)`, `<name> stopped`;
+k151), not by `startFailure`, which stays the failure text. The other
 tools — `status`, `logs`, `run_command` — call the supervisor from their own
 closure; a one-shot tool returns what `run_command` and `scriptAction` return,
 `commandReply(res, toolOutputLines)`, with `IsError` on a non-zero exit.

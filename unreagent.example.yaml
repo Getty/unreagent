@@ -52,7 +52,9 @@ agent:
   claudeIntegration: true
   # Interactive in the foreground (agent inherits the console = real TTY) is the DEFAULT.
   # UE runs in the background, launcher logs -> unreagent.log (previous session kept as unreagent.log.1;
-  # the launcher console's replies show on the console as well;
+  # the startup lines printed before that switch are replayed into the log (original times);
+  # the launcher console's replies, start/stop/restart outcomes and onExit leave/shutdown
+  # lines show on the console as well; each retried failed agent start prints one console line;
   # if the log cannot be created: a warning on stderr, logs go to the console). Turn off with
   # window: false — e.g. for headless: args: ["-p", "<task>"] (then window off).
   # window: false

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
@@ -185,6 +187,86 @@ func TestConsoleNamesAFailedStart(t *testing.T) {
 	for i, cmd := range []string{"start nosuch", "stop nosuch"} {
 		fc.typeLine(t, cmd)
 		fc.waitOutput(t, `Error: unknown service "nosuch"`, i+1)
+	}
+}
+
+// k151: in window mode the launcher console answered a lifecycle command only
+// when it failed. A stop, start or restart that went through left its
+// confirmation, the supervisor's own line, in unreagent.log alone, so the user
+// who typed it saw nothing; and so did the agent's onExit leave and shutdown
+// lines. The console now shows what the service is after the command, and the
+// onExit line, while the log keeps its lines. When the log is the console, the
+// supervisor's line is the confirmation and nothing is written beside it.
+func TestConsoleShowsTheOutcomeInWindowMode(t *testing.T) {
+	t.Run("stop, start and restart", func(t *testing.T) {
+		fc := newFakeConsole(t) // window mode: the log is a file
+		sup, logs := consoleLoop(t, fc.con)
+		fc.typeLine(t, "stop ue")
+		fc.waitOutput(t, "ue stopped\n", 1)
+		fc.typeLine(t, "start ue")
+		fc.waitOutput(t, "ue is running (pid ", 1)
+		started := statusOf(t, sup, "ue").PID
+		fc.typeLine(t, "r ue")
+		fc.waitOutput(t, "ue restarted (pid ", 1)
+		restarted := statusOf(t, sup, "ue").PID
+		if restarted == started {
+			t.Fatalf("r ue left pid %d running; the premise is a new process", started)
+		}
+		for _, want := range []string{
+			fmt.Sprintf("ue is running (pid %d)\n", started),
+			fmt.Sprintf("ue restarted (pid %d)\n", restarted),
+		} {
+			if !strings.Contains(fc.out.String(), want) {
+				t.Fatalf("the console does not show %q, the pid status reports; console:\n%s", want, fc.out)
+			}
+		}
+		for _, want := range []string{"[ue] stopped (manual)", fmt.Sprintf("[ue] started (pid %d)", started), "[ue] restarted (manual)"} {
+			if !strings.Contains(logs.String(), want) {
+				t.Fatalf("the launcher log lost the supervisor's line %q:\n%s", want, logs)
+			}
+		}
+	})
+	t.Run("the log is the console", func(t *testing.T) {
+		fc := newFakeConsole(t)
+		fc.con.logSeparate = false
+		_, logs := consoleLoop(t, fc.con)
+		for _, cmd := range []string{"stop ue", "start ue", "r ue", "status"} {
+			fc.typeLine(t, cmd)
+		}
+		// The loop takes one line at a time: once the status answer is in
+		// the log, the commands typed before it are done.
+		deadline := time.Now().Add(10 * time.Second)
+		for !strings.Contains(logs.String(), `"name": "ue"`) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the console did not answer status:\n%s", logs)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got := fc.out.String(); got != "" {
+			t.Fatalf("with the log on the console, the outcome was written beside the supervisor's lines:\n%s", got)
+		}
+		if !strings.Contains(logs.String(), "[ue] restarted (manual)") {
+			t.Fatalf("the supervisor's line is missing from the log, which is the console here:\n%s", logs)
+		}
+	})
+	for _, tc := range []struct{ onExit, line string }{
+		{config.OnExitLeave, "agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher."},
+		{config.OnExitShutdown, "agent.onExit=shutdown — stopping everything."},
+	} {
+		t.Run("onExit "+tc.onExit, func(t *testing.T) {
+			if _, err := exec.LookPath("false"); err != nil {
+				t.Skip("false not on PATH")
+			}
+			fc := newFakeConsole(t)
+			sess, _, logs := agentSessionWith(t, fc.con, tc.onExit, "false")
+			fc.waitOutput(t, tc.line+"\n", 1)
+			if !strings.Contains(logs.String(), tc.line) {
+				t.Fatalf("the launcher log lost %q:\n%s", tc.line, logs)
+			}
+			if tc.onExit == config.OnExitShutdown {
+				waitEnded(t, sess, fc)
+			}
+		})
 	}
 }
 

@@ -368,6 +368,12 @@ be started at all (for example a wrong `agent.command`). The prompt and the
 launcher console read the same input, so lines piped into the launcher are not
 lost between them.
 
+While the restart policy retries a failed agent start, window mode prints one
+console line per retry: `unreagent: Agent did not start: <error> — retry N[/M]
+in D` (`/M` only with an explicit `maxRestarts`; `D` is a duration such as `5s`
+or `1m30s`). The start the policy gives up on gets no such line; with
+`onExit: ask` the prompt above names it.
+
 `r` (and `start agent`) from the launcher console hands the terminal back to
 the agent, see [Manual control](#manual-control-stdin). Without a TTY
 (headless `-p`), it shuts down cleanly instead. Alternatives:
@@ -384,7 +390,9 @@ non-zero exit or a failed start. A clean exit 0 resets the count (so
 `restart: always` with a quick job keeps restarting), as does a run longer
 than 10 s or a manual start / restart. An explicit `maxRestarts` keeps its
 exact bound and the fast-fail rule does not apply then. It covers both
-`unreal` and `agent`; there is no extra config field.
+`unreal` and `agent`; there is no extra config field. When a failed start is
+retried, the launcher log says so: `[name] restart N[/M] in D` (the same line
+as after an exit; `/M` only with an explicit `maxRestarts`).
 
 ### Exit codes (CI / headless)
 
@@ -1429,12 +1437,14 @@ subprocess it won't start. Hence three ways:
    session's log is kept as `unreagent.log.1`, one generation, replaced on
    each start) so the agent has the window to itself. If the old log cannot
    be moved aside, a warning says so and the new session is appended to
-   `unreagent.log`. The `Agent command:` line in that log shows
-   the launcher's own `--mcp-config` file path, any other `--mcp-config` value
-   as `<redacted>`, and the token is blanked in any other argument; the agent
-   still gets the real arguments. The launcher console's replies (see
-   [Manual control](#manual-control-stdin)) show on the console as well as in
-   the log. If the log cannot be created, the launcher prints a
+   `unreagent.log`. The log also holds the startup lines the console showed
+   before the switch (config, engine, project and their warnings, such as a
+   fallback engine), with their original times. The `Agent command:` line in
+   that log shows the launcher's own `--mcp-config` file path, any other
+   `--mcp-config` value as `<redacted>`, and the token is blanked in any other
+   argument; the agent still gets the real arguments. The launcher console's
+   replies (see [Manual control](#manual-control-stdin)) show on the console as
+   well as in the log. If the log cannot be created, the launcher prints a
    warning to stderr and its logs go to the console instead. Disable with `window: false`; off in `-p` mode.
    An interactive agent is not subject to the permission policy: with
    `permissions.enabled` the launcher logs a `WARN` at startup, see
@@ -1498,6 +1508,14 @@ In the launcher console opened with `k` in window mode, `start agent`,
 `r agent`, `restart agent` and a plain `r` hand the terminal back to the agent
 instead of reading stdin alongside it; a plain `r` restarts the other services
 first. The agent's next exit shows the exit prompt again. (Console handover is
+unverified on Windows.)
+
+In window mode a `start`, `stop`, `r` or `restart` that went through also
+answers on the console: `<name> is running (pid N)`, `<name> restarted (pid N)`
+or `<name> stopped`. For a start, stop or restart it carried out, the log has
+the supervisor's own line; a `start` of a service that is already running only
+answers on the console. The `agent.onExit: leave` and `shutdown` lines show
+on the console as well as in the log. (Window-mode console lines are
 unverified on Windows.)
 
 ## Manual MCP test
