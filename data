@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-11-21T02:31:32Z
+created: 2026-08-24T23:25:43Z
+id: 54
+priority: medium
+started: 2026-11-21T01:41:01Z
+status: done
+tags:
+- mcp
+- bug
+title: Bridge npm install has no timeout and blocks launcher startup forever
+updated: 2026-11-21T02:32:04Z
+---
+
+prepareMCPBridges runs synchronously at main.go:300 before sup.Start at :304. prepareNodeBridge calls sup.RunOnce(npm, [install]) and supervisor.runOnce uses a plain exec.Command + Wait with no context and no timeout, while smokeTestMCP right next to it uses a 20s context. Trigger: an extraServers node bridge with a package.json but no node_modules on a machine without network or with a stalled registry: the editor is never started, no MCP server listens, the only exit is Ctrl-C.
+Acceptance: the bridge npm install runs under a context timeout like the smoke test; the failure is reported and the launcher continues or exits deliberately.
+main.go:914 via main.go:300: prepareMCPBridges runs synchronously before sup.Start, and prepareNodeBridge calls RunOnce for npm install, which supervisor.runOnce executes with a plain exec.Command and no context and no timeout. smokeTestMCP right next to it correctly uses a 20 second context, so the inconsistency looks accidental.
+Trigger: an extraServers node bridge whose directory has a package.json but no node_modules, on a machine with no network or a stalled registry. The editor is never started, no MCP server listens, and the only way out is Ctrl-C. Acceptance: the bridge install gets a context timeout like the smoke test, and a timeout is reported as a bridge warning rather than a silent hang.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, highest hang severity: prepareNodeBridge runs npm install via sup.RunOnce with no timeout; prepareMCPBridges runs before sup.Start. Merge with k68 + k55 (thread a ctx through bridge preparation) and k32 (context-aware RunOnce). Linux test with a sleeping fake npm. Size M.
+
+Worker done (worktree-agent-ab540e809e3268d7a, uncommitted, based on 2e72af4): new Supervisor.RunOnceContext (done ctx starts nothing; cancel closes the job, kills the child, reuses the k32 drain, returns partial output + wrapped ctx error); RunOnce/RunCommand unchanged (Background). prepareNodeBridge runs npm install through it with bridgeInstallTimeout = 5 min (npm's own default fetch-timeout); timeout = WARN with output tail, bridge skipped. TestPrepareMCPBridgesNpmInstallTimesOut red (>5s) -> green (0.31s). Windows compiled only.
+
+Review (unreagent-reviewer, worktree-agent-ab540e809e3268d7a on 2e72af4, uncommitted): APPROVE WITH NITS. Checked: cmd/launcher/bridge.go, internal/supervisor/supervisor.go (RunOnceContext/runOnce), internal/supervisor/cancel_test.go, internal/supervisor/stream_test.go, cmd/launcher/bridge_test.go. Check run myself: gofmt -l cmd internal (empty), go vet ./... ok, GOOS=windows go vet ./... ok, go test -count=1 ./... ok (no skips), go test -race -count=3 ./internal/supervisor ./cmd/launcher ok (x2), make linux ok, make windows ok, GOOS=windows CGO_ENABLED=0 go build ./cmd/launcher ok, Windows test binaries compile. Mutations (scratch copy): runOnce select ignoring ctx -> TestRunOnceContextKillsChildOnCancel red at 5s; the fix is load-bearing. runOnce: done ctx returns before exec; the cancel branch closes the job, kills the child, always receives waitc (no leaked Wait goroutine), then reuses the k32 drain tail (job.Close idempotent, drainTimeout-bounded). RunOnce/RunCommand signatures unchanged, Background path identical. Cancel racing a normal exit is benign (reports aborted with full output). Job assignment unchanged (Start, then Assign); syscall.Call error handling untouched. Nits: (1) bridge.go:34-35 the comment says a request npm is still waiting on is not cut short; the 5 min bounds the whole install, so any request after t=0 can be cut. 5 min is the worker's choice: say so. (2) bridge.go:131-136 a killed install can leave a partial node_modules; the timeout WARN tells the user, the abort line does not, and the next start skips the install (existence check). That gap was already there; follow-up card (e.g. check node_modules/.package-lock.json). (3) README still lists the bridge npm install without its 5 min bound (doc-writer follow-up, optional). WINDOWS-ONLY, UNVERIFIED (compiled only): job close ends npm's tree on timeout/cancel (npm is npm.cmd -> cmd.exe -> node there, so without the job only cmd.exe dies). Commit waits on k68 (same tree).
+
+Re-review after the worker's fix pass (same worktree, uncommitted): APPROVE. The bridgeInstallTimeout comment (bridge.go:32-38) now calls the 5 min a choice. The partial-node_modules hint is in both the abort and the timeout line (bridge.go:131-141). supervisor.go is byte-identical to the version I reviewed first. Check re-run myself, all green: gofmt -l cmd internal (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./... (0 skips), go test -race -count=3 ./internal/supervisor ./cmd/launcher, the new tests -race -count=10, make windows, make linux, GOOS=windows CGO_ENABLED=0 go build ./cmd/launcher, Windows test binaries compile. Mutations redone against the new tests, all red: runOnce ignoring ctx fails TestRunOnceContextKillsChildOnCancel plus both NpmInstall bridge tests. pgrep after the runs: nothing left from these tests. Still open, not blocking: a Windows smoke test of the job tree kill for npm (npm.cmd -> cmd.exe -> node), compiled only, UNVERIFIED. Optional follow-ups: README to mention the 5 min install bound; install detection still keys on node_modules existing.
+
+Committed as fc5f9ec on main
