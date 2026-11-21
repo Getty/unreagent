@@ -1,0 +1,65 @@
+---
+claimed_at: 2026-11-21T05:18:16Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:18:30Z
+created: 2026-08-22T04:39:26Z
+id: 49
+priority: low
+started: 2026-11-21T00:36:04Z
+status: done
+tags:
+- mcp
+- security
+title: resolve() does not follow symlinks, so a link escapes files.root
+updated: 2026-11-21T05:18:30Z
+---
+
+main.go:571-583: dot-dot traversal and absolute inputs are correctly contained because filepath.Join cleans them, but a symlink inside files.root pointing outside is followed for both read and write. Low priority on Windows where creating symlinks is privileged, real on the Linux dev box. Acceptance: EvalSymlinks on the resolved path before the prefix check, with a test for a link pointing out of the root.
+
+From k89 (go directive 1.19 -> 1.26): under the new GODEBUG defaults (winsymlink/winreadlinkvolume) a fix based only on filepath.EvalSymlinks would miss Windows junctions, which are no longer followed. Cover junctions explicitly.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: resolve (closure in registerFileTools) is lexical only, no EvalSymlinks; a symlink under files.root escapes on Linux too. Merge with k76 (same closure: filepath.IsLocal + EvalSymlinks + junction/device check). Size S/M.
+
+Worker done, worktree branch worktree-agent-a6cd84d12aec8e039 (.claude/worktrees/agent-a6cd84d12aec8e039), uncommitted, based on c013f77. resolve in filetools.go is replaced by confine: every file tool goes through a per-call os.Root, which resolves symlinks inside the root itself (no check/use race). Refused: links out of the root incl. not-yet-existing paths under a linked dir and dangling links; absolute symlinks and all junctions even when pointing inside the root; absolute paths. 8 symlink-escape tests in filetools_confine_test.go red->green; guards pin in-root relative links and a symlinked root. Junctions and OneDrive placeholders on Windows: unverified.
+
+**Review 2026-11-21** (unreagent-reviewer): CHANGES NEEDED. The blocking item is a doc. The Go diff itself needs no change.
+Reviewed: cmd/launcher/filetools.go, cmd/launcher/filetools_test.go, cmd/launcher/filetools_confine_test.go (branch worktree-agent-a6cd84d12aec8e039 on c013f77; scope ok: all three are owned by unreagent-worker).
+Check, run in the worktree: gofmt -l . clean; go vet ./... ok; GOOS=windows go vet ./... ok; go test -count=1 ./... ok (4 packages); go test -race ./cmd/launcher ok; make linux ok; make windows ok.
+Red/green: I put the new test file onto c013f77's filetools.go and 13 tests failed for the stated reasons: read/list/edit/write follow links out of the root, a file outside was modified, dirs were created on the far side of a link, the absolute path was re-rooted, reserved names were served. The 3 guards pass on both old and new code. 0 skips on Linux. Mutations: dropping the reserved check fails 4 tests, dropping IsLocal fails 2. All four tools go through confine and a per-call os.Root, which defer closes on every success path. MkdirAll, WriteFile, ReadFile and Open all go through the Root. No other agent-supplied path in cmd/launcher opens files.
+Findings:
+1 (blocking; owner unreagent-skill-author) skills/unreagent-files/SKILL.md:71-90 and :165 still describe the old resolve: "joined onto the root", "The check is lexical; symlinks are not resolved. A symlink inside the root pointing outside it is followed", "not a security boundary". All of that is now false. Update it in the same commit, covering: absolute paths refused; links out of the root, absolute symlinks and all junctions refused with "openat <p>: path escapes from parent"; reserved names refused.
+2 (decision/follow-up) filetools.go:41 (os.Root): absolute symlinks and every junction are refused even when they point inside the root, and the error says "escapes". Refusing links out of the root is what k49 asked for. It also cuts off plugin sources linked into Plugins/ (junction or absolute ln -s to a shared checkout), which is a common UE plugin-dev setup. The maintainer should confirm this, and it should be documented either way.
+3 (low; test-writer) filetools.go:93-94: nothing pins the list_dir sort. Removing it leaves the suite green, File.ReadDir returns entries in directory order, and SKILL.md:119 promises "sorted by name". No test covers list_dir returning a listing.
+4 (unverified) Windows junction refusal and OneDrive placeholders were not run, and CI is ubuntu-only. One risk to smoke-test before release, from reading the source only: os.Root opens every component with OBJ_DONT_REPARSE (internal/syscall/windows/at_windows.go:109). A non-symlink reparse point that trips it comes back as ELOOP. If cloud placeholders do that, every file tool breaks on a OneDrive-backed project.
+
+Decision after review (2026-11-21, main agent, not the maintainer): keep os.Root semantics — a symlink or junction that is absolute or leads outside the root is refused, also for plugin sources linked into Plugins/ from a shared checkout (they are outside the root by definition; set files.root to a directory holding both, or put the plugin into the project). Wrap Go's 'path escapes from parent' with a message that names the cause (a link on the path is absolute or leads outside the root) and the root; document it in the skill and README.
+
+Review fixes done (2026-11-21): explainLinkEscape wraps Go's 'path escapes from parent' (matched by exact text across the whole error chain, errors.Is/As still reach it) naming the given path, the cause and the root; pinned incl. the nested mkdirat/statat case. Link loops pass through unwrapped. Next: skills/unreagent-files (skill-author) and README/example (doc-writer), then re-review.
+
+Back to review (2026-11-21): code fixes by the worker (see the earlier note); skills/unreagent-files rewritten by the skill-author (every error text run against the real code on Linux); README file-tools row + new 'File-tool confinement' section + files row in the config table + example files.root comment by the doc-writer; main agent tightened the plugin workaround (a wider root reaches the plugin at its real path, the link itself stays refused). Release-manager checklist item 10 gained the OneDrive/junction check (main tree, .claude/agents).
+
+**Re-review 2026-11-21** (unreagent-reviewer): READY. Windows behaviour is unverified.
+Reviewed in the worktree on main 3ab0142: cmd/launcher/filetools.go, filetools_test.go and filetools_confine_test.go; skills/unreagent-files/SKILL.md; README.md; unreagent.example.yaml.
+Check, run in the worktree, all green: gofmt -l .; go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./... (including internal/skills); go test -race ./cmd/launcher; make linux; make windows.
+Mutations, one per fix. Each one failed the suite:
+- explainLinkEscape returning err unchanged: 3 tests fail.
+- explainLinkEscape using %v instead of %w: TestExplainLinkEscapeKeepsWrappedError fails.
+- list_dir without the sort, or without the trailing "/": the list_dir tests fail.
+I ran the doc claims against the code on Linux:
+- a link loop, and 9 links in a chain, give "openat <name>: too many levels of symbolic links"; 8 links work;
+- a dangling link, and an absolute spelling through a link, give the link error;
+- link entries are listed without "/";
+- with a wider root, a relative link inside it works, an absolute link is refused, and the real path works;
+- the texts for a missing root, read_file on a directory and list_dir on a file are as documented.
+Previous findings: F1 (the doc) is fixed, F3 is wrapped with the cause and the root, and F4 (sort) is pinned.
+Non-blocking, for unreagent-skill-author as a follow-up:
+(a) SKILL.md:87-88 says "Source/../Config/x.ini is fine". On Linux that holds only when Source exists as a directory, because os.Root walks the path and does not clean it (otherwise: "openat ...: no such file or directory"). A relative link that climbs out of the root and back in is also refused.
+(b) SKILL.md:82-83, "a root behind a link may be spelled either way", does not hold for a Windows junction: since Go 1.23, EvalSymlinks does not resolve mount points.
+(c) README "File-tool confinement" says "never leave files.root" but leaves out the hard-link and bind-mount caveat that SKILL.md:121-124 carries.
+(d) Pre-existing, not from this change: SKILL.md:67-69 says an empty files.root falls back to the agent working directory. The code makes "" the ${PROJECT_DIR} default, and an unresolved root disables the tools (main.go:134). This needs its own card.
+Scope note: the main agent said it tightened the plugin workaround. If that edit touched skills/unreagent-files/SKILL.md, it is skill text outside the main agent's lane, so the skill-author should sign off on it. I checked the content and it is correct.
+Not run: CI uses Go 1.27.x and the local toolchain is 1.26.6. filetools_confine_test.go pins Go's own inner error texts on purpose (e.g. "mkdirat link: statat link: ..."), so the first CI run is where those texts are first checked under 1.27. Junctions and OneDrive behaviour are unverified (Windows smoke item 10).
+
+Committed as 9792365 (with k76): file tools confined through os.Root, links and junctions refused, absolute paths only under files.root. Windows behaviour unverified.
