@@ -1,0 +1,117 @@
+---
+claimed_at: 2026-11-21T09:54:06Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T09:54:06Z
+created: 2026-11-21T03:44:49Z
+depends_on:
+- 69
+id: 123
+priority: medium
+started: 2026-11-21T08:20:32Z
+status: done
+tags:
+- mcp
+- bug
+- lifecycle
+title: A failed MCP listen does not stop the launcher
+updated: 2026-11-21T09:54:17Z
+---
+
+Found by the k69 review (2026-11-21): when the MCP server cannot listen (e.g. "address already in use"), the launcher keeps running. With k69 an editor give-up then logs "the launcher keeps serving MCP" although no server is running — the message is false and an external agent has nothing to connect to.
+
+Done when: a failed MCP listen ends the launcher with exit 1 and a clear error before the editor or the agent start (or, if that is too strong, the editor handler receives the real serving state) — with a test using an occupied loopback port. Lane: unreagent-worker. Touches cmd/launcher/main.go run() — after k69/k70/k71 lands.
+
+2026-11-21 08:41 Decision (main agent; worker carried it out): a failed MCP listen ends the launcher with exit 1 and a clear error before the editor, the bridges or the agent start. Worker's own decisions on top: (1) the bind (listenMCP, cmd/launcher/main.go) runs right after config load and the CLI flags, before the window-mode log rotation, the stale-script sweep, skill materialization and the .mcp.json writes, so a second unreagent on the same project leaves the running one's files alone. (2) An error from Serve after a successful bind (anything but ErrServerClosed) is not silent either: serveMCP logs 'MCP server on <addr> stopped serving: <err> — stopping everything.' and ends the session as a failure (exit 1). Why: the agent's MCP tools and its permission prompts fail from then on, and an external agent has nothing to connect to, so running on without MCP would be the silent failure the bind check is there to prevent. Only a permanent Accept error gets there; http.Server retries temporary ones itself. (3) The k69 give-up line 'the launcher keeps serving MCP' is now reached only while the server serves: MCP enabled at that point means bound and serving, a Serve failure ends the session, and the supervisor's stop path fires no OnExit. makeEditorExitHandler did not need to change.
+
+2026-11-21 08:41 Done, not committed (worktree on base 114237c). run() binds the MCP port up front (listenMCP). A failure returns from run(), so the launcher exits 1 with 'Error: MCP server cannot listen on <addr>: <net error> — another unreagent or another program may already hold that port, or mcp.address is not a host:port of this machine; stop the other program, or set mcp.address to a free host:port (for this machine only: in unreagent.local.yaml)'. A Serve failure after the bind ends the session with exit 1 (serveMCP, see the decision note). Tests in cmd/launcher/main_test.go: TestRunExitsWhenTheMCPAddressCannotBeBound (occupied loopback port, and an address without a port: exit 1, stderr names address, cause and mcp.address, no listening line, editor and agent marker scripts never ran; red before the fix, which ran on and started both), TestServeMCPFailureEndsTheSession and TestServeMCPClosedIsNotAFailure (each caught a mutation of serveMCP). Check, all green: gofmt -l cmd internal skills (empty), go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./cmd/launcher ./internal/..., make linux, make windows, CGO_ENABLED=0 windows build. Checked by hand with dist/unreagent: a second instance on example/unreagent.yaml exits 1 with the error above, and the demo still serves MCP. Windows behaviour (the bind error text there, Windows address sharing) is unverified.
+
+Docs (worktree): README.md:330 (exit-code row for bind failure / stops serving), README.md:544 (mcp row), README.md:1057-1061 (mcp.address: bind error text and fix), unreagent.example.yaml:142-144 (mcp.address), example/README.md:17-20 (taken 8765 gives exit 1 with the error).
+
+Project skills updated for k45/k123/k141 (skill-author, worktree, uncommitted): .claude/skills/unreagent-core/SKILL.md:103-108 invariant 6 names the MCP bind (listenMCP) and a serve error (serveMCP) as the deliberate fatal exception (exit 1), and why: an agent without the MCP server fails silently; :46 the main.go row names listenMCP and serveMCP. Shipped skills/unreagent-* say nothing about the listen behaviour (grep), unchanged. Check: gofmt -l cmd internal skills empty, go test -count=1 ./internal/skills ok.
+
+2026-11-21 09:01 Review (unreagent-reviewer): CHANGES NEEDED. Worktree diff on 114237c, uncommitted: cmd/launcher/main.go, cmd/launcher/main_test.go (new), cmd/launcher/skills_test.go, README.md, unreagent.example.yaml, example/README.md, .claude/skills/unreagent-core/SKILL.md (k88 files on k88).
+Check run, all green, in the worktree AND with the diff applied onto main 4f2661d: gofmt -l cmd internal skills (empty); go vet ./... and GOOS=windows go vet ./...; go test -count=1 ./...; go test -race -count=1 ./cmd/launcher ./internal/...; make linux; make windows (PE32+ x86-64); CGO_ENABLED=0 windows build. -count=40: the listening test 40/40, the skills test without retry 40/40, the bind/serveMCP tests 40/40. By hand: dist/unreagent on a copy of example/ with the port taken: exit 1, the error on stderr, no file written. Windows behaviour UNVERIFIED (compiled only).
+Code is right: the bind (main.go:115-122) comes before every write (window-mode log rotation, stale-script sweep, skill materialization, .mcp.json); between config load and the bind only log lines and in-memory flag overrides; in window mode the error goes to stderr because the log switch comes later. serveMCP (main.go:412-419): Serve returns ErrServerClosed after Close (shuttingDown is checked before the Accept error), so normal shutdown stays silent and exit 0; a serve error after a signal or after end() cannot change the result (finishLocked, first reason wins). The k69 line is reached only while serving (onEditorExit is set after go serveMCP, the supervisor's ctx stop fires no OnExit).
+Mutations: no early bind (pre-fix wiring) -> listening test red 40/40; bind error only logged -> red; sess.fail->end / dropped -> red; ErrServerClosed as failure -> red; line logged before the bind -> red; bind error returned after the editor start -> red (marker).
+Findings:
+1. Test gap, should fix: "nothing is written before the bind" is not pinned. Moving the bind block (main.go:115-122) to after writeMCPConfigs, which is after the log rotation, the sweep and setupSkills, passes every test. The config in TestRunExitsWhenTheMCPAddressCannotBeBound (main_test.go:44-92) writes nothing in any order (window false, no writeConfig, materialize off). Yet the worker's decision (1), main.go:108-114, README.md:330, README.md:1057, unreagent.example.yaml:143 and unreagent-core SKILL.md:104 all claim it. Extend the test: mcp.writeConfig, skills.materialize with a dir, a planted stale unreagent-<digits>.py in the agent workdir, and if workable an old unreagent.log in window mode. Then assert that each is absent or unchanged after exit 1.
+2. README.md:1058 quotes the Unix cause "... address already in use", in a section about unreagent.exe. On Windows Go gives the WSAEADDRINUSE system message ("Only one usage of each socket address (protocol/network address/port) is normally permitted.", in the system language). Quote only the stable prefix, as example/README.md:18 does.
+3. Scope: OWNERS gives example/ to unreagent-worker, but per the brief unreagent-doc-writer wrote example/README.md:17-20. The content is fine. Either the worker adopts the hunk, or main adds an exact-path OWNERS row.
+4. Decision for main to confirm, not blocking: exit 1 on a serve error. A permanent Accept error ends the session and kills the editor. "Temporary" is narrow: on Linux ENOBUFS/ENOMEM/EPERM/EPROTO from accept are not retried. On Windows any socket/AcceptEx failure except WSAECONNRESET/ERROR_NETNAME_DELETED is not retried either, WSAEMFILE/WSAENOBUFS included, because syscall.Errno.Temporary there compares against Go's invented EMFILE. It is loud, not silent, so I accept it as the worker's documented choice.
+Nits (optional): the error names the address twice ("cannot listen on A: listen tcp A: bind: ..."); README "touches any file" would be more exact as "writes any file"; the hint does not cover a Windows excluded port range (WSAEACCES); skills_test.go:823-830 could use the new freeLoopbackAddr/withMCP helpers.
+Windows smoke test (unverified items): (a) a second exe on the same 127.0.0.1:8765: exit 1, error text, no editor or agent, the first instance's unreagent.log/.mcp.json/skills untouched. (b) Overlap: first 0.0.0.0:8765, second 127.0.0.1:8765, and the reverse. Go sets neither SO_REUSEADDR nor SO_EXCLUSIVEADDRUSE on Windows listeners, and Windows may let the more specific bind succeed, in which case k45 survives for that pair; on Linux both fail (checked). (c) A double-click start with the port taken: does the console stay open long enough to read the error? (Same for every startup error.) (d) A port in an excluded port range (netsh interface ipv4 show excludedportrange protocol=tcp). (e) Window mode: the error reaches the console. (f) Ctrl-C or closing the window: exit 0, no "stopped serving" line.
+Changes, final wording (replaces the worker's three lines; k88's is on k88):
+  - A taken MCP port (another unreagent or another program on mcp.address),
+    or an mcp.address that is not a host:port of this machine, ends the
+    launcher with exit 1 and an error naming the address, the cause and the
+    fix, before it writes any file or starts the editor, the bridges or the
+    agent. It used to be a log line while the launcher ran on and its agent
+    talked to whatever held the port. An MCP server that stops serving later
+    also ends the launcher with exit 1.
+  - "MCP server listening on ..." is logged only once the port is bound, so a
+    client that connects on that line no longer gets "connection refused".
+Commit split: two commits (MCP; engine) are clean and preferred. main.go:82-84 is the only k88 hunk, and main_test.go:116-168 is one contiguous k88 block with no imports of its own. I checked that the MCP-only half alone passes gofmt, vet (both GOOS) and the cmd/launcher + internal/config tests. Each commit must pass the check on its own.
+
+**Review round 1:** needs a test that a bind failure leaves every file untouched (writeConfig target, skills, stale script, old unreagent.log) — sent to the worker. See k45 for the serve-failure decision.
+
+Correction to the skill-author note above (main agent's decision): .claude/skills/unreagent-core/SKILL.md:103-110 invariant 6 now makes only the bind fatal (listenMCP: exit 1 before any file is written). A serve failure after the bind (serveMCP) is one loud ERROR line (log + stderr), MCP marked not serving, launcher/editor/agent keep running, no automatic rebind. As of this note, cmd/launcher/main.go:406-418 serveMCP still calls sess.fail (ends the session), and the comments at main.go:311 and :350-351 say the same, so the skill describes behaviour the code does not have yet. unreagent-config has no serve wording. Check: gofmt -l cmd internal skills empty, go test -count=1 ./internal/skills ok.
+
+2026-11-21 09:16 Fix round (reviewer findings), not committed. Item 3, decision 5 (main agent's decision): this replaces my earlier decision (2). A Serve error after a successful bind no longer ends the session. serveMCP (cmd/launcher/main.go) now clears an atomic.Bool mcpServing and logs one line: 'ERROR MCP server on <addr> stopped serving: <err> — the agent's unreagent tools (and permission prompts through approve) no longer work; the editor and the agent keep running. Save your work in the editor, then restart unreagent.' Launcher, editor and agent keep running, and nothing rebinds. Only the bind failure is fatal (exit 1). My choice on stderr: the line also goes to stderr, prefixed 'unreagent: ', only when the launcher log is a file (window mode, unreagent.log), because otherwise the log is stdout and so already the console, and stderr would print it twice. makeEditorExitHandler takes *atomic.Bool and reads it when the editor exits. Its not-serving give-up line is reworded from 'MCP is off' to 'MCP is not serving' (also in the error) so it stays true after a serve failure. With no agent, nothing can retry, so it still ends the session as k69 does. Tests: TestServeMCPFailureMarksMCPNotServingAndSaysSo, TestEditorGiveUpAfterMCPStoppedServing (the serve failure does not end the session, and the later give-up does not claim MCP), TestServeMCPClosedIsNotAFailure. TestServeMCPFailureEndsTheSession is gone. Item 1: TestRunExitsWhenTheMCPAddressCannotBeBound now plants a running instance's state: window-mode unreagent.log, a stale unreagent-123456.py with the python runtime on, a materialized .claude/skills/unreagent-ue-context/SKILL.md, and an mcp.writeConfig .mcp.json. It asserts exit 1, every file byte-identical and nothing created or removed, directories included. Red check: I moved the bind block to just before '--- MCP server ---' (after all the writes). Both subtests went red, listing changed SKILL.md, changed .mcp.json, changed unreagent.log, created unreagent.log.1 and removed unreagent-123456.py. I then restored the original (cmp-identical). Full check green: gofmt -l (empty), go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race -count=1 ./..., make linux, make windows, CGO_ENABLED=0 windows build. Windows behaviour (the stderr line inside the agent's console, the bind error text) is unverified.
+
+Skill-author follow-up: the mismatch in my previous note is resolved now that the worker has implemented decision 5. .claude/skills/unreagent-core/SKILL.md:108-111 now says the serve-failure ERROR line goes to the launcher log, and also to stderr only when that log is a file (window mode), matching main.go:341-347. No k69 give-up or 'MCP off' wording in unreagent-core or unreagent-config. Check: gofmt -l cmd internal skills empty, go test -count=1 ./internal/skills ok.
+
+2026-11-21 09:29 Re-review (unreagent-reviewer), fix round: READY on k45/k123's own claims. The commit is blocked by the k141 flake: one ordering fix in main.go run(), see k141. Files: cmd/launcher/main.go, cmd/launcher/main_test.go, cmd/launcher/lifecycle.go, cmd/launcher/lifecycle_test.go, cmd/launcher/skills_test.go, README.md:327-331,544,1057-1068, unreagent.example.yaml:142-144, example/README.md:17-20, OWNERS, .claude/skills/unreagent-core/SKILL.md:46,103-111.
+Check run, green in the worktree AND with the diff applied onto main 4f2661d: gofmt -l cmd internal skills (empty), go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race -count=1 ./cmd/launcher ./internal/..., make linux, make windows (PE32+), and a CGO_ENABLED=0 windows build. At -count=40 everything is stable except k141's test. Windows UNVERIFIED (compiled only).
+Earlier findings, all resolved:
+(1) "Nothing written before the bind" is now pinned. Moving the bind after the log rotation alone, after the sweep, after setupSkills or after writeMCPConfigs turns TestRunExitsWhenTheMCPAddressCannotBeBound red each time, naming the touched files.
+(2) README.md:1057-1060 now quotes only the stable prefix.
+(3) example/README.md is now owned by unreagent-doc-writer in OWNERS (ack-team resolves it in the worktree).
+(4) Decision 5 is the main agent's own call: a serve failure no longer exits, and serveMCP's doc comment says whose decision it is.
+Mutations on decision 5: flag not cleared, handler reading the flag at build time, alert not written, flag never set true, ErrServerClosed taken as a failure: each one goes red.
+New, low:
+(a) The window-mode stderr wiring in run() (main.go:343-347) is not pinned: alert = nil there passes every test. serveMCP's alert is pinned, the choice in run() is not. Optional: a small helper for the choice, with a test.
+(b) A new idle case, for a decision or a ticket: no agent, the editor already gave up while MCP was serving ("keeps serving MCP"), then serving fails. Nothing re-evaluates, and the launcher idles with no editor, no agent and no MCP until Ctrl-C or q. Rare (a permanent accept error after a give-up).
+(c) Nit: the ERROR line (main.go:429) says "the editor and the agent keep running" also when no agent is configured.
+(d) Nit: README.md:1059 still gives the Linux text "address already in use" as the example reason; on Windows the reason is the system's WSAEADDRINUSE message, in the system language.
+Windows smoke test: as noted earlier, minus the serve-error exit. Add: after a serve failure in window mode, the ERROR line reaches the console (stderr) while the agent holds it.
+Changes, final wording (replaces the earlier proposal; the k88 line is on k88):
+  - A taken MCP port (another unreagent or another program on mcp.address),
+    or an mcp.address that is not a host:port of this machine, ends the
+    launcher with exit 1 and an error naming the address, the cause and the
+    fix, before it writes any file or starts the editor, the bridges or the
+    agent. It used to be a log line while the launcher ran on and its agent
+    talked to whatever held the port.
+  - An MCP server that stops serving after the bind logs one ERROR line, in
+    window mode also on stderr, saying that the agent's unreagent tools no
+    longer work; the editor and the agent keep running so you can save, then
+    restart unreagent. There is no automatic rebind.
+  - "MCP server listening on ..." is logged only once the port is bound, so a
+    client that connects on that line no longer gets "connection refused".
+Changes:72 (the existing k69 entry, unreleased): still true as written, since "MCP off" remains a case and the new serve-failure line covers the rest. Leave it, or make it "with no agent and MCP off or no longer serving". This is the release-manager's call, not a blocker.
+Commit split: still clean with lifecycle.go. lifecycle.go and lifecycle_test.go belong wholly to the MCP commit. main.go:83-85 is still the only k88 hunk, and the k88 test is one block in main_test.go without imports of its own. The README and example.yaml engine hunks are separate hunks. I checked the MCP half alone on 114237c: gofmt, vet for both GOOS and go test ./... all green. Each commit must pass the check on its own.
+
+2026-11-21 09:36 Fix round 2, not committed. (a) The stderr choice in run() is now pinned by TestRunReportsAServeFailureOnTheUsersConsole (cmd/launcher/main_test.go), a real launcher run. A new seam, 'var listen = net.Listen' (main.go, same pattern as loadEmbeddedSkills), lets TestLauncherRunProcess bind the port for real when UNREAGENT_TEST_MCP_ACCEPT_FAIL is set, then fail every Accept. Window mode: the ERROR line is in unreagent.log, the agent still starts after it, exit is 0 on SIGTERM, and stderr has 'unreagent: ERROR MCP server on <addr> stopped serving' exactly once. Log on stdout: the same, but stderr has no ERROR. Red checks: forcing 'never' failed the window subtest and forcing 'always' failed the stdout subtest, each alone. Restored afterwards (cmp-identical). -count=30 passed 30 of 30. (b) Nit: the ERROR line now says 'everything else keeps running' instead of 'the editor and the agent keep running', which was wrong with no agent configured. TestServeMCPFailureMarksMCPNotServingAndSaysSo pins it. (c) The signal-handler move is in the k141 note. Full check green, see k141. Windows behaviour (stderr inside the agent's console) is unverified.
+
+Review round 3 (unreagent-reviewer): READY. Behaviour is the main agent's decision 5: a failure after the bind does not exit; it clears mcpServing, logs one ERROR line and also writes it to stderr in window mode. The idle case is split out to k155. Files: cmd/launcher/main.go (serveMCP, atomic mcpServing, alert = os.Stderr only when the log is a file; the ERROR line says the agent's unreagent tools and approve prompts no longer work and that everything else keeps running), cmd/launcher/lifecycle.go (makeEditorExitHandler reads mcpServing at the editor's exit; the k69 give-up line says 'MCP is not serving'), cmd/launcher/lifecycle_test.go (acceptFailEnv hook swaps listen), cmd/launcher/main_test.go TestRunReportsAServeFailureOnTheUsersConsole (window vs stdout), TestServeMCPFailureMarksMCPNotServingAndSaysSo, TestEditorGiveUpAfterMCPStoppedServing, TestServeMCPClosedIsNotAFailure; README.md :327-331, :1065-1069. Check run on the worktree diff (base 114237c) and again applied onto main 4f2661d: gofmt -l empty; go vet ./... for linux and GOOS=windows green; go test -count=1 ./... green; -race green; make windows green. x40 green. Mutations red: alert=nil (window subtest), alert always (stdout subtest), alert written twice. Windows: UNVERIFIED. syscall.Errno.Temporary does not cover WSAEMFILE/WSAENOBUFS, so on Windows those end serving rather than being retried. Compiled only. Nit, optional: README.md:1068 is 115 columns, unwrapped.
+
+Review round 3 (unreagent-reviewer): Changes, final wording for the MCP commit (replaces the round-2 block above; only the second entry changes, to match the round-3 ERROR line, which says that everything else keeps running, agent or not):
+  - A taken MCP port (another unreagent or another program on mcp.address),
+    or an mcp.address that is not a host:port of this machine, ends the
+    launcher with exit 1 and an error naming the address, the cause and the
+    fix, before it writes any file or starts the editor, the bridges or the
+    agent. It used to be a log line while the launcher ran on and its agent
+    talked to whatever held the port.
+  - An MCP server that stops serving after the bind logs one ERROR line, in
+    window mode also on stderr, saying that the agent's unreagent tools no
+    longer work; everything else keeps running (the editor, and the agent if
+    one is configured) so you can save, then restart unreagent. There is no
+    automatic rebind.
+  - "MCP server listening on ..." is logged only once the port is bound, so a
+    client that connects on that line no longer gets "connection refused".
+The engine entry is on k88 (round-2 block, unchanged). Changes:72 (k69) stays, per the main agent.
+Commit plan, two commits, each passes the check on its own (split checked on 114237c and on main 4f2661d):
+1. MCP (k45, k123, k141): cmd/launcher/main.go except :83-85; cmd/launcher/main_test.go without the k88 block (from the '// k88: an EngineAssociation' comment up to '// brokenListener'); cmd/launcher/lifecycle.go; cmd/launcher/lifecycle_test.go; cmd/launcher/skills_test.go; README.md :327-331, :544, :1057-1069; unreagent.example.yaml :142-144; example/README.md; OWNERS; .claude/skills/unreagent-core/SKILL.md.
+2. Engine (k88): internal/config/config.go, engine.go, engine_test.go, load_test.go; cmd/launcher/main.go :83-85; the k88 block in main_test.go; README.md :199; unreagent.example.yaml :11-17; .claude/skills/unreagent-config/SKILL.md.
+
+Committed in 5f10d83 (on main, not pushed).
