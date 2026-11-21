@@ -118,6 +118,10 @@ Revision history for unreagent
     the open level), ue-levels (open, create and save levels, survey what a
     level holds) and ue-assets (find, inspect, edit, save, move, delete and
     import Content Browser assets), written against the UE LLM Toolkit's tools.
+  - New shipped skills ue-blueprints (read and change Blueprints with
+    blueprint_query and blueprint_modify), ue-widgets (build and edit Widget
+    Blueprints with widget_editor) and ue-enhanced-input (Input Actions,
+    Input Mapping Contexts, triggers and modifiers with enhanced_input).
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
