@@ -347,13 +347,6 @@ func hasPromptArg(args []string) bool {
 	return hasArg(args, "-p") || hasArg(args, "--print")
 }
 
-func perm(enabled bool) string {
-	if enabled {
-		return " + permission-prompt-tool"
-	}
-	return ""
-}
-
 func strictWord(strict bool) string {
 	if strict {
 		return ", strict"
