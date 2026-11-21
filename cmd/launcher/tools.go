@@ -19,7 +19,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "status",
-		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count. Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
+		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, and \"lastError\": why the last start failed (absent once a start succeeds). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
 		InputSchema: noArgs,
 		Handler: func(map[string]interface{}) mcp.ToolResult {
 			payload := map[string]interface{}{
@@ -33,21 +33,21 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_start",
-		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running.",
+		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards.",
 		InputSchema: noArgs,
-		Handler:     serviceAction(sup, "ue", sup.StartService),
+		Handler:     serviceAction(sup, "ue", sup.StartService, true),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_stop",
 		Description: "Stops the Unreal Editor and prevents auto-restart until it is explicitly started again. Terminates the whole process tree (no orphan processes).",
 		InputSchema: noArgs,
-		Handler:     serviceAction(sup, "ue", sup.StopService),
+		Handler:     serviceAction(sup, "ue", sup.StopService, false),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_restart",
-		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command).",
+		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards.",
 		InputSchema: noArgs,
-		Handler:     serviceAction(sup, "ue", sup.RestartService),
+		Handler:     serviceAction(sup, "ue", sup.RestartService, true),
 	})
 
 	srv.AddTool(mcp.Tool{
@@ -194,14 +194,20 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	}
 }
 
-// serviceAction builds a handler for a lifecycle action.
-func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (supervisor.ServiceStatus, error)) mcp.ToolHandler {
+// serviceAction builds a handler for a lifecycle action. starts marks an action
+// meant to leave the service running (start, restart): when it is not running
+// afterwards, the result is an error naming the start error. The supervisor
+// answers only after the start attempt, so the snapshot does not race it.
+func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (supervisor.ServiceStatus, error), starts bool) mcp.ToolHandler {
 	return func(map[string]interface{}) mcp.ToolResult {
 		st, err := fn(name)
 		if err != nil {
 			return errResult(err)
 		}
 		b, _ := json.Marshal(st)
+		if starts && !st.Running {
+			return mcp.ToolResult{Text: fmt.Sprintf("Error: service %q did not start: %s\n%s", name, st.LastError, b), IsError: true}
+		}
 		return mcp.ToolResult{Text: string(b)}
 	}
 }

@@ -41,7 +41,8 @@ agent:
   # claude invocation — no manual setup needed.
   claudeIntegration: true
   # Interactive in the foreground (agent inherits the console = real TTY) is the DEFAULT.
-  # UE runs in the background, launcher logs -> unreagent.log. Turn off with
+  # UE runs in the background, launcher logs -> unreagent.log (previous session kept as unreagent.log.1;
+  # if the log cannot be created: a warning on stderr, logs go to the console). Turn off with
   # window: false — e.g. for headless: args: ["-p", "<task>"] (then window off).
   # window: false
   # args: ["-p", "Start and work through the tasks"]   # one-off headless
@@ -203,8 +204,10 @@ mcp:
 #   maxRestarts: 0            # default 0 (5 = give up after 5 restarts)
 #   restartDelaySeconds: 3    # default 3 (0 = default); below 0 is a load error
 #   unattended: true          # -unattended: no crash dialog + no recovery prompt (default on)
-#   killCrashReporter: true   # kill a hanging CrashReportClientEditor.exe (default on)
-#   cleanOnRestart: false     # clear Saved/Autosaves/PackageRestoreData.json + Saved/Crashes before start
+#   killCrashReporter: true   # kill a hanging CrashReportClient(Editor) before each start (default on)
+#   cleanOnRestart: false     # remove Saved/Autosaves/PackageRestoreData.json before every start (default off);
+#                             # Saved/Crashes is emptied only on the first / a manual start —
+#                             # kept on an automatic restart so the crash dump survives
 #
 # commands:
 #   cook:

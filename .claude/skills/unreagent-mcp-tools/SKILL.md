@@ -75,7 +75,11 @@ Descriptions are **English**, like everything that ships — every description i
 Two adapters turn supervisor operations into tool handlers: `serviceAction`
 (`tools.go`) serves the service lifecycle tools `ue_start` / `ue_stop` /
 `ue_restart`, and `scriptAction` (`scripts.go`) the code-execution tools
-`run_python` / `run_node`. Reuse them for a tool of the same kind. The other
+`run_python` / `run_node`. Reuse them for a tool of the same kind. A lifecycle
+tool meant to leave the service running passes `starts` true: `StartService` /
+`RestartService` answer only after the start attempt, so a service not running
+in their snapshot did not start, and the result is `IsError` naming
+`ServiceStatus.LastError` — the bare snapshot would read as success. The other
 tools — `status`, `logs`, `run_command` — call the supervisor from their own
 closure; a one-shot tool returns what `run_command` and `scriptAction` return,
 `exit N` plus `tailLines(output, 300)`, with `IsError` on a non-zero exit.

@@ -516,7 +516,7 @@ runs no check on HTTP entries, `unreagent.log` will not say which.
 
 | Section | Purpose |
 |---|---|
-| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
@@ -546,8 +546,8 @@ the UE 5.7 source and **has not been re-checked for UE 5.8 or newer**.
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
 | `unattended` | `true` | appends `-unattended` — no crash dialog, no recovery prompt |
-| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` before every (re)start (belt and suspenders) |
-| `cleanOnRestart` | `false` | cleans `Saved/Autosaves/PackageRestoreData.json` + `Saved/Crashes/*` |
+| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before every (re)start (belt and suspenders); off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
+| `cleanOnRestart` | `false` | removes `Saved/Autosaves/PackageRestoreData.json` before every start; empties `Saved/Crashes/` only on the first start and on manual starts (console `start` / `r`, MCP `ue_start` / `ue_restart`). On an automatic restart by the restart policy (including a retry of a failed start) the crash folder is kept so the dump stays readable, and when it holds anything the launcher logs `Recovery: Saved/Crashes kept …` |
 
 If a **human** is working interactively in the editor in parallel, set
 `unattended: false`. In addition (so the reporter never even sends/starts)
@@ -842,8 +842,8 @@ description and are therefore automatically in context.
 
 | Tool | Function |
 |---|---|
-| `status` | process status + available commands — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list |
-| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle |
+| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list |
+| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle. If the editor is not running after `ue_start` / `ue_restart`, the result is an error, `Error: service "ue" did not start: <lastError>`, followed by the status JSON (e.g. a missing `unreal.editor` program) |
 | `run_command` | run a preconfigured command (compile, package) |
 | `logs` | last output lines of a service |
 | `run_python` / `run_node` | run code in a prepared environment |
@@ -896,8 +896,12 @@ subprocess it won't start. Hence three ways:
 1. **Interactive in the foreground** (`agent.window`, **on by default**) — the
    agent inherits the real console (TTY) and runs as an interactive TUI in
    the window you started `unreagent` in. UE + MCP run in the background,
-   launcher logs go to `unreagent.log` (next to the project) so the agent
-   has the window to itself. Disable with `window: false`; off in `-p` mode.
+   launcher logs go to `unreagent.log` (next to the project; the previous
+   session's log is kept as `unreagent.log.1`, one generation, replaced on
+   each start) so the agent has the window to itself. If the old log cannot
+   be moved aside, a warning says so and the new session is appended to
+   `unreagent.log`. If the log cannot be created, the launcher prints a
+   warning to stderr and its logs go to the console instead. Disable with `window: false`; off in `-p` mode.
 2. **Headless / task** (`agent.args: ["-p", "<task>"]`) — one-shot task
    without a window, then the agent exits.
 3. **External** (`-no-agent`) — the launcher does not start an agent; you

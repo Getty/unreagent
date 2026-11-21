@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,4 +154,84 @@ func TestOnExitFiresAfterStartRetriesExhausted(t *testing.T) {
 	}
 	cancel()
 	wg.Wait()
+}
+
+// preStarts records the automatic flag of every PreStart call.
+type preStarts struct {
+	mu    sync.Mutex
+	calls []bool
+}
+
+func (p *preStarts) record(automatic bool) {
+	p.mu.Lock()
+	p.calls = append(p.calls, automatic)
+	p.mu.Unlock()
+}
+
+func (p *preStarts) String() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return fmt.Sprint(p.calls)
+}
+
+// k77: PreStart could not tell the automatic restart after a crash from a
+// start somebody asked for, so cleanOnRestart wiped the crash dump the agent
+// needs on exactly the restart that follows the crash. Only a start of the
+// restart policy — after an exit, or retrying a failed start — is automatic;
+// the first start (delayed or not), StartService and RestartService are not.
+func TestPreStartSaysWhetherTheStartIsAutomatic(t *testing.T) {
+	t.Run("policy restart after an exit, then StartService and RestartService", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		// Run 1 fails and is restarted by the policy; every later run exits 0,
+		// which on-failure does not restart.
+		spec, _ := runsSpec(t, "fo", 0)
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		waitExit(t, exits, 10*time.Second, "the restarted run did not end")
+		if _, err := sup.StartService("svc"); err != nil {
+			t.Fatalf("StartService: %v", err)
+		}
+		waitExit(t, exits, 10*time.Second, "the run StartService began did not end")
+		if _, err := sup.RestartService("svc"); err != nil {
+			t.Fatalf("RestartService: %v", err)
+		}
+		waitExit(t, exits, 10*time.Second, "the run RestartService began did not end")
+		if got, want := pre.String(), "[false true false false]"; got != want {
+			t.Fatalf("PreStart(automatic) calls = %s, want %s (first start, policy restart, StartService, RestartService)", got, want)
+		}
+	})
+	t.Run("delayed first start", func(t *testing.T) {
+		var pre preStarts
+		spec, _ := runsSpec(t, "o", 0)
+		spec.StartDelay = 10 * time.Millisecond
+		spec.PreStart = pre.record
+		waitExit(t, startService(t, New(nil), spec), 10*time.Second, "the delayed first run did not end")
+		if got, want := pre.String(), "[false]"; got != want {
+			t.Fatalf("PreStart(automatic) calls = %s, want %s: a start delay is not a restart", got, want)
+		}
+	})
+	t.Run("policy retry of a failed start", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("executable bits work differently on Windows")
+		}
+		bin := filepath.Join(t.TempDir(), "not-executable")
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		var pre preStarts
+		spec := ServiceSpec{
+			Name:         "svc",
+			Command:      bin,
+			Autostart:    true,
+			Restart:      "on-failure",
+			MaxRestarts:  1,
+			RestartDelay: 10 * time.Millisecond,
+			PreStart:     pre.record,
+		}
+		waitExit(t, startService(t, New(nil), spec), 10*time.Second, "the start retries were not given up")
+		if got, want := pre.String(), "[false true]"; got != want {
+			t.Fatalf("PreStart(automatic) calls = %s, want %s: the policy's retry of a failed start is automatic", got, want)
+		}
+	})
 }

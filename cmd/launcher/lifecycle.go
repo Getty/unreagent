@@ -26,6 +26,27 @@ type console struct {
 	out io.Writer
 }
 
+// openLauncherLog creates the launcher log of window mode at path. The previous
+// session's log is kept as path.1 — one generation, so the log of a session
+// that crashed survives the relaunch. When it cannot be moved aside, this
+// session is appended to it instead of truncating it. What fails is said on
+// warn (the real stderr): the log is the very thing that is missing, and the
+// agent is about to take the console. It returns nil when the log cannot be
+// created; the launcher logs then go to the console.
+func openLauncherLog(path string, warn io.Writer) *os.File {
+	flag := os.O_RDWR | os.O_CREATE | os.O_TRUNC // as os.Create
+	if err := os.Rename(path, path+".1"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(warn, "WARN could not keep the previous launcher log as %s.1: %v — this session is appended to %s\n", path, err, path)
+		flag = os.O_RDWR | os.O_CREATE | os.O_APPEND
+	}
+	f, err := os.OpenFile(path, flag, 0o666)
+	if err != nil {
+		fmt.Fprintf(warn, "WARN could not create the launcher log: %v — the launcher logs go to this console and mix with the agent's screen\n", err)
+		return nil
+	}
+	return f
+}
+
 // session is the launcher's run from start to shutdown and carries its outcome
 // to run()'s return value, i.e. the exit code. Design choice for k69: a signal
 // ends it with exit 0, as that is the user's or the service manager's
@@ -308,22 +329,40 @@ func commandLoop(ctx context.Context, in io.Reader, stop func(), sup *supervisor
 
 // killCrashReporter terminates a possibly stuck crash reporter window.
 func killCrashReporter() {
-	var cmds [][]string
-	if runtime.GOOS == "windows" {
-		cmds = [][]string{
-			{"taskkill", "/F", "/IM", "CrashReportClientEditor.exe"},
-			{"taskkill", "/F", "/IM", "CrashReportClient.exe"},
-		}
-	} else {
-		cmds = [][]string{{"pkill", "-f", "CrashReportClient"}}
-	}
-	for _, c := range cmds {
+	for _, c := range crashReporterKillers() {
 		_ = exec.Command(c[0], c[1:]...).Run() // ignore errors (the process may not exist)
 	}
 }
 
-// cleanRecovery removes recovery/crash artefacts for a clean restart.
-func cleanRecovery(projectDir string, logger func(string)) {
+// crashReporterKillers returns the commands killCrashReporter runs.
+func crashReporterKillers() [][]string {
+	if runtime.GOOS == "windows" {
+		return [][]string{
+			{"taskkill", "/F", "/IM", "CrashReportClientEditor.exe"},
+			{"taskkill", "/F", "/IM", "CrashReportClient.exe"},
+		}
+	}
+	// pkill -x compares the process name, which Linux cuts to 15 characters
+	// ("CrashReportClie"), so neither full name would ever match. -f matches
+	// the whole command line instead, and a bare -f CrashReportClient hit any
+	// process with the string in an argument — an editor open on
+	// CrashReportClient.cpp. So the pattern pins the name to argv[0]'s last
+	// path component: anchored at the start of the command line, behind an
+	// optional directory part without spaces (with .* it could reach into the
+	// arguments, e.g. a .../Programs/CrashReportClient directory), and ended
+	// by the space before the first argument or by the end of the line (else
+	// a program inside such a directory would match). The price: a crash
+	// reporter started from a path with a space in it is not matched; the
+	// kill is the backup to -unattended, not the guard itself.
+	return [][]string{{"pkill", "-f", "^([^ ]*/)?CrashReportClient(Editor)?( |$)"}}
+}
+
+// cleanRecovery removes recovery/crash artefacts for a clean start.
+// PackageRestoreData.json goes on every start: its restore dialog would block
+// an unattended restart. Saved/Crashes is emptied only on a start somebody
+// asked for; an automatic restart follows a crash, and its dump is what the
+// agent reads to find out why.
+func cleanRecovery(projectDir string, automatic bool, logger func(string)) {
 	saved := filepath.Join(projectDir, "Saved")
 	restore := filepath.Join(saved, "Autosaves", "PackageRestoreData.json")
 	if err := os.Remove(restore); err == nil {
@@ -331,6 +370,10 @@ func cleanRecovery(projectDir string, logger func(string)) {
 	}
 	crashes := filepath.Join(saved, "Crashes")
 	if entries, err := os.ReadDir(crashes); err == nil && len(entries) > 0 {
+		if automatic {
+			logger("Recovery: Saved/Crashes kept (automatic restart — the crash dump stays for diagnosis)")
+			return
+		}
 		for _, e := range entries {
 			_ = os.RemoveAll(filepath.Join(crashes, e.Name()))
 		}

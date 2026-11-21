@@ -36,8 +36,11 @@ type ServiceSpec struct {
 	MaxRestarts  int    // 0 = unlimited — but one that keeps failing at its start is given up on (giveUp in runService)
 	RestartDelay time.Duration
 	// PreStart is called before every (re)start of the process (e.g. to kill the
-	// crash reporter or to clean up recovery files).
-	PreStart func()
+	// crash reporter or to clean up recovery files). automatic is true when the
+	// restart policy starts it — after an exit, or retrying a failed start —
+	// and false for the first start (with or without StartDelay) and for
+	// StartService / RestartService.
+	PreStart func(automatic bool)
 	// Foreground gives the process the launcher's real console (stdin/stdout/
 	// stderr are inherited) — required for interactive TUIs like Claude Code that
 	// need a TTY. stdout/stderr are then not mirrored into the log, and the caller
@@ -81,6 +84,9 @@ type ServiceStatus struct {
 	// Unresponsive is set when the service's control loop did not answer in
 	// time. The other fields are then unknown — not "stopped".
 	Unresponsive bool `json:"unresponsive,omitempty"`
+	// LastError is why the last start attempt failed (the program is missing,
+	// cannot be executed, …). A successful start clears it.
+	LastError string `json:"lastError,omitempty"`
 }
 
 // CommandResult is the result of a one-off command.
@@ -405,12 +411,18 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		streams  *streamSet
 		restarts int
 		backoff  <-chan time.Time
-		desired  = spec.Autostart
+		// backoffAuto says which start the pending backoff is for: the
+		// restart policy's (automatic) or the delayed first start (not).
+		backoffAuto bool
+		desired     = spec.Autostart
 		// startedAt is when the running process started; quickFails counts
 		// the failed runs in a row that ended within fastFailWindow of their
 		// start.
 		startedAt  time.Time
 		quickFails int
+		// lastErr is why the last start attempt failed; a successful start
+		// clears it (ServiceStatus.LastError).
+		lastErr string
 	)
 
 	// countRun is told whether the run that just ended failed early: a failed
@@ -466,10 +478,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 
 	// start is only ever called while the service is desired (initial start,
-	// backoff, ctrlStart, ctrlRestart).
-	start := func() {
+	// backoff, ctrlStart, ctrlRestart); automatic is passed on to PreStart.
+	start := func(automatic bool) {
 		if spec.PreStart != nil {
-			spec.PreStart()
+			spec.PreStart(automatic)
 		}
 		// startFailed reports a start that will not be retried. The service was
 		// desired and is not coming back, which is exactly what OnExit is for —
@@ -498,6 +510,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			var err error
 			if ss, err = newStreamSet(c); err != nil {
 				s.logf("[%s] output pipe: %v", spec.Name, err)
+				lastErr = "output pipe: " + err.Error()
 				startFailed()
 				return
 			}
@@ -509,6 +522,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		if err != nil {
 			ss.close()
 			s.logf("[%s] start failed: %v", spec.Name, err)
+			lastErr = err.Error()
 			if isNotFound(err) {
 				// The program does not exist at all — retries would be pointless.
 				s.logf("[%s] program not found — no further attempt (check path / installation)", spec.Name)
@@ -520,13 +534,14 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			countRun(true)
 			if desired && shouldRestart(spec, restarts, false) && !giveUp() {
 				restarts++
-				backoff = time.After(spec.RestartDelay)
+				backoff, backoffAuto = time.After(spec.RestartDelay), true
 				return
 			}
 			startFailed()
 			return
 		}
 		startedAt = time.Now()
+		lastErr = ""
 		j, jerr := NewJob()
 		if jerr != nil {
 			s.logf("[%s] WARN job object could not be created: %v — the process runs unsupervised (a launcher crash leaves it behind)", spec.Name, jerr)
@@ -544,7 +559,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 
 	snapshot := func() ServiceStatus {
-		st := ServiceStatus{Name: spec.Name, Desired: desired, Restarts: restarts}
+		st := ServiceStatus{Name: spec.Name, Desired: desired, Restarts: restarts, LastError: lastErr}
 		if cmd != nil && cmd.Process != nil {
 			st.Running = true
 			st.PID = cmd.Process.Pid
@@ -556,9 +571,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	// shutting down: the process would only be killed again on the next turn.
 	if desired && ctx.Err() == nil {
 		if spec.StartDelay > 0 {
-			backoff = time.After(spec.StartDelay)
+			backoff, backoffAuto = time.After(spec.StartDelay), false
 		} else {
-			start()
+			start(false)
 		}
 	}
 
@@ -572,7 +587,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		case <-backoff:
 			backoff = nil
 			if desired && cmd == nil {
-				start()
+				start(backoffAuto)
 			}
 
 		case err := <-waitChOrNil(waitCh):
@@ -593,7 +608,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			if restart && !gaveUp {
 				restarts++
 				s.logf("[%s] restart %d%s in %s", spec.Name, restarts, maxStr(spec), spec.RestartDelay)
-				backoff = time.After(spec.RestartDelay)
+				backoff, backoffAuto = time.After(spec.RestartDelay), true
 			} else if desired {
 				if !gaveUp { // the give-up has logged its own line
 					s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
@@ -613,7 +628,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				restarts, quickFails = 0, 0
 				backoff = nil
 				if cmd == nil {
-					start()
+					start(false)
 				}
 			case ctrlStop:
 				desired = false
@@ -625,8 +640,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				restarts, quickFails = 0, 0
 				backoff = nil
 				stop()
-				start()
-				s.logf("[%s] restarted (manual)", spec.Name)
+				start(false)
+				if cmd != nil { // a failed start has logged its own lines
+					s.logf("[%s] restarted (manual)", spec.Name)
+				}
 			case ctrlStatus:
 				// snapshot only
 			}

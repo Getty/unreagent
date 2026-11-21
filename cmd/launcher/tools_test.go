@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -237,6 +238,71 @@ func TestLogsLinesLimitsOutput(t *testing.T) {
 		res := callTool(t, srv, "logs", map[string]interface{}{"service": "ue", "lines": lines})
 		if res.IsError || res.Text != want {
 			t.Errorf("logs lines=%#v = %q (IsError %v), want the last three lines %q", lines, res.Text, res.IsError, want)
+		}
+	}
+}
+
+// startedSupervisor runs sup until the test ends.
+func startedSupervisor(t *testing.T, sup *supervisor.Supervisor) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg)
+	t.Cleanup(func() { cancel(); wg.Wait() })
+}
+
+// k72: ue_start and ue_restart on an editor that cannot start used to answer
+// with the bare snapshot — running false, isError false — and the agent took
+// that for a success. They must fail and name the start error; ue_stop on that
+// editor stays an ordinary result.
+func TestUEStartAndRestartFailWhenTheEditorDoesNotStart(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-editor")
+	sup := supervisor.New(nil)
+	sup.AddService(supervisor.ServiceSpec{Name: "ue", Command: missing, Restart: "never"})
+	startedSupervisor(t, sup)
+	srv := toolsServerOn(t, sup, config.Permissions{}, func(string) {})
+
+	for _, tool := range []string{"ue_start", "ue_restart"} {
+		res := callTool(t, srv, tool, map[string]interface{}{})
+		if !res.IsError {
+			t.Fatalf("%s on a missing editor: IsError = false (text %q), want an error", tool, res.Text)
+		}
+		// The start error leads the text, ahead of the snapshot — which carries
+		// lastError as well, so finding it anywhere in the text proves nothing.
+		lastErr := statusOf(t, sup, "ue").LastError
+		if !strings.Contains(lastErr, missing) {
+			t.Fatalf("%s on a missing editor: lastError = %q, want the start error naming %s", tool, lastErr, missing)
+		}
+		if want := `Error: service "ue" did not start: ` + lastErr + "\n"; !strings.HasPrefix(res.Text, want) {
+			t.Fatalf("%s on a missing editor: text %q does not start with %q", tool, res.Text, want)
+		}
+	}
+	if res := callTool(t, srv, "ue_stop", map[string]interface{}{}); res.IsError {
+		t.Fatalf("ue_stop: IsError = true (text %q), want an ordinary result", res.Text)
+	}
+}
+
+// The control for the test above: on an editor that runs, ue_start (a no-op)
+// and ue_restart are ordinary results. Without it, a handler that always
+// failed would pass the test above.
+func TestUEStartAndRestartSucceedOnARunningEditor(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not on PATH")
+	}
+	sup := supervisor.New(nil)
+	sup.AddService(supervisor.ServiceSpec{Name: "ue", Command: "sleep", Args: []string{"20"}, Autostart: true, Restart: "never"})
+	startedSupervisor(t, sup)
+	waitRunning(t, sup, "ue")
+	srv := toolsServerOn(t, sup, config.Permissions{}, func(string) {})
+
+	for _, tool := range []string{"ue_start", "ue_restart"} {
+		res := callTool(t, srv, tool, map[string]interface{}{})
+		if res.IsError {
+			t.Fatalf("%s on a running editor: IsError = true (text %q), want an ordinary result", tool, res.Text)
+		}
+		var st supervisor.ServiceStatus
+		if err := json.Unmarshal([]byte(res.Text), &st); err != nil || !st.Running {
+			t.Fatalf("%s on a running editor: text %q is not a running snapshot (%v)", tool, res.Text, err)
 		}
 	}
 }

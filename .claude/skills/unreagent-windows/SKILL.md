@@ -99,9 +99,12 @@ Two editor dialogs block unattended operation, and both are handled at start:
 - `-unattended` (config `unreal.unattended`, default true) suppresses the crash
   dialog *and* both recovery systems (PackageAutoSaver, disaster recovery) in
   UE 5.7 — the unclean state is discarded rather than prompted about.
-- `killCrashReporter` (default true) kills `CrashReportClientEditor.exe` before
-  every (re)start — belt and suspenders, see `killCrashReporter()` in
-  `cmd/launcher/lifecycle.go`.
+- `killCrashReporter` (default true) kills `CrashReportClientEditor.exe` and
+  `CrashReportClient.exe` before every (re)start — belt and suspenders, see
+  `crashReporterKillers()` in `cmd/launcher/lifecycle.go`. Off Windows it is a
+  `pkill -f` anchored to the program name: `pkill -x` never matches (Linux cuts
+  the process name to 15 characters), and a bare `-f CrashReportClient` kills
+  any process whose arguments mention the name. Keep the anchors.
 
 If a human is working in the editor in parallel, `unattended: false` is the
 documented escape hatch. Do not make these behaviors unconditional.

@@ -2,6 +2,10 @@ package supervisor
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +33,7 @@ func TestStatusReportsUnresponsiveServicesConcurrently(t *testing.T) {
 			Restart:   "never",
 			// PreStart runs inside the control loop, so the loop cannot answer
 			// while it blocks — the same shape as a hung editor start.
-			PreStart: func() { <-release },
+			PreStart: func(bool) { <-release },
 		})
 	}
 	sup.AddService(ServiceSpec{Name: "idle", Command: "sleep", Args: []string{"30"}, Restart: "never"})
@@ -66,4 +70,64 @@ func TestStatusReportsUnresponsiveServicesConcurrently(t *testing.T) {
 	close(release)
 	cancel()
 	wg.Wait()
+}
+
+// k72: a start that failed was reported like any other snapshot — running
+// false, nothing saying why — and the error reached only the launcher log, so
+// ue_start on a missing editor looked like a success to the agent. The snapshot
+// StartService and RestartService return, and Status, must carry the start
+// error, and a later successful start must clear it again.
+func TestStartErrorIsReportedAndClearedOnSuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the editor stand-in is a shell script")
+	}
+	requireBin(t, "sh")
+	requireBin(t, "sleep")
+	bin := filepath.Join(t.TempDir(), "editor")
+	var log lineLog
+	sup := New(log.log)
+	sup.AddService(ServiceSpec{Name: "ue", Command: bin, Restart: "never"})
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg)
+	t.Cleanup(func() { cancel(); wg.Wait() })
+
+	for _, call := range []struct {
+		name string
+		fn   func(string) (ServiceStatus, error)
+	}{
+		{"StartService", sup.StartService},
+		{"RestartService", sup.RestartService},
+	} {
+		st, err := call.fn("ue")
+		if err != nil {
+			t.Fatalf("%s: %v", call.name, err)
+		}
+		if st.Running {
+			t.Fatalf("%s on a missing program: running = true (%+v)", call.name, st)
+		}
+		if !strings.Contains(st.LastError, bin) {
+			t.Fatalf("%s on a missing program: lastError = %q, want the start error naming %s", call.name, st.LastError, bin)
+		}
+	}
+	if st := sup.Status(); len(st) != 1 || !strings.Contains(st[0].LastError, bin) {
+		t.Fatalf("Status after a failed start = %+v, want the start error in lastError", st)
+	}
+	if strings.Contains(log.String(), "restarted (manual)") {
+		t.Fatalf("a restart whose start failed is logged as done:\n%s", log.String())
+	}
+
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 20\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	st, err := sup.StartService("ue")
+	if err != nil {
+		t.Fatalf("StartService: %v", err)
+	}
+	if !st.Running || st.LastError != "" {
+		t.Fatalf("StartService once the program exists = %+v, want running with no lastError", st)
+	}
+	if st := sup.Status(); len(st) != 1 || st[0].LastError != "" {
+		t.Fatalf("Status after a successful start = %+v, want the old start error cleared", st)
+	}
 }

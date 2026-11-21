@@ -47,7 +47,7 @@ imports `mcp` is a design error, not a shortcut.
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` |
-| `lifecycle.go` | agent exit handling, the stdin console loop, `killCrashReporter`, `cleanRecovery` |
+| `lifecycle.go` | agent exit handling, the stdin console loop, the window-mode launcher log (`openLauncherLog`), `killCrashReporter` / `crashReporterKillers`, `cleanRecovery` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
 | `hermes.go` | the `hermes-setup` sub-command |
 
@@ -61,7 +61,7 @@ anything nearby:
 | `getString(args, key, def)` | `helpers.go` | one string argument with a default |
 | `firstString(args, keys…)` | `helpers.go` | first present key out of several aliases |
 | `errResult(err)` | `helpers.go` | the MCP error result every handler returns |
-| `serviceAction(sup, name, fn)` | `tools.go` | wraps a service call into a tool handler |
+| `serviceAction(sup, name, fn, starts)` | `tools.go` | wraps a service call into a tool handler; with `starts` (start, restart), a service not running afterwards is an error result naming its `lastError` |
 | `scriptAction(sup, cmd, pre, dir, ext, label)` | `scripts.go` | the `run_python` / `run_node` handler: writes the agent's code to a script in the runtime's working directory and runs it via `RunOnce` (`run_command` calls `RunCommand` directly) |
 
 The package only *looks* orthogonal to the packages below it. A change

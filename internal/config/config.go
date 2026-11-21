@@ -69,9 +69,9 @@ type UnrealConfig struct {
 	// KillCrashReporter kills CrashReportClientEditor.exe before every (re)start
 	// (default true) — a safeguard in case a reporter window is stuck after all.
 	KillCrashReporter *bool `yaml:"killCrashReporter"`
-	// CleanOnRestart removes Saved/Autosaves/PackageRestoreData.json and
-	// Saved/Crashes/* before every start (default false) — guarantees a clean
-	// start.
+	// CleanOnRestart removes Saved/Autosaves/PackageRestoreData.json before
+	// every start, and Saved/Crashes/* before every start except an automatic
+	// restart, which keeps the crash dump for diagnosis (default false).
 	CleanOnRestart bool `yaml:"cleanOnRestart"`
 }
 

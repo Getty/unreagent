@@ -112,7 +112,7 @@ func run() error {
 			dir = filepath.Dir(info.Project)
 		}
 		logPath := filepath.Join(dir, "unreagent.log")
-		if f, ferr := os.Create(logPath); ferr == nil {
+		if f := openLauncherLog(logPath, os.Stderr); f != nil {
 			logOut = f
 			defer f.Close()
 			fmt.Printf("unreagent %s\n", version)
@@ -160,12 +160,12 @@ func run() error {
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)
 	}
-	uePreStart := func() {
+	uePreStart := func(automatic bool) {
 		if boolVal(cfg.Unreal.KillCrashReporter) {
 			killCrashReporter()
 		}
 		if cfg.Unreal.CleanOnRestart && ueProjectDir != "" {
-			cleanRecovery(ueProjectDir, logger)
+			cleanRecovery(ueProjectDir, automatic, logger)
 		}
 	}
 	// Like onAgentExit below: set once the session exists.
