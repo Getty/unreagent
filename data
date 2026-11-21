@@ -1,0 +1,47 @@
+---
+class: standard
+completed: 2026-11-21T02:14:14Z
+created: 2026-11-21T00:52:33Z
+id: 99
+priority: low
+started: 2026-11-21T01:43:27Z
+status: done
+tags:
+- skills
+- docs
+- drift
+title: Drift in the project skills and the skill-subsystem spec
+updated: 2026-11-21T02:14:28Z
+---
+
+Found during k95: unreagent-core says "only two test files exist" (about ten now); unreagent-core and unreagent-windows mention a "taskbar flash" that no code implements; unreagent-mcp-tools says mcp.go is "~300 lines" (483); unreagent-core says scriptAction "wraps a one-shot command", but it serves only run_python/run_node (run_command calls RunCommand directly). Lane: unreagent-skill-author. The design spec under docs/superpowers/specs/ still cites main.go:204-219 and German tool descriptions. Lane: unreagent-doc-writer. Size S.
+
+**Spec part done (doc-writer, 2026-11-21), uncommitted:** docs/superpowers/specs/2026-08-21-skill-subsystem-design.md §1 now cites run() in cmd/launcher/main.go instead of main.go:204-219, §6.2 cites registerTools in cmd/launcher/tools.go, §10 German-descriptions claim marked resolved (no umlauts/ß under cmd/ or internal/). Only those three citations were checked. Skill part still with the skill-author.
+
+Both parts done in the main tree, uncommitted: spec citations (doc-writer); skills (skill-author): unreagent-core scriptAction row (run_python/run_node only; run_command calls RunCommand), test-file count dropped in favour of git ls-files, taskbar flash removed from core and windows (no code; Changes:57 records the removal), mcp-tools line count dropped, Long-running-work paragraph corrected, last line now names internal/mcp/mcp_test.go vs cmd/launcher/mcpcheck_test.go. Main agent also dropped the taskbar flash and the two-test-files hint from .claude/agents/unreagent-test-writer.md.
+
+**Review (unreagent-reviewer, 2026-11-21): APPROVE WITH NITS.** Check as for k97/k101 (gofmt / vet / go test -count=1 ./... / make windows all green). Files reviewed: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md, .claude/skills/unreagent-{core,mcp-tools,windows}/SKILL.md, .claude/agents/unreagent-test-writer.md (owner main per OWNERS; frontmatter intact).
+
+Verified true:
+- spec section 1: run() appends --mcp-config / --permission-prompt-tool (main.go:212, 225);
+- spec section 6.2: registerTools lives in tools.go;
+- spec section 10: no German anywhere in cmd/ or internal/ (umlaut grep and common-word grep both empty);
+- scriptAction row matches scripts.go (CreateTemp in the runtime dir, RunOnce); run_command calls sup.RunCommand directly;
+- every package has a _test.go (cmd/launcher 4, config 4, mcp 1, supervisor 5);
+- taskbar flash: no mention left outside Changes:57/77, no code;
+- mcp.go line count dropped (483 lines at HEAD);
+- mcp_test.go covers initialize / tools/list / tools/call / batches / bearer / origin, and mcpcheck_test.go only smokeTestMCP against a node -e fake;
+- the Long-running-work paragraph matches tools.go/scripts.go (serviceAction for ue_*, exit N + tailLines(…, 300), IsError on a non-zero exit);
+- test-writer agent: the taskbar flash and the "two test files" hint are gone, git ls-files pointer is correct.
+
+Nits:
+1. .claude/skills/unreagent-windows/SKILL.md:107 was not re-wrapped (138 chars).
+2. Spec line 13 "nothing else": run() also appends --strict-mcp-config (main.go:214) and --dangerously-skip-permissions (main.go:222). The point (no prompt or instruction path) still holds; optional wording fix.
+
+**Re-review (unreagent-reviewer, 2026-11-21): APPROVE.** Judged against main @ 3c920ef. Re-ran the YAML parse and go test -count=1 ./internal/config/ (both ok).
+Verified fixes:
+- spec line 12-15 now lists the flags run() actually appends: --mcp-config, --strict-mcp-config, --permission-prompt-tool or --dangerously-skip-permissions (main.go:210-227, unchanged by 3c920ef); still no prompt, skill or instruction path in cmd/ or internal/ (grep empty);
+- .claude/skills/unreagent-windows/SKILL.md "Testing on Linux" paragraph re-wrapped, frontmatter intact.
+Because 3c920ef changed tools.go and helpers.go, I re-checked the unreagent-mcp-tools and unreagent-core claims from this card against it. run_command still returns exit N + tailLines(…, 300) with IsError on a non-zero exit, serviceAction and scriptAction are unchanged, and getInt is still a helper (it now returns an error). Nothing contradicted. Nothing open.
+
+Committed in c563b81
