@@ -83,12 +83,14 @@ const defaultCtrlTimeout = 10 * time.Second
 // Supervisor holds all services and commands.
 type Supervisor struct {
 	log Logger
-	// ctrlTimeout is a field so tests can shorten it; New sets the default.
-	ctrlTimeout time.Duration
-	mu          sync.Mutex
-	services    map[string]*service
-	order       []string
-	commands    map[string]CommandSpec
+	// ctrlTimeout and drainTimeout are fields so tests can shorten them; New
+	// sets the defaults.
+	ctrlTimeout  time.Duration
+	drainTimeout time.Duration
+	mu           sync.Mutex
+	services     map[string]*service
+	order        []string
+	commands     map[string]CommandSpec
 }
 
 // New creates a supervisor with the given log sink.
@@ -97,10 +99,11 @@ func New(log Logger) *Supervisor {
 		log = func(string) {}
 	}
 	return &Supervisor{
-		log:         log,
-		ctrlTimeout: defaultCtrlTimeout,
-		services:    map[string]*service{},
-		commands:    map[string]CommandSpec{},
+		log:          log,
+		ctrlTimeout:  defaultCtrlTimeout,
+		drainTimeout: streamDrainTimeout,
+		services:     map[string]*service{},
+		commands:     map[string]CommandSpec{},
 	}
 }
 
@@ -279,18 +282,29 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
+	// A parent-owned pipe instead of an io.Writer: exec.Cmd then only sees an
+	// *os.File and Wait() returns when the command exits — not when the last
+	// grandchild that inherited the write end (MSBuild node reuse) lets go of
+	// it, which kept the caller waiting for that grandchild's whole lifetime.
+	ss, err := newCombinedStreamSet(cmd)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("output pipe: %w", err)
+	}
 	// Bounded on purpose: a full UE package log is tens to hundreds of MB and
 	// the callers only ever show the tail of it.
 	buf := newHeadTailBuffer(commandOutputLimit)
-	cmd.Stdout = buf
-	cmd.Stderr = buf
 
 	job, err := NewJob()
 	if err != nil {
 		s.logf("[%s] WARN job object could not be created: %v — the process runs unsupervised (a launcher crash leaves it behind)", label, err)
 	}
 	s.logf("[%s] starting: %s %v", label, command, args)
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// The child holds its own copy of the write end; ours has to go or the
+	// reader never sees EOF.
+	ss.closeWriteEnds()
+	if err != nil {
+		ss.close()
 		job.Close()
 		return CommandResult{}, fmt.Errorf("start failed: %w", err)
 	}
@@ -299,8 +313,22 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 			s.logf("[%s] WARN job assign failed: %v — the process runs unsupervised", label, err)
 		}
 	}
+	ss.startDrain(func(r io.Reader) {
+		if _, err := io.Copy(buf, r); err != nil && !errors.Is(err, os.ErrClosed) {
+			s.logf("[%s] output stream ended: %v", label, err)
+		}
+	})
 	err = cmd.Wait()
+	// Close the job before draining, not after: on Windows KILL_ON_JOB_CLOSE
+	// ends whatever the command left behind, and with it their copies of the
+	// pipe, so the drain reaches EOF right away. The timeout covers the rest —
+	// a process outside the job, and platforms without job objects.
 	job.Close()
+	ss.wait(s.drainTimeout)
+	ss.close()
+	// close() woke a reader still blocked on a write end held by a grandchild;
+	// join it, so nothing writes to buf any more once it is read.
+	<-ss.done
 	res := CommandResult{Output: buf.String(), ExitCode: exitCodeOf(err)}
 	s.logf("[%s] done (exit %d)", label, res.ExitCode)
 	return res, nil
@@ -332,7 +360,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	// releaseStreams flushes what the finished process left in its pipes into
 	// the log buffer before the exit is reported, then drops the read ends.
 	releaseStreams := func() {
-		streams.wait(streamDrainTimeout)
+		streams.wait(s.drainTimeout)
 		streams.close()
 		streams = nil
 	}
@@ -563,6 +591,22 @@ func newStreamSet(c *exec.Cmd) (*streamSet, error) {
 	return &streamSet{
 		read:  []*os.File{outR, errR},
 		write: []*os.File{outW, errW},
+		done:  make(chan struct{}),
+	}, nil
+}
+
+// newCombinedStreamSet points stdout and stderr of c at one shared pipe, so
+// the two stay interleaved the way the child wrote them — the order a build
+// log is read in — and a single drain goroutine is the only writer.
+func newCombinedStreamSet(c *exec.Cmd) (*streamSet, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	c.Stdout, c.Stderr = w, w
+	return &streamSet{
+		read:  []*os.File{r},
+		write: []*os.File{w},
 		done:  make(chan struct{}),
 	}, nil
 }

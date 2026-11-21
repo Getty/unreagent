@@ -63,8 +63,9 @@ func newHeadTailBuffer(limit int) *headTailBuffer {
 	return &headTailBuffer{limit: limit}
 }
 
-// Write never fails. It is not synchronised: os/exec calls it from a single
-// goroutine as long as the same writer is used for stdout and stderr.
+// Write never fails. It is not synchronised: runOnce writes to it from the one
+// goroutine draining the command's output and reads it only after joining
+// that goroutine.
 func (b *headTailBuffer) Write(p []byte) (int, error) {
 	n := len(p)
 	b.total += int64(n)

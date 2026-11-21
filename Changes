@@ -7,6 +7,9 @@ Revision history for unreagent
     config, the original is in config.yaml.bak.
   - hermes-setup no longer panics on an mcp.token shorter than eight
     characters, and only a token it generated is described as 64 hex chars.
+  - run_command and the runtimes return as soon as the command exits, even
+    when it leaves a process behind that holds its output (MSBuild node
+    reuse); the job object is closed first, so the leftover tree dies with it.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
