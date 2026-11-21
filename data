@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-21T05:08:27Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:08:38Z
+created: 2026-08-24T23:44:16Z
+id: 77
+priority: medium
+started: 2026-11-21T04:18:42Z
+status: done
+tags:
+- supervisor
+- bug
+title: cleanOnRestart wipes Saved/Crashes on the automatic restart that follows a
+  crash
+updated: 2026-11-21T05:08:38Z
+---
+
+main.go:1270-1283: with restart: on-failure the PreStart hook runs 3s after the crash and RemoveAll's the minidump and CrashContext the agent would need to diagnose it. Opt-in and documented, so borderline by-design, but the documented purpose (a clean editor start) does not need the crash dumps gone.
+Acceptance: clean only on manual/explicit starts, or move the crash directories aside instead of deleting them; README wording adjusted.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: uePreStart calls cleanRecovery on every start, including the automatic restart after a crash. Needs a manual-vs-automatic signal on the PreStart hook. Serialize with k80 (same helpers). Size M.
+
+Decision 2026-11-21 (main agent, not the maintainer): on an automatic restart after a failure, cleanOnRestart still removes Saved/Autosaves/PackageRestoreData.json (the restore dialog would block the unattended restart) but keeps Saved/Crashes, so the agent can read the dump; the first start and manual starts/restarts (console, MCP) clean both as today. PreStart learns whether the start is automatic. Bundled with k72 and k80.
+
+Worker done (2026-11-21): PreStart(automatic bool); policy restarts and policy retries of a failed start count as automatic, the first start (also delayed) and console/MCP starts as manual; cleanRecovery always removes PackageRestoreData.json and keeps Saved/Crashes on an automatic restart (logged). Docs follow before review.
+
+Ready for review (2026-11-21, worktree-agent-ada6ed91c99688f4c): code + tests by the worker; README + unreagent.example.yaml by the doc-writer; .claude/skills unreagent-core/-mcp-tools/-windows by the skill-author (serviceAction signature, starts check, crashReporterKillers). Main-agent call: the PreStart(automatic) contract stays in the code comments, not in a skill.
+
+Review 2026-11-21 (unreagent-reviewer, worktree-agent-ada6ed91c99688f4c on 3ab0142, uncommitted): APPROVE. Files: internal/supervisor/supervisor.go, supervisor_test.go, status_test.go, cmd/launcher/main.go, lifecycle.go, lifecycle_test.go, internal/config/config.go, README.md, unreagent.example.yaml. Check: same green run as k72 (gofmt, vet linux+windows, test, race x3, make linux/windows, mod verify). Every start() path checked: first start false; delayed first start backoffAuto=false; exit restart and failed-start retry backoffAuto=true; ctrlStart and ctrlRestart false. Every assignment of backoff also sets backoffAuto, so the flag cannot go stale. ctrlStop and ctrlStart/Restart clear a pending policy backoff, and a k70 give-up schedules no start. Mutations 13/13 killed: each start site flipped, backoff flag forced either way, cleanRecovery ignoring or inverting automatic, main.go wiring forced true or false, restore file kept on auto. Docs match the code sentence by sentence. Nit: README.md:550 says the launcher logs 'Saved/Crashes kept', but it does so only when Saved/Crashes is non-empty. Observations for the main agent, not worker findings: (a) the k70 give-up line (lifecycle.go:141) says 'retry with ue_start', and with cleanOnRestart that manual start empties Saved/Crashes. An agent that follows the advice loses the crash-loop dumps (per the decision, but neither the line nor the ue_start description warns about it). (b) killCrashReporter still runs on the automatic restart, about restartDelay after the crash. If the reporter is still writing the report, the dump k77 keeps can come out incomplete (pre-existing, unverified, candidate card).
+
+Committed as c0045e2 on main
