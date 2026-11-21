@@ -1,0 +1,60 @@
+---
+claimed_at: 2026-11-21T13:26:06Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T13:26:06Z
+created: 2026-08-22T04:38:42Z
+id: 46
+priority: low
+started: 2026-11-21T12:37:57Z
+status: done
+tags:
+- config
+- bug
+title: permissions.enabled without claudeIntegration is accepted and does nothing
+updated: 2026-11-21T13:26:06Z
+---
+
+config.go:425: validate only couples permissions to mcp.enabled. With agent.claudeIntegration false no --permission-prompt-tool is ever passed (main.go:207), so the whole allow/deny policy is dead config that loads without complaint. Verified: permissions enabled with mode deny_all and claudeIntegration false returns no error. Acceptance: extend the existing check so enabled permissions plus an enabled agent without claudeIntegration is a load-time error.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: validate() only couples permissions.enabled to mcp.enabled. Merge with k38. Linux test trivial. Size S.
+
+
+**Decision 2026-11-21** (maintainer): same as k38: warn, do not refuse.
+
+Worker (unreagent-worker) started 2026-11-21 together with k38 in the same worktree; one shared condition function covers both.
+
+Implemented with k38 (same worktree, same function permissionsInertReason in cmd/launcher/main.go): permissions.enabled + agent.enabled + claudeIntegration: false logs one WARN (log; stderr too in window mode): not enforced, no --permission-prompt-tool is passed, fix = agent.claudeIntegration: true (plus -p when interactive, one warning not two). Worker's choice: no warning when agent.args already carry --permission-prompt-tool (or --permission-prompt-tool=...) by hand, and none for an external agent (agent disabled / -no-agent), which can call approve itself. validate() unchanged: warn, not refuse. Tests and full check: see k38.
+
+Docs done (unreagent-doc-writer), uncommitted in the worktree: README quick start no longer ships permissions (so it does not trip the WARN) and says why; agent and permissions table rows; Permission layer (headless = -p/--print with a task, window:false alone left unsettled per k168; new "Startup warning" paragraph covering interactive and claudeIntegration:false, stderr when log is a file, no warning for -no-agent or hand-wired flag; Modes line corrected); "Interactive in the foreground" pointer; unreagent.example.yaml agent comment + permissions block (now enabled: false with the caveat); CLAUDE.md Agent<->Launcher line. Checked: gofmt -l clean, go test -count=1 ./internal/config ./cmd/launcher ok. Warning text verified against permissionsInertReason.
+
+docs complete, see note
+
+**Review 2026-11-21** (unreagent-reviewer, reviewed together with k38, same worktree and files): CHANGES NEEDED. The full verdict, the check run and the findings are on k38. The k46 path itself is correct. permissionsInertReason warns for permissions.enabled + agent.enabled + claudeIntegration: false, and the text names the dead policy and the fix (claudeIntegration: true, plus -p when interactive). The warning is one line, not two. It is pinned by TestPermissionsInertReason and the 'no claudeIntegration, log on stdout' run case, which the reviewer's mutations show can fail. Checks are green: gofmt, vet linux+windows, go test ./..., -race, -count=5, make linux, make windows.
+
+Findings that touch k46:
+- README.md:686-688 says there is no warning for a hand-wired --permission-prompt-tool. That is true only with claudeIntegration: false (main.go:490-495). With claudeIntegration: true, an interactive agent still WARNs, and with claudeIntegration: false an interactive hand-wired agent is silent although the prompt tool aborts outside -p (main.go:255-256). See k38 finding 3.
+- README.md:602: the "otherwise ... WARN" claim is too broad; see k38 finding 4.
+Commit subject and Changes proposal: see k38.
+
+Fix round 2026-11-21 (unreagent-worker): the hand-wired --permission-prompt-tool exemption from the k46 path now applies only to a headless agent; claudeIntegration: false + interactive + hand-wired now warns (text names the hand-wired flag, fix = run headless). Details, check run and final warning texts on k38.
+
+**Re-review 2026-11-21** (unreagent-reviewer, reviewed together with k38, same worktree and files): CHANGES NEEDED, docs only. The full verdict, the check run and the mutations are on k38. The k46 path is correct after round 2. With claudeIntegration: false and no hand-wired flag there is one warning (main.go:498-505), and it adds the headless fix only when the agent is interactive. A hand-wired --permission-prompt-tool silences the warning only for a headless agent (main.go:494). An interactive hand-wired agent now warns (main.go:509-516), and the warning names the flag and asks only for headless. No --dangerously-skip-permissions claim appears without claudeIntegration (main.go:512). Mutations caught: the hand-wired flag exempting an interactive agent; hand-wired + no claudeIntegration getting the claudeIntegration text; the headless fix always appended; the also-sentence without its claudeIntegration guard; the --flag=value form not detected. Check green: gofmt, vet linux+windows, go test -count=1 ./..., -race ./cmd/launcher, make linux, make windows, and the diff applied onto main 22bee2b.
+
+Findings that touch k46:
+- README.md:673-679: the interactive bullet says the warning names --dangerously-skip-permissions under allow_all. With claudeIntegration: false the launcher passes no such flag and the warning is the claudeIntegration text. The Modes note at :692-693 has the same gap. See k38 finding 1.
+- Low: README.md:602 "otherwise ... WARN" does not hold for headless + claudeIntegration: false + a hand-wired flag. See k38 finding 2.
+Commit subject and Changes proposal: see k38.
+
+**Re-review round 3 2026-11-21** (unreagent-reviewer, reviewed together with k38, same worktree; docs only): READY. The verdict, the check and the two nits are on k38. Check run: gofmt -l cmd internal on the worktree is empty. The round-2 full check stands, since no Go file changed.
+
+For k46: the README now matches the claudeIntegration: false path in main.go:498-516.
+- README.md:602 marks claudeIntegration: false as a WARN case. The headless hand-wired exception is pointed to Permission layer, which names it (:687-689).
+- The first Startup warning bullet (:673-682) no longer claims --dangerously-skip-permissions or "asks as usual" without claudeIntegration.
+- The Modes note (:692-695) limits --dangerously-skip-permissions to claudeIntegration: true.
+Round-2 findings 1 and 2 are resolved.
+
+Scope note, not blocking: OWNERS gives README.md to unreagent-doc-writer, and the main agent made this round's edit itself. That is plain prose, which the delegation rule lets the main agent edit. Windows: unverified, as on k38.
+
+Committed as ce12dc2 on main, together with k38.
