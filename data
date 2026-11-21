@@ -1,0 +1,27 @@
+---
+claimed_at: 2026-11-21T02:03:25Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:03:42Z
+created: 2026-08-24T23:44:23Z
+id: 78
+priority: low
+started: 2026-11-21T01:42:06Z
+status: done
+tags:
+- mcp
+title: 'MCP tool handlers: approve fails open on an unknown payload shape, getInt
+  ignores numeric strings, logs for the foreground agent is always empty'
+updated: 2026-11-21T02:03:42Z
+---
+
+1) main.go:480-490: with no tool name under the four aliases the approve tool calls Decide('', {}) -> deny rules cannot match -> allow with updatedInput {}. Unreachable with Claude Code's current tool_name/input payload, but fragile; deny with a message when toolName is empty. 2) main.go:1327: getInt silently returns the default for a numeric string (observed lines:'3' -> 50); strconv.Atoi on strings, else an error. 3) main.go:240, :380: logs service=agent is always empty in the default interactive config because Foreground services stream nothing into the buffer while the description promises agent output; say so in the description or the result text.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, all three items: (1) approve passes an empty tool name to Decide; (2) getInt ignores numeric strings; (3) the foreground agent leaves logs empty, the description still mentions it. Size S.
+
+Worker done (worktree-agent-a02c899f0fb94b507, uncommitted, based on 2e72af4): approve denies a request with no tool name or no tool-input object (reason names keys looked for/found); getInt returns (int, error), accepts numeric strings, missing/null/"" = default, else error surfaced by logs; logs description says service=agent stays empty for the foreground agent. Tests in cmd/launcher/tools_test.go, red on 2e72af4. Doc follow-ups after landing: README approve note (unreadable request denied; alias list lacks tool/parameters); skills/unreagent-iterate:196 (string lines) via k100.
+
+Review (unreagent-reviewer, worktree-agent-a02c899f0fb94b507 on 2e72af4, uncommitted: cmd/launcher/helpers.go, cmd/launcher/tools.go, new cmd/launcher/tools_test.go): APPROVE WITH NITS. Check run in the worktree, all green: gofmt -l cmd internal (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./cmd/launcher, make linux, make windows, and the canonical one-liner. Scope ok: all three paths owned by unreagent-worker (ack-team owner). No Windows-guarded code touched; make windows compiled only, handlers run on Linux only. Mutations in a scratch copy: old approve handler -> all 5 fail-closed subtests red; deny-everything -> TestApproveAllowsWellFormedPayload red; input check removed -> 2 subtests red; old getInt (string -> default) -> TestGetIntAcceptsNumericString and TestLogsRejectsNonNumericLines red; logs ignoring the error -> red; null/"" as error -> red. getInt has one caller (tools.go:65); args come through encoding/json without UseNumber, so float64 stays the number path. Name-without-input deny: Claude Code sends tool_name plus an input object, and tool_use input is always a JSON object, so no real payload should hit it. Not checked against a live payload; if it ever fires it is a loud deny that lists the keys. Follow-ups: (1) skills/unreagent-iterate/SKILL.md:196-197 still says a string 'lines' is ignored and you get 50, which this change makes false. Owner unreagent-skill-author; best fixed in the same commit, otherwise as a ticket. (2) README.md:495-497 alias list lacks tool/parameters and does not say an unreadable request is denied (doc-writer). Nits: tools.go:166 says 'no tool name' even when tool_name is present but not a string (the key list does show it); tools.go:179 logs '[approve]  -> deny' with an empty name; tools_test.go:146 lines:'3' only checks that there is no error (empty buffer), so the string-to-count path is pinned only at the getInt level.
+
+Committed as 3c920ef on main; reviewer nits tracked in k108.
