@@ -6,6 +6,7 @@ disallowedTools: Edit, Write, NotebookEdit
 briefing:
   skills:
     - unreagent-core
+    - unreagent-permissions
     - unreagent-mcp-tools
     - unreagent-config
     - unreagent-windows

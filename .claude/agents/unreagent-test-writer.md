@@ -5,6 +5,7 @@ model: sonnet
 briefing:
   skills:
     - unreagent-core
+    - unreagent-permissions
     - superpowers:test-driven-development
     - kanban-issues-karr-ticket
 ---

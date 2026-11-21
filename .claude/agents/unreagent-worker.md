@@ -5,6 +5,7 @@ model: inherit
 briefing:
   skills:
     - unreagent-core
+    - unreagent-permissions
     - unreagent-mcp-tools
     - unreagent-config
     - unreagent-windows
