@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-21T07:16:58Z
+created: 2026-11-21T07:14:34Z
+id: 142
+priority: low
+started: 2026-11-21T07:16:58Z
+status: archived
+tags:
+- mcp
+- bug
+title: Log 'MCP server listening' only once the port is bound
+updated: 2026-11-21T07:16:58Z
+---
+
+From the k10–k12 review: cmd/launcher/main.go logs 'MCP server listening on …' right after starting go httpSrv.ListenAndServe(), before the port is bound. A client (or the launcher's own bridge smoke test, or a test) that acts on that line can hit 'connection refused'. TestRunRegistersTheSkillsToolWithTheLoadedSkills was flaky for this reason (17 of 40 with -count=40) and now retries. Fix: net.Listen first, log after it succeeds, then Serve(listener). A bind failure is then reported before the line too. Done: the line appears only when a request can connect, and a test pins it. Lane: unreagent-worker. main.go/run() card: run it serially.
+
+Duplicate of k141. The same create was written twice after a push retry. Archived; work it as k141.
