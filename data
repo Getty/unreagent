@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-21T09:54:28Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T09:54:28Z
+created: 2026-11-21T07:14:23Z
+id: 141
+priority: low
+started: 2026-11-21T08:20:44Z
+status: done
+tags:
+- mcp
+- bug
+title: Log 'MCP server listening' only once the port is bound
+updated: 2026-11-21T09:54:39Z
+---
+
+From the k10–k12 review: cmd/launcher/main.go logs 'MCP server listening on …' right after starting go httpSrv.ListenAndServe(), before the port is bound. A client (or the launcher's own bridge smoke test, or a test) that acts on that line can hit 'connection refused'. TestRunRegistersTheSkillsToolWithTheLoadedSkills was flaky for this reason (17 of 40 with -count=40) and now retries. Fix: net.Listen first, log after it succeeds, then Serve(listener). A bind failure is then reported before the line too. Done: the line appears only when a request can connect, and a test pins it. Lane: unreagent-worker. main.go/run() card: run it serially.
+
+2026-11-21 08:42 Done together with k45/k123, not committed (worktree on base 114237c). The port is bound in listenMCP before anything else starts, and 'MCP server listening on <url>' is logged after Serve(listener) has been started, so a connect after the line succeeds. TestRunLogsMCPListeningOnlyOnceAConnectSucceeds (cmd/launcher/main_test.go) makes one dial after the line, with no retry: it failed 26 of 40 runs before the fix (-count=40) and passed 40 of 40 after. The retry workaround in TestRunRegistersTheSkillsToolWithTheLoadedSkills is gone (one POST, now waiting for 'MCP server listening on'): 40 of 40 green with -count=40. Full check green, see the k123 handoff note.
+
+2026-11-21 09:02 Review (unreagent-reviewer): READY on its own claim. It commits in the same commit as k45/k123, which need changes (see k123), so it waits for them. Files: cmd/launcher/main.go:341-344, cmd/launcher/main_test.go:97-114, cmd/launcher/skills_test.go:832-841. Check run (worktree and diff on main 4f2661d): gofmt -l, go vet (linux + windows), go test -count=1 ./..., go test -race, make linux, make windows, all green.
+The claim is pinned. TestRunLogsMCPListeningOnlyOnceAConnectSucceeds passes 40/40. With the pre-fix wiring (ListenAndServe in a goroutine, line logged at once) it fails 40/40, with the bind moved into the serve goroutine 39/40, and with the line logged before the bind it fails too. The skills test without retry passes 40/40. The line comes after go serveMCP; the port has been bound since listenMCP, so a connect succeeds and the request waits in the backlog until Serve accepts. Nit (optional): skills_test.go:823-830 could use the new freeLoopbackAddr/withMCP helpers. Changes line: see k123.
+
+2026-11-21 09:29 Re-review (unreagent-reviewer), fix round: CHANGES NEEDED. TestRunLogsMCPListeningOnlyOnceAConnectSucceeds (main_test.go:186-203) is flaky now. It failed 1 of 40 in each of four -count=40 runs, and 6 of 200 at -count=200, always with "exit code -1 after a signal, want 0". Cause: in the fix round, signal.NotifyContext went back below the MCP block. The listening line is logged at main.go:352, the handler installed at main.go:355, and the test's SIGTERM right after the line can arrive before the handler exists and kill the process. With main.go:355-357 (NotifyContext, defer stop, newSession) moved above the "--- MCP server ---" block, as in round 1, the result was 200 of 200 green. Fix: install the signal handler before the listening line. That is product-correct too: a client acting on the line may signal. The claim itself stays pinned: the connect-after-line test goes red with the pre-fix wiring. The rest of the check is green (see k123).
+
+**Decision (main agent) 2026-11-21 on the re-review:** blocker (flaky listening test, signal handler installed after the listening line) and the untested stderr choice go back to the worker; ERROR line wording fixed to hold without an agent. Idle case (no agent, editor gave up, then serving fails) filed as its own card. README :1059 and unreagent.example.yaml:13-17 reworded by the main agent. Changes:72 (k69 entry) stays as it is.
+
+2026-11-21 09:36 Fix round 2, not committed. Blocker fixed: TestRunLogsMCPListeningOnlyOnceAConnectSucceeds was flaky because the signal handler was installed after the 'MCP server listening' line, so the test's SIGTERM could arrive before it. Reproduced before the fix: go test -count=200 -run TestRunLogsMCPListeningOnlyOnceAConnectSucceeds ./cmd/launcher failed 5 of 200 with 'exit code -1 after a signal, want 0'. Fix in cmd/launcher/main.go: signal.NotifyContext, defer stop() and newSession now come before the '--- MCP server ---' block again, with a comment saying why (k141). After the fix, the same -count=200 run passed twice (200 of 200 each). Full check green: gofmt -l (empty), go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race -count=1 ./..., make linux, make windows, CGO_ENABLED=0 windows build.
+
+Review round 3 (unreagent-reviewer): READY. Files: cmd/launcher/main.go (signal.NotifyContext, defer stop and newSession now above the MCP block, so a client acting on the 'MCP server listening on' line finds the signal handler installed; that line is logged only after net.Listen succeeded), cmd/launcher/main_test.go TestRunLogsMCPListeningOnlyOnceAConnectSucceeds, cmd/launcher/skills_test.go (retry dropped, waits for the listening line). Check run on the worktree diff (base 114237c) and again with the diff applied onto main 4f2661d: gofmt -l cmd internal skills empty; go vet ./... for linux and GOOS=windows green; go test -count=1 ./... green; go test -race ./cmd/launcher ./internal/... green; make windows green (PE32+, CGO_ENABLED=0). Listening test 200/200 plain and 200/200 under -race. Mutation (NotifyContext moved back below the listening line): red, 4 of 200 runs exit -1 after a signal. So the regression is caught, but only by chance: about 2 percent of runs, so a single CI run usually misses it. Noted, not blocking. Windows: compiled only, UNVERIFIED (the subprocess launcher tests skip on Windows).
+
+Committed in 5f10d83 (on main, not pushed).
