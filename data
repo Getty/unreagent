@@ -1,0 +1,36 @@
+---
+class: standard
+completed: 2026-11-21T14:44:22Z
+created: 2026-11-21T02:06:18Z
+depends_on:
+- 104
+- 59
+id: 111
+priority: medium
+started: 2026-11-21T14:36:03Z
+status: done
+tags:
+- docs
+- permissions
+title: Document the permission rule changes from k104 and k59
+updated: 2026-11-21T14:44:22Z
+---
+
+README (doc-writer), after k104/k59 land:
+1. File-tool path rules (Read/Write/Edit/MultiEdit/NotebookEdit) must be absolute (${PROJECT_DIR} or a full path) and below a root; relative or root-only rules are a load error; the bare tool name means every path. On Windows use a drive letter: a drive-less Write(/etc/*) never matches C:\ paths.
+2. Allowlist mode: a command with an output redirection is only allowed by a rule that spells it out (Bash(echo x > *)); fd duplication (2>&1) and the null device do not count; Bash(*) no longer covers redirections, bare Bash does.
+3. k59 item 2: tool-native escapes no command-line matcher sees — git -c core.pager/core.sshCommand/alias.x=!sh, GIT_*/PAGER/EDITOR env, find -exec/-execdir/-delete, xargs from a file, tar --to-command/--checkpoint-action, rsync -e, ssh -o ProxyCommand, awk system(), sed -i / sed e, tee/cp/dd of=/Out-File/Set-Content, python -c/node -e/perl -e, npm/make scripts. Bash(git *) grants all of these.
+4. On Windows path rules ignore case, and .. cannot climb above a \\server\share root.
+Also the unreagent-config skill if it describes the permission rule format.
+
+**From the k104 review:** silent behaviour change to document — Grep(*), Glob(*) and mcp__x__*(*) no longer grant a call that carries a path (HEAD did); the bare tool name still does. On Windows a deny rule without a drive letter (Write(/etc/*)) loads but never matches C:\\ paths.
+
+From the k104 re-review (2026-11-21): item 1 must say root-only rules are a load error for allow rules only; deny rules at a root load again.
+
+README Permission layer + permissions table row documented (k104 path rules, k59 redirections/escapes/Windows case+UNC, k113 fail-closed unreadable commands); README.md only, uncommitted in worktree agent-a37f74fe4818f37c6
+
+README documents k104/k59/k113 behavior; hunks confined to the Permission-layer section and the permissions table row; uncommitted. Claims checked against permission.go; docs only, no code run.
+
+Main agent's review of the README diff (prose, main agent's lane): the claims check out against permission.go, including that under allow_all an unreadable command is blocked only when a Bash deny rule exists (denyCommand returns true without segments, and allowCommand is not asked). Two history phrasings changed to the present: 'Bash(*) does not cover a redirection either', 'Grep(*), Glob(*) and mcp__x__*(*) do not'. The history belongs in Changes. The unreagent-config skill does not describe the rule format, so nothing to do there. Ready; it is committed together with k59, k104 and k113.
+
+Committed in 602304e on main (checks green: gofmt, vet both GOOS, test, race, make linux/windows; Windows compiled only).
