@@ -1006,9 +1006,12 @@ shipped names.
 On every start the launcher:
 
 - replaces every directory in `skills.dir` whose name starts with `unreagent-`
-  (a hand-edited file inside one is lost),
+  (a hand-edited file inside one is lost). Each skill is written whole into a
+  work directory `unreagent-.tmp-*` inside `skills.dir` and then renamed into
+  place, so two launchers started at once do not leave a half-written skill,
 - removes such a directory that is no longer shipped, so renamed or dropped
-  skills do not linger,
+  skills do not linger; the next start also removes any `unreagent-.tmp-*`
+  work directory a crash left behind,
 - never touches anything else in `skills.dir`: your own skills and any other
   file or directory stay as they are.
 
@@ -1016,18 +1019,30 @@ Do not put your own skills under an `unreagent-` name in that directory.
 
 **Failure modes.** A skill set that does not load, or two skills that would land
 in the same directory (names that differ only in case count as the same), stops
-the start with an error; `skills.enabled: false` starts without skills. A write
-that fails (read-only directory, a file in the way) does not stop the start; it
-is logged:
+the start with an error, and so does a section file named like a Windows device
+(`con`, `aux`, `nul`, `com1`, `conout$` and so on, also with an extension
+such as `con.backup`), on every OS; `skills.enabled: false` starts without
+skills. A write that fails (read-only directory, a file in the way) does not
+stop the start; it is logged:
 
 ```
 WARN skills not fully written to <dir>: <cause> — its unreagent-* directories may be missing, incomplete or left from an earlier start
 ```
 
 The editor and agent start anyway, but the `unreagent-*` directories in
-`skills.dir` may then be missing, incomplete or from the previous start: a
-write that fails partway has already removed the old directories and written
-only some skills, and a removal that fails leaves the previous start's files.
+`skills.dir` may then be missing or from the previous start: each skill is
+replaced whole, so a skill that fails to write keeps its previous copy (rarely
+none), the other skills are still written, and a removal that fails leaves the
+previous start's files. Each skill gets three attempts, with short pauses
+between them; if no work directory can be created in `skills.dir` at all (a
+read-only directory), the launcher gives up at once with one cause ending in
+`(N of M skills not written)`. When several skills fail, all their errors are
+joined on the one warning line, separated by `; `. In the rare case that
+putting the new copy in place fails and moving the previous copy back fails
+too, the warning says the previous copy is kept in `unreagent-.tmp-*/previous`
+inside `skills.dir`; a later start removes it (a second launcher starting at
+the same moment can remove it sooner). Two launchers of different versions on
+one project can still remove each other's extra skills.
 The `skills` MCP tool, when on, is unaffected, since it serves from the binary.
 
 With `mcp.enabled: false` the `skills` tool cannot be served; unless the skills

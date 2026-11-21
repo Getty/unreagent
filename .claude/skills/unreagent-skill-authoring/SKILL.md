@@ -56,13 +56,17 @@ What binds the author:
   shipped names.
 - **The directory is `<name>` if the name already starts with `unreagent-`,
   else `unreagent-<name>`** (`skillDirName`) — never a doubled prefix. That
-  prefix is the one predicate for "ours": every real directory carrying it in
-  `skills.dir` is removed and rewritten on each start, so a dropped or renamed
-  skill does not linger, and nothing else there is touched.
+  prefix is the one predicate for "ours". On each start every skill is written
+  into an `unreagent-.tmp-*` work directory and renamed into place
+  (`installSkillDir`), then every other real directory carrying the prefix is
+  removed (`sweepSkillDirs`), so a dropped or renamed skill does not linger,
+  and nothing else there is touched.
 - **`name:` is a plain or quoted value on one line** — `ue-tasks`,
-  `'ue-tasks'` or `"ue-tasks"`, a comment after it is fine. A block scalar
-  (`>`, `|`), an escape, a tag or an anchor cannot be rewritten in place:
-  `Load` accepts it, but materialization refuses the whole set before writing
+  `'ue-tasks'` or `"ue-tasks"`, a comment after it is fine. Any other form
+  cannot be rewritten in place — for example a tag, an anchor, an alias, an
+  escape, a folded or block scalar (`>`, `|`), a value over several lines
+  (`materializedSource`). `Load` accepts it, but materialization refuses the
+  whole set before writing
   anything (WARN, the start goes on), and `go test ./cmd/launcher` fails over
   the shipped set (`TestMaterializeWritesEverySkill`). Only names that gain
   the prefix are checked; write every skill this way.
@@ -76,9 +80,11 @@ What binds the author:
   `go test ./internal/skills` stays green; `go test ./cmd/launcher`
   (`TestCheckSkillDirsRejectsCollisions`, over the shipped set) fails.
 - **No section named after a Windows device** — `con`, `prn`, `aux`, `nul`,
-  `com1`–`com9`, `lpt1`–`lpt9`, any case. Nothing rejects it on Linux, but on
-  Windows before 11 `filepath.IsLocal` (in `isPlainName`) refuses `aux.md`, and
-  the whole materialization is skipped with a WARN. The `unreagent-` prefix
+  `conin$`, `conout$`, `com` or `lpt` with `1`–`9` or `¹`–`³`, any case, also
+  with a further extension (`con.backup`); `reservedDeviceName`
+  (`cmd/launcher/filetools.go`) is the list. Windows 10 opens `aux.md` as the
+  device. `checkSkillDirs` refuses it like a collision: a load error that stops
+  the start, on every OS and whichever path is on. The `unreagent-` prefix
   keeps directory names clear of this.
 
 ## Format
@@ -193,7 +199,8 @@ stops the load; `DescribeAll` lists every skill in its pinned format; `Source`
 is the embedded file byte for byte. In `cmd/launcher/skills_test.go`: the
 tool's body, section and unknown-name results and its registration gate; the
 directory rule; replacing the launcher's own directories, removing dropped
-ones and leaving foreign entries alone; collisions over the shipped set.
+ones and leaving foreign entries alone, also with a second run at once or a
+crash at any step; collisions over the shipped set; device-named sections.
 
 ## Licensing
 

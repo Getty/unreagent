@@ -50,7 +50,7 @@ imports `mcp` is a design error, not a shortcut.
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` |
 | `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt), the stdin console loop, the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
-| `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills`, the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
+| `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills` (`installSkillDir`, `sweepSkillDirs`), the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
 | `hermes.go` | the `hermes-setup` sub-command |
 

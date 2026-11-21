@@ -6,16 +6,20 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/mcp"
@@ -258,8 +262,9 @@ func TestSkillDirName(t *testing.T) {
 	}
 }
 
-// Every skill of the set gets its prefixed directory, holding SKILL.md exactly
-// as embedded and its sub-documents next to it — and nothing else. The
+// Every skill of the set gets its prefixed directory, holding SKILL.md as
+// embedded, its name set to that directory where the prefix is added
+// (materialized), and its sub-documents next to it — and nothing else. The
 // directory is created when it does not exist yet.
 func TestMaterializeWritesEverySkill(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".claude", "skills")
@@ -438,14 +443,17 @@ func TestMaterializeNamesTheSkillLikeItsDirectory(t *testing.T) {
 }
 
 // A name whose text is not the name itself, plain or quoted (a block scalar,
-// an escape — both of which Load accepts), is refused before anything in dir
-// changes rather than rewritten by guess; so is a skill whose fields do not
-// fit together, which only a hand-built set can be.
+// an escape, a tag, an anchor, an alias — all of which Load accepts), is
+// refused before anything in dir changes rather than rewritten by guess; so is
+// a skill whose fields do not fit together, which only a hand-built set can be.
 func TestMaterializeRefusesANameItCannotRewrite(t *testing.T) {
 	const notPlain = "not a plain or quoted scalar"
 	for _, tc := range []struct{ why, source, body, want string }{
 		{"folded name", "---\nname: >-\n  ue-f\ndescription: d\n---\n# f\n", "# f\n", notPlain},
 		{"escaped name", "---\nname: \"ue\\x2df\"\ndescription: d\n---\n# f\n", "# f\n", notPlain},
+		{"tagged name", "---\nname: !!str ue-f\ndescription: d\n---\n# f\n", "# f\n", notPlain},
+		{"anchored name", "---\nname: &n ue-f\ndescription: d\n---\n# f\n", "# f\n", notPlain},
+		{"aliased name", "---\ndescription: &n ue-f\nname: *n\n---\n# f\n", "# f\n", notPlain},
 		{"body not at the end", "---\nname: ue-f\ndescription: d\n---\n# f\n", "# other\n", "body is not the end"},
 		{"frontmatter not YAML", "---\nname: [ue-f\n---\n# f\n", "# f\n", "yaml:"},
 		{"no name key", "---\ndescription: d\n---\n# f\n", "# f\n", "no name key"},
@@ -511,6 +519,36 @@ func TestCheckSkillDirsRejectsCollisions(t *testing.T) {
 	}
 }
 
+// A section named like a Windows device is refused on every OS: Windows 10
+// opens aux.md as the AUX device, so filepath.IsLocal fails there and the whole
+// set would be skipped on Windows alone. Names that merely contain a device
+// name are fine.
+func TestCheckSkillDirsRejectsWindowsDeviceNames(t *testing.T) {
+	sk := func(section string) []skills.Skill {
+		return []skills.Skill{
+			{Name: "ue-ok", Source: "x", Body: "x", Files: map[string]string{"nodes": "x"}},
+			{Name: "ue-x", Source: "x", Body: "x", Files: map[string]string{"graphs": "x", section: "x"}},
+		}
+	}
+	for _, section := range []string{"aux", "CON", "nul", "Prn", "com1", "LPT9", "COM¹", "conin$", "con.backup", "aux "} {
+		err := checkSkillDirs(sk(section))
+		if err == nil {
+			t.Errorf("section %q: no error; want it refused as a Windows device name", section)
+			continue
+		}
+		for _, w := range []string{"ue-x", section + ".md", "Windows device"} {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("section %q: error %q does not mention %q", section, err, w)
+			}
+		}
+	}
+	for _, section := range []string{"console", "auxiliary", "com10", "nullable", "lpt", "my-aux"} {
+		if err := checkSkillDirs(sk(section)); err != nil {
+			t.Errorf("section %q: %v; want it accepted", section, err)
+		}
+	}
+}
+
 // materializeSkills checks for collisions before it touches dir. Both skills
 // are well-formed, so nothing but the collision check can refuse them.
 func TestMaterializeRefusesCollisionsBeforeWriting(t *testing.T) {
@@ -568,8 +606,9 @@ func TestSetupSkillsWarnsWhenMaterializationFails(t *testing.T) {
 	if len(all) == 0 {
 		t.Error("setupSkills returned no skills; the MCP tool still needs them")
 	}
-	// The text claims no more than it knows: a write can fail after the old
-	// unreagent-* directories are gone, or a removal before anything is new.
+	// The text claims no more than it knows: a skill that could not be put in
+	// place may be missing or the previous start's, and a removal that fails
+	// leaves files of an earlier start.
 	prefix := "WARN skills not fully written to " + dir + ": "
 	const suffix = " — its unreagent-* directories may be missing, incomplete or left from an earlier start"
 	var warned bool
@@ -580,6 +619,120 @@ func TestSetupSkillsWarnsWhenMaterializationFails(t *testing.T) {
 	}
 	if !warned {
 		t.Errorf("log %q; want a line %q<cause>%q", *lines, prefix, suffix)
+	}
+}
+
+// Every skill that fails is named, in the one WARN line: the log is read line
+// by line, and a kept previous copy must not drop out of it.
+func TestSetupSkillsWarnsOnOneLineForEverySkillThatFails(t *testing.T) {
+	saved := loadEmbeddedSkills
+	loadEmbeddedSkills = func() ([]skills.Skill, error) { return testSkills(), nil }
+	t.Cleanup(func() { loadEmbeddedSkills = saved })
+	dir := t.TempDir()
+	for _, s := range testSkills() {
+		mustWriteFile(t, filepath.Join(dir, skillDirName(s.Name)), "a file in the way")
+	}
+	logger, lines := newLogCollector()
+	if _, err := setupSkills(&config.Config{Skills: skillsVia(true, true, dir)}, t.TempDir(), logger); err != nil {
+		t.Fatalf("setupSkills: %v; want a warning, not an error", err)
+	}
+	var warns []string
+	for _, l := range *lines {
+		if strings.Contains(l, "WARN skills not fully written") {
+			warns = append(warns, l)
+		}
+	}
+	if len(warns) != 1 || strings.Contains(warns[0], "\n") {
+		t.Fatalf("warnings %q; want one line", warns)
+	}
+	for _, s := range testSkills() {
+		if p := filepath.Join(dir, skillDirName(s.Name)); !strings.Contains(warns[0], p) {
+			t.Errorf("warning %q does not name %s", warns[0], p)
+		}
+	}
+}
+
+// A skills.dir no work directory can be created in (read-only) fails every
+// skill the same way, and no second launcher or scanner causes that: the
+// first failure ends the run at once — no pause, no further skill — and the
+// one cause is reported once, with how many skills were not written.
+func TestSetupSkillsGivesUpAtOnceWhenNoWorkDirectoryCanBeCreated(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to")
+	}
+	saved := loadEmbeddedSkills
+	loadEmbeddedSkills = func() ([]skills.Skill, error) { return testSkills(), nil }
+	t.Cleanup(func() { loadEmbeddedSkills = saved })
+	pause := time.Second
+	setRetryPauses(t, pause, pause) // any attempt after the first shows in the time
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	logger, lines := newLogCollector()
+	start := time.Now()
+	if _, err := setupSkills(&config.Config{Skills: skillsVia(true, true, dir)}, t.TempDir(), logger); err != nil {
+		t.Fatalf("setupSkills: %v; want a warning, not an error", err)
+	}
+	if took := time.Since(start); took >= pause {
+		t.Errorf("setupSkills took %v; want it to give up without a pause (%v)", took, pause)
+	}
+	var warns []string
+	for _, l := range *lines {
+		if strings.Contains(l, "WARN skills not fully written") {
+			warns = append(warns, l)
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("warnings %q; want one", warns)
+	}
+	n := len(testSkills())
+	if c := strings.Count(warns[0], "permission denied"); c != 1 {
+		t.Errorf("warning %q names the cause %d times; want once", warns[0], c)
+	}
+	if want := fmt.Sprintf("(%d of %d skills not written)", n, n); !strings.Contains(warns[0], want) {
+		t.Errorf("warning %q does not say %q", warns[0], want)
+	}
+}
+
+// A run that stops at a work directory it cannot create still spares the
+// skills it never tried in its sweep: their copies from the earlier start
+// stay, and only what is not in the set goes. Here skills.dir is read-only
+// until the sweep has listed it, so the first skill fails, the second is
+// never tried, and the sweep can still rename and remove.
+func TestMaterializeSparesTheSkillsItNeverTried(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to")
+	}
+	all := testSkills()
+	dir := t.TempDir()
+	previousStart(t, dir, all)
+	previous := byTopDir(previousSet(all))
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	setMaterializeHook(t, func(step string) {
+		if step == "listed" {
+			if err := os.Chmod(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	err := materializeSkills(dir, all)
+	if want := fmt.Sprintf("(%d of %d skills not written)", len(all), len(all)); !errors.Is(err, errNoWorkDir) || !strings.Contains(err.Error(), want) {
+		t.Errorf("materializeSkills: %v; want the work directory error with %q", err, want)
+	}
+	got := byTopDir(tree(t, dir))
+	for _, s := range all {
+		d := skillDirName(s.Name)
+		if !maps.Equal(got[d], previous[d]) {
+			t.Errorf("%s holds %v; want its copy from the earlier start %v", d, got[d], previous[d])
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "unreagent-dropped")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("unreagent-dropped is still there (%v); want the sweep to remove it", err)
 	}
 }
 
@@ -634,6 +787,9 @@ func TestSetupSkillsLoadErrorStopsTheStart(t *testing.T) {
 		{"collision", func() ([]skills.Skill, error) {
 			return []skills.Skill{{Name: "ue-x", Source: "a"}, {Name: "unreagent-ue-x", Source: "b"}}, nil
 		}, "unreagent-ue-x"},
+		{"section named like a Windows device", func() ([]skills.Skill, error) {
+			return []skills.Skill{{Name: "ue-x", Source: "a", Files: map[string]string{"aux": "x"}}}, nil
+		}, "aux.md"},
 	} {
 		loadEmbeddedSkills = tc.load
 		_, err := setupSkills(&config.Config{Skills: skillsVia(true, false, "")}, t.TempDir(), func(string) {})
@@ -750,9 +906,11 @@ func requireSymlink(t *testing.T, path string) {
 	}
 }
 
-// A symlink named like a skill directory is not ours and is in the way: Mkdir
-// must refuse it (not MkdirAll, not an ignored error), so nothing is written
-// through it into the user's own skill directory behind it.
+// A symlink named like a skill directory is not ours and is in the way: it
+// must be refused (not moved aside, not an ignored error), so nothing is
+// written through it into the user's own skill directory behind it. The other
+// skills are still written, and the run leaves no work directory behind —
+// the symlink would otherwise stop every start before its sweep.
 func TestMaterializeDoesNotWriteThroughASymlinkedSkillDirectory(t *testing.T) {
 	dir, foreign := t.TempDir(), t.TempDir()
 	mustWriteFile(t, filepath.Join(foreign, "SKILL.md"), "the user's own skill")
@@ -760,13 +918,28 @@ func TestMaterializeDoesNotWriteThroughASymlinkedSkillDirectory(t *testing.T) {
 	before := tree(t, foreign)
 	mustSymlink(t, foreign, filepath.Join(dir, "unreagent-alpha"))
 
-	if err := materializeSkills(dir, testSkills()); err == nil {
-		t.Error("materializeSkills succeeded with a symlink in the way of unreagent-alpha; want an error")
+	all := testSkills()
+	if err := materializeSkills(dir, all); err == nil || !strings.Contains(err.Error(), "unreagent-alpha") {
+		t.Errorf("materializeSkills = %v with a symlink in the way of unreagent-alpha; want an error naming it", err)
 	}
 	if got := tree(t, foreign); !maps.Equal(got, before) {
 		t.Errorf("the symlink target changed: %v; want %v", got, before)
 	}
 	requireSymlink(t, filepath.Join(dir, "unreagent-alpha"))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{"unreagent-alpha", "unreagent-ue-beta"}; !slices.Equal(names, want) {
+		t.Errorf("dir holds %v; want %v — the symlink and the other skill, no work directory", names, want)
+	}
+	if got, want := tree(t, filepath.Join(dir, "unreagent-ue-beta")), byTopDir(materialized(all))["unreagent-ue-beta"]; !maps.Equal(got, want) {
+		t.Errorf("unreagent-ue-beta = %v; want %v", got, want)
+	}
 }
 
 // The prefix is matched case-sensitively: Unreagent-* and UNREAGENT-* are the
@@ -808,6 +981,406 @@ func TestMaterializeDoesNotFollowASymlinkWithThePrefix(t *testing.T) {
 	requireSymlink(t, filepath.Join(dir, "unreagent-zzz"))
 	if got := tree(t, foreign); !maps.Equal(got, before) {
 		t.Errorf("the symlink target changed: %v; want %v", got, before)
+	}
+}
+
+// --- k139: two starts at once, and a crash in between ---------------------
+
+// setMaterializeHook replaces materializeHook for the rest of the test.
+func setMaterializeHook(t *testing.T, hook func(step string)) {
+	t.Helper()
+	saved := materializeHook
+	materializeHook = hook
+	t.Cleanup(func() { materializeHook = saved })
+}
+
+// setRetryPauses replaces skillRetryPauses for the rest of the test, so the
+// tests that make attempts fail stay fast.
+func setRetryPauses(t *testing.T, pauses ...time.Duration) {
+	t.Helper()
+	saved := skillRetryPauses
+	skillRetryPauses = pauses
+	t.Cleanup(func() { skillRetryPauses = saved })
+}
+
+// workDirs lists the work directories in dir.
+func workDirs(t *testing.T, dir string) []string {
+	t.Helper()
+	works, err := filepath.Glob(filepath.Join(dir, skillDirPrefix+".tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return works
+}
+
+// previousSet is what an earlier start left of the launcher's own directories
+// for all: each with an older SKILL.md and a file no longer shipped, and a
+// skill since dropped.
+func previousSet(all []skills.Skill) map[string]string {
+	out := map[string]string{"unreagent-dropped/SKILL.md": "a dropped skill"}
+	for _, s := range all {
+		d := skillDirName(s.Name)
+		out[d+"/SKILL.md"] = "an older " + d
+		out[d+"/stale.md"] = "no longer shipped"
+	}
+	return out
+}
+
+// previousStart fills dir with previousSet(all) next to the project's own
+// entries, and returns those.
+func previousStart(t *testing.T, dir string, all []skills.Skill) map[string]string {
+	t.Helper()
+	foreign := map[string]string{"my-skill/SKILL.md": "mine", "README.md": "the project's own"}
+	for _, m := range []map[string]string{previousSet(all), foreign} {
+		for p, c := range m {
+			mustWriteFile(t, filepath.Join(dir, filepath.FromSlash(p)), c)
+		}
+	}
+	return foreign
+}
+
+// byTopDir groups a tree by its first path element; top-level files go under "".
+func byTopDir(tree map[string]string) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for p, c := range tree {
+		top, rest, ok := strings.Cut(p, "/")
+		if !ok {
+			top, rest = "", p
+		}
+		if out[top] == nil {
+			out[top] = map[string]string{}
+		}
+		out[top][rest] = c
+	}
+	return out
+}
+
+// countMaterializeSteps runs one undisturbed materialization of all into a
+// previous start and returns how often it called materializeHook.
+func countMaterializeSteps(t *testing.T, all []skills.Skill) int {
+	t.Helper()
+	steps := 0
+	setMaterializeHook(t, func(string) { steps++ })
+	dir := t.TempDir()
+	previousStart(t, dir, all)
+	if err := materializeSkills(dir, all); err != nil {
+		t.Fatal(err)
+	}
+	if steps == 0 {
+		t.Fatal("materializeSkills never called materializeHook")
+	}
+	return steps
+}
+
+// A second launcher on the same project may run its whole materialization in
+// any gap of the first one's. Both must succeed and leave exactly the set:
+// neither may remove what the other just wrote, nor fail on it. This runs the
+// second materialization in every gap the first one has, one after another.
+func TestMaterializeWithASecondRunInEveryGap(t *testing.T) {
+	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+	all := testSkills()
+	steps := countMaterializeSteps(t, all)
+	for k := 1; k <= steps; k++ {
+		dir := t.TempDir()
+		want := previousStart(t, dir, all)
+		maps.Copy(want, materialized(all))
+		var at string
+		var peerErr error
+		n := 0
+		setMaterializeHook(t, func(step string) {
+			if n++; n == k {
+				at = step
+				peerErr = materializeSkills(dir, all) // its own steps only count on
+			}
+		})
+		err := materializeSkills(dir, all)
+		if err != nil || peerErr != nil {
+			t.Errorf("second run at step %d (%s): first run %v, second run %v; want both to succeed", k, at, err, peerErr)
+		}
+		if got := tree(t, dir); !maps.Equal(got, want) {
+			t.Errorf("second run at step %d (%s): tree = %v\nwant %v", k, at, slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+		}
+	}
+}
+
+// crash is the panic value TestMaterializeAfterACrashAtEveryStep stops a run
+// with.
+type crash struct{}
+
+// A launcher killed between any two steps leaves every skill directory whole —
+// the previous copy or the new one, nothing in between — and no copy of a
+// current skill outside its directory where an agent looks (<dir>/*/SKILL.md).
+// Whatever else it leaves carries the prefix, and the next start removes it.
+func TestMaterializeAfterACrashAtEveryStep(t *testing.T) {
+	all := testSkills()
+	steps := countMaterializeSteps(t, all)
+	previous, current := byTopDir(previousSet(all)), byTopDir(materialized(all))
+	for k := 1; k <= steps; k++ {
+		dir := t.TempDir()
+		foreign := previousStart(t, dir, all)
+		var at string
+		n := 0
+		setMaterializeHook(t, func(step string) {
+			if n++; n == k {
+				at = step
+				panic(crash{})
+			}
+		})
+		func() {
+			defer func() {
+				if r := recover(); r != (crash{}) {
+					t.Fatalf("crash at step %d: recovered %v; want the crash", k, r)
+				}
+			}()
+			_ = materializeSkills(dir, all)
+		}()
+
+		for top, files := range byTopDir(tree(t, dir)) {
+			switch {
+			case current[top] != nil || previous[top] != nil:
+				if !maps.Equal(files, current[top]) && !maps.Equal(files, previous[top]) {
+					t.Errorf("crash at step %d (%s): %s holds %v; want the previous or the new copy whole", k, at, top, files)
+				}
+			case strings.HasPrefix(top, skillDirPrefix):
+				// The sweep renames before it removes, so the dropped skill
+				// may sit here under a fresh name; a current one never.
+				if doc, ok := files[skillFile]; ok && doc != previous["unreagent-dropped"][skillFile] {
+					t.Errorf("crash at step %d (%s): %s/%s is a copy of a current skill an agent would load: %q", k, at, top, skillFile, doc)
+				}
+			case !maps.Equal(files, byTopDir(foreign)[top]):
+				t.Errorf("crash at step %d (%s): %q holds %v; want the project's own entries untouched", k, at, top, files)
+			}
+		}
+
+		setMaterializeHook(t, func(string) {})
+		if err := materializeSkills(dir, all); err != nil {
+			t.Fatalf("start after a crash at step %d (%s): %v", k, at, err)
+		}
+		want := materialized(all)
+		maps.Copy(want, foreign)
+		if got := tree(t, dir); !maps.Equal(got, want) {
+			t.Errorf("start after a crash at step %d (%s): tree = %v\nwant %v", k, at, slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+		}
+	}
+}
+
+// A rename in that fails after the previous copy was moved aside — a virus
+// scanner holding a file of the new copy, on Windows — puts the previous copy
+// back before the next attempt: a failed attempt leaves the skill as it found
+// it, not missing. Here the new copy is taken away under the attempt.
+func TestMaterializeMovesThePreviousCopyBackWhenTheRenameInFails(t *testing.T) {
+	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+	all := testSkills()
+	dir := t.TempDir()
+	want := previousStart(t, dir, all)
+	maps.Copy(want, materialized(all))
+	previous := byTopDir(previousSet(all))
+	var broken string
+	var between map[string]string
+	setMaterializeHook(t, func(step string) {
+		switch {
+		case broken == "" && step == "aside":
+			works := workDirs(t, dir)
+			if len(works) != 1 {
+				t.Fatalf("work directories at the first aside: %v; want one", works)
+			}
+			entries, err := os.ReadDir(works[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != "previous" {
+					broken = e.Name()
+					if err := os.RemoveAll(filepath.Join(works[0], broken)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		case broken != "" && between == nil:
+			// The next attempt's first step: what the failed one left.
+			between = byTopDir(tree(t, dir))[broken]
+		}
+	})
+	if err := materializeSkills(dir, all); err != nil {
+		t.Fatalf("materializeSkills: %v; want the next attempt to succeed", err)
+	}
+	if broken == "" {
+		t.Fatal("no attempt moved a previous copy aside")
+	}
+	if !maps.Equal(between, previous[broken]) {
+		t.Errorf("after the failed attempt %s holds %v; want the previous copy %v whole", broken, between, previous[broken])
+	}
+	if got := tree(t, dir); !maps.Equal(got, want) {
+		t.Errorf("tree = %v\nwant %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
+// A work directory a second launcher's sweep took after the previous copy went
+// into it — a launcher of another version, whose set lacks the skill — took
+// that copy along: nothing is left to keep, so nothing is reported as kept,
+// and the next attempt puts the skill in place.
+func TestMaterializeTriesAgainWhenItsWorkDirectoryIsTaken(t *testing.T) {
+	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+	all := testSkills()
+	dir := t.TempDir()
+	want := previousStart(t, dir, all)
+	maps.Copy(want, materialized(all))
+	taken := false
+	setMaterializeHook(t, func(step string) {
+		if taken || step != "aside" {
+			return
+		}
+		taken = true
+		for _, w := range workDirs(t, dir) {
+			if err := os.RemoveAll(w); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if err := materializeSkills(dir, all); err != nil {
+		t.Fatalf("materializeSkills: %v; want the next attempt to succeed", err)
+	}
+	if !taken {
+		t.Fatal("no attempt moved a previous copy aside")
+	}
+	if got := tree(t, dir); !maps.Equal(got, want) {
+		t.Errorf("tree = %v\nwant %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
+// When the previous copy cannot be moved back either, it is not thrown away:
+// it stays whole in its work directory, which the sweep of this run spares,
+// the error names where it is, and the attempts for that skill end. The other
+// skills are still written. Here the work directory is made read-only after
+// the previous copy went into it, so neither copy can leave it.
+func TestMaterializeKeepsThePreviousCopyItCannotMoveBack(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to")
+	}
+	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+	all := testSkills()
+	dir := t.TempDir()
+	previousStart(t, dir, all)
+	previous, current := byTopDir(previousSet(all)), byTopDir(materialized(all))
+	var work, broken string
+	setMaterializeHook(t, func(step string) {
+		if work != "" || step != "aside" {
+			return
+		}
+		works := workDirs(t, dir)
+		if len(works) != 1 {
+			t.Fatalf("work directories at the first aside: %v; want one", works)
+		}
+		work = works[0]
+		entries, err := os.ReadDir(work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != "previous" {
+				broken = e.Name()
+			}
+		}
+		if err := os.Chmod(work, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(work, 0o755) })
+	})
+	err := materializeSkills(dir, all)
+	if work == "" {
+		t.Fatal("no attempt moved a previous copy aside")
+	}
+	kept := filepath.Join(work, "previous")
+	if err == nil || !strings.Contains(err.Error(), "it is kept in "+kept+" until the next start removes it") {
+		t.Errorf("materializeSkills: %v; want an error naming %s", err, kept)
+	}
+	if got := byTopDir(tree(t, work))["previous"]; !maps.Equal(got, previous[broken]) {
+		t.Errorf("%s holds %v; want the previous copy of %s whole", kept, got, broken)
+	}
+	got := byTopDir(tree(t, dir))
+	if _, err := os.Lstat(filepath.Join(dir, broken)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("%s is in place (%v); want the attempts to have ended with the previous copy kept", broken, err)
+	}
+	for top, files := range current {
+		if top != broken && !maps.Equal(got[top], files) {
+			t.Errorf("%s holds %v; want the new copy %v", top, got[top], files)
+		}
+	}
+	if works := workDirs(t, dir); !slices.Equal(works, []string{work}) {
+		t.Errorf("work directories after the run: %v; want only the one that keeps the previous copy, %s", works, work)
+	}
+}
+
+// installSkillDir makes one attempt more than skillRetryPauses has pauses, and
+// waits each of them in turn before the next attempt, so a short lock or a
+// second launcher's run has passed. The pauses shipped grow and stay short.
+func TestInstallSkillDirPausesBetweenAttempts(t *testing.T) {
+	var total time.Duration
+	for _, p := range skillRetryPauses {
+		total += p
+	}
+	if len(skillRetryPauses) == 0 || !slices.IsSorted(skillRetryPauses) || total > time.Second {
+		t.Errorf("skillRetryPauses = %v; want growing pauses that add up to a second at most", skillRetryPauses)
+	}
+
+	pauses := []time.Duration{20 * time.Millisecond, 60 * time.Millisecond}
+	setRetryPauses(t, pauses...)
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "unreagent-x", skillFile), "an older copy")
+	var attempts []time.Time
+	setMaterializeHook(t, func(string) {
+		// The copy is written: take the work directory away, so moving the
+		// previous copy aside into it fails.
+		attempts = append(attempts, time.Now())
+		for _, w := range workDirs(t, dir) {
+			if err := os.RemoveAll(w); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if _, err := installSkillDir(dir, "unreagent-x", map[string]string{skillFile: "a new copy"}); err == nil {
+		t.Error("installSkillDir succeeded; want every attempt to fail")
+	}
+	if len(attempts) != len(pauses)+1 {
+		t.Fatalf("%d attempts; want %d", len(attempts), len(pauses)+1)
+	}
+	for i, p := range pauses {
+		if gap := attempts[i+1].Sub(attempts[i]); gap < p {
+			t.Errorf("attempt %d came %v after attempt %d; want a pause of %v at least", i+2, gap, i+1, p)
+		}
+	}
+	if got := mustReadFile(t, filepath.Join(dir, "unreagent-x", skillFile)); got != "an older copy" {
+		t.Errorf("unreagent-x/%s = %q; want the previous copy untouched", skillFile, got)
+	}
+}
+
+// Two launchers started at once over the shipped set, for real: both succeed
+// and the set is whole every time. TestMaterializeWithASecondRunInEveryGap
+// pins the interleavings one by one; this catches the ones between its steps.
+func TestMaterializeTwoRunsAtOnce(t *testing.T) {
+	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+	all := append(shippedSkills(t), testSkills()...)
+	for i := range 40 {
+		dir := t.TempDir()
+		want := previousStart(t, dir, all)
+		maps.Copy(want, materialized(all))
+		var errs [2]error
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for j := range errs {
+			wg.Go(func() {
+				<-start
+				errs[j] = materializeSkills(dir, all)
+			})
+		}
+		close(start)
+		wg.Wait()
+		if errs[0] != nil || errs[1] != nil {
+			t.Errorf("round %d: %v, %v; want both runs to succeed", i, errs[0], errs[1])
+		}
+		if got := tree(t, dir); !maps.Equal(got, want) {
+			t.Fatalf("round %d: tree = %v\nwant %v", i, slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+		}
 	}
 }
 

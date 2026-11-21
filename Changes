@@ -179,8 +179,15 @@ Revision history for unreagent
     Claude Code finds them. Only `unreagent-*` directories there are replaced
     or removed, so your own skills stay, and skills dropped from a release are
     removed. A skill written under the `unreagent-` prefix gets its `name:` set
-    to the directory name. If writing fails the launcher logs a WARN and
-    starts anyway.
+    to the directory name. Each skill is written whole into a work directory
+    inside `skills.dir` and then renamed into place, so a failed write or two
+    launchers starting at once no longer leave a half-written skill; a skill
+    that cannot be put in place keeps its previous copy (rarely none), and the
+    WARN names every failure on one line. A `skills.dir` that no work directory
+    can be created in (read-only, full) is given up at once with one cause,
+    instead of being retried for every skill. A skill with a section named like
+    a Windows device (aux.md) is refused at start on every OS. If writing fails
+    the launcher logs a WARN and starts anyway.
   - `skills.enabled: false` turns both paths off. Switching both paths off
     while `skills.enabled` is true is a load error.
   - An absolute unreal.editor path without .exe no longer logs "path not found"

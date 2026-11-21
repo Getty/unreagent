@@ -253,11 +253,11 @@ func TestLoadAcceptsCRLF(t *testing.T) {
 	}
 }
 
-// Source is what materialization writes, and other parsers read that file, so
-// it must be SKILL.md exactly as embedded, not rebuilt from the parsed fields
-// and Body. Each input holds something a rebuild would lose: a comment and a
-// folded description in the frontmatter, blank lines after the closing ---
-// (Body trims them), CRLF line endings.
+// Source is SKILL.md byte for byte as embedded, not rebuilt from the parsed
+// fields and Body: materialization writes it, changing at most the name:
+// value, and other parsers read that file. Each input holds something a
+// rebuild would lose: a comment and a folded description in the frontmatter,
+// blank lines after the closing --- (Body trims them), CRLF line endings.
 func TestLoadKeepsSourceVerbatim(t *testing.T) {
 	want := map[string]string{
 		"lf":   "---\n# kept as written\nname: lf\ndescription: >\n  Use when the source\n  must survive.\ntoolkit_tools: [material]\n---\n\n\n# lf\n",

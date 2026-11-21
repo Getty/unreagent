@@ -289,12 +289,47 @@ renamed or dropped skills do not linger.
 - Only real directories named `unreagent-*` count as ours; a file with such a
   name is left alone.
 - A relative `skills.dir` is resolved against the agent working directory.
+- A section file named like a Windows device (`con`, `aux`, `nul`, `com1`,
+  `conin$`, `conout$`, superscript digits; with any extension, so
+  `con.backup` too) is a load error on every OS; the start stops. Windows 10
+  opens such a name as the device, not as a file.
 - A failed write only logs a warning; the editor and agent still start.
+- Each skill is written whole, never in place: into a work directory
+  `unreagent-.tmp-*` inside `<dir>` (new copy one level down, at
+  `<work>/<name>`), then the previous copy, if a real directory, is renamed to
+  `<work>/previous`, then the new copy is renamed to `<dir>/<name>`. Nothing is
+  renamed onto an existing directory (Windows cannot, Linux only onto an empty
+  one). A file or symlink in the way is refused at once. A work directory that
+  cannot be created (`errNoWorkDir`, e.g. a read-only `skills.dir`) ends the
+  run at once: no retry, no further skills, one cause ending in `(N of M
+  skills not written)`; every skill in place is spared by the sweep. Any other
+  failed attempt is retried from a fresh work directory, up to three attempts
+  in all, with pauses of 50 ms and 200 ms between them (`skillRetryPauses`).
+  When the rename-in fails, `<work>/previous` is renamed back into place, so
+  the old copy stays. If that move back fails too, it simply tries again when
+  the old copy went with a peer's sweep or a peer's copy is now in place;
+  otherwise the old copy stays whole in `<work>/previous`, attempts for that
+  skill stop, this run's sweep spares that work directory, and a later start
+  removes it (a launcher starting at the same moment can remove it sooner,
+  since its sweep does not know the copy is kept). The cause names it: `...,
+  and moving the previous copy back failed too (rename <work>/previous
+  <dir>/<name>: <err>): it is kept in <work>/previous until the next start
+  removes it`. The sweep of dropped skills renames each to a fresh
+  `unreagent-.tmp-*` name first and removes it after, so it cannot empty a
+  peer's in-flight copy. Apart from `errNoWorkDir`, a skill that fails does
+  not stop the others; no failure stops the sweep. Every error is returned,
+  joined, and logged on the one warning line, separated by `; `. A crash
+  leaves only `unreagent-*` names, and every skill directory in place is a
+  whole copy; the next start removes the rest.
+  Two launchers started at once end with the whole set. Accepted gap: two
+  launchers of different versions (different sets) on one project can still
+  remove each other's extra skills; that needs a lock.
 - `SKILL.md` is written from `Skill.Source` (§6.1): byte for byte for a skill
   already named `unreagent-*`; otherwise with only the frontmatter `name:`
   value set to the directory name. Only a plain or quoted single-line `name:`
-  value can be rewritten. Anything else (a folded or block value, an escape, a
-  tag) makes materialization refuse the whole set before writing anything.
+  value can be rewritten. Anything else makes materialization refuse the whole
+  set before writing anything, for example a tag, an anchor, an alias, an
+  escape, a folded or block value, or a value over several lines.
 
 ## 7. Scope
 
