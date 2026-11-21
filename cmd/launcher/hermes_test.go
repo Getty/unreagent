@@ -379,6 +379,30 @@ func TestHermesSetupRefusesMultiDocumentLocalConfig(t *testing.T) {
 	}
 }
 
+// k134: a generated token is not written into an unreagent.local.yaml whose
+// mcp is an anchored null either. The token would go into a new mapping in
+// the null's place, without the anchor, and the alias would be left undefined.
+func TestHermesSetupRefusesAnchoredNullLocalMCP(t *testing.T) {
+	f := newHermesFixture(t, "", userHermesConfig)
+	localPath := localOverridePath(f.cfgPath)
+	const local = "mcp: &m\nagent: *m\n"
+	writeFile(t, localPath, local)
+
+	_, err := f.run(t)
+	if err == nil {
+		t.Fatalf("hermes-setup accepted an anchored null mcp and wrote:\n%s", readFile(t, localPath))
+	}
+	if want := "add the token to " + localPath + ": mcp carries the anchor &m; adding to it would change its aliases too (nothing written)"; err.Error() != want {
+		t.Errorf("error %q, want %q", err, want)
+	}
+	if got := readFile(t, localPath); got != local {
+		t.Errorf("unreagent.local.yaml was changed:\n%s", got)
+	}
+	if got := readFile(t, f.hermesPath); got != userHermesConfig {
+		t.Errorf("Hermes config was changed:\n%s", got)
+	}
+}
+
 // mcp_servers that is not a mapping with string keys cannot be merged into
 // without dropping what is there, so the command refuses and touches nothing.
 // Neither can an mcp_servers that is an alias, carries an anchor, or comes in
@@ -398,6 +422,9 @@ func TestHermesSetupRefusesUnmergeableServers(t *testing.T) {
 		"anchored mcp_servers": {"mcp_servers: &srv\n  github:\n    command: npx\nbackup_servers: *srv\n", "mcp_servers carries the anchor &srv; adding to it would change its aliases too; refusing to change it"},
 		"merge key":            {"base: &base\n  mcp_servers:\n    github:\n      command: npx\n<<: *base\nmodel: hermes-3\n", "mcp_servers comes in through a merge key (<<); refusing to override it"},
 		"duplicate key":        {"mcp_servers:\n  github:\n    command: npx\nmcp_servers:\n  other:\n    command: x\n", `mapping key "mcp_servers" already defined at line 1`},
+		// k134: a null is replaced by a new mapping, which would drop the
+		// anchor and leave the alias undefined.
+		"anchored null mcp_servers": {"mcp_servers: &m\nother: *m\n", "mcp_servers carries the anchor &m; adding to it would change its aliases too; refusing to change it"},
 		"anchor on the entry": {`model: hermes-3
 mcp_servers:
   unreagent: &unreagent
@@ -1498,21 +1525,24 @@ func TestCheckEdit(t *testing.T) {
 }
 
 // k125: checkEdit has to stay wired into hermesSetup. This is one input that
-// only checkEdit refuses: an anchored null mcp_servers. childMapping replaces
-// the null with a fresh mapping and drops the anchor &m, so the alias under
-// other is left without it and the result would not parse. A hermesSetup that
-// no longer calls checkEdit writes that file. The test relies on that gap in
-// childMapping (k134): whoever closes k134 has to give this test another input
-// that only checkEdit refuses.
+// only checkEdit refuses: a folded block scalar with a more-indented line,
+// outside the entry. The node edit leaves it alone, but the vendored yaml.v3
+// (v3.0.1) writes it back with an extra blank line before the indented lines,
+// so the result would change the prompt. A hermesSetup that no longer calls
+// checkEdit writes that file. k134 took away the anchored null mcp_servers
+// this test used before: childMapping now refuses it itself. This input does
+// not rest on a gap in hermes.go but on the encoder: a yaml.v3 that writes the
+// scalar back unchanged, or a workaround for it in the edit, needs another
+// input here that only checkEdit refuses.
 func TestHermesSetupChecksTheEditBeforeWriting(t *testing.T) {
-	const hermesConfig = "mcp_servers: &m\nother: *m\n"
+	const hermesConfig = "model: hermes-3\nsystem_prompt: >\n  Rules:\n    - be brief\n    - be kind\n"
 	f := newHermesFixture(t, "", hermesConfig)
 
 	_, err := f.run(t)
 	if err == nil {
-		t.Fatalf("hermes-setup accepted an anchored null mcp_servers and wrote:\n%s", readFile(t, f.hermesPath))
+		t.Fatalf("hermes-setup accepted a config yaml.v3 does not write back as read, and wrote:\n%s", readFile(t, f.hermesPath))
 	}
-	if want := "the result would not parse"; !strings.Contains(err.Error(), want) {
+	if want := "the result would change more than mcp_servers.unreagent"; !strings.Contains(err.Error(), want) {
 		t.Errorf("error %q is not checkEdit's refusal (%q)", err, want)
 	}
 	if got := readFile(t, f.hermesPath); got != hermesConfig {

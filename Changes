@@ -8,8 +8,8 @@ Revision history for unreagent
   - hermes-setup edits only its own entry in the Hermes config: comments, key
     order, anchors and other MCP servers survive, and the managed marker sits
     on that entry. It refuses entries it cannot edit safely (anchored or
-    aliased mcp_servers, anchors inside the old entry) and a dangling symlink
-    at either file. Both files are written atomically, keep their permissions
+    aliased mcp_servers, even an empty one, anchors inside the old entry) and
+    a dangling symlink at either file. Both files are written atomically, keep their permissions
     and follow symlinks; a new token is saved to unreagent.local.yaml only
     once the merge has succeeded.
   - hermes-setup refreshes only url and headers.Authorization in its entry and

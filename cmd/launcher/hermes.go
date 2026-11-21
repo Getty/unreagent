@@ -407,9 +407,10 @@ func setString(m *yaml.Node, key, s string) (*yaml.Node, bool) {
 
 // childMapping returns the mapping under key in m: the one that is there, an
 // empty one in place of a null, or an empty one under a new key at the end of
-// m. An alias or an anchored mapping is an error, since adding to it would
-// change the anchored mapping or its aliases as well, and so is any other
-// value. m is only changed on success.
+// m. An alias is an error, since adding to it would change the anchored
+// mapping as well. So is a value that carries an anchor, a mapping or a null:
+// adding to it would change what its aliases see, or leave them undefined.
+// Any other value is an error, too. m is only changed on success.
 func childMapping(m *yaml.Node, key string) (*yaml.Node, error) {
 	i := mappingEntry(m, key)
 	if i < 0 {
@@ -418,7 +419,7 @@ func childMapping(m *yaml.Node, key string) (*yaml.Node, error) {
 		return v, nil
 	}
 	switch k, v := m.Content[i], m.Content[i+1]; {
-	case v.Kind == yaml.MappingNode && v.Anchor != "":
+	case v.Anchor != "":
 		return nil, fmt.Errorf("%s carries the anchor &%s; adding to it would change its aliases too", key, v.Anchor)
 	case v.Kind == yaml.MappingNode:
 		return v, nil
@@ -535,9 +536,9 @@ func backupHermesConfig(path string, raw []byte) (bak string, created bool, err 
 //
 // What cannot be edited that way without dropping or changing more is refused,
 // and doc stays unchanged: an mcp_servers that is not a mapping with string
-// keys (a list, or a key YAML reads as a number), an alias or an anchored
-// mapping, or one that comes in through a merge key (<<); and an entry, or its
-// headers, that checkHermesEntry refuses.
+// keys (a list, or a key YAML reads as a number), an alias, one that carries
+// an anchor (a mapping or a null), or one that comes in through a merge key
+// (<<); and an entry, or its headers, that checkHermesEntry refuses.
 func mergeHermesServer(doc *yamlFile, name, address, token string) error {
 	switch doc.data["mcp_servers"].(type) {
 	case nil, map[string]interface{}:
