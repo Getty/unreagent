@@ -105,7 +105,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		Description: fmt.Sprintf("Runs a preconfigured one-off command and returns once it exits, with its exit code and the last %d lines of its output (stdout+stderr merged). ", toolOutputLines) +
 			cutNote + " What was cut, which can hold the first compile errors, is gone: that output is kept nowhere else, and logs does not have it. " +
 			"Typical commands: compile (build the C++ modules), package (create a build). Available commands: " +
-			strings.Join(cmdNames, ", ") + ". Stop the editor (ue_stop) before 'compile', since UnrealBuildTool refuses to build while Live Coding is active, and ue_start it afterwards to load the new modules.",
+			strings.Join(cmdNames, ", ") + ". Stop the editor (ue_stop) before 'compile', since it has the project's modules loaded and the build may fail or wait, and ue_start it afterwards to load the rebuilt modules.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

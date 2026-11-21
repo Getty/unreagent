@@ -434,6 +434,9 @@ Revision history for unreagent
     or that -unattended suppresses the package recovery prompt. They keep the
     guidance (stop the editor before a compile, do not retry a build that does
     not come back) and say what to look for instead.
+  - The run_command tool description no longer states that UnrealBuildTool
+    refuses to build while Live Coding is active; it still tells the agent to
+    stop the editor before compile and start it afterwards.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
