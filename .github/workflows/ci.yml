@@ -34,6 +34,11 @@ jobs:
         # but only on a tag push. Run it here on the newest stamped version, so
         # a broken script or Changes layout shows up before a tag does.
         run: |
+          # Stamping a release keeps {{$NEXT}} above the new version line.
+          if ! awk '{ sub(/\r$/, "") } $1 == "{{$NEXT}}" { found = 1; exit } END { exit !found }' Changes; then
+            echo 'No {{$NEXT}} line in Changes'
+            exit 1
+          fi
           # The newest stamped version is the first version line after {{$NEXT}}.
           version="$(awk '{ sub(/\r$/, "") } seen && /^[^ \t]/ { print $1; exit } $1 == "{{$NEXT}}" { seen = 1 }' Changes)"
           if [ -z "$version" ]; then
@@ -47,7 +52,23 @@ jobs:
           fi
           echo "Release notes for $version:"
           echo "$notes"
-          if scripts/changes-section.sh '{{$NEXT}}' > /dev/null 2>&1; then
+          # The refusal of {{$NEXT}} is checked on a fixture with an entry under
+          # {{$NEXT}}: without the refusal the script prints that entry. On the
+          # real Changes an empty {{$NEXT}}, as right after a release, makes the
+          # script fail anyway and would hide a removed refusal.
+          changes_fixture() { # $1: the heading of the first section
+            printf '%s\n' 'Revision history for the fixture' '' "$1" '  - An unreleased entry.' '' '0.0.1  2026-01-01' '  - A released entry.'
+          }
+          fixture="$(mktemp)"
+          # Positive control: under a version heading the same section prints,
+          # so the refusal below is the refusal, not a broken fixture or script.
+          changes_fixture 0.0.2 > "$fixture"
+          if [ "$(scripts/changes-section.sh 0.0.2 "$fixture")" != '- An unreleased entry.' ]; then
+            echo 'scripts/changes-section.sh does not print the fixture section, so the {{$NEXT}} check proves nothing'
+            exit 1
+          fi
+          changes_fixture '{{$NEXT}}' > "$fixture"
+          if scripts/changes-section.sh '{{$NEXT}}' "$fixture" > /dev/null 2>&1; then
             echo 'scripts/changes-section.sh accepted {{$NEXT}}, which is not a version'
             exit 1
           fi
