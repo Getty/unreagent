@@ -20,6 +20,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,12 +57,12 @@ type FilesConfig struct {
 // UnrealConfig describes the Unreal Editor process.
 type UnrealConfig struct {
 	Editor              string   `yaml:"editor"`  // default: ${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe
-	Project             string   `yaml:"project"` // optional; default: auto-detection of the .uproject
-	Args                []string `yaml:"args"`
+	Project             string   `yaml:"project"` // optional; default: auto-detection of the .uproject; no placeholders, must exist
+	Args                []string `yaml:"args"`    // unset or null: -stdout -FullStdOutLogOutput; [] clears
 	ManualStart         bool     `yaml:"manualStart"`
 	Restart             string   `yaml:"restart"`
 	MaxRestarts         int      `yaml:"maxRestarts"`
-	RestartDelaySeconds int      `yaml:"restartDelaySeconds"`
+	RestartDelaySeconds int      `yaml:"restartDelaySeconds"` // 0 = default 3; at least 1
 	// Unattended appends -unattended (default true): it suppresses the crash
 	// reporter dialog AND both recovery prompts on restart.
 	Unattended *bool `yaml:"unattended"`
@@ -81,10 +82,10 @@ type AgentConfig struct {
 	Args                []string          `yaml:"args"`
 	Env                 map[string]string `yaml:"env"` // additional environment variables (e.g. HOME/USERPROFILE)
 	Workdir             string            `yaml:"workdir"`
-	StartDelaySeconds   int               `yaml:"startDelaySeconds"`
+	StartDelaySeconds   int               `yaml:"startDelaySeconds"` // 0 = default 5; at least 1
 	Restart             string            `yaml:"restart"`
 	MaxRestarts         int               `yaml:"maxRestarts"`
-	RestartDelaySeconds int               `yaml:"restartDelaySeconds"`
+	RestartDelaySeconds int               `yaml:"restartDelaySeconds"` // 0 = default 3; at least 1
 	ClaudeIntegration   bool              `yaml:"claudeIntegration"`
 	// PowershellTool sets CLAUDE_CODE_USE_POWERSHELL_TOOL=1 in the agent env on
 	// Windows (with claudeIntegration). Default true; can be turned off with
@@ -223,6 +224,9 @@ type Info struct {
 	EngineRoot  string
 	Project     string
 	ProjectName string
+	// SkippedCommands are the built-in commands (compile, package) left out
+	// because a placeholder they need resolved to nothing — sorted.
+	SkippedCommands []string
 }
 
 // Load reads the configuration. explicitPath is optional; if it is empty,
@@ -235,6 +239,14 @@ func Load(explicitPath string) (*Config, Info, error) {
 	if path == "" {
 		path = findConfig()
 	}
+	// Absolute, because every project path derives from the config directory
+	// and lands in placeholders: a relative "-config unreagent.yaml" made
+	// ${PROJECT_DIR} ".", and "Write(${PROJECT_DIR}/*)" then matched anything.
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, info, fmt.Errorf("config path %s: %w", path, err)
+	}
+	path = abs
 	info.ConfigPath = path
 	baseDir := filepath.Dir(path)
 
@@ -249,11 +261,17 @@ func Load(explicitPath string) (*Config, Info, error) {
 		}
 	}
 
-	c.applyDefaults()
+	builtins := c.applyDefaults()
 
 	// Project first: engine auto-detection reads its EngineAssociation.
-	project, projectDir, projectName := resolveProject(&c, baseDir)
-	engine := resolveEngine(&c, project)
+	project, projectDir, projectName, err := resolveProject(&c, baseDir)
+	if err != nil {
+		return nil, info, err
+	}
+	engine, err := resolveEngine(&c, project)
+	if err != nil {
+		return nil, info, err
+	}
 	info.EngineRoot = engine
 	info.Project = project
 	info.ProjectName = projectName
@@ -262,7 +280,11 @@ func Load(explicitPath string) (*Config, Info, error) {
 	// with the project and project-related features can use it.
 	c.Unreal.Project = project
 
-	c.substitute(engine, project, projectDir, projectName)
+	skipped, err := c.substitute(engine, project, projectDir, projectName, builtins)
+	info.SkippedCommands = skipped
+	if err != nil {
+		return nil, info, err
+	}
 
 	if err := c.validate(); err != nil {
 		return nil, info, err
@@ -270,7 +292,16 @@ func Load(explicitPath string) (*Config, Info, error) {
 	return &c, info, nil
 }
 
-func (c *Config) applyDefaults() {
+// applyDefaults fills unset values and returns the names of the built-in
+// commands it added (the user defined none of that name).
+//
+// Zero is "not set" for the plain ints: a delay of 0 gets the default, so the
+// smallest delay that can be configured is 1 second — for the restart delay
+// that floor is what keeps a crashing process from restarting in a tight loop.
+// A nil list is "not set" too, and null in unreagent.local.yaml decodes to nil:
+// "unreal.args: ~" restores the default arguments, "unreal.args: []" clears
+// them.
+func (c *Config) applyDefaults() (builtins map[string]bool) {
 	if c.Unreal.Editor == "" {
 		c.Unreal.Editor = "${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe"
 	}
@@ -334,7 +365,9 @@ func (c *Config) applyDefaults() {
 	if c.Commands == nil {
 		c.Commands = map[string]CommandSpec{}
 	}
+	builtins = map[string]bool{}
 	if _, ok := c.Commands["compile"]; !ok {
+		builtins["compile"] = true
 		c.Commands["compile"] = CommandSpec{
 			Description: "Compiles the project's C++ modules (UnrealBuildTool).",
 			Command:     "${ENGINE}/Engine/Build/BatchFiles/Build.bat",
@@ -342,6 +375,7 @@ func (c *Config) applyDefaults() {
 		}
 	}
 	if _, ok := c.Commands["package"]; !ok {
+		builtins["package"] = true
 		c.Commands["package"] = CommandSpec{
 			Description: "Builds a distributable Windows build (cook + stage + pak).",
 			Command:     "${ENGINE}/Engine/Build/BatchFiles/RunUAT.bat",
@@ -352,53 +386,190 @@ func (c *Config) applyDefaults() {
 			},
 		}
 	}
+	return builtins
 }
 
-// substitute replaces the placeholders in all path/argument fields.
-func (c *Config) substitute(engine, project, projectDir, projectName string) {
-	rep := strings.NewReplacer(
-		"${ENGINE}", engine,
-		"${PROJECT_DIR}", projectDir,
-		"${PROJECT_NAME}", projectName,
-		"${PROJECT}", project,
-	)
-	c.Unreal.Editor = rep.Replace(c.Unreal.Editor)
-	c.Unreal.Project = rep.Replace(c.Unreal.Project)
-	c.Unreal.Args = replaceAll(rep, c.Unreal.Args)
-	c.Agent.Workdir = rep.Replace(c.Agent.Workdir)
-	c.Runtimes.Python.Project = rep.Replace(c.Runtimes.Python.Project)
-	c.Runtimes.Node.Project = rep.Replace(c.Runtimes.Node.Project)
-	c.Files.Root = rep.Replace(c.Files.Root)
+// substitute replaces the placeholders in every field that holds a path, a
+// command, an argument, an environment value or a permission pattern:
+// unreal.editor/args, agent.command/args/workdir, the agent.env values,
+// agent.hermes.configPath, permissions.allow/deny, the runtimes' executables
+// and project directories, files.root, commands (command, args, dir), every
+// string in mcp.extraServers and the mcp.writeConfig paths. Everything else
+// stays literal on purpose: names and keys (env names, hermes.serverName),
+// enums, mcp.address and mcp.token (no placeholder forms part of either, and a
+// token must never change under the user's hands), descriptions (prose), and
+// engineRoot and unreal.project, from which the placeholders are derived.
+//
+// A placeholder that resolved to "" is an error in every field the launcher
+// will use: the result would be a garbage path such as
+// /Engine/Binaries/Win64/UnrealEditor.exe or, in an allow rule, "Edit(/*)".
+// A field is used when its section is enabled; unreal.*, agent.workdir (it
+// also roots the runtimes and the written MCP configs) and the user's commands
+// always are, runtimes.node.npm also for a node-started extra server. An unused field keeps whatever the replacement produces, with
+// two exceptions: a built-in command (see builtins) that needs the placeholder
+// is removed and its name returned in skipped, and files.root is cleared, so
+// that -files, which enables the file tools after loading, finds no root
+// rather than a wrong one.
+func (c *Config) substitute(engine, project, projectDir, projectName string, builtins map[string]bool) (skipped []string, err error) {
+	values := [][2]string{
+		{"${ENGINE}", engine},
+		{"${PROJECT_DIR}", projectDir},
+		{"${PROJECT_NAME}", projectName},
+		{"${PROJECT}", project},
+	}
+	var pairs, empty []string
+	for _, v := range values {
+		pairs = append(pairs, v[0], v[1])
+		if v[1] == "" {
+			empty = append(empty, v[0])
+		}
+	}
+	rep := strings.NewReplacer(pairs...)
+	unresolved := func(s string) []string {
+		var out []string
+		for _, p := range empty {
+			if strings.Contains(s, p) {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	usedBy := map[string]map[string]bool{} // placeholder -> fields
+	sub := func(field string, used bool, s string) string {
+		if used {
+			for _, p := range unresolved(s) {
+				if usedBy[p] == nil {
+					usedBy[p] = map[string]bool{}
+				}
+				usedBy[p][field] = true
+			}
+		}
+		return rep.Replace(s)
+	}
+	subList := func(field string, used bool, in []string) []string {
+		out := make([]string, len(in))
+		for i, s := range in {
+			out[i] = sub(fmt.Sprintf("%s[%d]", field, i), used, s)
+		}
+		return out
+	}
+
+	c.Unreal.Editor = sub("unreal.editor", true, c.Unreal.Editor)
+	c.Unreal.Args = subList("unreal.args", true, c.Unreal.Args)
+
+	agent := c.Agent.Enabled
+	c.Agent.Command = sub("agent.command", agent, c.Agent.Command)
+	c.Agent.Args = subList("agent.args", agent, c.Agent.Args)
+	for k, v := range c.Agent.Env {
+		c.Agent.Env[k] = sub("agent.env."+k, agent, v)
+	}
+	c.Agent.Workdir = sub("agent.workdir", true, c.Agent.Workdir)
+	c.Agent.Hermes.ConfigPath = sub("agent.hermes.configPath", c.Agent.Hermes.Enabled, c.Agent.Hermes.ConfigPath)
+
+	// Safe in patterns only because every value is an absolute path: the
+	// config path is made absolute in Load (the project values derive from
+	// it) and resolveEngine makes the engine root absolute. Then the only glob
+	// character is a trailing *, and the rule's own "(" comes before any
+	// substituted path. A relative value would break this: matchPath cleans
+	// "Write(./*)" to "*", which grants everything, and "Write(sub/*)" never
+	// matches the absolute paths Claude Code sends, which leaves a deny rule
+	// inert. An empty one is caught by the unresolved check ("Edit(/*)").
+	c.Permissions.Allow = subList("permissions.allow", c.Permissions.Enabled, c.Permissions.Allow)
+	c.Permissions.Deny = subList("permissions.deny", c.Permissions.Enabled, c.Permissions.Deny)
+
+	py, node := c.Runtimes.Python.Enabled, c.Runtimes.Node.Enabled
+	c.Runtimes.Python.UV = sub("runtimes.python.uv", py, c.Runtimes.Python.UV)
+	c.Runtimes.Python.Project = sub("runtimes.python.project", py, c.Runtimes.Python.Project)
+	c.Runtimes.Node.Node = sub("runtimes.node.node", node, c.Runtimes.Node.Node)
+	// npm also installs the dependencies of node-started extra servers
+	// (prepareNodeBridge in cmd/launcher/bridge.go).
+	npmUsed := node || (c.MCP.Enabled && c.hasNodeExtraServer())
+	c.Runtimes.Node.Npm = sub("runtimes.node.npm", npmUsed, c.Runtimes.Node.Npm)
+	c.Runtimes.Node.Project = sub("runtimes.node.project", node, c.Runtimes.Node.Project)
+
+	if !c.Files.Enabled && len(unresolved(c.Files.Root)) > 0 {
+		c.Files.Root = ""
+	} else {
+		c.Files.Root = sub("files.root", c.Files.Enabled, c.Files.Root)
+	}
+
 	for name, cmd := range c.Commands {
-		cmd.Command = rep.Replace(cmd.Command)
-		cmd.Dir = rep.Replace(cmd.Dir)
-		cmd.Args = replaceAll(rep, cmd.Args)
+		if builtins[name] && len(unresolved(strings.Join(append([]string{cmd.Command, cmd.Dir}, cmd.Args...), "\n"))) > 0 {
+			delete(c.Commands, name)
+			skipped = append(skipped, name)
+			continue
+		}
+		cmd.Command = sub("commands."+name+".command", true, cmd.Command)
+		cmd.Dir = sub("commands."+name+".dir", true, cmd.Dir)
+		cmd.Args = subList("commands."+name+".args", true, cmd.Args)
 		c.Commands[name] = cmd
 	}
+	sort.Strings(skipped)
+
 	for name, def := range c.MCP.ExtraServers {
-		if m, ok := substituteAny(rep, def).(map[string]interface{}); ok {
+		field := "mcp.extraServers." + name
+		replace := func(s string) string { return sub(field, c.MCP.Enabled, s) }
+		if m, ok := substituteAny(replace, def).(map[string]interface{}); ok {
 			c.MCP.ExtraServers[name] = m
 		}
 	}
 	for i := range c.MCP.WriteConfig {
-		c.MCP.WriteConfig[i].Path = rep.Replace(c.MCP.WriteConfig[i].Path)
+		c.MCP.WriteConfig[i].Path = sub(fmt.Sprintf("mcp.writeConfig[%d].path", i), c.MCP.Enabled, c.MCP.WriteConfig[i].Path)
 	}
+
+	var problems []string
+	for _, p := range empty {
+		if len(usedBy[p]) == 0 {
+			continue
+		}
+		fields := make([]string, 0, len(usedBy[p]))
+		for f := range usedBy[p] {
+			fields = append(fields, f)
+		}
+		sort.Strings(fields)
+		problems = append(problems, fmt.Sprintf("%s is unresolved (%s) but used by %s", p, placeholderHint(p), strings.Join(fields, ", ")))
+	}
+	if len(problems) > 0 {
+		return skipped, errors.New(strings.Join(problems, "; "))
+	}
+	return skipped, nil
+}
+
+// hasNodeExtraServer reports whether an extra server is started with node, by
+// the same test as prepareMCPBridges in cmd/launcher/bridge.go — change both
+// together.
+func (c *Config) hasNodeExtraServer() bool {
+	for _, def := range c.MCP.ExtraServers {
+		command, _ := def["command"].(string)
+		if strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe") == "node" {
+			return true
+		}
+	}
+	return false
+}
+
+// placeholderHint says why a placeholder resolved to nothing and what to set.
+func placeholderHint(p string) string {
+	if p == "${ENGINE}" {
+		return "engine not found — set UE_ROOT or engineRoot in unreagent.local.yaml"
+	}
+	return "no .uproject found next to the config — set unreal.project"
 }
 
 // substituteAny replaces placeholders recursively in strings/maps/lists (for the
 // extraServers definitions passed through raw).
-func substituteAny(rep *strings.Replacer, v interface{}) interface{} {
+func substituteAny(replace func(string) string, v interface{}) interface{} {
 	switch t := v.(type) {
 	case string:
-		return rep.Replace(t)
+		return replace(t)
 	case map[string]interface{}:
 		for k, val := range t {
-			t[k] = substituteAny(rep, val)
+			t[k] = substituteAny(replace, val)
 		}
 		return t
 	case []interface{}:
 		for i, val := range t {
-			t[i] = substituteAny(rep, val)
+			t[i] = substituteAny(replace, val)
 		}
 		return t
 	default:
@@ -410,9 +581,18 @@ func (c *Config) validate() error {
 	if err := validRestart(c.Unreal.Restart); err != nil {
 		return fmt.Errorf("unreal.restart: %w", err)
 	}
+	if err := validDelay("unreal.restartDelaySeconds", c.Unreal.RestartDelaySeconds); err != nil {
+		return err
+	}
 	if c.Agent.Enabled {
 		if err := validRestart(c.Agent.Restart); err != nil {
 			return fmt.Errorf("agent.restart: %w", err)
+		}
+		if err := validDelay("agent.startDelaySeconds", c.Agent.StartDelaySeconds); err != nil {
+			return err
+		}
+		if err := validDelay("agent.restartDelaySeconds", c.Agent.RestartDelaySeconds); err != nil {
+			return err
 		}
 		switch c.Agent.OnExit {
 		case OnExitAsk, OnExitShutdown, OnExitLeave:
@@ -433,6 +613,13 @@ func (c *Config) validate() error {
 			return fmt.Errorf("commands.%s.command is missing", name)
 		}
 	}
+	for i, out := range c.MCP.WriteConfig {
+		switch out.Format {
+		case "", "mcp_json", "vscode":
+		default:
+			return fmt.Errorf("mcp.writeConfig[%d].format invalid: %q (allowed: mcp_json, vscode)", i, out.Format)
+		}
+	}
 	return nil
 }
 
@@ -445,42 +632,77 @@ func validRestart(p string) error {
 	}
 }
 
+// validDelay rejects a negative delay. A negative value used to act as a zero
+// delay — the way around the restart delay's floor (see applyDefaults).
+func validDelay(field string, seconds int) error {
+	if seconds < 0 {
+		return fmt.Errorf("%s invalid: %d (seconds, at least 1; 0 = default)", field, seconds)
+	}
+	return nil
+}
+
 // --- resolution ---
+
+// autodetect is the auto-detection step of resolveEngine; tests replace it so
+// that they do not depend on the engines installed on the host.
+var autodetect = autodetectEngine
 
 // resolveEngine determines the UE installation root; project (the resolved
 // .uproject path, may be empty) feeds auto-detection its EngineAssociation.
-func resolveEngine(c *Config, project string) string {
-	if v := strings.TrimSpace(os.Getenv("UE_ROOT")); v != "" {
-		return filepath.ToSlash(v)
+// A relative UE_ROOT or engineRoot is made absolute against the working
+// directory, which is where it pointed before: as typed, it would land in
+// placeholders and permission rules relative ("Write(${ENGINE}/*)" with
+// engineRoot "." would match anything).
+func resolveEngine(c *Config, project string) (string, error) {
+	for _, v := range []string{strings.TrimSpace(os.Getenv("UE_ROOT")), c.EngineRoot} {
+		if v == "" {
+			continue
+		}
+		abs, err := filepath.Abs(v)
+		if err != nil {
+			return "", fmt.Errorf("engine root %s: %w", v, err)
+		}
+		return filepath.ToSlash(abs), nil
 	}
-	if c.EngineRoot != "" {
-		return filepath.ToSlash(c.EngineRoot)
-	}
-	return autodetectEngine(project)
+	return autodetect(project), nil
 }
 
-// resolveProject determines the .uproject (set explicitly or auto-detected in
-// the config directory). It returns the full path, the directory and the name
-// without the extension.
-func resolveProject(c *Config, baseDir string) (project, dir, name string) {
+// resolveProject determines the .uproject: unreal.project if set (absolute or
+// relative to the config directory; it must exist), otherwise the first
+// *.uproject in the config directory, "" if there is none. It returns the full
+// path, the directory and the name without the extension.
+//
+// unreal.project takes no placeholders: ${PROJECT_DIR}, ${PROJECT_NAME} and
+// ${PROJECT} are derived from it, and ${ENGINE} auto-detection reads the
+// project's EngineAssociation.
+func resolveProject(c *Config, baseDir string) (project, dir, name string, err error) {
 	p := strings.TrimSpace(c.Unreal.Project)
-	if p != "" && !strings.Contains(p, "${") {
+	switch {
+	case strings.Contains(p, "${"):
+		return "", "", "", fmt.Errorf("unreal.project %q: placeholders are not supported here, they are derived from this setting — give the path absolute or relative to %s", p, filepath.ToSlash(baseDir))
+	case p != "":
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(baseDir, p)
 		}
-	} else {
-		matches, _ := filepath.Glob(filepath.Join(baseDir, "*.uproject"))
-		if len(matches) > 0 {
-			sort.Strings(matches)
-			p = matches[0]
-		} else {
-			return "", "", ""
+		st, statErr := os.Stat(p)
+		if statErr != nil {
+			return "", "", "", fmt.Errorf("unreal.project: %w", statErr)
 		}
+		if st.IsDir() {
+			return "", "", "", fmt.Errorf("unreal.project: %s is a directory, not a .uproject file", filepath.ToSlash(p))
+		}
+	default:
+		matches, _ := filepath.Glob(filepath.Join(baseDir, "*.uproject"))
+		if len(matches) == 0 {
+			return "", "", "", nil
+		}
+		sort.Strings(matches)
+		p = matches[0]
 	}
 	p = filepath.ToSlash(p)
 	dir = filepath.ToSlash(filepath.Dir(p))
 	name = strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
-	return p, dir, name
+	return p, dir, name, nil
 }
 
 // --- file helpers ---
@@ -531,12 +753,4 @@ func fileExists(path string) bool {
 	}
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func replaceAll(rep *strings.Replacer, in []string) []string {
-	out := make([]string, len(in))
-	for i, s := range in {
-		out[i] = rep.Replace(s)
-	}
-	return out
 }

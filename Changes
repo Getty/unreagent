@@ -10,6 +10,17 @@ Revision history for unreagent
   - run_command and the runtimes return as soon as the command exits, even
     when it leaves a process behind that holds its output (MSBuild node
     reuse); the job object is closed first, so the leftover tree dies with it.
+  - Config placeholders now work in agent command/args/env, permission rules,
+    hermes.configPath and the runtime executables. One that cannot be
+    resolved is a load error wherever it is used; built-in compile/package
+    are left out with a warning instead. Paths from a relative -config,
+    UE_ROOT or engineRoot are made absolute first.
+  - unreal.project must exist and takes no placeholders; mcp.writeConfig
+    formats and negative delays are rejected at load time. Without an engine
+    and with the default unreal.editor, the launcher (and hermes-setup) now
+    stops at load with an error instead of starting a non-existent editor.
+  - -files with an unresolved files.root is refused, and the file-tools
+    startup line only appears when the MCP server is enabled.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

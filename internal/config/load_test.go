@@ -1,0 +1,445 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// writeConfigFiles writes unreagent.yaml (and unreagent.local.yaml, if local
+// is not empty) into dir and returns the path of unreagent.yaml.
+func writeConfigFiles(t *testing.T, dir, base, local string) string {
+	t.Helper()
+	path := filepath.Join(dir, "unreagent.yaml")
+	if err := os.WriteFile(path, []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if local != "" {
+		if err := os.WriteFile(filepath.Join(dir, "unreagent.local.yaml"), []byte(local), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path
+}
+
+// writeUProject creates an (empty-JSON) .uproject at dir/rel.
+func writeUProject(t *testing.T, dir, rel string) string {
+	t.Helper()
+	p := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.ToSlash(p)
+}
+
+// noEngine makes ${ENGINE} unresolvable whatever the host has installed:
+// UE_ROOT is cleared and auto-detection finds nothing.
+func noEngine(t *testing.T) {
+	t.Helper()
+	t.Setenv("UE_ROOT", "")
+	saved := autodetect
+	autodetect = func(string) string { return "" }
+	t.Cleanup(func() { autodetect = saved })
+}
+
+func errContains(t *testing.T, err error, wants ...string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("Load succeeded; want an error mentioning %q", wants)
+		return
+	}
+	for _, w := range wants {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error %q does not mention %q", err, w)
+		}
+	}
+}
+
+// k41: ${PROJECT_DIR} and ${PROJECT_NAME} are derived from unreal.project, and
+// ${ENGINE} auto-detection reads the project's EngineAssociation, so a
+// placeholder in unreal.project cannot be resolved. It used to fall through to
+// globbing next to the config and leave the project empty; it must be a
+// load-time error instead.
+func TestProjectPlaceholderIsRejected(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	for _, p := range []string{
+		"${PROJECT_DIR}/Game/Game.uproject",
+		"${PROJECT}",
+		"Game/${PROJECT_NAME}.uproject",
+		"${ENGINE}/Samples/Game/Game.uproject",
+	} {
+		dir := t.TempDir()
+		writeUProject(t, dir, "Game/Game.uproject")
+		_, _, err := Load(writeConfigFiles(t, dir, "unreal:\n  project: \""+p+"\"\n", ""))
+		errContains(t, err, "unreal.project")
+	}
+}
+
+// k41 control: the supported way to name a .uproject in a subdirectory, a
+// path relative to the config file, resolves and feeds the placeholders.
+func TestExplicitRelativeProjectResolves(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	dir := t.TempDir()
+	want := writeUProject(t, dir, "Game/Game.uproject")
+	c, info, err := Load(writeConfigFiles(t, dir, "unreal:\n  project: Game/Game.uproject\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Unreal.Project != want || info.Project != want || info.ProjectName != "Game" {
+		t.Errorf("project = %q / %q / %q; want %q / %q / Game", c.Unreal.Project, info.Project, info.ProjectName, want, want)
+	}
+	if wantRoot := filepath.ToSlash(filepath.Join(dir, "Game")); c.Files.Root != wantRoot {
+		t.Errorf("files.root = %q; want %q", c.Files.Root, wantRoot)
+	}
+	if args := c.Commands["compile"].Args; !hasString(args, "-Project="+want) {
+		t.Errorf("compile args = %v; want -Project=%s", args, want)
+	}
+}
+
+// k47 item 7: an explicit unreal.project is checked for existence at load
+// time; a stale path used to load cleanly and fail later as a UE startup
+// error. A directory is not a project file either.
+func TestExplicitProjectMustExist(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "Game"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Missing.uproject", "Game"} {
+		_, _, err := Load(writeConfigFiles(t, dir, "unreal:\n  project: "+p+"\n", ""))
+		errContains(t, err, "unreal.project", p)
+	}
+}
+
+// k42: every field that holds a path, a command, an argument, an environment
+// value or a permission pattern gets the placeholders. Names, addresses, the
+// token and descriptions deliberately stay literal.
+func TestSubstitutionCoversPathAndArgumentFields(t *testing.T) {
+	ue := filepath.ToSlash(t.TempDir())
+	t.Setenv("UE_ROOT", ue)
+	dir := t.TempDir()
+	writeUProject(t, dir, "Game.uproject")
+	pd := filepath.ToSlash(dir)
+	base := `
+agent:
+  enabled: true
+  command: ${PROJECT_DIR}/bin/claude
+  args: ["--add-dir", "${ENGINE}/Engine/Source"]
+  env: {GAME_HOME: "${PROJECT_DIR}/.home", "${PROJECT_NAME}": "key"}
+  hermes: {configPath: "${PROJECT_DIR}/hermes.yaml", serverName: "${PROJECT_NAME}"}
+mcp:
+  enabled: true
+  address: "${PROJECT_NAME}:1"
+  token: "${PROJECT_NAME}"
+permissions:
+  enabled: true
+  allow: ["Edit(${PROJECT_DIR}/Source/*)"]
+  deny: ["Bash(rm -rf ${PROJECT_DIR}*)"]
+runtimes:
+  python: {uv: "${PROJECT_DIR}/tools/uv"}
+  node: {node: "${ENGINE}/node", npm: "${ENGINE}/npm"}
+commands:
+  hello: {description: "builds ${PROJECT_NAME}", command: echo}
+`
+	c, _, err := Load(writeConfigFiles(t, dir, base, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ field, got, want string }{
+		{"agent.command", c.Agent.Command, pd + "/bin/claude"},
+		{"agent.args[1]", c.Agent.Args[1], ue + "/Engine/Source"},
+		{"agent.env.GAME_HOME", c.Agent.Env["GAME_HOME"], pd + "/.home"},
+		{"agent.hermes.configPath", c.Agent.Hermes.ConfigPath, pd + "/hermes.yaml"},
+		{"permissions.allow[0]", c.Permissions.Allow[0], "Edit(" + pd + "/Source/*)"},
+		{"permissions.deny[0]", c.Permissions.Deny[0], "Bash(rm -rf " + pd + "*)"},
+		{"runtimes.python.uv", c.Runtimes.Python.UV, pd + "/tools/uv"},
+		{"runtimes.node.node", c.Runtimes.Node.Node, ue + "/node"},
+		{"runtimes.node.npm", c.Runtimes.Node.Npm, ue + "/npm"},
+		// Deliberately literal.
+		{"agent.env key", c.Agent.Env["${PROJECT_NAME}"], "key"},
+		{"agent.hermes.serverName", c.Agent.Hermes.ServerName, "${PROJECT_NAME}"},
+		{"mcp.address", c.MCP.Address, "${PROJECT_NAME}:1"},
+		{"mcp.token", c.MCP.Token, "${PROJECT_NAME}"},
+		{"commands.hello.description", c.Commands["hello"].Description, "builds ${PROJECT_NAME}"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q; want %q", tc.field, tc.got, tc.want)
+		}
+	}
+
+	// The substituted rules decide as written: a permission rule with
+	// ${PROJECT_DIR} used to stay literal and never match.
+	if d := c.Permissions.Decide("Edit", map[string]any{"file_path": pd + "/Source/a.cpp"}); !d.Allow {
+		t.Errorf("Edit inside Source denied: %s", d.Message)
+	}
+	if d := c.Permissions.Decide("Edit", map[string]any{"file_path": pd + "/Config/a.ini"}); d.Allow {
+		t.Errorf("Edit outside Source allowed: %s", d.Message)
+	}
+	if d := c.Permissions.Decide("Bash", map[string]any{"command": "rm -rf " + pd + "/Saved"}); d.Allow {
+		t.Errorf("deny rule with ${PROJECT_DIR} did not block: %s", d.Message)
+	}
+}
+
+// k43: a placeholder that resolved to "" in a field the launcher will use is a
+// load-time error naming the field and the placeholder. It used to yield
+// garbage like /Engine/Binaries/Win64/UnrealEditor.exe — or, in an allow rule,
+// "Edit(/*)", which grants far more than written.
+func TestUnresolvedPlaceholderInUsedFieldFails(t *testing.T) {
+	noEngine(t)
+	for _, tc := range []struct {
+		name, yaml, field, placeholder string
+	}{
+		{"default editor, no engine", "", "unreal.editor", "${ENGINE}"},
+		{"editor args, no project", "unreal: {editor: ue, args: [\"${PROJECT}\"]}\n", "unreal.args[0]", "${PROJECT}"},
+		{"user command, no project", "unreal: {editor: ue}\ncommands:\n  hello: {command: echo, args: [\"${PROJECT_DIR}\"]}\n", "commands.hello.args[0]", "${PROJECT_DIR}"},
+		{"user override of compile, no engine", "unreal: {editor: ue}\ncommands:\n  compile: {command: \"${ENGINE}/Build.bat\"}\n", "commands.compile.command", "${ENGINE}"},
+		{"file tools, no project", "unreal: {editor: ue}\nmcp: {enabled: true}\nfiles: {enabled: true}\n", "files.root", "${PROJECT_DIR}"},
+		{"agent args, no engine", "unreal: {editor: ue}\nagent: {enabled: true, args: [\"--add-dir\", \"${ENGINE}/Engine/Source\"]}\n", "agent.args[1]", "${ENGINE}"},
+		{"agent workdir, no project", "unreal: {editor: ue}\nagent: {workdir: \"${PROJECT_DIR}\"}\n", "agent.workdir", "${PROJECT_DIR}"},
+		{"allow rule, no project", "unreal: {editor: ue}\nmcp: {enabled: true}\npermissions: {enabled: true, allow: [\"Edit(${PROJECT_DIR}/*)\"]}\n", "permissions.allow[0]", "${PROJECT_DIR}"},
+		{"python runtime, no project", "unreal: {editor: ue}\nruntimes: {python: {enabled: true, project: \"${PROJECT_DIR}/py\"}}\n", "runtimes.python.project", "${PROJECT_DIR}"},
+		{"extra server, no project", "unreal: {editor: ue}\nmcp: {enabled: true, extraServers: {x: {command: \"${PROJECT_DIR}/srv\"}}}\n", "mcp.extraServers.x", "${PROJECT_DIR}"},
+		{"hermes config, no project", "unreal: {editor: ue}\nagent: {hermes: {enabled: true, configPath: \"${PROJECT_DIR}/h.yaml\"}}\n", "agent.hermes.configPath", "${PROJECT_DIR}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := Load(writeConfigFiles(t, t.TempDir(), tc.yaml, ""))
+			errContains(t, err, tc.field, tc.placeholder)
+		})
+	}
+}
+
+// k43: the same placeholders in fields the launcher will not use are not an
+// error. The built-in compile and package commands, which need the engine and
+// the project, are left out (and reported) instead of being offered as
+// garbage, and files.root is cleared so that turning the file tools on later
+// (-files) finds no root rather than a wrong one.
+func TestUnresolvedPlaceholderInUnusedFieldLoads(t *testing.T) {
+	noEngine(t)
+	base := `
+unreal: {editor: ue}
+agent:
+  enabled: false
+  args: ["--add-dir", "${ENGINE}/Engine/Source"]
+runtimes:
+  python: {enabled: false, project: "${PROJECT_DIR}/py"}
+commands:
+  hello: {command: echo}
+`
+	c, info, err := Load(writeConfigFiles(t, t.TempDir(), base, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for name := range c.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if !reflect.DeepEqual(names, []string{"hello"}) {
+		t.Errorf("commands = %v; want only hello", names)
+	}
+	if want := []string{"compile", "package"}; !reflect.DeepEqual(info.SkippedCommands, want) {
+		t.Errorf("info.SkippedCommands = %v; want %v", info.SkippedCommands, want)
+	}
+	if c.Files.Root != "" {
+		t.Errorf("files.root = %q; want empty while ${PROJECT_DIR} is unresolved", c.Files.Root)
+	}
+}
+
+// example/unreagent.yaml ships as the demo config of every release: no engine,
+// no .uproject, ping as the "editor". It has to keep loading.
+func TestExampleDemoConfigLoads(t *testing.T) {
+	noEngine(t)
+	c, _, err := Load(filepath.Join("..", "..", "example", "unreagent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Unreal.Editor != "ping" || c.Commands["hello"].Command != "cmd" {
+		t.Errorf("demo config: editor %q, hello %q", c.Unreal.Editor, c.Commands["hello"].Command)
+	}
+}
+
+// k47 item 2, documented limitation: 0 (or unset) means the default delay —
+// the restart delay is a floor against an unthrottled restart loop. A
+// negative value used to slip past that floor as a zero delay; it is rejected.
+func TestDelays(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	zero := "unreal: {restartDelaySeconds: 0}\nagent: {enabled: true, startDelaySeconds: 0, restartDelaySeconds: 0}\n"
+	c, _, err := Load(writeConfigFiles(t, t.TempDir(), zero, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Unreal.RestartDelaySeconds != 3 || c.Agent.RestartDelaySeconds != 3 || c.Agent.StartDelaySeconds != 5 {
+		t.Errorf("delays = %d/%d/%d; want the defaults 3/3/5",
+			c.Unreal.RestartDelaySeconds, c.Agent.RestartDelaySeconds, c.Agent.StartDelaySeconds)
+	}
+	for field, yaml := range map[string]string{
+		"unreal.restartDelaySeconds": "unreal: {restartDelaySeconds: -1}\n",
+		"agent.startDelaySeconds":    "agent: {enabled: true, startDelaySeconds: -1}\n",
+		"agent.restartDelaySeconds":  "agent: {enabled: true, restartDelaySeconds: -1}\n",
+	} {
+		_, _, err := Load(writeConfigFiles(t, t.TempDir(), yaml, ""))
+		errContains(t, err, field)
+	}
+}
+
+// k47 item 3, documented limitation: null in the overlay is "not set", so
+// unreal.args falls back to the built-in default; an empty list clears it.
+func TestUnrealArgsNullVersusEmptyInOverlay(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	base := "unreal:\n  args: [\"-base\"]\n"
+	for local, want := range map[string][]string{
+		"unreal:\n  args: ~\n":  {"-stdout", "-FullStdOutLogOutput"},
+		"unreal:\n  args: []\n": {},
+	} {
+		c, _, err := Load(writeConfigFiles(t, t.TempDir(), base, local))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(c.Unreal.Args, want) {
+			t.Errorf("local %q: unreal.args = %#v; want %#v", local, c.Unreal.Args, want)
+		}
+	}
+}
+
+// k47 item 4: mcp.writeConfig format is an enum; a typo used to fall through
+// to mcp_json and was then logged as the format.
+func TestWriteConfigFormat(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	for _, f := range []string{"", "mcp_json", "vscode"} {
+		yaml := "mcp:\n  enabled: true\n  writeConfig: [{path: a.json, format: \"" + f + "\"}]\n"
+		if _, _, err := Load(writeConfigFiles(t, t.TempDir(), yaml, "")); err != nil {
+			t.Errorf("format %q: %v", f, err)
+		}
+	}
+	yaml := "mcp:\n  enabled: true\n  writeConfig: [{path: a.json, format: vscod}]\n"
+	_, _, err := Load(writeConfigFiles(t, t.TempDir(), yaml, ""))
+	errContains(t, err, "mcp.writeConfig[0].format", "vscod")
+}
+
+// k42 review F1: Load makes the config path absolute. With a relative -config
+// path ${PROJECT_DIR} used to become "." or "sub": "Write(./*)" is cleaned to
+// "*" by the matcher and allowed writing anywhere, and a relative deny rule
+// never matched the absolute paths Claude Code sends.
+func TestRelativeConfigPathYieldsAbsoluteRules(t *testing.T) {
+	t.Setenv("UE_ROOT", filepath.ToSlash(t.TempDir()))
+	base := `
+mcp: {enabled: true}
+permissions:
+  enabled: true
+  mode: allowlist
+  allow: ["Write(${PROJECT_DIR}/*)"]
+  deny: ["Write(${PROJECT_DIR}/Config/*)"]
+`
+	outside := filepath.ToSlash(t.TempDir()) + "/outside.txt"
+	for _, rel := range []string{"unreagent.yaml", "sub/unreagent.yaml"} {
+		t.Run(rel, func(t *testing.T) {
+			root := t.TempDir()
+			cfgDir := filepath.Join(root, filepath.FromSlash(filepath.Dir(rel)))
+			writeUProject(t, cfgDir, "Game.uproject")
+			writeConfigFiles(t, cfgDir, base, "")
+			t.Chdir(root)
+			pd, err := filepath.Abs(filepath.Dir(rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pd = filepath.ToSlash(pd)
+
+			c, info, err := Load(rel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !filepath.IsAbs(info.ConfigPath) {
+				t.Errorf("info.ConfigPath = %q; want absolute", info.ConfigPath)
+			}
+			if c.Unreal.Project != pd+"/Game.uproject" || c.Files.Root != pd {
+				t.Errorf("project %q, files.root %q; want under %q", c.Unreal.Project, c.Files.Root, pd)
+			}
+			if want := "Write(" + pd + "/*)"; c.Permissions.Allow[0] != want {
+				t.Errorf("allow[0] = %q; want %q", c.Permissions.Allow[0], want)
+			}
+			if want := "Write(" + pd + "/Config/*)"; c.Permissions.Deny[0] != want {
+				t.Errorf("deny[0] = %q; want %q", c.Permissions.Deny[0], want)
+			}
+			for path, allow := range map[string]bool{
+				outside:                 false, // the allow rule must not widen to "*"
+				pd + "/Source/a.cpp":    true,
+				pd + "/Config/Game.ini": false, // the deny rule must not be inert
+			} {
+				if d := c.Permissions.Decide("Write", map[string]any{"file_path": path}); d.Allow != allow {
+					t.Errorf("Write %s: allow = %v (%s); want %v", path, d.Allow, d.Message, allow)
+				}
+			}
+		})
+	}
+}
+
+// k42 review F1, same hole via ${ENGINE}: a relative UE_ROOT or engineRoot
+// is made absolute (against the working directory, where it pointed before)
+// instead of being substituted into rules as typed.
+func TestRelativeEngineRootIsAbsolute(t *testing.T) {
+	for _, tc := range []struct{ name, env, yaml string }{
+		{"UE_ROOT", "eng", "unreal: {}\n"},
+		{"engineRoot", "", "engineRoot: eng\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UE_ROOT", tc.env)
+			root := t.TempDir()
+			writeConfigFiles(t, root, tc.yaml, "")
+			t.Chdir(root)
+			want, err := filepath.Abs("eng")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = filepath.ToSlash(want)
+			c, info, err := Load("unreagent.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.EngineRoot != want || c.Unreal.Editor != want+"/Engine/Binaries/Win64/UnrealEditor.exe" {
+				t.Errorf("engine %q, editor %q; want under %q", info.EngineRoot, c.Unreal.Editor, want)
+			}
+		})
+	}
+}
+
+// k43 review F3: runtimes.node.npm is not only the node runtime's: the
+// launcher runs it for every extra server started with node while mcp.enabled
+// is set (prepareNodeBridge, npm install). An unresolved placeholder in it is
+// then a load error even with the node runtime off.
+func TestNpmIsUsedByNodeExtraServers(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	npm := "runtimes: {node: {enabled: false, npm: \"${PROJECT_DIR}/npm\"}}\nunreal: {editor: ue}\n"
+	for _, tc := range []struct {
+		name, mcp string
+		used      bool
+	}{
+		{"node server", "mcp: {enabled: true, extraServers: {b: {command: node, args: [b.js]}}}\n", true},
+		{"node.exe by path", "mcp: {enabled: true, extraServers: {b: {command: \"C:/Program Files/nodejs/NODE.EXE\"}}}\n", true},
+		{"http server only", "mcp: {enabled: true, extraServers: {b: {type: http, url: \"http://127.0.0.1:1/mcp\"}}}\n", false},
+		{"mcp disabled", "mcp: {enabled: false, extraServers: {b: {command: node}}}\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := Load(writeConfigFiles(t, t.TempDir(), npm+tc.mcp, ""))
+			if tc.used {
+				errContains(t, err, "runtimes.node.npm", "${PROJECT_DIR}")
+			} else if err != nil {
+				t.Errorf("npm is not used here, yet: %v", err)
+			}
+		})
+	}
+}
+
+func hasString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

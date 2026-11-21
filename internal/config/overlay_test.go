@@ -13,6 +13,9 @@ import (
 // absent key keeps the base value, a nested struct is decoded field by field,
 // a list replaces, a map merges by key with each given entry replaced whole.
 func TestLocalOverlaySemantics(t *testing.T) {
+	// The default unreal.editor needs ${ENGINE}; an unresolved one is a load
+	// error.
+	t.Setenv("UE_ROOT", "/ue")
 	dir := t.TempDir()
 	base := `
 unreal:
@@ -98,6 +101,7 @@ commands:
 // TestLocalOverlayCannotClearMapWithEmptyMap pins the consequence of the
 // merge: {} in the local file leaves the base map alone, null clears it.
 func TestLocalOverlayCannotClearMapWithEmptyMap(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue") // see TestLocalOverlaySemantics
 	base := "mcp:\n  extraServers:\n    a: {url: http://a}\n"
 	for _, tc := range []struct {
 		local string

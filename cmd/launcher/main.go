@@ -81,6 +81,9 @@ func run() error {
 	} else {
 		logger("WARN no .uproject found next to the config — set unreal.project")
 	}
+	for _, name := range info.SkippedCommands {
+		logger("WARN built-in command " + name + " not offered: it needs the engine and the .uproject (see above)")
+	}
 	// CLI overrides.
 	if *noAgent && cfg.Agent.Enabled {
 		cfg.Agent.Enabled = false
@@ -125,7 +128,16 @@ func run() error {
 			logger("WARN agent command not in PATH: " + cfg.Agent.Command + " (set the full path in unreagent.local.yaml)")
 		}
 	}
-	if cfg.Files.Enabled {
+	// config.Load rejects an unresolved files.root only when files.enabled is
+	// set in the config; -files turns the tools on afterwards and finds the
+	// root cleared instead. Refuse rather than fall back to some other dir.
+	if cfg.Files.Enabled && cfg.Files.Root == "" {
+		logger("WARN file tools disabled: files.root names a placeholder that is unresolved — set unreal.project or files.root")
+		cfg.Files.Enabled = false
+	}
+	if cfg.Files.Enabled && !cfg.MCP.Enabled {
+		logger("WARN file tools not served: they need mcp.enabled")
+	} else if cfg.Files.Enabled {
 		mode := "read/write"
 		if cfg.Files.ReadOnly {
 			mode = "read-only"
