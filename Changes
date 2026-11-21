@@ -178,6 +178,13 @@ Revision history for unreagent
   - A failed bridge smoke test now also logs the line that names the error,
     such as node's "Error: Cannot find module 'dep'", which a long stack trace
     used to push out of the last 15 lines of stderr shown.
+  - agent.hermes.serverName is checked at load time while
+    agent.hermes.enabled is set: it must start with an ASCII letter, hold
+    only letters, digits, "_" and "-", and not be a word YAML reads as a
+    boolean or null (yes, no, on, off, true, null, ...). Before, hermes-setup
+    took any name, wrote some as a key that YAML reads as something else, and
+    refused "<<" with an error that did not name the option. A bad name now
+    stops every config load, a normal start included, not only hermes-setup.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

@@ -669,6 +669,13 @@ agent:
     enabled: true
 ```
 
+The entry goes under `mcp_servers.<name>` in the Hermes config, where `<name>`
+is `agent.hermes.serverName` (default `unreagent`). The name may hold only
+ASCII letters, digits, `_` and `-`, must start with a letter, and must not be
+a word YAML reads as a boolean or null (`yes`, `no`, `on`, `off`, `true`,
+`null`, ...). While `agent.hermes.enabled` is set, a bad name is a load error
+for a normal start as well as for `hermes-setup`.
+
 ```bash
 unreagent hermes-setup      # merges MCP entry into ~/.hermes/config.yaml
 ```

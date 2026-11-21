@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -144,7 +145,8 @@ type HermesConfig struct {
 	// an auto-merge.
 	Enabled bool `yaml:"enabled"`
 	// ServerName is the name Hermes uses for the unreagent server (key under
-	// "mcp_servers:"). Default: "unreagent".
+	// "mcp_servers:"). Default: "unreagent". With Enabled it must be a plain
+	// YAML key (see validHermesServerName).
 	ServerName string `yaml:"serverName"`
 	// ConfigPath is the Hermes config file. Default: $HERMES_HOME/config.yaml
 	// (typically ~/.hermes/config.yaml). Empty = default.
@@ -638,6 +640,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("agent.onExit invalid: %q (allowed: ask, shutdown, leave)", c.Agent.OnExit)
 		}
 	}
+	if c.Agent.Hermes.Enabled {
+		if err := validHermesServerName(c.Agent.Hermes.ServerName); err != nil {
+			return err
+		}
+	}
 	switch c.Permissions.Mode {
 	case ModeAllowAll, ModeAllowlist, ModeDenyAll:
 	default:
@@ -671,6 +678,32 @@ func validRestart(p string) error {
 	default:
 		return fmt.Errorf("invalid policy %q (allowed: never, on-failure, always)", p)
 	}
+}
+
+// hermesServerNameChars is what agent.hermes.serverName may consist of: ASCII
+// letters, digits, "_" and "-", starting with a letter. None of these means
+// anything to YAML, so no such name needs quoting as a key, and they are the
+// characters model APIs commonly allow in tool names. The leading letter rules
+// out every YAML number, date and timestamp, which start with a digit, a sign
+// or a dot — among them some yaml.v3 writes unquoted and PyYAML misreads or
+// cannot load (an integer past 64 bits, "0x_", "2001-02-30").
+var hermesServerNameChars = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+// validHermesServerName refuses a serverName that is not a plain YAML key:
+// hermes-setup writes it as a key under mcp_servers in the Hermes config, and
+// "<<" there became a merge key. A name of the allowed characters can still
+// read as something other than a string: true, null, and the YAML 1.1
+// booleans yes, on, n ..., which hermes-setup's node encoder writes unquoted
+// and a YAML 1.1 reader takes as booleans. yaml.v3 quotes all of them when it
+// marshals the bare string, so a name it would quote is refused.
+func validHermesServerName(name string) error {
+	if !hermesServerNameChars.MatchString(name) {
+		return fmt.Errorf(`agent.hermes.serverName invalid: %q (allowed: ASCII letters, digits, "_" and "-", starting with a letter)`, name)
+	}
+	if out, err := yaml.Marshal(name); err != nil || string(out) != name+"\n" {
+		return fmt.Errorf("agent.hermes.serverName invalid: %q (YAML may read it as a boolean or null rather than a name)", name)
+	}
+	return nil
 }
 
 // validDelay rejects a negative delay. A negative value used to act as a zero

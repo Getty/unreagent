@@ -201,6 +201,10 @@ mcp:
 #   hermes:
 #     enabled: true
 #     # serverName: unreagent     # key under mcp_servers
+#     #   Allowed: ASCII letters, digits, "_" and "-", starting with a letter.
+#     #   Names YAML reads as boolean or null (yes, no, on, off, true, null,
+#     #   ...) are refused at load.
+#     #   Empty = the default, unreagent.
 #     # configPath: ""            # empty = $HERMES_HOME/config.yaml or ~/.hermes/config.yaml (takes placeholders)
 
 # ------------------------------------------------------------

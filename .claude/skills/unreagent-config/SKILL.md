@@ -74,8 +74,14 @@ placeholder system exists.
    `mcp.writeConfig[].format`), negative delays, `permissions.enabled` without
    `mcp.enabled`, a command without `command`, `skills.mcp` and
    `skills.materialize` both false (no skill would reach the agent; the error
-   names both and `skills.enabled: false`). The `agent.*` checks run only when
-   `agent.enabled`, the skills check only when `skills.enabled`.
+   names both and `skills.enabled: false`), an `agent.hermes.serverName` that
+   is not a plain YAML key (`validHermesServerName`: a character allowlist
+   starting with a letter, which already rules out every YAML number and
+   date, then anything YAML would read as a boolean or null; an empty name is
+   already `unreagent` from step 4). The `agent.*` checks run only
+   when `agent.enabled`, except serverName, which runs on
+   `agent.hermes.enabled` alone — the only flag `hermes-setup` checks; the
+   skills check only when `skills.enabled`.
 
 `unreal.*` always counts as used and `unreal.editor` defaults to
 `${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe`, so without a resolvable
