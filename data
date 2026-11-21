@@ -1,0 +1,37 @@
+---
+class: standard
+completed: 2026-11-21T01:20:19Z
+created: 2026-08-22T04:37:39Z
+id: 42
+priority: medium
+started: 2026-11-21T00:36:36Z
+status: done
+tags:
+- config
+- docs
+title: Placeholder substitution covers only half the string fields
+updated: 2026-11-21T01:20:40Z
+---
+
+config.go:355-383. Substituted: unreal.editor, project, args; agent.workdir; runtimes project paths; files.root; commands; mcp.extraServers; mcp.writeConfig paths. Not substituted, verified literal: agent.command, agent.args, agent.env values, agent.hermes.configPath, permissions allow and deny, runtimes.python.uv, runtimes.node.node and npm, mcp.address.
+unreagent.example.yaml:8-13 and README:142-143 present placeholders as a general config feature with no field list. Concretely a permission rule containing PROJECT_DIR silently never matches, and hermes.configPath with a placeholder is made absolute into a literal directory under the CWD. Acceptance: the replacer runs over at least agent.command/args/env, permissions entries and hermes.configPath, and the supported field list is documented.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: substitute() skips agent.command/args/env, permissions allow/deny, hermes.configPath, runtimes uv/node/npm and mcp.address. The unreagent-config skill claims 'all string values'; fix that text too (skill-author). Merge with k41, k43. Size M.
+
+Worker done, worktree branch worktree-agent-a34fb3202df96dbbc (.claude/worktrees/agent-a34fb3202df96dbbc), uncommitted, based on c013f77; tests in internal/config/load_test.go, red captured before the fix. Now substituted: agent.command/args, agent.env values, agent.hermes.configPath, permissions allow/deny, runtimes.python.uv, runtimes.node.node/npm. Deliberately literal: env keys, hermes.serverName, mcp.address, mcp.token, descriptions, engineRoot, unreal.project. Permission patterns are safe only together with the k43 empty-placeholder check. Known ambiguity: a shell-style PROJECT variable in a Bash(...) rule or agent args is replaced too; there is no escape syntax.
+
+2026-11-21 01:03 Review (unreagent-reviewer), worktree branch worktree-agent-a34fb3202df96dbbc on c013f77: CHANGES NEEDED. Check run, all green: gofmt -l . empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... and go test -race ./... pass, 0 skips; make linux and make windows build. The Windows path only compiled, so it is unverified.
+F1 (blocker) internal/config/config.go:243 with :461-462. Load takes baseDir from the -config path as given. With `-config unreagent.yaml`, PROJECT_DIR is '.', and the newly substituted Write(${PROJECT_DIR}/*) becomes Write(./*). matchPath cleans that to '*', so allowlist mode allows Write on /etc/passwd and on C:\Windows\... (reproduced in a scratch copy; HEAD leaves the rule literal and denies). With `-config sub/unreagent.yaml` the rules stay relative and never match the absolute paths Claude Code sends, so a PROJECT_DIR deny rule stays inert, which is the k42 symptom again. Fix: make the config path absolute in Load (filepath.Abs) before deriving baseDir. Add a test that loads a relative config path (t.Chdir) and asserts an absolute PROJECT_DIR and a denied Write outside it. Then correct the 'Safe in patterns' comment at :458-460, which holds only for absolute values.
+Not findings: spaces, '(' and ')' in an absolute PROJECT_DIR do not widen a rule (verified). A Bash allow rule that names a path with spaces never matches the quoted command, so it fails closed; that is a doc note for k101. A shell-style ${PROJECT} in a Bash rule or in agent args being replaced is acceptable: the four names are the documented placeholder vocabulary, and commands/extraServers already got the same replacement. k101 must still say there is no escape syntax.
+
+Fixes for the review done (same worktree branch worktree-agent-a34fb3202df96dbbc). F1: Load makes the config path absolute before taking its dir, which covers every config-dir-derived path; resolveEngine makes a relative UE_ROOT/engineRoot absolute too (same widening via ENGINE; worker's addition, kept). 'Safe in patterns' comment now states the absolute-value precondition. TestRelativeConfigPathYieldsAbsoluteRules (unreagent.yaml and sub/unreagent.yaml via t.Chdir) and TestRelativeEngineRootIsAbsolute red->green.
+
+2026-11-21 01:16 Re-review (unreagent-reviewer), same worktree branch, fixes for F1-F3: APPROVE. Check run, all green: gofmt -l . empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... and go test -race ./... pass, 0 skips; make linux and make windows build. The Windows path only compiled, so it is unverified.
+F1 is fixed. Load makes the config path absolute (internal/config/config.go:245), and resolveEngine makes a relative UE_ROOT or engineRoot absolute (:656). TestRelativeConfigPathYieldsAbsoluteRules and TestRelativeEngineRootIsAbsolute both fail on the previous state for their stated reasons: Write(./*) allowed /etc/passwd, Write(sub/*) and the engine root stayed relative.
+No config-dir- or engine-derived value reaches a rule relative any more. Every project value derives from the absolute config dir. On Windows (by reading), filepath.Abs uses GetFullPathName: a drive-relative C:foo or a rooted \foo becomes drive-qualified, and UNC stays UNC. Auto-detected engines come from registry or default-path directories, which are absolute on Windows. On Linux the default patterns glob as relative 'C:/...' paths, but those can never clean to '.' or '*'.
+Notes, not blocking. A relative engineRoot/UE_ROOT now resolves against the working directory (that is where the executed path pointed before), while unreal.project resolves against the config dir; k101 must document both. The matcher folds //server/share and a drive-rooted \server\share to the same path; that is a pre-existing quirk and belongs with k59.
+Also found, outside this card and pre-existing: a hand-written relative pattern that cleans to '*' grants everything. Literal Write(./*) and Write(x/../*) both allow Write on /etc/passwd (normalizePath/matchPath in internal/config/permission.go). k59 does not cover it; it needs its own card.
+Rebase: the branch diff applies cleanly onto main 077439a (main.go 3-way merge without conflicts). On the simulated rebase, vet, go test, go test -race and the Windows build all pass, main's new hermes_test.go included.
+
+Committed as 2e72af4 on main (one commit with k41, k42, k43, k47)
