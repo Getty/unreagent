@@ -1,0 +1,141 @@
+---
+claimed_at: 2026-11-21T18:19:05Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:21:19Z
+created: 2026-11-21T11:38:08Z
+id: 162
+priority: low
+started: 2026-11-21T17:46:40Z
+status: done
+tags:
+- config
+- mcp
+title: 'mcp.address: refuse an IPv6 zone id and a host that is no host'
+updated: 2026-11-21T18:21:30Z
+---
+
+Found in the k57 review (not a regression; same before k57):
+1. internal/config ClientURL / validMCPAddress: an IPv6 zone id loads — `[fe80::1%eth0]:8765` becomes `http://[fe80::1%eth0]:8765/mcp`, which is not a valid URL (the % must be escaped as %25, and Node clients take no zone at all); `[::%eth0]:8765` is not recognised as a wildcard.
+2. validMCPAddress checks only the port: `user@host:8765`, `a/b:8765` or a host with a leading space load. The bind then fails loudly, but hermes-setup with MCP off writes such a URL into the Hermes config.
+3. Nit: the error hint shows only `127.0.0.1:8765`; for an unbracketed IPv6 like `::1:8765` it should also show `[::1]:8765`.
+
+Done when: a zone id is refused (or, if kept, escaped correctly — main-agent preference: refuse), the host must be an IP literal or a hostname (letters, digits, -, .), and the hint mentions the bracketed IPv6 form; table tests for each. Lane: unreagent-worker.
+
+**Decision 2026-11-21 (main agent):** k162 and k166 go to one worker as a bundle. Both are host checks in `internal/config/config.go` and `mcp_test.go`, and the cards stay separate.
+
+For k162:
+- refuse a zone id;
+- the host must be an IP literal, a hostname (letters, digits, `-`, `.`) or empty (wildcard);
+- the hint names the bracketed IPv6 form.
+
+For k166:
+- decide "numeric" from the characters, not from the parse error;
+- refuse the WHATWG forbidden host code points;
+- fix the test comment.
+
+**Worker report 2026-11-21 (unreagent-worker, bundle k162 + k166; tree on d61227a, uncommitted, in the worker's isolation worktree).**
+
+Changed (k162 part):
+- `internal/config/config.go` `validMCPAddress`: after the port check, a bracketed host must be an IPv6 address without a zone (`[fe80::1%eth0]`, `[::%eth0]`, `[fe80::1%]` -> "no IPv6 zone allowed, a client URL takes none"; `[127.0.0.1]`, `[localhost]`, `[]` -> "brackets hold an IPv6 address only"); any other host must match the new `mcpHostName` (`^[A-Za-z0-9.-]*$`, empty = wildcard), else "host must be an IP address or a name of ASCII letters, digits, "-" and "."" (`user@host`, `a/b`, a leading space, `ue box`, `ue_box`, `bücher.example`, `127.0.0.1%eth0`). Every mcp.address error now ends "want host:port, e.g. 127.0.0.1:8765 or [::1]:8765".
+- `internal/config/load_test.go` (k42 test): the claim "mcp.address stays literal" used `address: "${PROJECT_NAME}:1"`, which is now no host. Claim kept, mechanism replaced: the address left the big fixture, and a separate Load asserts `mcp.address invalid: "${PROJECT_NAME}:1"` (substituted it would load as `Game:1`).
+
+My decisions, not the brief's:
+- Brackets around anything but IPv6 are refused. Go's SplitHostPort accepts `[127.0.0.1]:8765`, `[localhost]:8765` and `[]:8765`, and they loaded after k57. I read "IPv6 bracketed" as "brackets hold IPv6 only".
+- `_` is refused as the brief's charset says. Windows NetBIOS names may contain `_`; the reviewer may want to reconsider that.
+- Not done (drift, not scope): a numeric-looking name such as `999.1.1.1:8765` or `127.1:8765` passes the charset (digits and dots) and still loads; the bind then fails, or on Windows the resolver may read it as an IPv4 address. Possible follow-up card for this board.
+
+Tests (`internal/config/mcp_test.go`): `TestMCPAddressRefused` gets the 13 new cases plus the hint check on every case; `TestMCPAddressAccepted` adds `127.0.0.1:8765`, `localhost:8765`, `ue-box.lan:8765`, `UE-Box.LAN.:8765`, `[2001:db8::5]:8765`, `[0:0:0:0:0:0:0:0]:8765`, `[::ffff:0.0.0.0]:8765` and `[::ffff:127.0.0.1]:8765`. All six README forms still load (`127.0.0.1:8765`, `:8765`, `0.0.0.0:8765`, `[::]:8765`, `[::1]:8765`, `localhost:8765`). Red before the fix: all 13 new refusals loaded.
+
+Mutations (`go test -overlay` on a copy of config.go, tree untouched), all killed: zone case removed; bracket case disabled; charset check disabled; charset widened to `_ @ / space`; empty host refused (`+`); hint without `[::1]:8765`; mcp.address substituted (kills the k42 test). The k166 mutations are on k166.
+
+Check, all green: `gofmt -l cmd internal skills` (empty), `go vet ./...`, `GOOS=windows go vet ./...`, `go test -count=1 -timeout 600s ./...`, `go test -race -timeout 600s ./internal/config`, `make linux`, `make windows`, plus a `CGO_ENABLED=0 GOOS=windows` build. One skip: `TestWarnIfMissingAppliesPathExtOnWindows` (Windows-only, skips on Linux, already there). Windows: these are pure string checks with no platform code. They are compiled for Windows but not run there, so they are unverified on Windows.
+
+README sentences that need a change (main agent): the `mcp` row (~:651) "must be `host:port` with a port from 1 to 65535, anything else is a load error" needs the host rule; the exit-code-1 row (~:403) likewise; the quoted error at ~:1477 now reads `(missing port in address; want host:port, e.g. 127.0.0.1:8765 or [::1]:8765)`.
+Skill drift (lane `unreagent-skill-author`, this board): `.claude/skills/unreagent-config/SKILL.md` step on `validMCPAddress` (~:105-109) describes only host:port and port; it now also checks the host.
+
+Proposed subject (70 chars): `Tighten the host checks of mcp.address and allowedOrigins (k162, k166)`
+Proposed Changes: amend the unreleased `{{$NEXT}}` entry "An mcp.address that is not host:port ..." to:
+  - An mcp.address that is not host:port with a port from 1 to 65535 (no
+    port, port 0, a service name), or whose host is not empty, an IP
+    address (IPv6 in brackets, without a zone such as %eth0) or a name of
+    ASCII letters, digits, "-" and ".", is a load error naming the value,
+    checked when mcp.enabled or agent.hermes.enabled is on.
+
+Ready for review (bundle with k166): report in the worker note above. Tree uncommitted in the worker's isolation worktree; files internal/config/config.go, internal/config/mcp_test.go, internal/config/load_test.go.
+
+**Decision 2026-11-21 (main agent), on the worker's four choices:**
+
+1. **Brackets around anything but IPv6 are refused** (`[127.0.0.1]`, `[localhost]`, `[]`): accepted. No v0.0.9 behavior changes, since v0.0.9 had no address check.
+2. **`_` is allowed** in an `mcp.address` host name. This overrides my brief's character list. Windows computer names and many resolvers take `_`, it is no forbidden host code point in the URL Standard, and a host that cannot be resolved still fails loudly at bind. Pin `my_pc:8765` as loading.
+3. **`chrome-extension://a%25b` still loads:** accepted. Such an entry matches no real extension, so it grants nothing.
+4. **Numeric-looking names** (`999.1.1.1`, `127.1`) still load. This is accepted with no new card: the bind fails loudly or resolves the name, and the card's aim (user info, paths, spaces, zones) is met.
+
+The README is done by the main agent. The unreagent-config skill text goes to the skill-author in the same worktree.
+
+**Worker follow-up 2026-11-21 (unreagent-worker): `_` allowed in an mcp.address host name, per the decision above.**
+
+- `internal/config/config.go`: `mcpHostName` is now `^[A-Za-z0-9._-]*$`. Its comment gives the reason (Windows computer names, which resolvers take; no forbidden host code point in the URL Standard). The error cause now reads `host must be an IP address or a name of ASCII letters, digits, "-", "_" and "."`.
+- `internal/config/mcp_test.go`: the `ue_box:8765` refusal is gone, `my_pc:8765` is pinned in `TestMCPAddressAccepted`, and both test comments that list the characters now include `_`.
+- Mutations rerun for the host rule (`go test -overlay`, tree untouched), all 8 killed: zone case removed; bracket case disabled; charset check disabled; charset widened to `@ / space`; `_` refused again (kills `TestMCPAddressAccepted` via `my_pc:8765`); empty host refused; hint without `[::1]:8765`; mcp.address substituted (kills the k42 test).
+- Check, green: `gofmt -l cmd internal skills` (empty), `go vet ./internal/config`, `GOOS=windows go vet ./internal/config`, `go test -count=1 -timeout 300s ./internal/config`. Not rerun this round: the full `./...`, race, `make linux` and `make windows` (green in the first report; this change touches only `internal/config`).
+- I did not touch `README.md` or `.claude/skills/unreagent-config/SKILL.md`. The worktree shows `README.md` modified; that is the main agent's edit, not mine.
+
+Proposed Changes, updated: amend the unreleased `{{$NEXT}}` entry "An mcp.address that is not host:port ..." to:
+  - An mcp.address that is not host:port with a port from 1 to 65535 (no
+    port, port 0, a service name), or whose host is not empty, an IP
+    address (IPv6 in brackets, without a zone such as %eth0) or a name of
+    ASCII letters, digits, "-", "_" and ".", is a load error naming the
+    value, checked when mcp.enabled or agent.hermes.enabled is on.
+The subject stays `Tighten the host checks of mcp.address and allowedOrigins (k162, k166)`.
+
+**Skill-author note 2026-11-21 (unreagent-skill-author, bundle k162 + k166; uncommitted, in the same worktree).**
+
+Changed:
+- `.claude/skills/unreagent-config/SKILL.md`, step 8 (validate): the mcp.address and allowedOrigins clauses are now two sub-bullets.
+  - validMCPAddress: host:port with a port from 1 to 65535. The host is empty, an IPv6 address in brackets, or a name of ASCII letters, digits, `-`, `_` and `.`. Brackets hold IPv6 only (`[127.0.0.1]`, `[localhost]`, `[]` are refused). A zone is refused (`%25` in the URL; Node takes none). The bind would fail on user info, a path or a space, but hermes-setup writes the URL with the server off. Every error ends with the hint `want host:port, e.g. 127.0.0.1:8765 or [::1]:8765`.
+  - validOrigin: "numeric" is decided from the characters (browserIPv4: decimal digits, or `0x` and only hex digits). `http://a.0xffffffffffffffffffff` is refused and `http://ide.example.0xg` is a name. forbiddenHostChars applies outside brackets, for http(s) and extension schemes alike. `%` is refused in an http(s) host only, so an extension host keeps it (decision 3).
+- `.claude/skills/unreagent-core/SKILL.md` :140-144: the MCP-bind parenthetical said config load refuses an address "not host:port with a port 1-65535". It now also names the host check and points to validMCPAddress / unreagent-config. It was incomplete rather than wrong; I fixed it so nobody reads the host as unchecked.
+
+Written with `_` allowed, per the main agent's decision 2. At the time of writing, config.go in the worktree still had `^[A-Za-z0-9.-]*$`. The skill text does not quote the host-error message, so a reworded message does not break it.
+
+Checked the other unreagent-* skills (.claude/skills, skills/unreagent-*). unreagent-config :178 ("mcp.address stays literal") still holds. The diff's load_test shows a placeholder there is now refused as no host. That is true but not stated, and I left it. Nothing else names these rules. The shipped skills/ say nothing about mcp.address or allowedOrigins.
+
+Check: `go test -count=1 -timeout 180s ./internal/skills` ok. README.md and the Go files are untouched.
+
+Correction to the skill-author note: by the time it was posted, the worker's `_` change had landed. `mcpHostName` is now `^[A-Za-z0-9._-]*$`, which matches the skill text.
+
+**Review 2026-11-21 (unreagent-reviewer, bundle k162 + k166): changes needed.**
+
+Check, run myself, green twice: in the worktree (base d61227a), and on the bundle 3-way-applied onto main dc53cfe in a scratch clone. Commands: `gofmt -l cmd internal skills` (empty), `go vet ./...`, `GOOS=windows go vet ./...`, `go test -count=1 -timeout 600s ./...`, `go test -race -timeout 600s ./internal/config`, `make linux`, `make windows`. Windows: these are pure string checks, compiled for Windows and not run there, so they are unverified on Windows.
+
+Findings, most important first:
+1. `internal/config/mcp_test.go` TestMCPAllowedOriginsRefused (owner unreagent-worker). Uppercase hex digits in the last label are not pinned. In browserIPv4 (config.go:998), the mutation `"0123456789abcdefABCDEF"` -> `"0123456789abcdef"` survives the whole package. Under it, `http://0x7F000001` and `http://a.0xFF` load: a numeric host no browser sends, which is k166(1)'s class. The old ParseUint rule covered them for free. Add `{"http://0x7F000001", "non-canonical IPv4 host, write it as 127.0.0.1"}` and `{"http://a.0xFF", "numeric host but no IPv4 address"}`.
+2. `unreagent.example.yaml:165-166` (owner unreagent-doc-writer). It still says "host:port with a port 1-65535 (anything else is a load error)", the same claim the README mcp row made before your edit. `user@host:8765` and `[fe80::1%eth0]:8765` are now load errors. The allowedOrigins refused list at :186-191 also lacks the forbidden host characters and `%` in an http(s) host. Neither spot was on the worker's README list.
+3. Recommended, non-blocking: the empty-last-label branch in browserIPv4 (config.go:999, `else if last == ""`) is not pinned. Removing it survives, and `http://ide.example..` (a name to the URL Standard) is then refused as numeric. It was unpinned in k60 too; one Accepted line closes it.
+
+Verified, no finding:
+- Forms, through Load. Addresses: the zones `[fe80::1%eth0]`, `[::%eth0]` and `[fe80::1%25eth0]` are refused with the zone message. `[127.0.0.1]`, `[localhost]` and `[]` are refused. `user@host`, `a/b`, a leading or trailing space, `bücher.example` and `127.0.0.1%eth0` are refused. `my_pc:8765` loads. `::1:8765` is refused with the `[::1]:8765` hint. Origins: `http://a.0xffffffffffffffffffff`, `http://a<b.example`, `chrome-extension://a<b` and `http://a%25b.example` are refused; `chrome-extension://a%25b` loads (decision 3). All six README address forms load.
+- forbiddenHostChars is exactly the URL Standard's 17 forbidden host code points. Go 1.26 url.Parse lets only `<`, `>`, `]` and a decoded `%25` into a host. C0 controls and DEL, the rest of the forbidden domain code points, already fail url.Parse. url.Parse checks a bracketed host with netip.ParseAddr, so skipping it is safe, and the zone message for `[fe80::1%25eth0]` stays.
+- Mutations (`go test -overlay`), all killed: no `%` for web hosts, `]` dropped from the list, the zone case folded into the bracket case.
+- k42 (load_test.go): the claim still holds in substance. The new Load proves the address is validated as written. Whenever mcp.address is used, an address with a placeholder is refused. A substitution placed after validate would go uncaught, but it could not reach a bind or a client URL either.
+- Prose matches the code: README mcp row, exit-1 row, the Entry form and Browser extensions bullets, the quoted error at :1477, unreagent-config step 8 and unreagent-core :140-145. Both "unreagent.local.yaml replaces the base list whole" sentences stay (the mcp row and the Overlay bullet).
+- Changes: v0.0.9 has neither check (no validMCPAddress and no config allowedOrigins), so amending the two unreleased entries is right. Both proposed texts match the code. The subject is 70 chars.
+- Scope: the worker touched only its three internal/config files, and the skill-author only the two skill files. README.md is the main agent's edit. OWNERS names unreagent-doc-writer for it, but the main agent's prose-doc lane covers it.
+
+For the release-manager: plain `git apply` of the diff onto dc53cfe fails at README.md:400, because k159 changed the exit-table context. `git apply --3way` merges cleanly, and the check above passed on that merge.
+Observation, no card: `-:8765` and `..:8765` load, since only the characters are checked. The bind fails loudly; this is decision 4's territory.
+
+**Worker follow-up 2026-11-21 (unreagent-worker): review findings 1 and 3 fixed.** Only `internal/config/mcp_test.go` changed; config.go is untouched this round.
+
+- Finding 1: `TestMCPAllowedOriginsRefused` adds `{"http://0x7F000001", "non-canonical IPv4 host, write it as 127.0.0.1, the form a browser sends"}` and `{"http://a.0xFF", "numeric host but no IPv4 address a browser accepts"}`. Both strings are the code's own messages.
+- Finding 3: `TestMCPAllowedOriginsAccepted` adds `http://ide.example..`, and the comment above it gains "so is an empty last label, left after the one trailing dot a browser drops". Nothing else refuses a trailing `..`: url.Parse keeps the host, no forbidden code point is in it, and per the URL Standard an empty last label does not end in a number. So "loads" is the right pin.
+- Mutations (`go test -overlay`, tree untouched), both killed by exactly the new entries:
+  - `ABCDEF` dropped from the hex digits in `browserIPv4`: `http://0x7F000001` and `http://a.0xFF` load (TestMCPAllowedOriginsRefused).
+  - The `else if last == ""` branch removed: `http://ide.example..` is refused as "numeric host but no IPv4 address a browser accepts" (TestMCPAllowedOriginsAccepted).
+- Check, green: `gofmt -l cmd internal skills` (empty), `go vet ./internal/config`, `GOOS=windows go vet ./internal/config`, `go test -count=1 -timeout 300s ./internal/config`.
+- I left `README.md`, `unreagent.example.yaml` and the `.claude/skills/*` files alone. They show as modified in the worktree from the main agent's and the skill-author's edits.
+
+The proposed subject and Changes entries are unchanged (see the two earlier worker notes).
+
+Committed as 146366f on main (bundle with k166). The reviewer's changes-needed round was closed by the main agent's own check of the fix, as the main agent's call in place of a second review round. Full check rerun on the merged tree: green.
