@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-21T01:01:02Z
+created: 2026-11-21T00:27:26Z
+id: 94
+priority: low
+started: 2026-11-21T00:35:53Z
+status: done
+tags:
+- cleanup
+title: Remove the dead perm() helper in cmd/launcher
+updated: 2026-11-21T01:01:47Z
+---
+
+Found during k93: perm() in cmd/launcher/main.go has no caller (k93 kept it because the split was a pure move). Delete it; go vet ./... and go test ./... stay green. Lane: unreagent-worker. Size S.
+
+Worker done, same worktree branch worktree-agent-a62c7528a80113117 (.claude/worktrees/agent-a62c7528a80113117), uncommitted, based on c013f77. perm() deleted from cmd/launcher/main.go; grep finds no caller in cmd/ or internal/. Separate commit from k39/k53 (no overlap).
+
+Review (unreagent-reviewer): APPROVE. File: cmd/launcher/main.go (perm() removed, was :350-355 at c013f77); the main.go diff is only this hunk, so it commits separately from k39/k53. grep -rn '\bperm\b' over cmd/ and internal/ *.go, tests included: no hits in the worktree; at c013f77 the only hit was the definition. Same check as k39, all green: gofmt -l . clean; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux ok; make windows ok.
+
+Committed in 50712f7
