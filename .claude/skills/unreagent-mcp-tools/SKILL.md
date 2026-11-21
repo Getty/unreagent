@@ -39,6 +39,14 @@ srv.AddTool(mcp.Tool{
 `AddTool` maintains a name→index map; registering the same name twice replaces
 rather than duplicates. A nil `InputSchema` is served as an empty object schema.
 
+A tool that belongs to a feature is gated where it is registered: the `skills`
+tool is added only when `cfg.Skills.ViaMCP()`, and `registerTools` itself runs
+only while `mcp.enabled`. A gate that can leave a feature with no way to the
+agent gets a startup WARN (`setupSkills` warns when the skills tool is the
+only path and `mcp.enabled` is off). A tool too large for `tools.go` lives in
+the feature's file behind a constructor returning `mcp.Tool` (`skillsTool` in
+`skills.go`).
+
 ## The description is prompt surface, not documentation
 
 Every tool description ends up permanently in the agent's context. Write the
@@ -47,6 +55,13 @@ mean, what the failure modes look like — because that text is the only thing
 standing between the agent and a guessing spiral. This is why `run_python`
 explains the `uv` environment inline instead of assuming the agent will
 investigate. Keep it dense; every token is paid on every request.
+
+A description can be generated from data. The `skills` tool's is
+`skillsToolPreamble` plus `skills.DescribeAll(set)`, one line per shipped
+skill, so it grows with the set and every skill's frontmatter `description` is
+tool prompt (skill `unreagent-skill-authoring` holds the rule for writing
+one). Its unknown-name error lists the available names, which is why the tool
+has no `list` action.
 
 Descriptions are **English**, like everything that ships — every description in
 `tools.go` and `filetools.go` is by now; keep it that way.
@@ -63,8 +78,9 @@ Descriptions are **English**, like everything that ships — every description i
   `map[string]interface{}` with numbers as `float64`; direct type assertions
   are how this code gets a panic in production.
 - **Be defensive about field names.** `approve` reads `tool_name` / `toolName` /
-  `name` and `tool_input` / `input` / `arguments` because Anthropic does not
-  document the `--permission-prompt-tool` input schema. Follow that pattern for
+  `name` / `tool` and `tool_input` / `input` / `arguments` / `parameters`
+  because Anthropic does not document the `--permission-prompt-tool` input
+  schema, and denies a request it cannot read. Follow that pattern for
   anything driven by an external contract you do not control.
 - Handlers run on the HTTP server's goroutine and may be concurrent. Anything
   touching shared state goes through the supervisor, which is already

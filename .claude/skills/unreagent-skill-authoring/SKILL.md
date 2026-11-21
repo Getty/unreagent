@@ -5,8 +5,9 @@ description: >
   the SKILL.md format and the loader rules it must pass, the two delivery paths
   (MCP tool and materialization), which sources are authoritative, the
   toolkit-registry lint, and the licensing rule for text adapted from VibeUE.
-  Use when writing or reviewing anything under skills/ in this repository, or
-  when go test ./internal/skills fails.
+  Use when writing or reviewing anything under skills/ or internal/skills/ in
+  this repository, the delivery code in cmd/launcher/skills.go, or when go test
+  ./internal/skills fails.
 ---
 
 # unreagent — authoring shipped skills
@@ -22,31 +23,63 @@ ships UE domain knowledge with the binary so it is present without setup.
 ## Delivery — one source, two paths
 
 `skills/<name>/SKILL.md` is `go:embed`-ed by `skills/embed.go` (pattern
-`*/*.md`) and parsed by `internal/skills` (`Load`). It is to reach the agent
-through the `skills` MCP tool (default), by being materialized to
-`<Project>/.claude/skills/unreagent-<name>/`, or both. The switches belong to
-a `skills:` config section that is planned (k10) and does not exist yet:
-`skills.materialize: true` turns materialization on, `--no-skills-mcp` sets
-`mcp: false` and `materialize: true`, and `mcp: false` on its own is a config
-error, because `materialize` defaults to false and no path would be left.
-Neither path is wired yet either: `cmd/launcher` does not import
-`internal/skills` until the tool (k11) and materialization (k12) land, so
-today the tests are the only consumer.
+`*/*.md`) and parsed by `internal/skills` (`Load`), which only parses.
+Delivery is wiring, in `cmd/launcher/skills.go`: `setupSkills` runs in `run()`
+before the agent starts, loads the set and hands it to whichever paths the
+`skills:` config section turns on (skill `unreagent-config`; contract: design
+spec §5, §6.2, §6.3):
 
-Two consequences bind the author:
+- **The `skills` MCP tool** — the default. `name` returns the skill's `Body`
+  (frontmatter stripped), `section` one sub-document. Registered only when
+  `skills.enabled` and `skills.mcp`, and only while `mcp.enabled`.
+- **Materialization** — `skills.materialize: true`, or `-no-skills-mcp`. Every
+  start writes the set into `skills.dir` (default
+  `${PROJECT_DIR}/.claude/skills`).
+
+What binds the author:
 
 - **The `skills` tool description is generated from the whole set**
-  (`DescribeAll`: one `- <name>: <description>` line per skill, the
-  description's whitespace collapsed to single spaces), so every `description`
-  is permanently in the agent's context. It must state *when* to reach for the
-  skill, in one or two lines, because that text is the entire basis for
-  selection. Long descriptions tax every request.
-- **The `unreagent-` prefix on materialized directories is load-bearing.** It is
-  what lets the launcher replace its own skills on each start and remove ones no
-  longer embedded, while never touching a project's own skills in the same
-  directory. How it combines with names that already start with `unreagent-`
-  (the shipped Class D skills) is open — k12; the loader puts no prefix rule on
-  names.
+  (`skillsToolPreamble` plus `DescribeAll`: one `- <name>: <description>` line
+  per skill, the description's whitespace collapsed to single spaces), so every
+  `description` is permanently in the agent's context. It must state *when* to
+  reach for the skill, in one or two lines, because that text is the entire
+  basis for selection. Long descriptions tax every request.
+- **What you commit is what lands on disk, bar one value.** Materialization
+  writes `Skill.Source` — `SKILL.md` as embedded, frontmatter included — and
+  each sub-document verbatim as a sibling `<section>.md`. Nothing is rebuilt
+  from the parsed fields, which is why the delimiter rules below insist on the
+  plain form: other agents parse that file. The one change: when the directory
+  gains the `unreagent-` prefix (next point), the `name:` value is set to the
+  directory name (`ue-tasks` → `unreagent-ue-tasks`), as the Agent Skills
+  format requires; every other byte stays. A skill already named `unreagent-*`
+  is written byte for byte (`materializedSource`). The `skills` tool keeps the
+  shipped names.
+- **The directory is `<name>` if the name already starts with `unreagent-`,
+  else `unreagent-<name>`** (`skillDirName`) — never a doubled prefix. That
+  prefix is the one predicate for "ours": every real directory carrying it in
+  `skills.dir` is removed and rewritten on each start, so a dropped or renamed
+  skill does not linger, and nothing else there is touched.
+- **`name:` is a plain or quoted value on one line** — `ue-tasks`,
+  `'ue-tasks'` or `"ue-tasks"`, a comment after it is fine. A block scalar
+  (`>`, `|`), an escape, a tag or an anchor cannot be rewritten in place:
+  `Load` accepts it, but materialization refuses the whole set before writing
+  anything (WARN, the start goes on), and `go test ./cmd/launcher` fails over
+  the shipped set (`TestMaterializeWritesEverySkill`). Only names that gain
+  the prefix are checked; write every skill this way.
+- **Refer to other skills by the shipped name** — `ue-tasks`, never
+  `unreagent-ue-tasks`. It is the name the `skills` tool takes; on disk the
+  same skill is `unreagent-ue-tasks/`, and the body is not rewritten.
+- **Collisions ignore case and stop the start**, on every OS and whichever path
+  is on: `ue-x` next to `unreagent-ue-x` (one directory), two skill names or
+  two sections of one skill that differ only in case, a section named `skill`
+  (it meets `SKILL.md`). `checkSkillDirs` raises them, not `Load`, so
+  `go test ./internal/skills` stays green; `go test ./cmd/launcher`
+  (`TestCheckSkillDirsRejectsCollisions`, over the shipped set) fails.
+- **No section named after a Windows device** — `con`, `prn`, `aux`, `nul`,
+  `com1`–`com9`, `lpt1`–`lpt9`, any case. Nothing rejects it on Linux, but on
+  Windows before 11 `filepath.IsLocal` (in `isPlainName`) refuses `aux.md`, and
+  the whole materialization is skipped with a WARN. The `unreagent-` prefix
+  keeps directory names clear of this.
 
 ## Format
 
@@ -65,22 +98,26 @@ unreal_classes: [MaterialEditingLibrary]
 ---
 ```
 
-- `name` — required; equals the skill's directory name.
+- `name` — required; equals the skill's directory name, and sets the
+  materialized one; plain or quoted, on one line (Delivery).
 - `description` — required, non-blank.
 - `toolkit_tools` — a list of the plugin MCP tools this skill covers. To be
   lint-checked (see the lint below).
 - `unreal_classes` — a list of relevant `unreal.*` Python classes, for skills
   that work through `execute_script`.
 - Long material goes into sub-documents `<skill>/<section>.md`; the section
-  name is the file name without `.md`, and the `skills` tool is to serve it
-  through its `section` parameter (k11).
+  name is the file name without `.md`. The `skills` tool serves one through
+  `section` (with or without `.md`; an unknown one is an error listing the
+  skill's sections). The tool description lists skills, not sections, so the
+  body names each section and when to load it.
 
 ### What the loader rejects
 
 `internal/skills/skills.go` is the authority; this is the checklist. Run
-`go test ./internal/skills` after every change under `skills/`:
-`TestLoadParsesEveryEmbeddedSkill` loads the real set, and
-`TestEmbedMissesNoSourceFile` catches a file that would not ship.
+`go test ./internal/skills ./cmd/launcher` after every change under `skills/`:
+`TestLoadParsesEveryEmbeddedSkill` loads the real set,
+`TestEmbedMissesNoSourceFile` catches a file that would not ship, and the
+launcher's tests serve and materialize the shipped set.
 
 - **Layout.** A skill directory must hold `SKILL.md`, and besides it only
   `<section>.md` files. The embed pattern is `*/*.md`, so a sub-directory, a
@@ -109,7 +146,8 @@ unreal_classes: [MaterialEditingLibrary]
 
 A malformed skill stops `Load`: it returns no skills at all, only an error
 naming the skill and the problem. Nothing is skipped — one broken file takes
-the whole set down, by design.
+the whole set down, by design, and at startup it stops the launcher (the error
+names `skills.enabled: false` as the way out).
 
 ## Authoritative sources, in order
 
@@ -151,10 +189,11 @@ entry against the registry by hand.
 Covered today, in `internal/skills/skills_test.go`: every embedded skill parses
 and comes back with its directory name, a description and a body; the embed
 holds only `<skill>/<doc>.md` and misses no source file; every rejection above
-stops the load; `DescribeAll` lists every skill in its pinned format. Section
-lookup and the unknown-name error come with the `skills` tool (k11, tests k16);
-replacing the launcher's own directories while leaving foreign ones alone
-comes with materialization (k12, tests k17).
+stops the load; `DescribeAll` lists every skill in its pinned format; `Source`
+is the embedded file byte for byte. In `cmd/launcher/skills_test.go`: the
+tool's body, section and unknown-name results and its registration gate; the
+directory rule; replacing the launcher's own directories, removing dropped
+ones and leaving foreign entries alone; collisions over the shipped set.
 
 ## Licensing
 

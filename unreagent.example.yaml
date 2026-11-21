@@ -19,7 +19,7 @@
 #
 #  Placeholders are replaced in: unreal.editor/args; agent.command/args/env
 #  values/workdir; agent.hermes.configPath; permissions.allow/deny; the
-#  runtimes' uv/node/npm/project; files.root; commands.<name>.command/args/dir;
+#  runtimes' uv/node/npm/project; files.root; skills.dir; commands.<name>.command/args/dir;
 #  every string in mcp.extraServers; the mcp.writeConfig paths. They are NOT
 #  replaced in unreal.project, engineRoot, mcp.address, mcp.token, names/keys
 #  and enums. There is no escape syntax: a literal ${PROJECT} in a Bash(...)
@@ -115,6 +115,25 @@ files:
   # use the plugin's real path. Windows reserved names (NUL, aux.h) are refused.
   root: "${PROJECT_DIR}"
   readOnly: false            # true = read-only
+
+# Skills: UE skill documents shipped inside the launcher. Two delivery paths,
+# which may run together:
+#   mcp          the `skills` MCP tool; its description lists every skill, so
+#                the agent picks one without a list call
+#   materialize  the skills as files in dir, rewritten on every start
+# Only directories named unreagent-* in dir are replaced or removed (a skill
+# that is no longer shipped is removed); everything else there is never touched.
+# mcp: false together with materialize: false is a load error, not a no-op.
+# Quick via flag: unreagent.exe -no-skills-mcp  (mcp: false, materialize: true;
+# wins over this file and unreagent.local.yaml)
+# skills:
+#   enabled: true            # default true; false turns both paths off
+#   mcp: true                # default true
+#   materialize: false       # default false
+#   # Where the files go. Takes placeholders; a relative path is taken relative
+#   # to the agent working directory. UE 5.8 reads <Project>/Skills/:
+#   # "${PROJECT_DIR}/Skills" targets it.
+#   dir: "${PROJECT_DIR}/.claude/skills"   # default
 
 mcp:
   enabled: true

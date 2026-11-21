@@ -253,6 +253,56 @@ func TestLoadAcceptsCRLF(t *testing.T) {
 	}
 }
 
+// Source is what materialization writes, and other parsers read that file, so
+// it must be SKILL.md exactly as embedded, not rebuilt from the parsed fields
+// and Body. Each input holds something a rebuild would lose: a comment and a
+// folded description in the frontmatter, blank lines after the closing ---
+// (Body trims them), CRLF line endings.
+func TestLoadKeepsSourceVerbatim(t *testing.T) {
+	want := map[string]string{
+		"lf":   "---\n# kept as written\nname: lf\ndescription: >\n  Use when the source\n  must survive.\ntoolkit_tools: [material]\n---\n\n\n# lf\n",
+		"crlf": "---\r\nname: crlf\r\ndescription: Use when\r\n  CRLF.\r\n---\r\n\r\n# crlf\r\n",
+	}
+	files := fstest.MapFS{}
+	for name, src := range want {
+		files[name+"/SKILL.md"] = md(src)
+	}
+	got, err := load(files)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d skills, want %d", len(got), len(want))
+	}
+	for _, s := range got {
+		if s.Source != want[s.Name] {
+			t.Errorf("%s.Source = %q, want the SKILL.md input %q", s.Name, s.Source, want[s.Name])
+		}
+	}
+}
+
+// The same over the shipped set: every embedded skill's Source is its SKILL.md
+// as go:embed holds it.
+func TestLoadSourceIsTheEmbeddedFile(t *testing.T) {
+	all, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(all) == 0 {
+		t.Fatal("Load returned no skills")
+	}
+	for _, s := range all {
+		raw, err := fs.ReadFile(shipped.FS, s.Name+"/SKILL.md")
+		if err != nil {
+			t.Errorf("%s: %v", s.Name, err)
+			continue
+		}
+		if s.Source != string(raw) {
+			t.Errorf("%s: Source (%d bytes) differs from the embedded SKILL.md (%d bytes)", s.Name, len(s.Source), len(raw))
+		}
+	}
+}
+
 // Sub-documents belong to the directory they sit in, keyed by section name
 // (file name without .md); SKILL.md itself is the body, not a section.
 func TestLoadAttachesSubDocumentsToTheirSkill(t *testing.T) {

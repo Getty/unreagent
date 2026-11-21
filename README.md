@@ -207,7 +207,7 @@ absolute first, so every placeholder value ends up an absolute path.
 `agent.command`, `agent.args`, the `agent.env` values, `agent.workdir` and
 `agent.hermes.configPath`; `permissions.allow` / `permissions.deny`; the
 runtimes' executables and project directories (`runtimes.python.uv` /
-`project`, `runtimes.node.node` / `npm` / `project`); `files.root`; every
+`project`, `runtimes.node.node` / `npm` / `project`); `files.root`; `skills.dir`; every
 `commands.<name>` `command`, `args` and `dir`; every string inside
 `mcp.extraServers`; and the `mcp.writeConfig` paths. There is no escape
 syntax: a shell-style `${PROJECT}` inside a `Bash(...)` rule or in `agent.args`
@@ -233,7 +233,8 @@ A field counts as used when its section is enabled (`agent.*` needs
 `permissions.*` needs `permissions.enabled`, a runtime needs its `enabled`
 (`runtimes.node.npm` also counts when an extra server is started with `node`),
 `mcp.extraServers` and `mcp.writeConfig` need `mcp.enabled`, `files.root` needs
-`files.enabled`). `unreal.*`, `agent.workdir` and your own `commands` always count.
+`files.enabled`, `skills.dir` needs `skills.enabled` with `skills.materialize`).
+`unreal.*`, `agent.workdir` and your own `commands` always count.
 Two exceptions never fail the load:
 
 - The built-in `compile` and `package` commands are **left out with a warning**
@@ -245,6 +246,10 @@ Two exceptions never fail the load:
   rejected, and `-files` is then refused at startup
   (`WARN file tools disabled: files.root names a placeholder that is unresolved`).
   Set `unreal.project` or an explicit `files.root`.
+- An unresolved `skills.dir` that is not in use (skills are not materialized) is
+  cleared instead of rejected. `-no-skills-mcp` then has no directory to write
+  to and logs
+  `WARN skills not written: skills.dir names a placeholder that is unresolved — set unreal.project or skills.dir`.
 
 Without an engine and with the default `unreal.editor`, the launcher therefore
 stops at load, and so does `unreagent hermes-setup`, although it does not start
@@ -268,6 +273,8 @@ the base entry whole (`agent.env`, `commands`, `mcp.extraServers`). So
 `agent.env: { HOME: "C:/Path/To/Home" }` adds or changes `HOME` and keeps the
 other variables of the base file, while a command defined in both files comes
 out with the local definition only — you cannot override just its `args`.
+The `skills` section has no list or map option: each of its keys overlays on
+its own, like a scalar.
 
 Recommended `.gitignore` entry in the UE project:
 
@@ -537,6 +544,7 @@ runs no check on HTTP entries, `unreagent.log` will not say which.
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
 | `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
+| `skills` | *optional* — how the shipped UE skill documents reach the agent, see [Skills](#skills). `enabled` (default `true`; `false` turns both paths off), `mcp` (default `true`: the `skills` MCP tool), `materialize` (default `false`: write the skills as files into `dir`), `dir` (default `${PROJECT_DIR}/.claude/skills`; takes the path placeholders; a relative path is taken relative to the agent working directory). `enabled: true` with `mcp: false` and `materialize: false` is a load error |
 | `engineRoot` | *usually only in local.yaml* — engine path override; relative is resolved against the working directory |
 
 ### No process zombies (Windows)
@@ -853,6 +861,67 @@ through the project's `node_modules`. The agent does **not** have to analyse
 or set up the environment itself; the instructions are in the MCP tool
 description and are therefore automatically in context.
 
+## Skills
+
+unreagent ships UE skill documents inside the `.exe`: operating instructions
+for one kind of work each (which tools to call, in what order, what their
+errors mean). Two paths bring them to the agent; they can run together.
+
+| Path | Setting | What happens | Use it when |
+|---|---|---|---|
+| MCP tool (default) | `skills.mcp: true` | the `skills` tool returns a skill by `name` (and a sub-document by `section`). Its description lists every skill with its one-line description, so the agent chooses without an extra round trip | any agent; nothing is written to disk |
+| Files | `skills.materialize: true`, or the `-no-skills-mcp` flag (which also turns the MCP tool off) | every start, the skills are written to `skills.dir` | the agent reads skills from disk itself (Claude Code reads `<project>/.claude/skills`, and can invoke one as `/skill-name`) |
+
+`skills.dir` defaults to `${PROJECT_DIR}/.claude/skills`. UE 5.8 reads skills
+from `<Project>/Skills/`; point `skills.dir` at `${PROJECT_DIR}/Skills` to
+target it. With `skills.enabled: false` neither path runs. Switching both
+paths off while `skills.enabled` is `true` is a load error:
+
+```
+skills.mcp and skills.materialize are both false, so no skill would reach the agent — set skills.mcp: true (the skills MCP tool), skills.materialize: true (files in skills.dir), or skills.enabled: false to turn skills off
+```
+
+**What materialization owns.** Each skill goes to `<dir>/<name>/` with its
+`SKILL.md` plus its sub-documents; the directory carries the `unreagent-`
+prefix (`ue-materials` becomes `unreagent-ue-materials`; a name that already
+starts with it, such as `unreagent-files`, is used as is, and its `SKILL.md`
+is written exactly as shipped). When the prefix is added, the `name:` in the
+written `SKILL.md` frontmatter is set to the directory name, so name and
+directory match as the Agent Skills spec requires; nothing else in the file
+changes. Skill texts refer to each other by their shipped names (`ue-tasks`),
+which on disk are `unreagent-ue-tasks`. The `skills` MCP tool keeps the
+shipped names.
+On every start the launcher:
+
+- replaces every directory in `skills.dir` whose name starts with `unreagent-`
+  (a hand-edited file inside one is lost),
+- removes such a directory that is no longer shipped, so renamed or dropped
+  skills do not linger,
+- never touches anything else in `skills.dir`: your own skills and any other
+  file or directory stay as they are.
+
+Do not put your own skills under an `unreagent-` name in that directory.
+
+**Failure modes.** A skill set that does not load, or two skills that would land
+in the same directory (names that differ only in case count as the same), stops
+the start with an error; `skills.enabled: false` starts without skills. A write
+that fails (read-only directory, a file in the way) does not stop the start; it
+is logged:
+
+```
+WARN skills not fully written to <dir>: <cause> — its unreagent-* directories may be missing, incomplete or left from an earlier start
+```
+
+The editor and agent start anyway, but the `unreagent-*` directories in
+`skills.dir` may then be missing, incomplete or from the previous start: a
+write that fails partway has already removed the old directories and written
+only some skills, and a removal that fails leaves the previous start's files.
+The `skills` MCP tool, when on, is unaffected, since it serves from the binary.
+
+With `mcp.enabled: false` the `skills` tool cannot be served; unless the skills
+are materialized the launcher logs
+`WARN no skills reach the agent: the skills MCP tool needs mcp.enabled — enable it, set skills.materialize: true, or skills.enabled: false`.
+
 ## MCP tools
 
 | Tool | Function |
@@ -863,6 +932,7 @@ description and are therefore automatically in context.
 | `logs` | last output lines of a service |
 | `run_python` / `run_node` | run code in a prepared environment |
 | `read_file` / `list_dir` / `write_file` / `edit_file` | file access on the project (only with `files.enabled` / `-files`); `read_file` takes optional `offset` / `limit` in bytes (a negative `offset` counts from the end, so `offset=-65536` is the last 64 KiB of a log; `limit` defaults to and is capped at 256 KiB) and ends a partial result with `[bytes X-Y of Z]`, or `[bytes X-Y of Z; continue with offset=Y]` when more follows. Confined to `files.root`: paths are relative to it, and an absolute path is accepted only under it. Refused: any other absolute or rooted path ("must be relative to the project root"), a relative path that climbs out with `..`, a Windows reserved device name (`CON`, `NUL`, `AUX`, `COM1`, `aux.h`, …) in any path component (on every platform), and any symlink or Windows junction on the path that is absolute or leads outside the root — also on the way to a file that does not exist yet. A plugin linked into `Plugins/` from outside the root is therefore out of reach through the link: put the plugin into the project, or set `files.root` to a directory holding both and reach the plugin at its real path (see File-tool confinement below) |
+| `skills` | load a shipped skill document by `name`, or one of its sub-documents by `section` (with or without `.md`). The tool description lists every skill with its one-line description, so the agent can pick one without a list call. Only with `skills.enabled` and `skills.mcp`, see [Skills](#skills) |
 | `approve` | permission prompt tool for Claude Code |
 
 ### File-tool confinement
@@ -936,6 +1006,7 @@ guessing:
 | `-config <path>` | alternative path to `unreagent.yaml`; a relative path is made absolute against the working directory before anything is derived from it |
 | `-no-agent` | **do not** start the agent — only UE + MCP server. An external agent (your own Claude Code session) then connects to the MCP server. |
 | `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. Refused with a warning (file tools stay off) when `files.root` contains a placeholder that did not resolve — set `unreal.project` or an explicit `files.root`. |
+| `-no-skills-mcp` | deliver the skills as files in `skills.dir` instead of through the `skills` MCP tool (`skills.mcp: false`, `skills.materialize: true`). It is applied after both YAML files are loaded, so it wins over `unreagent.yaml` and `unreagent.local.yaml`; with `skills.enabled: false` it has no effect and says so in the log. See [Skills](#skills). |
 | `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). |
 
 ## Sub-commands

@@ -143,6 +143,19 @@ Revision history for unreagent
     set_audio_properties requires) and ue-metasounds (build and edit MetaSound
     Source graphs, set input defaults, add graph inputs and outputs, and
     preview them with metasound; needs UE 5.7 or a later 5.x).
+  - The shipped UE skills now reach the agent through a new `skills` MCP tool,
+    on by default. Its description lists every skill, and the `section`
+    argument fetches a skill's sub-documents.
+  - With `skills.materialize: true` (or the `-no-skills-mcp` flag, which also
+    turns the MCP tool off) the skills are written as files into `skills.dir`
+    on every start; the default is `${PROJECT_DIR}/.claude/skills`, where
+    Claude Code finds them. Only `unreagent-*` directories there are replaced
+    or removed, so your own skills stay, and skills dropped from a release are
+    removed. A skill written under the `unreagent-` prefix gets its `name:` set
+    to the directory name. If writing fails the launcher logs a WARN and
+    starts anyway.
+  - `skills.enabled: false` turns both paths off. Switching both paths off
+    while `skills.enabled` is true is a load error.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

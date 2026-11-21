@@ -28,20 +28,24 @@ placeholder system exists.
    extension, `localPathFor`) exists, decode it **into the same struct**. This is
    a YAML-decode overlay with yaml.v3 semantics, not a deep merge (pinned by
    `internal/config/overlay_test.go`): a scalar wins; an absent key leaves the
-   base value alone; a nested struct (`unreal:`, `agent.hermes:` …) is decoded
-   field by field, so only the fields given change; a list **replaces** the
-   base list; a map **merges by key**: base-only keys survive, and each key
-   the local file gives replaces that entry's value whole, even when the value
-   is a map or struct (`commands.hello: {command: x}` drops the base entry's
-   `args` and `description`). So `{}` cannot clear a base map; `~` (null) can.
+   base value alone; a nested struct (`unreal:`, `agent.hermes:`, `skills:` …)
+   is decoded field by field, so only the fields given change; a list
+   **replaces** the base list; a map **merges by key**: base-only keys
+   survive, and each key the local file gives replaces that entry's value
+   whole, even when the value is a map or struct
+   (`commands.hello: {command: x}` drops the base entry's `args` and
+   `description`). So `{}` cannot clear a base map; `~` (null) can.
    Users expecting to append one item to `agent.args` will instead replace the
    list — remember this when documenting a new list- or map-valued field.
 4. `applyDefaults()` — fills unset values and returns the built-in commands it
    added (`compile`, `package`, each only when the user defined none of that
    name). Note that the zero value is indistinguishable from "not set" for
    plain `bool` and `int`; fields whose default is `true` are therefore `*bool`
-   (`Unattended`, `KillCrashReporter`, `PowershellTool`, `Window`) and read
-   through `boolVal()`. Use `*bool` for any new option that defaults to on.
+   (`Unattended`, `KillCrashReporter`, `PowershellTool`, `Window`,
+   `skills.enabled`, `skills.mcp`) and read through `boolVal()`. Use `*bool`
+   for any new option that defaults to on. `SkillsConfig` wraps its pair in
+   `ViaMCP()` / `ViaFiles()`, which apply `enabled`; callers ask those, not
+   the raw fields.
    For the plain-`int` delays, 0 means the default (`unreal.restartDelaySeconds`
    and `agent.restartDelaySeconds` 3, `agent.startDelaySeconds` 5), so the
    smallest configurable delay is 1 second — for the restart delay that floor
@@ -68,8 +72,10 @@ placeholder system exists.
 8. `validate()` — reject bad values here, not at the point of use: the enums
    (restart policies, `agent.onExit`, `permissions.mode`,
    `mcp.writeConfig[].format`), negative delays, `permissions.enabled` without
-   `mcp.enabled`, a command without `command`. The `agent.*` checks run only
-   when `agent.enabled`.
+   `mcp.enabled`, a command without `command`, `skills.mcp` and
+   `skills.materialize` both false (no skill would reach the agent; the error
+   names both and `skills.enabled: false`). The `agent.*` checks run only when
+   `agent.enabled`, the skills check only when `skills.enabled`.
 
 `unreal.*` always counts as used and `unreal.editor` defaults to
 `${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe`, so without a resolvable
@@ -103,6 +109,7 @@ condition under which it counts as *used*:
 | `runtimes.node.node`, `runtimes.node.project` | `runtimes.node.enabled` |
 | `runtimes.node.npm` | `runtimes.node.enabled`, or `mcp.enabled` with an extra server started by `node` (`hasNodeExtraServer` — the same test as `prepareMCPBridges` in `cmd/launcher/bridge.go`; change both together) |
 | `files.root` | `files.enabled` |
+| `skills.dir` | `skills.enabled` and `skills.materialize` (`ViaFiles`) |
 | `commands.<name>.command`, `.args`, `.dir` | always for the user's commands, a user-defined `compile` or `package` included |
 | every string value in `mcp.extraServers.<name>`, at any depth (`substituteAny`; keys stay literal) | `mcp.enabled` |
 | `mcp.writeConfig[].path` | `mcp.enabled` |
@@ -117,13 +124,22 @@ step with the code.
 An unresolved placeholder (resolved to `""`) in a used field is a load error:
 the result would be a garbage path such as
 `/Engine/Binaries/Win64/UnrealEditor.exe` or, in an allow rule, `Edit(/*)`. An
-unused field keeps whatever the replacement produces, with two exceptions: a
+unused field keeps whatever the replacement produces, with three exceptions: a
 built-in command that needs the placeholder is removed and reported in
-`Info.SkippedCommands`, and `files.root` is cleared, so that `-files` finds no
-root and `run()` disables the file tools with a WARN instead of rooting them
-somewhere wrong. CLI flags apply after `Load` and do not change what counted
-as used: `-no-agent` does not rescue an unresolved placeholder in an enabled
-agent's fields, and a `-write-mcp-config` path is not substituted.
+`Info.SkippedCommands`, and `files.root` and `skills.dir` are cleared, so that
+`-files` finds no root and `run()` disables the file tools with a WARN instead
+of rooting them somewhere wrong, and `-no-skills-mcp` finds no directory and
+`setupSkills` warns instead of writing. CLI flags apply after `Load` and do not
+change what counted as used: `-no-agent` does not rescue an unresolved
+placeholder in an enabled agent's fields, and a `-write-mcp-config` path is not
+substituted.
+
+`-no-skills-mcp` (`applyNoSkillsMCP`) sets `skills.mcp: false` and
+`skills.materialize: true` after `Load` has overlaid the local file, so it wins
+over `unreagent.yaml` and `unreagent.local.yaml` alike (pinned by
+`TestRunNoSkillsMCPWinsOverTheLocalOverlay`); with `skills.enabled: false` it
+only logs that it has no effect. `Load` leaves a relative `skills.dir`
+relative; `setupSkills` resolves it against the agent working directory.
 
 Substituting into permission patterns is safe only because every placeholder
 value is absolute (steps 1 and 6): with `${PROJECT_DIR}` = `.`, the matcher
@@ -141,7 +157,7 @@ together:
 
 1. **Struct field + `yaml:` tag** in `internal/config/config.go`, in the section
    it belongs to (`unreal`, `agent`, `mcp`, `permissions`, `runtimes`,
-   `files`, `commands`).
+   `files`, `skills`, `commands`).
 2. **Default** in `applyDefaults()` — `*bool` if it defaults to true.
 3. **Substitution — yes or no, and when the field counts as used.** A path,
    command, argument, environment value or permission pattern goes into
@@ -153,7 +169,7 @@ together:
    as the `agent.*` checks are.
 5. **Use site** — usually `run()` in `cmd/launcher/main.go`, plus the file that
    owns the feature (`tools.go`, `scripts.go`, `bridge.go`, `mcpconfig.go`,
-   `lifecycle.go`, `hermes.go`).
+   `lifecycle.go`, `hermes.go`, `skills.go`).
 6. **`unreagent.example.yaml`** — commented, with the default stated.
 7. **`README.md`** — the quick-reference table under "Configuration", plus prose
    if the option changes observable behavior.
@@ -171,11 +187,11 @@ option that does not exist.
 
 ## Things that are auto-derived, deliberately
 
-`unreal.editor`, the built-in `compile` and `package` commands and `files.root`
-have placeholder-based defaults, and the project path is auto-detected, so that
-a minimal config is genuinely minimal (see README "Setup"). Preserve that
-property: a new option should have a default that works, not one that forces an
-entry in every user's config.
+`unreal.editor`, the built-in `compile` and `package` commands, `files.root`
+and `skills.dir` have placeholder-based defaults, and the project path is
+auto-detected, so that a minimal config is genuinely minimal (see README
+"Setup"). Preserve that property: a new option should have a default that
+works, not one that forces an entry in every user's config.
 
 ## Secrets
 

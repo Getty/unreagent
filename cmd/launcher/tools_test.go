@@ -37,7 +37,7 @@ func toolsServerOn(t *testing.T, sup *supervisor.Supervisor, perms config.Permis
 	t.Helper()
 	cfg := &config.Config{Permissions: perms}
 	srv := mcp.NewServer("tools-test", "0", nil)
-	registerTools(srv, sup, cfg, t.TempDir(), logger)
+	registerTools(srv, sup, cfg, t.TempDir(), nil, logger)
 	return srv
 }
 

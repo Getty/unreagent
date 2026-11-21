@@ -43,7 +43,27 @@ type Config struct {
 	Permissions Permissions            `yaml:"permissions"`
 	Runtimes    Runtimes               `yaml:"runtimes"`
 	Files       FilesConfig            `yaml:"files"`
+	Skills      SkillsConfig           `yaml:"skills"`
 }
+
+// SkillsConfig delivers the skill documents embedded in the launcher to the
+// agent: through the skills MCP tool, as files in Dir, or both. Enabled and MCP
+// default to true, so they are *bool; ViaMCP and ViaFiles read them with
+// Enabled applied.
+type SkillsConfig struct {
+	Enabled     *bool  `yaml:"enabled"`     // default true; false turns both paths off
+	MCP         *bool  `yaml:"mcp"`         // default true: serve them through the skills MCP tool
+	Materialize bool   `yaml:"materialize"` // write them into Dir on every start
+	Dir         string `yaml:"dir"`         // default: ${PROJECT_DIR}/.claude/skills
+}
+
+// ViaMCP reports whether the skills MCP tool is to be served.
+func (s SkillsConfig) ViaMCP() bool { return boolVal(s.Enabled) && boolVal(s.MCP) }
+
+// ViaFiles reports whether the skills are to be written into Dir.
+func (s SkillsConfig) ViaFiles() bool { return boolVal(s.Enabled) && s.Materialize }
+
+func boolVal(p *bool) bool { return p != nil && *p }
 
 // FilesConfig exposes file tools (read/write/list/edit) through the MCP server,
 // so an agent (external/headless as well) can work on the UE project without
@@ -360,6 +380,17 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 	if c.Files.Root == "" {
 		c.Files.Root = "${PROJECT_DIR}"
 	}
+	if c.Skills.Enabled == nil {
+		t := true
+		c.Skills.Enabled = &t
+	}
+	if c.Skills.MCP == nil {
+		t := true
+		c.Skills.MCP = &t
+	}
+	if c.Skills.Dir == "" {
+		c.Skills.Dir = "${PROJECT_DIR}/.claude/skills"
+	}
 
 	// Built-in default commands (only if not defined by the user).
 	if c.Commands == nil {
@@ -393,9 +424,9 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 // command, an argument, an environment value or a permission pattern:
 // unreal.editor/args, agent.command/args/workdir, the agent.env values,
 // agent.hermes.configPath, permissions.allow/deny, the runtimes' executables
-// and project directories, files.root, commands (command, args, dir), every
-// string in mcp.extraServers and the mcp.writeConfig paths. Everything else
-// stays literal on purpose: names and keys (env names, hermes.serverName),
+// and project directories, files.root, skills.dir, commands (command, args,
+// dir), every string in mcp.extraServers and the mcp.writeConfig paths. Everything
+// else stays literal on purpose: names and keys (env names, hermes.serverName),
 // enums, mcp.address and mcp.token (no placeholder forms part of either, and a
 // token must never change under the user's hands), descriptions (prose), and
 // engineRoot and unreal.project, from which the placeholders are derived.
@@ -405,10 +436,12 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 // /Engine/Binaries/Win64/UnrealEditor.exe or, in an allow rule, "Edit(/*)".
 // A field is used when its section is enabled; unreal.*, agent.workdir (it
 // also roots the runtimes and the written MCP configs) and the user's commands
-// always are, runtimes.node.npm also for a node-started extra server. An unused field keeps whatever the replacement produces, with
-// two exceptions: a built-in command (see builtins) that needs the placeholder
-// is removed and its name returned in skipped, and files.root is cleared, so
-// that -files, which enables the file tools after loading, finds no root
+// always are, runtimes.node.npm also for a node-started extra server, and
+// skills.dir while skills are materialized (ViaFiles). An unused field keeps
+// whatever the replacement produces, with three exceptions: a built-in command
+// (see builtins) that needs the placeholder is removed and its name returned
+// in skipped, and files.root and skills.dir are cleared, so that -files and
+// -no-skills-mcp, which turn their feature on after loading, find no directory
 // rather than a wrong one.
 func (c *Config) substitute(engine, project, projectDir, projectName string, builtins map[string]bool) (skipped []string, err error) {
 	values := [][2]string{
@@ -491,6 +524,11 @@ func (c *Config) substitute(engine, project, projectDir, projectName string, bui
 		c.Files.Root = ""
 	} else {
 		c.Files.Root = sub("files.root", c.Files.Enabled, c.Files.Root)
+	}
+	if skillFiles := c.Skills.ViaFiles(); !skillFiles && len(unresolved(c.Skills.Dir)) > 0 {
+		c.Skills.Dir = ""
+	} else {
+		c.Skills.Dir = sub("skills.dir", skillFiles, c.Skills.Dir)
 	}
 
 	for name, cmd := range c.Commands {
@@ -619,6 +657,9 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("mcp.writeConfig[%d].format invalid: %q (allowed: mcp_json, vscode)", i, out.Format)
 		}
+	}
+	if boolVal(c.Skills.Enabled) && !c.Skills.ViaMCP() && !c.Skills.ViaFiles() {
+		return fmt.Errorf("skills.mcp and skills.materialize are both false, so no skill would reach the agent — set skills.mcp: true (the skills MCP tool), skills.materialize: true (files in skills.dir), or skills.enabled: false to turn skills off")
 	}
 	return nil
 }

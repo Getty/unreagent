@@ -144,6 +144,7 @@ permissions:
 runtimes:
   python: {uv: "${PROJECT_DIR}/tools/uv"}
   node: {node: "${ENGINE}/node", npm: "${ENGINE}/npm"}
+skills: {materialize: true, dir: "${PROJECT_DIR}/Skills"}
 commands:
   hello: {description: "builds ${PROJECT_NAME}", command: echo}
 `
@@ -161,6 +162,7 @@ commands:
 		{"runtimes.python.uv", c.Runtimes.Python.UV, pd + "/tools/uv"},
 		{"runtimes.node.node", c.Runtimes.Node.Node, ue + "/node"},
 		{"runtimes.node.npm", c.Runtimes.Node.Npm, ue + "/npm"},
+		{"skills.dir", c.Skills.Dir, pd + "/Skills"},
 		// Deliberately literal.
 		{"agent.env key", c.Agent.Env["${PROJECT_NAME}"], "key"},
 		{"agent.hermes.serverName", c.Agent.Hermes.ServerName, "${PROJECT_NAME}"},
@@ -206,6 +208,7 @@ func TestUnresolvedPlaceholderInUsedFieldFails(t *testing.T) {
 		{"python runtime, no project", "unreal: {editor: ue}\nruntimes: {python: {enabled: true, project: \"${PROJECT_DIR}/py\"}}\n", "runtimes.python.project", "${PROJECT_DIR}"},
 		{"extra server, no project", "unreal: {editor: ue}\nmcp: {enabled: true, extraServers: {x: {command: \"${PROJECT_DIR}/srv\"}}}\n", "mcp.extraServers.x", "${PROJECT_DIR}"},
 		{"hermes config, no project", "unreal: {editor: ue}\nagent: {hermes: {enabled: true, configPath: \"${PROJECT_DIR}/h.yaml\"}}\n", "agent.hermes.configPath", "${PROJECT_DIR}"},
+		{"materialized skills, no project", "unreal: {editor: ue}\nskills: {materialize: true}\n", "skills.dir", "${PROJECT_DIR}"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := Load(writeConfigFiles(t, t.TempDir(), tc.yaml, ""))

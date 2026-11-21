@@ -9,12 +9,14 @@ import (
 
 	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/mcp"
+	"github.com/conflict-industries/unreagent/internal/skills"
 	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
 // registerTools registers all MCP tools. The description texts are deliberately
-// verbose — they are the "manual" the agent sees automatically.
-func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
+// verbose — they are the "manual" the agent sees automatically. skillSet is the
+// embedded skill set setupSkills loaded (nil while skills are disabled).
+func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, skillSet []skills.Skill, logger func(string)) {
 	noArgs := map[string]interface{}{"type": "object", "additionalProperties": false}
 
 	srv.AddTool(mcp.Tool{
@@ -101,6 +103,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 			}
 		},
 	})
+
+	// --- skills tool ---
+	if cfg.Skills.ViaMCP() {
+		srv.AddTool(skillsTool(skillSet))
+	}
 
 	// --- runtime tools ---
 	if cfg.Runtimes.Python.Enabled {

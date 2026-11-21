@@ -22,11 +22,16 @@ import (
 	"time"
 
 	"github.com/conflict-industries/unreagent/internal/config"
+	"github.com/conflict-industries/unreagent/internal/skills"
 	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
-// runConfigEnv selects TestLauncherRunProcess and names the config it runs.
-const runConfigEnv = "UNREAGENT_TEST_RUN_CONFIG"
+// runConfigEnv selects TestLauncherRunProcess and names the config it runs;
+// runArgsEnv carries further launcher arguments, one per line.
+const (
+	runConfigEnv = "UNREAGENT_TEST_RUN_CONFIG"
+	runArgsEnv   = "UNREAGENT_TEST_RUN_ARGS"
+)
 
 // TestLauncherRunProcess is not a test: it is the launcher process for the
 // run() tests, selected via runConfigEnv. It does what main() does, so the
@@ -36,7 +41,13 @@ func TestLauncherRunProcess(t *testing.T) {
 	if path == "" {
 		return
 	}
+	if os.Getenv(loadFailEnv) != "" {
+		loadEmbeddedSkills = func() ([]skills.Skill, error) { return nil, errors.New("skills: injected load failure") }
+	}
 	os.Args = []string{os.Args[0], "-config", path}
+	if extra := os.Getenv(runArgsEnv); extra != "" {
+		os.Args = append(os.Args, strings.Split(extra, "\n")...)
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
@@ -64,8 +75,9 @@ func startLauncher(t *testing.T, yaml string) *launcherRun {
 
 // startLauncherIn is startLauncher in dir, which the test may have prepared
 // (a .uproject, a Saved directory, an old log); the config is written there and
-// the launcher runs with dir as its working directory.
-func startLauncherIn(t *testing.T, dir, yaml string) *launcherRun {
+// the launcher runs with dir as its working directory, given args after
+// -config.
+func startLauncherIn(t *testing.T, dir, yaml string, args ...string) *launcherRun {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the configs use sleep/false and the tests send SIGTERM")
@@ -86,7 +98,7 @@ func startLauncherIn(t *testing.T, dir, yaml string) *launcherRun {
 	l := &launcherRun{lines: make(chan string, 256), stdout: &syncLog{}, done: make(chan struct{})}
 	l.cmd = exec.Command(exe, "-test.run=^TestLauncherRunProcess$")
 	l.cmd.Dir = dir
-	l.cmd.Env = append(os.Environ(), runConfigEnv+"="+path)
+	l.cmd.Env = append(os.Environ(), runConfigEnv+"="+path, runArgsEnv+"="+strings.Join(args, "\n"))
 	l.cmd.Stderr = &l.stderr
 	out, err := l.cmd.StdoutPipe()
 	if err != nil {

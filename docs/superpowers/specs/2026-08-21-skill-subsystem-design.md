@@ -72,6 +72,12 @@ Unreagent repo
                         (skills.materialize: true)
 ```
 
+**Decided (k10, k12):** the target directory is not fixed to
+`<Project>/.claude/skills/`: it is `skills.dir` (§5), default
+`${PROJECT_DIR}/.claude/skills`, so a project can point it elsewhere, for
+example at the `<Project>/Skills/` directory UE 5.8 reads. The directory
+name rule is in §6.3.
+
 ### 3.1 Why the MCP tool needs the list in its description
 
 Native skills work because `name` + `description` of every skill sit
@@ -87,7 +93,7 @@ native skill built solely to advertise the MCP tool.
 
 The fix is to generate the `skills` tool description from the embedded set, so
 it carries every skill's name and one-line description. The same selection
-information is then resident in context, and one `load` call suffices. This
+information is then resident in context, and one `skills` call suffices. This
 reduces the practical difference between the two delivery paths to a single
 round trip, which is why MCP can be the default.
 
@@ -182,7 +188,7 @@ skills:
   enabled: true       # default true
   mcp: true           # default true — serve via the `skills` MCP tool
   materialize: false  # default false — write to <dir> instead
-  dir: "${PROJECT_DIR}/.claude/skills"
+  dir: "${PROJECT_DIR}/.claude/skills"   # default; takes the path placeholders
 ```
 
 CLI override: `--no-skills-mcp` sets `mcp: false` and `materialize: true` — the
@@ -191,6 +197,13 @@ switch requested for users who prefer file-based skills.
 `enabled: false` disables both paths. Setting both `mcp` and `materialize` is
 legal (belt and braces); setting neither is a config error, reported at load
 time rather than silently shipping nothing.
+
+**Decided (k10):** `--no-skills-mcp` is applied after both YAML files are
+loaded, so it wins over `unreagent.yaml` and `unreagent.local.yaml`; with
+`enabled: false` it has no effect and logs that. An unused `dir` with an
+unresolved placeholder is cleared rather than rejected (as `files.root`), so
+the flag then finds no directory and warns. The Go flag is spelled
+`-no-skills-mcp`.
 
 ## 6. Component contracts
 
@@ -209,17 +222,27 @@ at the repository root:
 
 Its API:
 
-- `Load() ([]Skill, error)` — parse all embedded skills (to be called once at
-  startup, once the launcher wires it in for the `skills` tool, k11, and for
-  materialization, k12), in directory-name order; returns an error if any
-  skill breaks a rule in §4.1, so a broken skill fails loudly in
-  `go test ./internal/skills` (and, once wired in, at startup) instead of
-  silently vanishing. `load(fs.FS)` is the same over any filesystem, which is
+- `Load() ([]Skill, error)` — parse all embedded skills (called once at
+  startup by the launcher's `setupSkills`, for the `skills` tool and for
+  materialization), in directory-name order; returns an error if any skill
+  breaks a rule in §4.1, so a broken skill fails loudly in
+  `go test ./internal/skills` and at startup instead of silently
+  vanishing. `load(fs.FS)` is the same over any filesystem, which is
   how the tests feed it malformed skills.
-- `Skill{Name, Description, ToolkitTools, UnrealClasses, Body, Files}` —
+- `Skill{Name, Description, ToolkitTools, UnrealClasses, Body, Source, Files}` —
   `Files` maps section name to sub-document and is nil when there are none.
+  **Decided (k12):** `Source` is `SKILL.md` byte for byte as embedded,
+  frontmatter included; materialization starts from it instead of rebuilding
+  the file from `Body`. When materialization adds the `unreagent-` prefix to
+  the directory (`ue-x` becomes `unreagent-ue-x/`), the frontmatter `name:` of
+  the written `SKILL.md` is set to the directory name, so name and directory
+  match as the Agent Skills spec requires; nothing else in the file changes. A
+  skill already named `unreagent-*` is written byte for byte. The `skills` MCP
+  tool keeps the shipped names. Rejected: renaming every shipped skill to
+  `unreagent-*`, which would churn every Class A skill and make the MCP names
+  long.
 - `DescribeAll([]Skill) string` — renders the selection list that becomes the
-  MCP tool description once the `skills` tool exists (k11): one line per
+  `skills` MCP tool description (after its preamble): one line per
   skill, `- <name>: <description>`, in the order given.
 
 Depends on nothing but the embedded FS and the YAML parser. Testable without a
@@ -230,24 +253,48 @@ launcher, an editor, or a network.
 Registered in `registerTools` (`cmd/launcher/tools.go`) alongside the existing tools, following
 the `mcp.Tool` shape in `internal/mcp/mcp.go`.
 
-- `Description` — generated via `DescribeAll`, listing every skill.
+- `Description` — a short preamble followed by `DescribeAll`, which lists
+  every skill.
 - Parameters: `name` (required) — the skill to load; `section` (optional) — a
-  sub-document.
-- Result: the skill body as text. Unknown name returns an error result naming
-  the available skills.
+  sub-document, with or without `.md`.
+- Result: the skill body as text, or the sub-document when `section` is given.
+  An unknown name returns an error result naming the available skills; an
+  unknown section returns one naming the skill's sections.
+- Registered only when `skills.enabled` and `skills.mcp`.
 
-No `list` action: the description already carries the list. An agent that
-somehow needs it can call `load` with an unknown name and read the error.
+**Decided (k11):** the tool is named `skills`, not `load` as an earlier draft
+of this section had it. No `list` action: the description already carries the
+list. An agent that somehow needs it can call `skills` with an unknown name and
+read the error.
 
 ### 6.3 Materialization
 
-Writes each skill to `<dir>/unreagent-<name>/SKILL.md` plus its sub-documents.
+Writes each skill to `<dir>/<directory name>/SKILL.md` plus its sub-documents,
+where `<dir>` is `skills.dir`.
 
 The `unreagent-` prefix is load-bearing: it namespaces the launcher's skills so
 a project's own skills in the same directory are never touched. On each start,
 directories carrying the prefix are replaced and everything else is left alone.
 A prefixed directory that is not in the current embedded set is removed, so
 renamed or dropped skills do not linger.
+
+**Decided (k12):**
+
+- The directory name is the skill name when it already starts with
+  `unreagent-` (the Class D skills), otherwise `unreagent-<name>` — never a
+  doubled prefix. "Starts with `unreagent-`" is the one predicate for "ours".
+- Two skills that map to the same directory (`ue-x` and `unreagent-ue-x`), or
+  whose directory names (or a skill's file names) differ only in case, are a
+  load error on every OS; the start stops.
+- Only real directories named `unreagent-*` count as ours; a file with such a
+  name is left alone.
+- A relative `skills.dir` is resolved against the agent working directory.
+- A failed write only logs a warning; the editor and agent still start.
+- `SKILL.md` is written from `Skill.Source` (§6.1): byte for byte for a skill
+  already named `unreagent-*`; otherwise with only the frontmatter `name:`
+  value set to the directory name. Only a plain or quoted single-line `name:`
+  value can be rewritten. Anything else (a folded or block value, an escape, a
+  tag) makes materialization refuse the whole set before writing anything.
 
 ## 7. Scope
 

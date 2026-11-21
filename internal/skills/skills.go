@@ -23,13 +23,14 @@ import (
 const skillFile = "SKILL.md"
 
 // Skill is one shipped skill: the frontmatter of <name>/SKILL.md, the Markdown
-// after it, and the skill's sub-documents.
+// after it, the file itself as embedded, and the skill's sub-documents.
 type Skill struct {
 	Name          string            // equals the skill's directory name
 	Description   string            // when to use the skill, collapsed to one line
 	ToolkitTools  []string          // nil when the frontmatter omits toolkit_tools
 	UnrealClasses []string          // nil when the frontmatter omits unreal_classes
 	Body          string            // SKILL.md after the frontmatter
+	Source        string            // SKILL.md byte for byte as embedded, frontmatter included; materialized unchanged for an unreagent-* name, else with name: set to unreagent-<name>
 	Files         map[string]string // sub-documents <section>.md by section name; nil when there are none
 }
 
@@ -86,6 +87,7 @@ func loadSkill(fsys fs.FS, dir string) (Skill, error) {
 	if err != nil {
 		return Skill{}, fmt.Errorf("%s: %w", skillFile, err)
 	}
+	s.Source = string(src)
 
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {

@@ -127,3 +127,58 @@ func TestLocalOverlayCannotClearMapWithEmptyMap(t *testing.T) {
 		}
 	}
 }
+
+// k15: skills is a struct section, so the local overlay decodes it field by
+// field — each key it sets replaces only that key. mcp: false in the local
+// file must not drop the base's materialize/dir (a whole-struct replace would
+// also reset them), and the enabled the overlay never mentions keeps its
+// default. The dir comes out of the base, substituted.
+func TestLocalOverlaySkillsFieldByField(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	dir := t.TempDir()
+	writeUProject(t, dir, "Game.uproject")
+	base := "skills: {materialize: true, dir: \"${PROJECT_DIR}/Skills\"}\n"
+	c, info, err := Load(writeConfigFiles(t, dir, base, "skills: {mcp: false}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.LocalPath == "" {
+		t.Fatal("local overlay was not picked up")
+	}
+	s := c.Skills
+	if boolVal(s.MCP) {
+		t.Error("skills.mcp = true; want the local false")
+	}
+	if !s.Materialize {
+		t.Error("skills.materialize: base true lost although local does not set it")
+	}
+	if want := filepath.ToSlash(dir) + "/Skills"; s.Dir != want {
+		t.Errorf("skills.dir = %q; want the base value substituted, %q", s.Dir, want)
+	}
+	if !boolVal(s.Enabled) {
+		t.Error("skills.enabled = false; want the default true")
+	}
+	if s.ViaMCP() || !s.ViaFiles() {
+		t.Errorf("ViaMCP/ViaFiles = %v/%v; want false/true", s.ViaMCP(), s.ViaFiles())
+	}
+}
+
+// k15: an overlay's skills.enabled: false turns both paths off over a base
+// that has them on; the both-paths-off load error applies only while skills
+// are enabled, so mcp: false from the base is no error here.
+func TestLocalOverlaySkillsDisabled(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	dir := t.TempDir()
+	writeUProject(t, dir, "Game.uproject")
+	base := "skills: {mcp: false, materialize: false}\n"
+	if _, _, err := Load(writeConfigFiles(t, t.TempDir(), base, "")); err == nil {
+		t.Fatal("base alone: want the both-paths-off error")
+	}
+	c, _, err := Load(writeConfigFiles(t, dir, base, "skills: {enabled: false}\n"))
+	if err != nil {
+		t.Fatalf("overlay enabled: false: %v", err)
+	}
+	if boolVal(c.Skills.Enabled) || c.Skills.ViaMCP() || c.Skills.ViaFiles() {
+		t.Errorf("enabled/ViaMCP/ViaFiles = %v/%v/%v; want false/false/false", boolVal(c.Skills.Enabled), c.Skills.ViaMCP(), c.Skills.ViaFiles())
+	}
+}

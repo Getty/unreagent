@@ -18,7 +18,7 @@ Python/Node.
 
 | Layer | Package | What it owns |
 |---|---|---|
-| Wiring | `cmd/launcher/` | flag parsing, subcommands, tool registration, bridge smoke tests, agent lifecycle, console loop |
+| Wiring | `cmd/launcher/` | flag parsing, subcommands, tool registration, skill delivery, bridge smoke tests, agent lifecycle, console loop |
 | Config | `internal/config/` | YAML load, `unreagent.local.yaml` overlay, `${…}` substitution, defaults, validation |
 | MCP | `internal/mcp/` | minimal JSON-RPC-over-HTTP server, tool registry, bearer auth |
 | Processes | `internal/supervisor/` | services + one-shot commands, restart policy, ring-buffer logs, Windows Job Objects |
@@ -27,9 +27,11 @@ Python/Node.
 The skill documents live in `skills/<name>/` at the repository root, and
 `skills/embed.go` holds only the `go:embed` directive — a pattern cannot reach
 outside its own package directory. Import `internal/skills`, never `skills`.
-`cmd/launcher` does not import `internal/skills` yet: the `skills` tool (k11)
-and materialization (k12) wire it in, so today the skills package is exercised
-by its tests alone.
+`internal/skills` only parses and knows no config; delivery is wiring.
+`setupSkills` (`cmd/launcher/skills.go`) runs in `run()` before the agent
+starts, loads the set and, as the `skills:` config says, hands it to the
+`skills` MCP tool, writes it into `skills.dir`, or both — skill
+`unreagent-skill-authoring` holds the rules.
 
 Dependency direction is strictly downward: `main` knows the packages below it,
 and they know nothing of each other and nothing of `main`. A supervisor that
@@ -48,6 +50,7 @@ imports `mcp` is a design error, not a shortcut.
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` |
 | `lifecycle.go` | agent exit handling, the stdin console loop, the window-mode launcher log (`openLauncherLog`), `killCrashReporter` / `crashReporterKillers`, `cleanRecovery` |
+| `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills`, the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
 | `hermes.go` | the `hermes-setup` sub-command |
 

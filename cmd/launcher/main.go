@@ -56,6 +56,7 @@ func run() error {
 	noAgent := flag.Bool("no-agent", false, "Don't start the agent (UE + MCP server only; an external agent can connect)")
 	filesFlag := flag.Bool("files", false, "Expose file tools (read/write/list/edit) over the MCP server")
 	writeMcp := flag.String("write-mcp-config", "", "Also write the MCP config as a .mcp.json to this path")
+	noSkillsMCP := flag.Bool("no-skills-mcp", false, "Deliver the skills as files in skills.dir instead of through the skills MCP tool (skills.mcp: false, skills.materialize: true)")
 	flag.Parse()
 
 	logOut := io.Writer(os.Stdout)
@@ -94,6 +95,9 @@ func run() error {
 	}
 	if *writeMcp != "" {
 		cfg.MCP.WriteConfig = append(cfg.MCP.WriteConfig, config.MCPOutput{Path: *writeMcp, Format: "mcp_json"})
+	}
+	if *noSkillsMCP {
+		applyNoSkillsMCP(&cfg.Skills, logger)
 	}
 
 	// Interactive agent: it inherits the real console (TTY). So that Claude has
@@ -197,6 +201,11 @@ func run() error {
 	// Remove leftover script files before the MCP server can write new ones
 	// (see scriptAction).
 	sweepStaleScripts(cfg, agentWorkdir, logger)
+	// Before the agent starts, so that it finds the skill files complete.
+	skillSet, err := setupSkills(cfg, agentWorkdir, logger)
+	if err != nil {
+		return err
+	}
 	mcpURL := "http://" + cfg.MCP.Address + "/mcp"
 	var mcpServers map[string]interface{}
 	if cfg.MCP.Enabled {
@@ -286,7 +295,7 @@ func run() error {
 			srv.SetToken(cfg.MCP.Token)
 			logger("MCP server: bearer auth enabled (mcp.token is set)")
 		}
-		registerTools(srv, sup, cfg, agentWorkdir, logger)
+		registerTools(srv, sup, cfg, agentWorkdir, skillSet, logger)
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", srv)
 		mux.Handle("/", srv)
