@@ -33,7 +33,7 @@ func TestStatusReportsUnresponsiveServicesConcurrently(t *testing.T) {
 			Restart:   "never",
 			// PreStart runs inside the control loop, so the loop cannot answer
 			// while it blocks — the same shape as a hung editor start.
-			PreStart: func(bool) { <-release },
+			PreStart: func(Start) { <-release },
 		})
 	}
 	sup.AddService(ServiceSpec{Name: "idle", Command: "sleep", Args: []string{"30"}, Restart: "never"})

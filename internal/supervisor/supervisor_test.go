@@ -156,22 +156,122 @@ func TestOnExitFiresAfterStartRetriesExhausted(t *testing.T) {
 	wg.Wait()
 }
 
-// preStarts records the automatic flag of every PreStart call.
+// preStarts records every PreStart call.
 type preStarts struct {
 	mu    sync.Mutex
-	calls []bool
+	calls []Start
 }
 
-func (p *preStarts) record(automatic bool) {
+func (p *preStarts) record(st Start) {
 	p.mu.Lock()
-	p.calls = append(p.calls, automatic)
+	p.calls = append(p.calls, st)
 	p.mu.Unlock()
 }
 
+// String lists the Automatic flag of every call.
 func (p *preStarts) String() string {
+	return p.flags(func(st Start) bool { return st.Automatic })
+}
+
+// afterGiveUp lists the AfterGiveUp flag of every call.
+func (p *preStarts) afterGiveUp() string {
+	return p.flags(func(st Start) bool { return st.AfterGiveUp })
+}
+
+func (p *preStarts) flags(flag func(Start) bool) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return fmt.Sprint(p.calls)
+	got := make([]bool, len(p.calls))
+	for i, st := range p.calls {
+		got[i] = flag(st)
+	}
+	return fmt.Sprint(got)
+}
+
+// k128: after the fast-fail give-up the launcher asks for ue_start, and with
+// cleanOnRestart that start emptied Saved/Crashes, because PreStart could not
+// tell it from any other start somebody asks for. The first start after a
+// failure the supervisor did not restart says so; later starts do not.
+func TestPreStartSaysWhetherTheStartFollowsAGiveUp(t *testing.T) {
+	t.Run("fast-fail give-up, then StartService twice", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		// Runs 1-3 fail at once (the give-up); every later run exits 0.
+		spec, _ := runsSpec(t, "fffo", 0)
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		if e := waitExit(t, exits, 10*time.Second, "the failing runs were not given up"); e.Success {
+			t.Fatal("the give-up must report success=false")
+		}
+		for i := 0; i < 2; i++ {
+			if _, err := sup.StartService("svc"); err != nil {
+				t.Fatalf("StartService: %v", err)
+			}
+			waitExit(t, exits, 10*time.Second, "the run StartService began did not end")
+		}
+		if got, want := pre.afterGiveUp(), "[false false false true false]"; got != want {
+			t.Fatalf("PreStart AfterGiveUp = %s, want %s (first start, two policy restarts, StartService after the give-up, StartService after a clean exit)", got, want)
+		}
+		if got, want := pre.String(), "[false true true false false]"; got != want {
+			t.Fatalf("PreStart Automatic = %s, want %s", got, want)
+		}
+	})
+	t.Run("the start after the give-up's start", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		// Runs 1-3 fail at once (the give-up); run 4 keeps running until
+		// RestartService replaces it, so no exit of its own resets the flag.
+		spec, _ := runsSpec(t, "fffs", time.Minute)
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		waitExit(t, exits, 10*time.Second, "the failing runs were not given up")
+		if _, err := sup.StartService("svc"); err != nil {
+			t.Fatalf("StartService: %v", err)
+		}
+		if _, err := sup.RestartService("svc"); err != nil {
+			t.Fatalf("RestartService: %v", err)
+		}
+		if got, want := pre.afterGiveUp(), "[false false false true false]"; got != want {
+			t.Fatalf("PreStart AfterGiveUp = %s, want %s: only the first start after the give-up follows it", got, want)
+		}
+	})
+	t.Run("restart never, then RestartService", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		spec, _ := runsSpec(t, "fo", 0)
+		spec.Restart = "never"
+		spec.PreStart = pre.record
+		exits := startService(t, sup, spec)
+		waitExit(t, exits, 10*time.Second, "the failed run was not reported")
+		if _, err := sup.RestartService("svc"); err != nil {
+			t.Fatalf("RestartService: %v", err)
+		}
+		waitExit(t, exits, 10*time.Second, "the run RestartService began did not end")
+		if got, want := pre.afterGiveUp(), "[false true]"; got != want {
+			t.Fatalf("PreStart AfterGiveUp = %s, want %s: a failure the policy does not restart is given up on too", got, want)
+		}
+	})
+	t.Run("a start that cannot be retried", func(t *testing.T) {
+		var pre preStarts
+		sup := New(nil)
+		exits := startService(t, sup, ServiceSpec{
+			Name:      "svc",
+			Command:   filepath.Join(t.TempDir(), "does-not-exist"),
+			Autostart: true,
+			Restart:   "on-failure",
+			PreStart:  pre.record,
+		})
+		waitExit(t, exits, 10*time.Second, "the failed start was not reported")
+		for i := 0; i < 2; i++ {
+			if _, err := sup.StartService("svc"); err != nil {
+				t.Fatalf("StartService: %v", err)
+			}
+			waitExit(t, exits, 10*time.Second, "the failed StartService was not reported")
+		}
+		if got, want := pre.afterGiveUp(), "[false true true]"; got != want {
+			t.Fatalf("PreStart AfterGiveUp = %s, want %s: each start after a start that was not retried follows a give-up", got, want)
+		}
+	})
 }
 
 // k77: PreStart could not tell the automatic restart after a crash from a

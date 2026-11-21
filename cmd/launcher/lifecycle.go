@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,10 +20,59 @@ import (
 )
 
 // console is the launcher's own terminal, which the exit prompt and the
-// launcher console read and write. run() passes os.Stdin and os.Stdout.
+// launcher console read and write. run() makes one for the session
+// (newConsole) and hands the same one to both, so they share its reader.
 type console struct {
-	in  io.Reader
+	in  *lineReader
 	out io.Writer
+	// logSeparate is set when the launcher log does not go to out (window
+	// mode's unreagent.log): the launcher console then answers on out and
+	// logs the answer as well.
+	logSeparate bool
+}
+
+// newConsole is the console on in and out for a launcher that logs to log.
+func newConsole(in io.Reader, out, log io.Writer) console {
+	return console{in: &lineReader{in: in}, out: out, logSeparate: log != out}
+}
+
+// reply answers the user of the launcher console: on the console and in the
+// launcher log, once when the log is the console itself.
+func (c console) reply(logger func(string), line string) {
+	if c.logSeparate {
+		fmt.Fprintln(c.out, line)
+	}
+	logger(line)
+}
+
+// lineReader is the session's one reader of the console input. It reads a
+// byte at a time and never past the line it returns: a bufio.Scanner buffers
+// ahead, and with piped input the lines it took past its own were lost to the
+// next reader — the next exit prompt, the launcher console, or the foreground
+// agent, which reads the same stdin itself after a handover. One read call
+// per byte is nothing for typed input. It is not safe for concurrent reads;
+// the k71 handover keeps the readers to one at a time.
+type lineReader struct {
+	in io.Reader
+}
+
+// readLine returns the next line without its line end (CRLF included), and
+// false at EOF or on a read error — after a last line without a line end.
+func (r *lineReader) readLine() (string, bool) {
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		n, err := r.in.Read(b)
+		if n == 1 {
+			if b[0] == '\n' {
+				return strings.TrimSuffix(string(line), "\r"), true
+			}
+			line = append(line, b[0])
+		}
+		if err != nil {
+			return string(line), len(line) > 0
+		}
+	}
 }
 
 // openLauncherLog creates the launcher log of window mode at path. The previous
@@ -125,28 +173,53 @@ func (s *session) result() error {
 	return s.err
 }
 
-// makeEditorExitHandler builds the editor's OnExit for a launcher without an
-// agent. It acts only on an editor whose last run never got going (not found,
-// cannot be executed, or failed within the fast-fail window of its start); one
-// that ran and then ended is left to its restart policy, as before. Design
-// choice for k69: with MCP serving, an external agent can still read the logs
-// and retry ue_start, so the launcher keeps running and says so. With MCP not
-// serving (off, or stopped serving since: see serveMCP) and no agent, nothing
-// can retry on the user's behalf, so the session ends with exit 1 instead of
-// idling until somebody presses Ctrl-C — also when the failed start was typed
-// into the launcher console; that user can start the launcher again (see k69).
-// mcpServing is read at the editor's exit, not when the handler is built.
-func makeEditorExitHandler(sess *session, logger func(string), mcpServing *atomic.Bool) func(supervisor.Exit) {
+// makeEditorExitHandler builds the editor's OnExit. On every failure the
+// editor is not restarted after, with or without an agent, it says where the
+// crash dumps are in projectDir ("" for none): the next start keeps them
+// (followsCrash). Without an agent it also acts on an editor whose last run
+// never got going (not found, cannot be executed, or failed within the
+// fast-fail window of its start); one that ran and then ended is left to its
+// restart policy, as before. Design choice for k69: with MCP serving, an
+// external agent can still read the logs and retry ue_start, so the launcher
+// keeps running and says so. With MCP not serving (off, or stopped serving
+// since: see serveMCP) and no agent, nothing can retry on the user's behalf,
+// so the session ends with exit 1 instead of idling until somebody presses
+// Ctrl-C — also when the failed start was typed into the launcher console;
+// that user can start the launcher again (see k69). mcpServing is read at the
+// editor's exit, not when the handler is built.
+func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpServing *atomic.Bool, u config.UnrealConfig, projectDir string) func(supervisor.Exit) {
 	return func(e supervisor.Exit) {
-		if !e.StartFailed {
+		if e.Success {
+			return
+		}
+		serving := mcpServing.Load()
+		ends := !agent && e.StartFailed && !serving
+		// dumps says where the failed runs' crash dumps are, and what empties
+		// that folder: a retry from this launcher does not (followsCrash), the
+		// first start of a new launcher run does with cleanOnRestart.
+		dumps := ""
+		if projectDir != "" {
+			dumps = " Any crash dumps are in " + filepath.Join(projectDir, "Saved", "Crashes")
+			switch {
+			case u.CleanOnRestart && !ends:
+				dumps += " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)"
+			case u.CleanOnRestart:
+				dumps += " — the next launcher run empties them (unreal.cleanOnRestart)"
+			}
+			dumps += "."
+		}
+		if agent || !e.StartFailed {
+			if dumps != "" {
+				logger("The editor failed and is not restarted." + dumps)
+			}
 			return
 		}
 		failed := fmt.Sprintf("failed to start, or failed within %s of starting", supervisor.FastFailWindow)
-		if mcpServing.Load() {
-			logger("The editor " + failed + ", and is not restarted — the launcher keeps serving MCP: read the logs, fix the cause, retry with ue_start (Ctrl-C stops the launcher).")
+		if serving {
+			logger("The editor " + failed + ", and is not restarted — the launcher keeps serving MCP: read the logs, fix the cause, retry with ue_start (Ctrl-C stops the launcher)." + dumps)
 			return
 		}
-		logger("The editor " + failed + ", and is not restarted; no agent is configured and MCP is not serving — stopping everything.")
+		logger("The editor " + failed + ", and is not restarted; no agent is configured and MCP is not serving — stopping everything." + dumps)
 		sess.fail(fmt.Errorf("the editor %s, and with no agent and MCP not serving nothing can retry it (see the launcher log)", failed))
 	}
 }
@@ -160,7 +233,11 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 	cmdLoopRunning := false // already switched to the launcher console?
 	stop := sess.end
 	// restartAgent is the one way the agent is started again from here: the
-	// prompt's 'r', and the launcher console handing the window back.
+	// prompt's 'r', and the launcher console handing the window back. A start
+	// that fails is named by the exit prompt (agentEnded), not here: the agent
+	// comes back to this handler once its restart policy stops retrying it —
+	// at once for a missing program — and a line printed here would race that
+	// prompt for the console.
 	restartAgent := func() {
 		fmt.Fprintln(con.out, "Restarting agent …")
 		if _, err := sup.StartService("agent"); err != nil {
@@ -182,7 +259,7 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 		busy := cmdLoopRunning
 		mu.Unlock()
 		if busy {
-			logger("Launcher console active — 'q' stops everything, 'start agent' restarts the agent.")
+			con.reply(logger, "Launcher console active — 'q' stops everything, 'start agent' restarts the agent.")
 			return
 		}
 
@@ -199,7 +276,7 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 				stop()
 				return
 			}
-			switch promptAgentExit(con, success) {
+			switch promptAgentExit(con, agentEnded(sup, success)) {
 			case "k":
 				fmt.Fprintln(con.out, "Editor keeps running. Launcher console — 'start agent' gives this window back to the agent, 'q' stops everything:")
 				mu.Lock()
@@ -210,7 +287,7 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 					// agent, which needs stdin itself (k71). By the time the loop
 					// returns it has stopped reading, and the flag is clear before
 					// the agent can end again, so that exit gets the prompt.
-					handover := commandLoop(ctx, con.in, stop, sup, logger, "agent")
+					handover := commandLoop(ctx, con, stop, sup, logger, "agent")
 					mu.Lock()
 					cmdLoopRunning = false
 					mu.Unlock()
@@ -227,28 +304,38 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 	}
 }
 
-// promptAgentExit shows the selection menu on the real console (not the logger —
-// in window mode the launcher logs go to the file) and returns the choice. After
-// 30s without input, "stop everything" applies (e.g. agent crashed overnight).
-func promptAgentExit(con console, success bool) string {
+// agentEnded is the exit prompt's first line: how the agent's last run ended.
+// A start that failed (the program is missing, …) comes here as an exit too;
+// it is named with its start error, as ue_start names it. The error stays in
+// lastError only until a start succeeds, so after a run it is empty.
+func agentEnded(sup *supervisor.Supervisor, success bool) string {
 	if success {
-		fmt.Fprintln(con.out, "\nAgent exited.")
-	} else {
-		fmt.Fprintln(con.out, "\nAgent crashed.")
+		return "Agent exited."
 	}
+	for _, st := range sup.Status() {
+		if st.Name == "agent" && st.LastError != "" {
+			return "Agent did not start: " + st.LastError
+		}
+	}
+	return "Agent crashed."
+}
+
+// promptAgentExit shows the selection menu under ended (agentEnded) on the
+// real console (not the logger — in window mode the launcher logs go to the
+// file) and returns the choice. After 30s without input, "stop everything"
+// applies (e.g. agent crashed overnight).
+func promptAgentExit(con console, ended string) string {
+	fmt.Fprintln(con.out, "\n"+ended)
 	fmt.Fprintln(con.out, "  [Enter] stop everything (UE + launcher)")
 	fmt.Fprintln(con.out, "  [k]     keep the editor running, launcher console")
 	fmt.Fprintln(con.out, "  [r]     restart the agent")
 	fmt.Fprint(con.out, "> ")
 
+	// The read outlives a timeout; harmless, as a timeout ends the session.
 	ch := make(chan string, 1)
 	go func() {
-		sc := bufio.NewScanner(con.in)
-		if sc.Scan() {
-			ch <- strings.ToLower(strings.TrimSpace(sc.Text()))
-		} else {
-			ch <- "" // EOF (e.g. stdin closed) -> stop everything
-		}
+		line, _ := con.in.readLine() // EOF (e.g. stdin closed): "" -> stop everything
+		ch <- strings.ToLower(strings.TrimSpace(line))
 	}()
 	select {
 	case s := <-ch:
@@ -259,43 +346,60 @@ func promptAgentExit(con console, success bool) string {
 	}
 }
 
-// commandLoop reads control commands from in (for manual operation) until 'q',
-// EOF or the end of ctx. foreground names a service that needs the console
-// itself while it runs ("" for none). A command that would (re)start it is not
-// run here: the loop returns true before it reads another line, and the caller
-// hands the console over and starts the service — two readers on one stdin
-// split the user's input between them (k71).
-func commandLoop(ctx context.Context, in io.Reader, stop func(), sup *supervisor.Supervisor, logger func(string), foreground string) (handover bool) {
-	logger("Commands: 'status' | 'r' (restart all) | 'r <name>' | 'stop <name>' | 'start <name>' | 'c <name>' | 'q'")
-	sc := bufio.NewScanner(in)
-	for sc.Scan() {
+// commandLoop reads control commands from the console (for manual operation)
+// until 'q', EOF or the end of ctx. foreground names a service that needs the
+// console itself while it runs ("" for none). A command that would (re)start
+// it is not run here: the loop returns true before it reads another line, and
+// the caller hands the console over and starts the service — two readers on
+// one stdin split the user's input between them (k71). Its answers go to the
+// console and the launcher log (console.reply).
+func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.Supervisor, logger func(string), foreground string) (handover bool) {
+	reply := func(line string) { con.reply(logger, line) }
+	// act runs a lifecycle command and names what went wrong, as serviceAction
+	// does for ue_start / ue_stop / ue_restart: an error, or — for a command
+	// that starts — a service not running afterwards, with the start error.
+	act := func(fn func(string) (supervisor.ServiceStatus, error), name string, starts bool) {
+		st, err := fn(name)
+		switch {
+		case err != nil:
+			reply("Error: " + err.Error())
+		case starts && !st.Running:
+			reply("Error: " + startFailure(name, st))
+		}
+	}
+	reply("Commands: 'status' | 'r' (restart all) | 'r <name>' | 'stop <name>' | 'start <name>' | 'c <name>' | 'q'")
+	for {
+		line, ok := con.in.readLine()
+		if !ok {
+			return false
+		}
 		select {
 		case <-ctx.Done():
 			return false
 		default:
 		}
-		fields := strings.Fields(strings.TrimSpace(sc.Text()))
+		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) == 0 {
 			continue
 		}
 		switch fields[0] {
 		case "q", "quit", "exit":
-			logger("Stopping …")
+			reply("Stopping …")
 			stop()
 			return false
 		case "status", "s":
 			b, _ := json.MarshalIndent(sup.Status(), "", "  ")
-			logger("\n" + string(b))
+			reply("\n" + string(b))
 		case "r", "restart":
 			if len(fields) > 1 {
 				if fields[1] == foreground {
 					return true
 				}
-				sup.RestartService(fields[1])
+				act(sup.RestartService, fields[1], true)
 			} else {
 				for _, n := range sup.ServiceNames() {
 					if n != foreground {
-						sup.RestartService(n)
+						act(sup.RestartService, n, true)
 					}
 				}
 				if foreground != "" {
@@ -304,29 +408,58 @@ func commandLoop(ctx context.Context, in io.Reader, stop func(), sup *supervisor
 			}
 		case "stop":
 			if len(fields) > 1 {
-				sup.StopService(fields[1])
+				act(sup.StopService, fields[1], false)
 			}
 		case "start":
 			if len(fields) > 1 {
 				if fields[1] == foreground {
 					return true
 				}
-				sup.StartService(fields[1])
+				act(sup.StartService, fields[1], true)
 			}
 		case "c", "cmd":
 			if len(fields) > 1 {
 				res, err := sup.RunCommand(fields[1])
 				if err != nil {
-					logger("Error: " + err.Error())
+					reply("Error: " + err.Error())
 				} else {
-					logger(fmt.Sprintf("exit %d\n%s", res.ExitCode, tailLines(res.Output, 100)))
+					reply(fmt.Sprintf("exit %d\n%s", res.ExitCode, tailLines(res.Output, 100)))
 				}
 			}
 		default:
-			logger("Unknown command: " + fields[0])
+			reply("Unknown command: " + fields[0])
 		}
 	}
-	return false
+}
+
+// editorPreStart is the editor's PreStart: the crash-reporter kill
+// (unreal.killCrashReporter) and the cleanup of unreal.cleanOnRestart in
+// projectDir ("" for none). A start that follows a crash (followsCrash)
+// spares that crash's evidence: Saved/Crashes stays, and so does a crash
+// reporter, which may still be writing the report — the restart policy
+// starts the editor again about one restart delay after it ended. Skipping
+// the kill cannot hold the restart up, where waiting for a reporter to finish
+// would need a bound and a way to tell it is done; and every other start
+// still kills it, so a stuck reporter window is gone by the second start
+// somebody asks for after a crash. kill is killCrashReporter; tests pass
+// their own.
+func editorPreStart(u config.UnrealConfig, projectDir string, kill func(), logger func(string)) func(supervisor.Start) {
+	return func(st supervisor.Start) {
+		if boolVal(u.KillCrashReporter) && !followsCrash(st) {
+			kill()
+		}
+		if u.CleanOnRestart && projectDir != "" {
+			cleanRecovery(projectDir, st, logger)
+		}
+	}
+}
+
+// followsCrash reports whether st is a start that keeps the last crash's
+// evidence for diagnosis: the restart policy's, and the first start after the
+// editor failed and was not restarted — the one the give-up line asks for
+// (makeEditorExitHandler), before anybody has read the dumps.
+func followsCrash(st supervisor.Start) bool {
+	return st.Automatic || st.AfterGiveUp
 }
 
 // killCrashReporter terminates a possibly stuck crash reporter window.
@@ -361,10 +494,10 @@ func crashReporterKillers() [][]string {
 
 // cleanRecovery removes recovery/crash artefacts for a clean start.
 // PackageRestoreData.json goes on every start: its restore dialog would block
-// an unattended restart. Saved/Crashes is emptied only on a start somebody
-// asked for; an automatic restart follows a crash, and its dump is what the
-// agent reads to find out why.
-func cleanRecovery(projectDir string, automatic bool, logger func(string)) {
+// an unattended restart. Saved/Crashes is emptied only on a start that does
+// not follow a crash (followsCrash): the crash dump is what the agent reads
+// to find out why.
+func cleanRecovery(projectDir string, st supervisor.Start, logger func(string)) {
 	saved := filepath.Join(projectDir, "Saved")
 	restore := filepath.Join(saved, "Autosaves", "PackageRestoreData.json")
 	if err := os.Remove(restore); err == nil {
@@ -372,8 +505,12 @@ func cleanRecovery(projectDir string, automatic bool, logger func(string)) {
 	}
 	crashes := filepath.Join(saved, "Crashes")
 	if entries, err := os.ReadDir(crashes); err == nil && len(entries) > 0 {
-		if automatic {
-			logger("Recovery: Saved/Crashes kept (automatic restart — the crash dump stays for diagnosis)")
+		if followsCrash(st) {
+			why := "automatic restart — the crash dump stays for diagnosis"
+			if !st.Automatic {
+				why = "first start since the editor failed and was not restarted — the crash dumps stay for diagnosis"
+			}
+			logger("Recovery: Saved/Crashes kept (" + why + ")")
 			return
 		}
 		for _, e := range entries {

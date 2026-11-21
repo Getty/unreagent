@@ -100,8 +100,11 @@ Two editor dialogs block unattended operation, and both are handled at start:
   dialog *and* both recovery systems (PackageAutoSaver, disaster recovery) in
   UE 5.7 — the unclean state is discarded rather than prompted about.
 - `killCrashReporter` (default true) kills `CrashReportClientEditor.exe` and
-  `CrashReportClient.exe` before every (re)start — belt and suspenders, see
-  `crashReporterKillers()` in `cmd/launcher/lifecycle.go`. Off Windows it is a
+  `CrashReportClient.exe` before every (re)start except one that follows a
+  crash (`followsCrash`: an automatic restart, or the first start after the
+  editor was given up on), whose reporter may still be writing — belt and
+  suspenders, see `editorPreStart` and `crashReporterKillers()` in
+  `cmd/launcher/lifecycle.go`. Off Windows it is a
   `pkill -f` anchored to the program name: `pkill -x` never matches (Linux cuts
   the process name to 15 characters), and a bare `-f CrashReportClient` kills
   any process whose arguments mention the name. Keep the anchors.

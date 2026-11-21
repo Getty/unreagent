@@ -21,7 +21,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "status",
-		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, and \"lastError\": why the last start failed (absent once a start succeeds). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
+		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, \"lastError\": why the last start failed (absent once a start succeeds), and \"lastExit\": how its last run that ended on its own ended, e.g. \"exit 1\" (absent until one ends; ue_start and ue_restart clear it). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
 		InputSchema: noArgs,
 		Handler: func(map[string]interface{}) mcp.ToolResult {
 			payload := map[string]interface{}{
@@ -35,7 +35,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_start",
-		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards.",
+		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit).",
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StartService, true),
 	})
@@ -47,7 +47,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_restart",
-		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards.",
+		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit).",
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.RestartService, true),
 	})
@@ -225,10 +225,16 @@ func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (sup
 		}
 		b, _ := json.Marshal(st)
 		if starts && !st.Running {
-			return mcp.ToolResult{Text: fmt.Sprintf("Error: service %q did not start: %s\n%s", name, st.LastError, b), IsError: true}
+			return mcp.ToolResult{Text: "Error: " + startFailure(name, st) + "\n" + string(b), IsError: true}
 		}
 		return mcp.ToolResult{Text: string(b)}
 	}
+}
+
+// startFailure says that a start left the service not running, and why: the
+// ue_start / ue_restart error and the launcher console's answer (commandLoop).
+func startFailure(name string, st supervisor.ServiceStatus) string {
+	return fmt.Sprintf("service %q did not start: %s", name, st.LastError)
 }
 
 func allowWord(b bool) string {

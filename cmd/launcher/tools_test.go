@@ -308,6 +308,79 @@ func TestUEStartAndRestartSucceedOnARunningEditor(t *testing.T) {
 	}
 }
 
+// ueStatus is the "ue" entry of the status tool's reply, as the agent reads it.
+func ueStatus(t *testing.T, srv *mcp.Server) map[string]interface{} {
+	t.Helper()
+	res := callTool(t, srv, "status", map[string]interface{}{})
+	var payload struct {
+		Services []map[string]interface{} `json:"services"`
+	}
+	if err := json.Unmarshal([]byte(res.Text), &payload); err != nil {
+		t.Fatalf("status reply is not JSON: %v\n%s", err, res.Text)
+	}
+	for _, st := range payload.Services {
+		if st["name"] == "ue" {
+			return st
+		}
+	}
+	t.Fatalf("status has no ue: %s", res.Text)
+	return nil
+}
+
+// k126: ue_start answers right after the spawn, so an editor that starts and
+// dies at once is reported running; and afterwards status said only
+// running:false — no exit, no lastError, nothing to tell it from a stop.
+// Running means spawned (the descriptions say so now); status must show that
+// the editor exited and how. ue_start clears it, as it resets the restarts.
+func TestStatusShowsHowTheEditorLastExited(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH — skipping")
+	}
+	exits := make(chan struct{}, 2)
+	sup := supervisor.New(nil)
+	sup.AddService(supervisor.ServiceSpec{
+		Name:      "ue",
+		Command:   "sh",
+		Args:      []string{"-c", "exit 3"},
+		Autostart: true,
+		Restart:   "never",
+		OnExit:    func(supervisor.Exit) { exits <- struct{}{} },
+	})
+	startedSupervisor(t, sup)
+	select {
+	case <-exits:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the ue service did not exit")
+	}
+	srv := toolsServerOn(t, sup, config.Permissions{}, func(string) {})
+	if st := ueStatus(t, srv); st["running"] != false || st["lastExit"] != "exit 3" {
+		t.Fatalf("status after the editor exited 3 = %v, want running false and lastExit \"exit 3\"", st)
+	}
+
+	res := callTool(t, srv, "ue_start", map[string]interface{}{})
+	var started map[string]interface{}
+	if err := json.Unmarshal([]byte(res.Text), &started); err != nil || res.IsError {
+		t.Fatalf("ue_start = %q (IsError %v), want the snapshot of a started editor", res.Text, res.IsError)
+	}
+	if _, kept := started["lastExit"]; started["running"] != true || kept {
+		t.Fatalf("ue_start = %v, want running true (spawned) and the last exit cleared", started)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st := ueStatus(t, srv)
+		if st["running"] == false {
+			if st["lastExit"] != "exit 3" {
+				t.Fatalf("status after the started editor died = %v, want lastExit \"exit 3\"", st)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the editor ue_start started did not exit: %v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // --- k74: truncation markers ---------------------------------------------
 
 // printLinesScript is a sh script printing line-1 … line-n, one per line.

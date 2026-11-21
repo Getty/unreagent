@@ -44,12 +44,12 @@ imports `mcp` is a design error, not a shortcut.
 | File | What it holds |
 |---|---|
 | `main.go` | `run()` — flag parsing, sub-command dispatch, config load, MCP bind (`listenMCP`), service and command registration, MCP serving (`serveMCP`), shutdown — plus small helpers (`extractSubcommand`, `hasArg`, …) |
-| `tools.go` | `registerTools` (every MCP tool except the file tools), `serviceAction` |
+| `tools.go` | `registerTools` (every MCP tool except the file tools), `serviceAction`, `startFailure` |
 | `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` |
-| `lifecycle.go` | agent exit handling, the stdin console loop, the window-mode launcher log (`openLauncherLog`), `killCrashReporter` / `crashReporterKillers`, `cleanRecovery` |
+| `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt), the stdin console loop, the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
 | `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills`, the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
 | `hermes.go` | the `hermes-setup` sub-command |

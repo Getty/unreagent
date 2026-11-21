@@ -88,11 +88,14 @@ type UnrealConfig struct {
 	// reporter dialog AND both recovery prompts on restart.
 	Unattended *bool `yaml:"unattended"`
 	// KillCrashReporter kills CrashReportClientEditor.exe before every (re)start
+	// except one that follows a crash, whose reporter may still be writing
 	// (default true) — a safeguard in case a reporter window is stuck after all.
 	KillCrashReporter *bool `yaml:"killCrashReporter"`
 	// CleanOnRestart removes Saved/Autosaves/PackageRestoreData.json before
-	// every start, and Saved/Crashes/* before every start except an automatic
-	// restart, which keeps the crash dump for diagnosis (default false).
+	// every start, and Saved/Crashes/* before every start except one that
+	// follows a crash — an automatic restart, and the first start after the
+	// editor failed and was not restarted — which keeps the crash dumps for
+	// diagnosis (default false).
 	CleanOnRestart bool `yaml:"cleanOnRestart"`
 }
 

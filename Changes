@@ -72,18 +72,25 @@ Revision history for unreagent
     and CI runs see the failure; it also exits 1 with no agent and MCP off when
     the editor's last run never got going (failed to start, or failed within
     10 s). With MCP on it keeps serving and says so; a signal still exits 0.
-  - start agent, r agent and r in the launcher console hand the terminal back
-    to the agent, so the console and the agent no longer both read stdin.
   - ue_start and ue_restart fail, naming the cause, when the editor is not
-    running afterwards. status shows the last start error as lastError until a
-    start succeeds.
-  - cleanOnRestart keeps Saved/Crashes on the automatic restart after a crash,
-    so the dump can still be read. PackageRestoreData.json is still removed
-    before every start, and the first and manual starts still empty
-    Saved/Crashes.
-  - Off Windows, the crash-reporter kill matches only the CrashReportClient and
-    CrashReportClientEditor programs, no longer any process with the name in
-    its command line.
+    running afterwards, and so do start and r in the launcher console; the
+    agent exit prompt says "Agent did not start: <cause>". Running means
+    spawned: status shows lastError until a start succeeds, and lastExit (how
+    the last run that ended on its own ended) until the next manual start.
+  - cleanOnRestart keeps Saved/Crashes on a start that follows a crash: the
+    automatic restart, and the first start after the launcher gave up on the
+    editor. PackageRestoreData.json is removed before every start, and every
+    other start empties Saved/Crashes. Each editor give-up logs where the
+    dumps are.
+  - The crash-reporter kill skips a start that follows a crash, so a reporter
+    still writing its report is left alone. Off Windows it matches only the
+    CrashReportClient and CrashReportClientEditor programs, not any process
+    with the name in its command line.
+  - start agent, r agent and r in the launcher console hand the terminal back
+    to the agent, so the console and the agent never both read stdin. The exit
+    prompt and the console share one reader, so piped input reaches both.
+  - In window mode the launcher console answers on the console (command list,
+    status, command results, errors) as well as in unreagent.log.
   - In window mode the previous session's log is kept as unreagent.log.1; if
     it cannot be moved aside, the new session is appended to it. A log that
     cannot be created is reported on the console instead of being skipped

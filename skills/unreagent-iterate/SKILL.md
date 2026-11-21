@@ -30,7 +30,8 @@ Three facts shape everything below:
 2. **Stopping is a kill.** There is no graceful shutdown, no save and no
    confirmation.
 3. **A start reports success as soon as the process is spawned.** A start that
-   fails comes back as an ordinary result, never as an error.
+   spawns no process is an error result. An editor that spawns and dies a
+   moment later is not: `status` shows that afterwards, in `lastExit`.
 
 ## status
 
@@ -50,6 +51,8 @@ Three facts shape everything below:
 | `pid` | its process id; `0` when nothing is running |
 | `desired` | the launcher wants it up. Set by `ue_start` / `ue_restart` and at launch (unless `unreal.manualStart` is set). Cleared by `ue_stop`, and by a start that found no executable |
 | `restarts` | automatic restarts since the last `ue_start` / `ue_restart`, which reset it to 0. `ue_stop` leaves it unchanged |
+| `lastError` | present only while the last start attempt failed: why no process was spawned (the executable is missing, cannot be run, …). A start that spawns a process removes it |
+| `lastExit` | how the last run that ended on its own ended, such as `"exit 1"`. Absent until one ends. `ue_start` and `ue_restart` remove it, the kill of `ue_stop` or `ue_restart` does not set it, and automatic restarts keep it |
 | `unresponsive` | present, as `true`, only when the service's control loop did not answer within 10 s. `running` and `pid` are then unknown and sent as `false` / `0` |
 
 `agent` is listed only when the launcher runs its own agent. `commands` holds
@@ -62,7 +65,7 @@ Here is how to read the combinations:
 |---|---|---|
 | `true` | `true` | a process is up, which does not mean it is ready |
 | `false` | `false` | stopped by `ue_stop`, not started at launch (`manualStart`), or the editor executable does not exist |
-| `false` | `true` | the process ended. Either a restart is pending (after a crash, waiting out `restartDelaySeconds`), or none will come (exit 0 under `on-failure`, policy `never`, `maxRestarts` reached, or a failed start) |
+| `false` | `true` | the process ended. Either a restart is pending (after a crash, waiting out `restartDelaySeconds`), or none will come (exit 0 under `on-failure`, policy `never`, `maxRestarts` reached, the launcher gave up on an editor that keeps failing at once, or a failed start) |
 
 No field tells "restart pending" apart from "given up". `restarts` goes up when
 a restart is scheduled, not when it happens, so `status` already shows the
@@ -85,29 +88,31 @@ attempt:
 {"name":"ue","running":true,"pid":12345,"restarts":0,"desired":true}
 ```
 
-- **Already running**: the process is left alone. `desired` becomes `true` and
-  `restarts` resets to 0.
+- **Already running**: the process is left alone. `desired` becomes `true`,
+  `restarts` resets to 0 and `lastExit` is removed.
 - **Restart pending**: the editor starts now instead of waiting.
 - **Returns at spawn time.** After that, the editor still needs anything from
   seconds to many minutes to load, depending on the project and the state of
   its shader cache.
 
-**A failed start is never an error result.** The JSON looks like success even
-when no editor came up. The cause goes only to the launcher log (see Where the
-output is). Read the fields, not the absence of an error:
+**A start that spawns no process is an error result**:
+`Error: service "ue" did not start: <lastError>`, with the `ue` entry as JSON
+on the next line. The fields of that entry say whether a retry comes:
 
 | Result | Meaning |
 |---|---|
-| `running: true` | a process was spawned. It can still die while starting up |
-| `running: false, desired: false` | the executable does not exist (wrong `unreal.editor`, engine root not found). There will be no retry |
-| `running: false, desired: true, restarts: 1` | spawning failed for some other reason, such as permissions. It is retried after `restartDelaySeconds` |
-| `running: false, desired: true, restarts: 0` | spawning failed and `unreal.restart` is `never`. There will be no retry |
+| `running: true`, no error | a process was spawned. It can still die while starting up |
+| error, `desired: false` | the executable does not exist (wrong `unreal.editor`, engine root not found). There will be no retry |
+| error, `desired: true, restarts: 1` | spawning failed for some other reason, such as permissions. It is retried after `restartDelaySeconds` |
+| error, `desired: true, restarts: 0` | spawning failed and will not be retried, as under `unreal.restart: never` |
 
 `ue_start` cannot see a process that spawns and then dies during startup
 (missing or stale modules, a project that does not load, a crash). To catch
-that, call `status` again some seconds later and look at `logs`. A different
-`pid` or a higher `restarts` means it died, and the launcher has restarted it
-or is about to.
+that, call `status` again some seconds later and look at `logs`. `ue_start`
+removed `lastExit`, so a `lastExit` now means a run ended since the call. A
+different `pid` or a higher `restarts` means the launcher has restarted it or
+is about to. `running: false` that stays past the restart delay means no
+restart is coming (see Automatic restarts).
 
 ## ue_stop
 
@@ -124,8 +129,9 @@ editor's last lines are in `logs`.
 
 One step that does `ue_stop` and then `ue_start`: the same kill, then the same
 spawn-time report. It also works as a plain start when the editor is not
-running, and it resets `restarts` to 0. All the `ue_start` caveats apply. In
-particular, `running: false` in its result means the new editor never came up.
+running, and it resets `restarts` to 0 and removes `lastExit`. All the
+`ue_start` caveats apply. In particular, a new editor that never came up is
+the same `Error: service "ue" did not start: …` result.
 
 ## What a stop does to the process tree
 
@@ -167,25 +173,47 @@ editor process. Its children survive there.
 | `never` | nothing |
 
 The restart follows after `unreal.restartDelaySeconds` (default 3). The limit is
-`unreal.maxRestarts`, where the default 0 means unlimited. Only automatic
-restarts count. A manual `ue_start` or `ue_restart` resets the count.
+`unreal.maxRestarts`. Only automatic restarts count. A manual `ue_start` or
+`ue_restart` resets the count.
 
-**Crash loop**: an editor that dies during startup is restarted every few
-seconds forever, and `restarts` keeps climbing. `ue_stop` breaks the loop. The
-output of the last attempts stays in `logs`.
+**Crash loop**: with `maxRestarts` at its default 0, the launcher gives up on
+an editor that fails 3 times in a row, each run ending within 10 s of its
+start (a non-zero exit or a failed spawn). The launcher log says
+`[ue] failed 3 times in a row, each within 10s of its start — giving up (no automatic restart)`,
+and `status` shows `running: false, desired: true` with the last `lastExit`
+(or `lastError`, when the spawn itself failed). Every failure the launcher
+does not restart (this give-up, `maxRestarts` used up, policy `never`) is
+followed by a line that names the dump folder:
+`The editor failed and is not restarted. Any crash dumps are in <project dir>\Saved\Crashes.`
+With `unreal.cleanOnRestart` on, the line ends
+`… Saved\Crashes — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart).`
+Without an agent of the launcher's own, a quick failure gets a longer line
+that ends with the same hint. With `unreal.project` unset, no hint is logged.
+An editor that runs longer than 10 s before each crash is restarted without
+end, and `restarts` keeps climbing. A `maxRestarts` above 0 stops after that
+many restarts instead, however long each run lasted. `ue_stop` breaks any loop,
+and `ue_start` tries again with the count reset. The output of the last
+attempts stays in `logs`.
 
 Before every start (the first one, a manual one, or an automatic one), the
-launcher runs two hooks:
+launcher runs two hooks. Both spare the evidence of a crash on a start that
+follows one: an automatic restart, and the first `ue_start` or `ue_restart`
+after the editor failed and was not restarted (given up on, `maxRestarts`
+used up, policy `never`). A `ue_start` while a restart is still pending is not
+such a start.
 
 - **`unreal.killCrashReporter`** (default on) kills `CrashReportClientEditor.exe`
   and `CrashReportClient.exe` by image name, so it hits every running crash
-  reporter, not only this editor's.
+  reporter, not only this editor's. A start that follows a crash skips the
+  kill, because the reporter may still be writing the report.
 - **`unreal.cleanOnRestart`** (default off) deletes
-  `Saved/Autosaves/PackageRestoreData.json` and everything under
-  `Saved/Crashes/`. With it on, a crash's report is gone a few seconds later,
-  when the automatic restart runs. `logs` still holds the editor's last
-  output. To keep the crash report itself, the user has to turn the option
-  off.
+  `Saved/Autosaves/PackageRestoreData.json` before every start, and everything
+  under `Saved/Crashes/` before every start that does not follow a crash. A
+  start that keeps them logs `Recovery: Saved/Crashes kept (…)`. The crash
+  reports are in `Saved/Crashes/` in the project directory (`read_file`,
+  `list_dir`, see `unreagent-files`). With the option on, read them before
+  a start that does not follow a crash, such as a `ue_restart` of an editor
+  that came back up: that start empties the folder.
 
 ## logs
 
@@ -245,14 +273,16 @@ Each line starts with a `HH:MM:SS` timestamp. Lines to look for:
 [ue] exited (exit 3)
 [ue] restart 1 in 3s
 [ue] no automatic restart (policy=on-failure)
+[ue] failed 3 times in a row, each within 10s of its start — giving up (no automatic restart)
+The editor failed and is not restarted. Any crash dumps are in <project dir>\Saved\Crashes.
 [ue] start failed: <error>
 [ue] program not found — no further attempt (check path / installation)
 [ue] stopped (manual)
 [ue] restarted (manual)
 ```
 
-`restarted (manual)` is logged after every `ue_restart`, also when the start
-failed. Look for `start failed` just above it.
+`restarted (manual)` is logged only when `ue_restart` spawned a new editor. A
+start that failed logs `start failed: …` instead.
 
 `read_file` (`unreagent-files`) returns at most 256 KiB per call, and a negative
 `offset` counts from the end of the file: `offset: -65536` returns the last
@@ -279,8 +309,8 @@ For C++:
    modules that are out of date.
 5. **`ue_start`.**
 6. **`status` some seconds later.** Expect `running: true`, the same `pid`,
-   and `restarts: 0`. A new `pid` or a higher `restarts` means the editor
-   crashed, and the launcher has restarted it or is about to.
+   `restarts: 0` and no `lastExit`. A `lastExit`, a new `pid` or a higher
+   `restarts` means the editor crashed.
 7. **`logs`**: look for errors in the startup output.
 8. **Wait for the in-editor plugin** before you use its tools (see below).
 
@@ -309,10 +339,11 @@ nothing in `status` reflects this. Check the plugin itself:
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `ue_start` returns `running: false, desired: false` | the editor executable does not exist | the user fixes `unreal.editor` or the engine root. The launcher log names the path |
-| `ue_start` returns `running: false, desired: true, restarts: 1` | the spawn failed, and a retry is scheduled | see `start failed:` in the launcher log |
-| `running: true` at start, then a new `pid` or higher `restarts` | the editor crashed during startup and is being restarted | `ue_stop`, then read `logs` |
-| `restarts` climbs every few seconds | a crash loop, unlimited by default | `ue_stop` breaks it |
+| `ue_start` returns `Error: service "ue" did not start: …` with `desired: false` | the editor executable does not exist | the user fixes `unreal.editor` or the engine root. The error names the path |
+| `ue_start` returns `Error: service "ue" did not start: …` with `desired: true, restarts: 1` | the spawn failed, and a retry is scheduled | the error names the cause |
+| `running: true` at start, then `lastExit`, a new `pid` or a higher `restarts` | the editor died during startup. The launcher restarts it, or gave up (next row) | `ue_stop`, then read `logs` |
+| `running: false, desired: true` and `lastExit` that stay past the restart delay | the editor failed and no restart is coming, for example after 3 quick failures in a row | read `logs` and `Saved/Crashes/`, fix the cause, then `ue_start` |
+| `restarts` climbs every few seconds | a crash loop of an editor that runs more than 10 s each time, or one under a `maxRestarts` limit | `ue_stop` breaks it |
 | `Error: service "ue" is not responding` | the control loop was busy for more than 10 s | wait, call `status`, then retry |
 | `"unresponsive": true` in `status` | same cause | do not `ue_start`; check again |
 | `logs` is empty for `ue` | the editor has not written anything yet, or `unreal.args` lacks `-stdout` | check `status`. The user restores the args |

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
@@ -393,7 +394,7 @@ func TestEditorGiveUpAfterMCPStoppedServing(t *testing.T) {
 	var serving atomic.Bool
 	serving.Store(true)
 	var log syncLog
-	onEditorExit := makeEditorExitHandler(sess, log.log, &serving)
+	onEditorExit := makeEditorExitHandler(sess, log.log, false, &serving, config.UnrealConfig{}, "")
 
 	serveMCP(&http.Server{Handler: http.NotFoundHandler()}, brokenListener{}, &serving, log.log, nil)
 	if ctx.Err() != nil || sess.result() != nil {

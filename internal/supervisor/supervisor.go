@@ -36,11 +36,9 @@ type ServiceSpec struct {
 	MaxRestarts  int    // 0 = unlimited — but one that keeps failing at its start is given up on (giveUp in runService)
 	RestartDelay time.Duration
 	// PreStart is called before every (re)start of the process (e.g. to kill the
-	// crash reporter or to clean up recovery files). automatic is true when the
-	// restart policy starts it — after an exit, or retrying a failed start —
-	// and false for the first start (with or without StartDelay) and for
-	// StartService / RestartService.
-	PreStart func(automatic bool)
+	// crash reporter or to clean up recovery files); Start says which start it
+	// is.
+	PreStart func(Start)
 	// Foreground gives the process the launcher's real console (stdin/stdout/
 	// stderr are inherited) — required for interactive TUIs like Claude Code that
 	// need a TTY. stdout/stderr are then not mirrored into the log, and the caller
@@ -52,6 +50,20 @@ type ServiceSpec struct {
 	// a manual stop. It is called in its own goroutine, so it may block /
 	// control the supervisor.
 	OnExit func(Exit)
+}
+
+// Start tells ServiceSpec.PreStart which start is coming.
+type Start struct {
+	// Automatic is true when the restart policy starts the service — after an
+	// exit, or retrying a failed start — and false for the first start (with
+	// or without StartDelay) and for StartService / RestartService.
+	Automatic bool
+	// AfterGiveUp is true for the first start after the service failed and was
+	// not restarted — the fast-fail give-up, a used-up MaxRestarts, a policy
+	// that does not restart the failure, a start that cannot be retried (what
+	// OnExit reports with Success false). Only StartService or RestartService
+	// start it then, so it is never Automatic.
+	AfterGiveUp bool
 }
 
 // Exit tells ServiceSpec.OnExit how the service ended.
@@ -87,6 +99,11 @@ type ServiceStatus struct {
 	// LastError is why the last start attempt failed (the program is missing,
 	// cannot be executed, …). A successful start clears it.
 	LastError string `json:"lastError,omitempty"`
+	// LastExit is how the last run that ended on its own ended ("exit 1"), not
+	// one StopService or RestartService ended. A process that dies right after
+	// a successful start shows here, not in LastError. StartService and
+	// RestartService clear it; the restart policy's restarts keep it.
+	LastExit string `json:"lastExit,omitempty"`
 }
 
 // CommandResult is the result of a one-off command.
@@ -433,6 +450,12 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		// lastErr is why the last start attempt failed; a successful start
 		// clears it (ServiceStatus.LastError).
 		lastErr string
+		// lastExit is how the last run that ended on its own ended
+		// (ServiceStatus.LastExit).
+		lastExit string
+		// afterGiveUp is set while the service failed and was not restarted, until
+		// the next start (Start.AfterGiveUp).
+		afterGiveUp bool
 	)
 
 	// countRun is told whether the run that just ended failed early: a failed
@@ -490,14 +513,17 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	// start is only ever called while the service is desired (initial start,
 	// backoff, ctrlStart, ctrlRestart); automatic is passed on to PreStart.
 	start := func(automatic bool) {
+		pre := Start{Automatic: automatic, AfterGiveUp: afterGiveUp}
+		afterGiveUp = false
 		if spec.PreStart != nil {
-			spec.PreStart(automatic)
+			spec.PreStart(pre)
 		}
 		// startFailed reports a start that will not be retried. The service was
 		// desired and is not coming back, which is exactly what OnExit is for —
 		// without it a missing agent.command leaves the user with a dead console
 		// while the editor keeps running in the background.
 		startFailed := func() {
+			afterGiveUp = true
 			if spec.OnExit != nil {
 				// Own goroutine, same reason as in the exit branch below: the
 				// handler may block and steer us via svc.ctrl.
@@ -569,7 +595,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 
 	snapshot := func() ServiceStatus {
-		st := ServiceStatus{Name: spec.Name, Desired: desired, Restarts: restarts, LastError: lastErr}
+		st := ServiceStatus{Name: spec.Name, Desired: desired, Restarts: restarts, LastError: lastErr, LastExit: lastExit}
 		if cmd != nil && cmd.Process != nil {
 			st.Running = true
 			st.PID = cmd.Process.Pid
@@ -612,7 +638,8 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			releaseStreams()
 			cmd, job, waitCh = nil, nil, nil
 			success := err == nil
-			s.logf("[%s] exited (%s)", spec.Name, describeExit(err))
+			lastExit = describeExit(err)
+			s.logf("[%s] exited (%s)", spec.Name, lastExit)
 			restart := desired && shouldRestart(spec, restarts, success)
 			gaveUp := restart && giveUp()
 			if restart && !gaveUp {
@@ -623,6 +650,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				if !gaveUp { // the give-up has logged its own line
 					s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
 				}
+				afterGiveUp = !success
 				if spec.OnExit != nil {
 					// Own goroutine: the handler may block (TTY prompt) and steer us
 					// via svc.ctrl (start/restart) — doing it synchronously would
@@ -635,7 +663,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			switch msg.kind {
 			case ctrlStart:
 				desired = true
-				restarts, quickFails = 0, 0
+				restarts, quickFails, lastExit = 0, 0, ""
 				backoff = nil
 				if cmd == nil {
 					start(false)
@@ -647,7 +675,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				s.logf("[%s] stopped (manual)", spec.Name)
 			case ctrlRestart:
 				desired = true
-				restarts, quickFails = 0, 0
+				restarts, quickFails, lastExit = 0, 0, ""
 				backoff = nil
 				stop()
 				start(false)

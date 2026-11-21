@@ -186,14 +186,6 @@ func run() error {
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)
 	}
-	uePreStart := func(automatic bool) {
-		if boolVal(cfg.Unreal.KillCrashReporter) {
-			killCrashReporter()
-		}
-		if cfg.Unreal.CleanOnRestart && ueProjectDir != "" {
-			cleanRecovery(ueProjectDir, automatic, logger)
-		}
-	}
 	// Like onAgentExit below: set once the session exists.
 	var onEditorExit func(supervisor.Exit)
 	sup.AddService(supervisor.ServiceSpec{
@@ -204,7 +196,7 @@ func run() error {
 		Restart:      cfg.Unreal.Restart,
 		MaxRestarts:  cfg.Unreal.MaxRestarts,
 		RestartDelay: secs(cfg.Unreal.RestartDelaySeconds),
-		PreStart:     uePreStart,
+		PreStart:     editorPreStart(cfg.Unreal, ueProjectDir, killCrashReporter, logger),
 		OnExit: func(e supervisor.Exit) {
 			if onEditorExit != nil {
 				onEditorExit(e)
@@ -358,10 +350,10 @@ func run() error {
 		logger("MCP server listening on " + mcpURL)
 	}
 
+	con := newConsole(os.Stdin, os.Stdout, logOut)
+	onEditorExit = makeEditorExitHandler(sess, logger, cfg.Agent.Enabled, &mcpServing, cfg.Unreal, ueProjectDir)
 	if cfg.Agent.Enabled {
-		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, console{os.Stdin, os.Stdout})
-	} else {
-		onEditorExit = makeEditorExitHandler(sess, logger, &mcpServing)
+		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, con)
 	}
 
 	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
@@ -376,7 +368,7 @@ func run() error {
 		prepareRuntimes(sup, cfg, agentWorkdir, logger)
 		// In interactive mode stdin belongs to the agent — no command loop of our own.
 		if !agentInteractive {
-			go commandLoop(ctx, os.Stdin, sess.end, sup, logger, "")
+			go commandLoop(ctx, con, sess.end, sup, logger, "")
 		}
 	}
 

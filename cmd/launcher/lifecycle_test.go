@@ -260,7 +260,7 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 		var log syncLog
 		var serving atomic.Bool
 		serving.Store(c.mcpServing)
-		makeEditorExitHandler(sess, log.log, &serving)(c.exit)
+		makeEditorExitHandler(sess, log.log, false, &serving, config.UnrealConfig{}, "")(c.exit)
 		if ended := ctx.Err() != nil; ended != c.wantErr {
 			t.Fatalf("%+v, mcp %v: session ended = %v, want %v", c.exit, c.mcpServing, ended, c.wantErr)
 		}
@@ -271,6 +271,62 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 			t.Fatalf("%+v, mcp %v: logged %q, want a line with %q", c.exit, c.mcpServing, got, c.wantLog)
 		}
 		cancel()
+	}
+}
+
+// k128: the give-up line said "read the logs" and nothing about the crash
+// dumps the failed runs left. It names Saved/Crashes, and with cleanOnRestart
+// what empties it: a retry keeps the dumps, a new launcher run does not. The
+// hint comes on every failure the editor is not restarted after — also with
+// the launcher's own agent, where there is no k69 give-up line to carry it,
+// and after a run that failed late — and only the k69 case ends the session.
+func TestEditorGiveUpLineSaysWhereTheDumpsAre(t *testing.T) {
+	dir := filepath.Join("proj", "Demo")
+	crashes := filepath.Join(dir, "Saved", "Crashes")
+	quick, late := supervisor.Exit{StartFailed: true}, supervisor.Exit{}
+	const failedLine = "The editor failed and is not restarted."
+	for _, c := range []struct {
+		agent      bool
+		exit       supervisor.Exit
+		mcpServing bool
+		clean      bool
+		projectDir string
+		ends       bool
+		want       string // the end of the logged line; "" for no dump hint
+	}{
+		{false, quick, true, false, dir, false, "(Ctrl-C stops the launcher). Any crash dumps are in " + crashes + "."},
+		{false, quick, true, true, dir, false, " Any crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
+		{false, quick, false, false, dir, true, "stopping everything. Any crash dumps are in " + crashes + "."},
+		{false, quick, false, true, dir, true, " Any crash dumps are in " + crashes + " — the next launcher run empties them (unreal.cleanOnRestart)."},
+		{false, late, false, true, dir, false, failedLine + " Any crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
+		{true, quick, false, true, dir, false, failedLine + " Any crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
+		{true, quick, true, false, dir, false, failedLine + " Any crash dumps are in " + crashes + "."},
+		{true, late, false, false, dir, false, failedLine + " Any crash dumps are in " + crashes + "."},
+		{true, supervisor.Exit{Success: true}, false, true, dir, false, ""},
+		{false, quick, true, true, "", false, ""},
+		{false, quick, false, true, "", true, ""},
+		{true, quick, false, true, "", false, ""},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		var log syncLog
+		var serving atomic.Bool
+		serving.Store(c.mcpServing)
+		makeEditorExitHandler(newSession(ctx, cancel), log.log, c.agent, &serving, config.UnrealConfig{CleanOnRestart: c.clean}, c.projectDir)(c.exit)
+		ended := ctx.Err() != nil
+		cancel()
+		got := strings.TrimSpace(log.String())
+		if ended != c.ends {
+			t.Errorf("agent %v, %+v, mcp %v: session ended = %v, want %v", c.agent, c.exit, c.mcpServing, ended, c.ends)
+		}
+		if c.want == "" {
+			if strings.Contains(got, "crash dumps") {
+				t.Errorf("agent %v, %+v, project %q: logged %q, want no dump hint", c.agent, c.exit, c.projectDir, got)
+			}
+			continue
+		}
+		if !strings.HasSuffix(got, c.want) {
+			t.Errorf("agent %v, %+v, mcp %v, clean %v: logged %q, want it to end with %q", c.agent, c.exit, c.mcpServing, c.clean, got, c.want)
+		}
 	}
 }
 
@@ -449,6 +505,116 @@ func TestRunCleanOnRestartKeepsCrashesOnAnAutomaticRestart(t *testing.T) {
 	}
 }
 
+// crashLoopEditor is an editor stand-in for the give-up test. Its first three
+// runs each leave a crash dump in Saved/Crashes and fail at once, which the
+// fast-fail rule gives up on; the fourth run records what Saved/Crashes holds
+// when it starts and keeps running. $1 is the .uproject the launcher passes.
+const crashLoopEditor = `#!/bin/sh
+d=$(dirname "$1")
+n=$(ls "$d" | grep -c '^run\.')
+n=$((n+1))
+: > "$d/run.$n"
+if [ "$n" -le 3 ]; then
+	mkdir -p "$d/Saved/Crashes/dump$n"
+	exit 1
+fi
+ls "$d/Saved/Crashes" > "$d/seen.tmp" 2>/dev/null
+mv "$d/seen.tmp" "$d/seen"
+exec sleep 20
+`
+
+// k128: after the k70 give-up the launcher advises "retry with ue_start", and
+// with cleanOnRestart that manual start emptied Saved/Crashes — the dumps of
+// the crash loop went before anybody read them. The first start after a
+// give-up keeps them, as the automatic restart does (k77).
+func TestRunCleanOnRestartKeepsCrashesOnTheFirstStartAfterAGiveUp(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not on PATH")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick a free port: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"Demo.uproject": "{}",
+		"editor.sh":     crashLoopEditor,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	yaml := strings.Replace(launcherYAML(filepath.Join(dir, "editor.sh"), "  enabled: false\n"),
+		"  killCrashReporter: false\n",
+		"  killCrashReporter: false\n  cleanOnRestart: true\n  restartDelaySeconds: 1\n", 1)
+	yaml = strings.Replace(yaml, "mcp:\n  enabled: false\n", "mcp:\n  enabled: true\n  address: "+addr+"\n", 1)
+	l := startLauncherIn(t, dir, yaml)
+	l.waitLine(t, "keeps serving MCP")
+
+	resp, err := http.Post("http://"+addr+"/mcp", "application/json",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ue_start","arguments":{}}}`))
+	if err != nil {
+		t.Fatalf("ue_start: %v\n%s", err, l.stdout)
+	}
+	_ = resp.Body.Close()
+	var seen []byte
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if seen, err = os.ReadFile(filepath.Join(dir, "seen")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the editor did not start again after ue_start:\n%s\nstderr: %s", l.stdout, l.stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got, want := strings.Fields(string(seen)), []string{"dump1", "dump2", "dump3"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("the first start after the give-up found %q in Saved/Crashes, want the crash loop's dumps %q", got, want)
+	}
+
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+}
+
+// k128: the dump hint came only with the k69 give-up line, which a launcher
+// with its own agent — the default — never logs: there the editor's give-up
+// was the supervisor's line alone. Every editor give-up names the folder.
+func TestRunEditorGiveUpWithAnAgentSaysWhereTheDumpsAre(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not on PATH")
+	}
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"Demo.uproject": "{}",
+		"editor.sh":     "#!/bin/sh\nexit 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	yaml := strings.Replace(launcherYAML(filepath.Join(dir, "editor.sh"), `  enabled: true
+  command: sleep
+  args: ["20"]
+  window: false
+  claudeIntegration: false
+`), "  killCrashReporter: false\n", "  killCrashReporter: false\n  restartDelaySeconds: 1\n", 1)
+	l := startLauncherIn(t, dir, yaml)
+	l.waitLine(t, "Any crash dumps are in "+filepath.Join(dir, "Saved", "Crashes")+".")
+
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0 (an editor give-up does not end a session with an agent):\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+}
+
 // sleepProcessEnv selects TestSleepProcess.
 const sleepProcessEnv = "UNREAGENT_TEST_SLEEP"
 
@@ -541,6 +707,31 @@ func TestCrashReporterKillMatchesOnlyTheProgram(t *testing.T) {
 		case <-p.done:
 			t.Errorf("killed %s (%v): the pattern matches more than the crash reporter", p.name, p.cmd.ProcessState)
 		default:
+		}
+	}
+}
+
+// k128: the crash-reporter kill ran before every start, also before the
+// restart policy's restart about one restart delay after a crash, and could
+// cut off a reporter still writing the report of that crash. A start that
+// keeps Saved/Crashes for diagnosis leaves the reporter alone too; every
+// other start kills it, and killCrashReporter: false never does.
+func TestEditorPreStartSparesTheCrashReporterAfterACrash(t *testing.T) {
+	on, off := true, false
+	for _, c := range []struct {
+		kill  *bool
+		start supervisor.Start
+		want  int
+	}{
+		{&on, supervisor.Start{}, 1},
+		{&on, supervisor.Start{Automatic: true}, 0},
+		{&on, supervisor.Start{AfterGiveUp: true}, 0},
+		{&off, supervisor.Start{}, 0},
+	} {
+		kills := 0
+		editorPreStart(config.UnrealConfig{KillCrashReporter: c.kill}, "", func() { kills++ }, func(string) {})(c.start)
+		if kills != c.want {
+			t.Errorf("killCrashReporter %v, %+v: %d kills, want %d", *c.kill, c.start, kills, c.want)
 		}
 	}
 }
@@ -712,7 +903,7 @@ func newFakeConsole(t *testing.T) *fakeConsole {
 	r, w := io.Pipe()
 	t.Cleanup(func() { _ = w.Close() })
 	out := &syncBuffer{}
-	return &fakeConsole{w: w, con: console{in: r, out: out}, out: out}
+	return &fakeConsole{w: w, con: console{in: &lineReader{in: r}, out: out, logSeparate: true}, out: out}
 }
 
 // typeLine types one line; it fails the test when nobody reads it.
@@ -769,9 +960,17 @@ func agentSession(t *testing.T, command string, args ...string) (*session, *fake
 	if _, err := exec.LookPath(command); err != nil {
 		t.Skipf("%s not on PATH", command)
 	}
+	fc := newFakeConsole(t)
+	sess, sup, _ := agentSessionOn(t, fc.con, command, args...)
+	return sess, fc, sup
+}
+
+// agentSessionOn is agentSession on the given console; it also returns the
+// launcher log.
+func agentSessionOn(t *testing.T, con console, command string, args ...string) (*session, *supervisor.Supervisor, *syncLog) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := newSession(ctx, cancel)
-	fc := newFakeConsole(t)
 	logs := &syncLog{}
 	sup := supervisor.New(logs.log)
 	var onExit func(bool)
@@ -785,11 +984,11 @@ func agentSession(t *testing.T, command string, args ...string) (*session, *fake
 	})
 	cfg := &config.Config{}
 	cfg.Agent.OnExit = config.OnExitAsk
-	onExit = makeAgentExitHandler(ctx, sess, sup, cfg, logs.log, true, fc.con)
+	onExit = makeAgentExitHandler(ctx, sess, sup, cfg, logs.log, true, con)
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	return sess, fc, sup
+	return sess, sup, logs
 }
 
 func waitEnded(t *testing.T, sess *session, fc *fakeConsole) {
@@ -869,7 +1068,7 @@ func TestCommandLoopHandsTheConsoleToTheForegroundAgent(t *testing.T) {
 			fc := newFakeConsole(t)
 			ended := false
 			result := make(chan bool, 1)
-			go func() { result <- commandLoop(ctx, fc.con.in, func() { ended = true }, sup, logs.log, "agent") }()
+			go func() { result <- commandLoop(ctx, fc.con, func() { ended = true }, sup, logs.log, "agent") }()
 
 			fc.typeLine(t, "status") // an ordinary command: the loop keeps reading
 			fc.typeLine(t, cmd)

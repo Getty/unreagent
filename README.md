@@ -296,12 +296,18 @@ is not restarted, the launcher prompts on the console (`agent.onExit: ask`,
 the default):
 
 ```
-Agent ended.
-  [Enter] shut down everything (UE + launcher)
-  [k]     keep editor running, drop to launcher console
+Agent exited.
+  [Enter] stop everything (UE + launcher)
+  [k]     keep the editor running, launcher console
   [r]     restart the agent
-> _   (30s -> shut down everything)
+> _   (30s -> stop everything)
 ```
+
+The first line says how the run ended: `Agent exited.` (exit 0),
+`Agent crashed.`, or `Agent did not start: <reason>` when the agent could not
+be started at all (for example a wrong `agent.command`). The prompt and the
+launcher console read the same input, so lines piped into the launcher are not
+lost between them.
 
 `r` (and `start agent`) from the launcher console hands the terminal back to
 the agent, see [Manual control](#manual-control-stdin). Without a TTY
@@ -343,6 +349,12 @@ error line on stderr names the reason. With MCP on
 (including `-no-agent` and `manualStart` setups) an editor give-up does not end
 the launcher: it logs the failure and keeps serving MCP, so an external agent
 can read the logs and retry `ue_start`.
+
+Every editor give-up, with or without an agent, ends its log line with where
+the crash dumps are, for example `The editor failed and is not restarted. Any
+crash dumps are in <project>/Saved/Crashes.` With `unreal.cleanOnRestart` the
+line adds what empties them: a retry from the launcher keeps them, a new
+launcher run empties them.
 
 ## In-editor MCP: Unreal MCP or UE LLM Toolkit (Windows)
 
@@ -570,8 +582,8 @@ the UE 5.7 source and **has not been re-checked for UE 5.8 or newer**.
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
 | `unattended` | `true` | appends `-unattended` — no crash dialog, no recovery prompt |
-| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before every (re)start (belt and suspenders); off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
-| `cleanOnRestart` | `false` | removes `Saved/Autosaves/PackageRestoreData.json` before every start; empties `Saved/Crashes/` only on the first start and on manual starts (console `start` / `r`, MCP `ue_start` / `ue_restart`). On an automatic restart by the restart policy (including a retry of a failed start) the crash folder is kept so the dump stays readable, and when it holds anything the launcher logs `Recovery: Saved/Crashes kept …` |
+| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before a start (belt and suspenders), except a start that follows a crash — an automatic restart, or the first start after the launcher gave up on the editor — where the reporter may still be writing the dump; off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
+| `cleanOnRestart` | `false` | removes `Saved/Autosaves/PackageRestoreData.json` before every start; empties `Saved/Crashes/` before a start that does not follow a crash: the first start of a launcher run and every other manual start (console `start` / `r`, MCP `ue_start` / `ue_restart`), including one issued during the restart delay after a crash. The crash folder is kept on an automatic restart by the restart policy (including a retry of a failed start) and on the first start after the launcher gave up on the editor, so the dumps stay readable; when it holds anything the launcher logs `Recovery: Saved/Crashes kept (…)` with the reason |
 
 If a **human** is working interactively in the editor in parallel, set
 `unattended: false`. In addition (so the reporter never even sends/starts)
@@ -934,8 +946,8 @@ are materialized the launcher logs
 
 | Tool | Function |
 |---|---|
-| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list |
-| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle. If the editor is not running after `ue_start` / `ue_restart`, the result is an error, `Error: service "ue" did not start: <lastError>`, followed by the status JSON (e.g. a missing `unreal.editor` program) |
+| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds); `lastExit` is how the last run that ended on its own ended, e.g. `exit 1` (absent until one ends; `ue_start` / `ue_restart` clear it) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list |
+| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle. If the editor is not running after `ue_start` / `ue_restart`, the result is an error, `Error: service "ue" did not start: <lastError>`, followed by the status JSON (e.g. a missing `unreal.editor` program). Running only means the editor was spawned: for one that dies at once, check `status` after a few seconds (`lastExit`) |
 | `run_command` | run a preconfigured command (compile, package) |
 | `logs` | last output lines of a service |
 | `run_python` / `run_node` | run code in a prepared environment |
@@ -1035,7 +1047,9 @@ subprocess it won't start. Hence three ways:
    session's log is kept as `unreagent.log.1`, one generation, replaced on
    each start) so the agent has the window to itself. If the old log cannot
    be moved aside, a warning says so and the new session is appended to
-   `unreagent.log`. If the log cannot be created, the launcher prints a
+   `unreagent.log`. The launcher console's replies (see
+   [Manual control](#manual-control-stdin)) show on the console as well as in
+   the log. If the log cannot be created, the launcher prints a
    warning to stderr and its logs go to the console instead. Disable with `window: false`; off in `-p` mode.
 2. **Headless / task** (`agent.args: ["-p", "<task>"]`) — one-shot task
    without a window, then the agent exits.
@@ -1075,6 +1089,16 @@ in trusted networks — the server then has file-write access).
 
 `status` · `r [name]` (restart) · `start <name>` · `stop <name>` ·
 `c <name>` (run command) · `q` (quit)
+
+The console answers each command on the console itself; in window mode, where
+the launcher log goes to `unreagent.log`, the same line is logged there too.
+That covers the command list, the `status` JSON, `c <name>` results,
+`Error: …`, `Unknown command: …`, `Stopping …` and
+`Launcher console active — …`. A `start`, `r <name>`, `r` or `restart` that
+leaves the service not running answers `Error: service "ue" did not start:
+<lastError>`; `start` or `stop` of a name that is not a service answers
+`Error: unknown service "nosuch"`. `status` shows `lastExit` for a run that
+ended on its own.
 
 In the launcher console opened with `k` in window mode, `start agent`,
 `r agent`, `restart agent` and a plain `r` hand the terminal back to the agent
