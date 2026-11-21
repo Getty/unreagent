@@ -1,0 +1,61 @@
+---
+class: standard
+completed: 2026-11-21T02:13:34Z
+created: 2026-11-21T00:54:07Z
+depends_on:
+- 41
+- 42
+- 43
+- 47
+id: 101
+priority: medium
+started: 2026-11-21T01:43:00Z
+status: done
+tags:
+- docs
+- config
+title: Document config placeholder coverage and the new load errors
+updated: 2026-11-21T02:13:48Z
+---
+
+After k41/k42/k43/k47. README.md (doc-writer): placeholder table (PROJECT row: unreal.project if set, else the .uproject next to the config; the substituted field list and the exclusions; no placeholders in unreal.project; an unresolved placeholder in a used field is a load error); quick-reference unreal row (project relative or absolute, must exist; args: ~ vs []; restartDelaySeconds 0 = 3), agent row (startDelaySeconds 0 = 5, restartDelaySeconds 0 = 3, none below 0); commands row (compile/package only when engine and project resolve); writeConfig formats other than mcp_json/vscode are a load error; agent.env merges by key in the overlay (k47 item 1). Lists replace and maps merge by key in the overlay: say so for every list- or map-valued option touched. unreagent.example.yaml (doc-writer): header (which fields take placeholders, unresolved = error), the commented unreal block (project, args, restartDelaySeconds), the agent delays, the writeConfig format values. .claude/skills/unreagent-config (skill-author): replace the "all string values" claim with the field list and say a new field must be added to substitute on purpose with its used-condition; fix "order matters in the replacer" (the closing brace prevents the overlap); load-order steps 4 and 5; add a substitution step to the "Adding a field" checklist. Size M.
+
+
+**Note 2026-11-21** (k42 re-review): document that a relative engineRoot/UE_ROOT resolves against the working directory, while a relative unreal.project resolves against the config directory; and that hermes-setup now fails at load without an engine.
+
+**Doc part done (doc-writer, 2026-11-21), uncommitted in the main tree** (README Portability + quick-reference + MCP/CLI sections, unreagent.example.yaml header and option comments). Covers: the substitute field list and exclusions, no escape syntax, unresolved placeholder in a used field = load error with per-section used-conditions, built-in compile/package skipped with a warning, files.root cleared when files disabled and -files refused, hermes-setup stops at load without an engine, relative -config/UE_ROOT/engineRoot/project bases, delays (0 = default, negative rejected), args: ~ vs [], writeConfig formats + relative-path base (agent.workdir), overlay rule per list/map option. Not stated: agent delays are only validated when agent.enabled. Skill part (unreagent-config) still with the skill-author.
+
+Both parts done in the main tree, uncommitted: README + unreagent.example.yaml (doc-writer) and .claude/skills/unreagent-config/SKILL.md (skill-author: real substituted-field table with used-conditions, replacer order does not matter because every key ends in '}', 8-step load order with every new load error, substitution step in the Adding-a-field checklist, overlay wording unchanged).
+
+**Review (unreagent-reviewer, 2026-11-21): APPROVE WITH NITS** — fold the nits into the README pass k97 needs anyway. Check: same run as k97 (gofmt / vet / go test ./... / make windows all green), plus go test -count=1 ./internal/config/ ok, including TestExampleDemoConfigLoads, TestLocalOverlaySemantics, TestDelays, TestUnrealArgsNullVersusEmptyInOverlay, TestWriteConfigFormat and TestUnresolvedPlaceholder*. unreagent.example.yaml parses (PyYAML) and its parsed structure is identical to HEAD. Files reviewed: README.md, unreagent.example.yaml, .claude/skills/unreagent-config/SKILL.md.
+
+Nits (each an edge where the text over-claims):
+1. README.md:226-228 used-conditions: "a runtime needs its enabled" — runtimes.node.npm is also used with mcp.enabled and a node-started extra server (config.go:486). The skill says so; README does not.
+2. README.md:463 agent row: "a negative value is a load error" holds only when agent.enabled (config.go:587-596).
+3. README.md:198-199 "so the project paths never depend on the working directory" — a relative -config is resolved against the working directory (config.go:245). What holds is that every placeholder value is absolute. The CLI-flags row says it correctly.
+4. README.md:258-260 lists "the args of a command" among the lists replaced whole, but a command entry is replaced whole (overlay_test.go:94-99), so its args cannot be overridden alone. Drop it or say so.
+5. unreagent.example.yaml:29-30 "an unresolved files.root only disables -files" holds only with files.enabled: false; with true it is a load error (config.go:490-494). README states it correctly.
+
+Verified true:
+- the substituted-field list and used-conditions vs substitute() (config.go:457-518), and the literal fields;
+- ${ in unreal.project is a load error; both quoted load errors match config.go:530 + placeholderHint;
+- built-in compile/package dropped into Info.SkippedCommands, WARN at main.go:84-86, absent from status and run_command;
+- files.root cleared and -files refused (main.go:134-137);
+- -config made absolute; project relative to the config dir; UE_ROOT/engineRoot relative to the working dir;
+- writeConfig relative to agentWorkdir (main.go:186-189, 256-261); format enum message;
+- delays: 0 = default, negative rejected; args ~ vs [] pinned; StartDelay applies to the first start only;
+- overlay list/map classification complete for Config.
+Skill: every claim checked, including the extras: KnownFields, CLI flags after Load, the permission note (matchPath cleans "./*" to "*", which matches all), the auto-derived section. Replacer-order claim checked by running it: all 24 key orders give identical output; keys without the closing brace would not.
+
+**Re-review (unreagent-reviewer, 2026-11-21): APPROVE WITH NITS** — cosmetic only, the release-manager need not wait for them. Judged against main @ 3c920ef (config.go and main.go unchanged). Re-ran the YAML parse (ok, structure identical to HEAD) and go test -count=1 ./internal/config/ (ok).
+All five findings fixed and verified:
+1. npm used-condition (README.md:229, config.go:486);
+2. a negative agent delay is a load error only with agent.enabled (README.md:463, config.go:587-596);
+3. the relative -config sentence (README.md:198-199) is now true;
+4. command args are out of the replaced-list set, and the README explains that the whole command entry is replaced (overlay_test.go:94-99);
+5. the files.root exception in the example header now depends on files.enabled (config.go:490-494).
+Nits left:
+- README.md:263 is not wrapped (95 chars), and "— so you cannot override … , the whole command entry is replaced. So agent.env …" is a comma splice followed by a second "So"; one sentence would read better.
+- Optional: README.md:229 — npm counts for a node-started extra server only with mcp.enabled (config.go:486). The same sentence already ties extraServers to mcp.enabled, so this is not misleading.
+
+Committed in c563b81
