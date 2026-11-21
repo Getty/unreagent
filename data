@@ -1,0 +1,35 @@
+---
+claimed_at: 2026-11-21T11:37:52Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:40:48Z
+created: 2026-11-21T07:31:47Z
+id: 143
+priority: low
+started: 2026-11-21T07:45:07Z
+status: done
+tags:
+- skills
+- docs
+- test
+title: 'Skill name rewrite: list the refused forms consistently and pin tag/anchor/alias'
+updated: 2026-11-21T12:41:00Z
+---
+
+From the k10–k12 round-3 review (optional, not blocking). Materialization rewrites name: only for a plain or quoted single-line value. The code also refuses a tag, an anchor and an alias, but the docs list the refused forms unevenly. (1) doc-writer: spec docs/superpowers/specs/2026-08-21-skill-subsystem-design.md §6.3 (~:296-297): add 'an anchor or an alias' and mark the list as examples. (2) worker: the same in the comment at cmd/launcher/skills.go (~:204, materializedSource). (3) skill-author: add the alias to .claude/skills/unreagent-skill-authoring/SKILL.md (~:64). (4) test-writer: add tagged, anchored and aliased cases to TestMaterializeRefusesANameItCannotRewrite. Also stale comments that still say byte for byte: cmd/launcher/skills_test.go (~:262-263) and internal/skills/skills_test.go (~:256). Do it after the k10–k12 commit lands.
+
+2026-11-21 08:12 Worker part done (not committed). (2) The materializedSource comment in cmd/launcher/skills.go now lists the refused forms the way the code refuses them, marked as examples: a tag, an anchor, an alias, an escape, a folded or block scalar, a value over several lines; the value must be plain or quoted on one line. (4) Handed to me by the main agent, although the card names the test-writer: TestMaterializeRefusesANameItCannotRewrite gained tagged (!!str), anchored (&n) and aliased (*n) cases. They pin existing behaviour and pass on the current code. A guess-rewrite mutation (search for the name after the node's position, follow aliases) turns all three red, while the existing cases stay green under it. Also fixed the stale comment in cmd/launcher/skills_test.go (TestMaterializeWritesEverySkill: SKILL.md 'exactly as embedded' becomes 'as embedded, its name set to that directory where the prefix is added'). Left for the owning agents: (1) spec §6.3, doc-writer; (3) .claude/skills/unreagent-skill-authoring, skill-author; internal/skills/skills_test.go:256. Checks: see k139 (same tree), all green.
+
+2026-11-21 08:14 Worker part done: the materializedSource comment lists the refused forms as examples (tag, anchor, alias, escape, folded or block, multi-line); TestMaterializeRefusesANameItCannotRewrite gained tagged/anchored/aliased cases, shown red under a guess-rewrite mutation; the stale skills_test.go comment is fixed. Spec, the skill-authoring skill and internal/skills/skills_test.go:256 are left for their owners.
+
+Item (1) done: spec §6.3 name: bullet now lists tag, anchor, alias, escape, folded/block, multi-line as examples (docs/superpowers/specs/2026-08-21-skill-subsystem-design.md ~:312-317).
+
+Skill-author part done (not committed). (3) .claude/skills/unreagent-skill-authoring/SKILL.md:65-69: the name: bullet lists the forms materialization cannot rewrite as examples, matching the materializedSource comment: a tag, an anchor, an alias, an escape, a folded or block scalar, a value over several lines. internal/skills/skills_test.go:256-260: the TestLoadKeepsSourceVerbatim comment now matches Skill.Source's doc (internal/skills/skills.go:33): Source is SKILL.md byte for byte as embedded; materialization writes it changing at most the name: value. Comment only. Checks in the worktree: gofmt -l cmd internal skills clean, go vet ./... clean, go test -count=1 ./internal/skills ok.
+
+Reviewer verdict (bundle k137+k139+k143): k143 READY.
+These all list the same forms as examples, and all are in English: the materializedSource comment (cmd/launcher/skills.go:318-328); the tagged, anchored and aliased cases in TestMaterializeRefusesANameItCannotRewrite (cmd/launcher/skills_test.go:452-454); the comments at cmd/launcher/skills_test.go:263-266 and internal/skills/skills_test.go:256-260; the name: bullet in spec §6.3 (:313-317); and .claude/skills/unreagent-skill-authoring/SKILL.md:65-69. The three new cases pin behaviour that already exists and pass. I did not re-run the worker's guess-rewrite mutation.
+Nit (skill-author): SKILL.md:69 has a short line left over from the rewrap ("whole set before writing").
+Check: as noted on k137, green in the worktree and in the copy applied on 90c07ae.
+Changes: no entry (comments and tests only).
+
+Committed in 9bd5b84 on main (bundle k137+k139+k143). Windows UNVERIFIED (compile only); smoke items remain: directory rename onto/over existing, open handle in a skill dir, Defender/OneDrive on fresh copy, two sweeps with RemoveAll, device-named section.
