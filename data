@@ -1,0 +1,40 @@
+---
+claimed_at: 2026-11-21T04:16:48Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T04:16:59Z
+created: 2026-08-24T23:43:40Z
+id: 71
+priority: medium
+started: 2026-11-21T02:34:39Z
+status: done
+tags:
+- bug
+title: After k + start agent the launcher console and the foreground agent both read
+  stdin
+updated: 2026-11-21T04:16:59Z
+---
+
+main.go:1056-1061, :1109: the k path starts commandLoop (a stdin reader); the loop's own hint (:1038) advertises start agent; that spawns the Foreground agent on the same stdin while commandLoop keeps scanning. Observed with piped stdin: 'hello' went to commandLoop ('Unbekannter Befehl: hello'), 'q' went to the agent, launcher then unreachable until SIGTERM. Two readers on a Windows console behave the same (unverified).
+Acceptance: start agent in the loop returns from commandLoop and clears cmdLoopRunning so the exit prompt takes over again, or the loop refuses start agent and only the prompt's r path starts the agent; test.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: the k path starts commandLoop, which accepts 'start agent' and spawns the foreground agent on the same stdin. Same function set as k69/k70. Size S/M.
+
+Done (2026-11-21), same worktree: the k-console returns before the foreground agent starts (start agent / r agent / restart agent / plain r), the caller restarts the agent, one stdin reader at a time; fake-console tests, 3 mutations red. Docs: README manual control section. Interactive console on Windows unverified.
+
+2026-11-21 03:42 Review (unreagent-reviewer): READY. The Windows console handover is compile-only and unverified.
+Check: same run as on k70 (gofmt, vet linux+windows, go test -count=1 ./..., race -count=5 on supervisor+launcher, make linux, make windows: all green).
+Mutations: the worker's 3 K71 mutations, re-run on a scratch copy, all fail the tests. So do mine: R5 (the loop runs 'r agent' / 'restart agent' itself), R6 (the handover happens but restartAgent is never called) and R9 (a plain r restarts the agent inside the loop).
+One stdin reader at a time: commandLoop returns before restartAgent, and cmdLoopRunning is cleared before StartService. The MCP tools control only 'ue', so nothing else can start the foreground agent while the console is reading. No-zombie: the handover starts the agent through StartService and runService, with the Job Object, as before.
+Notes (pre-existing, not blockers): (a) the prompt and the console each use their own bufio.Scanner on the same reader. With piped stdin, lines buffered past 'k' or past the handover line are lost; a TTY reads one line at a time, so it is not affected. (b) In window mode the console's 'Commands:' line and its 'status' output go through logger, so they end up in unreagent.log, not on the terminal. Ticket candidate.
+Commit this together with k69/k70: they share lifecycle.go. The worktree base 4b71fea is behind main (k115, k96); the patch applies cleanly onto main and is green there.
+
+Reviewer verdict: ready. Waits for k69/k70 (shared lifecycle.go), lands in the same commit.
+
+2026-11-21 04:10 Re-confirmed (unreagent-reviewer): still READY. Windows console behaviour is compile-only and unverified.
+Nothing k71 depends on changed in the k69/k70 fix round. In lifecycle.go only the session comment, the editor-handler comment and the agent-exit log line changed; commandLoop, the handover goroutine and promptAgentExit are untouched, and so are the k71 tests.
+Check: same run as on k70: all green, including race -count=5. K71-M1 to M3 in the worker's mutate_k69_k71.sh still fail the tests.
+Commit this together with k69 and k70.
+
+Committed as 3ab0142
