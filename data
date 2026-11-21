@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-11-21T02:44:41Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:44:41Z
+created: 2026-11-21T02:00:56Z
+depends_on:
+- 78
+id: 108
+priority: low
+started: 2026-11-21T02:17:26Z
+status: done
+tags:
+- mcp
+- nit
+title: Tool wording nits from the k78/k98 review
+updated: 2026-11-21T02:44:54Z
+---
+
+From the reviewer of k78/k98 (non-blocking):
+- cmd/launcher/tools.go ue_restart description ("Use this after a C++ build…") reads against the new run_command advice (stop, compile, start). Not plainly wrong — a restart also starts a stopped editor — but reword so the two agree.
+- approve deny reason says "no tool name" even when tool_name is present but not a string (the key list in the message does show it).
+- the launcher log line for an empty tool name reads "[approve]  → deny" — show a placeholder.
+- logs and run_command descriptions both say run_command output is not in logs; say it once to save prompt tokens.
+- cmd/launcher/tools_test.go: the logs lines="3" case only checks for no error (empty buffer); string → line count is only covered by the direct getInt test.
+
+Worker done (worktree-agent-aca6dae775b467c55, uncommitted, base c563b81; files cmd/launcher/tools.go, tools_test.go): ue_restart description agrees with stop -> compile -> start ('starts it if it is stopped … To compile, stop it first instead (see run_command)'); 'not in logs' said once, in run_command; approve says 'tool name is not a string (tool_name is float64)' when the key is present but not a string; log line shows <unknown> for a missing name; new TestApproveLogNamesTheTool and TestLogsLinesLimitsOutput (real supervised sh service fills the ue buffer; red shown via a temporary getInt mutation). Follow-up: skills/unreagent-files/SKILL.md:185 could match the stop -> compile -> start order (skill-author, k100).
+
+Reviewer verdict: APPROVE WITH NITS (non-blocking). Files: cmd/launcher/tools.go, cmd/launcher/tools_test.go (worktree-agent-aca6dae775b467c55, base c563b81). Check run by reviewer in the worktree, green: gofmt -l cmd internal skills (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test ./... -count=1 -race, go test -race -count=5 ./cmd/launcher, make windows. Plus TestLogsLinesLimitsOutput 600x (-cpu 1,4, race build) under full CPU load: green. Claims verified: ue_restart 'starts it if it is stopped' is true (supervisor.go:529-535, stop() is a no-op when cmd==nil, start() runs, a pending backoff is cleared); the text agrees with run_command (tools.go:80-81), skills/unreagent-build/SKILL.md:153-160 and skills/unreagent-iterate/SKILL.md:123-128,262. 'Not in logs' now said once (tools.go:80). Mutations in a scratch copy, each caught: HEAD tools.go (not-a-string case + blank log name fail), getInt ignoring strings, logs ignoring n, dropping the nil guard at tools.go:169, a blank placeholder. Nits: (1) tools.go:170 uses %T, so the deny reason names Go types (float64, map[string]interface {}); same convention as helpers.go:77, acceptable. (2) tools_test.go:220-221 says the buffer is complete once OnExit fired; true up to drainTimeout (2s, supervisor.go:363), fine for sh printf with no grandchildren. (3) TestLogsLinesLimitsOutput skips without sh; with a Git-for-Windows sh it would run there: not exercised, Windows unverified (compile only), no platform code in this change. Follow-up, not this card: skills/unreagent-files/SKILL.md:183-186 ('compile ... and usually ue_restart') is not yet noted on k100 (skill-author).
+
+Committed as 5a2368e, fast-forwarded to main.
