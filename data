@@ -1,0 +1,138 @@
+---
+class: standard
+completed: 2026-11-21T16:08:38Z
+created: 2026-11-21T13:31:33Z
+id: 175
+priority: low
+started: 2026-11-21T14:18:12Z
+status: done
+tags:
+- mcp
+- tools
+title: Reply cap marker undercounts when the supervisor already dropped the middle
+  of the output
+updated: 2026-11-21T16:09:08Z
+---
+
+From k149. Past 2 MiB, the supervisor keeps the first and last MiB of a run_* output and drops the middle. The k149 reply cap then cuts the oldest bytes of what is left, and its [... N bytes omitted; a reply holds at most 96 KiB] count leaves the dropped middle out. With 10,000-byte lines and 3 MiB of output, the marker said 1,998,942 bytes, about 1 MiB less than was really cut, and no gap line survives. k149's tool description warns about this. Done when the cap marker's count includes the supervisor's dropped bytes, or a separate line says a middle was dropped, with a test. Lane: unreagent-worker; after k149 lands.
+
+From the k149 re-review (two optional nits, folded in here so k149 can land): 1) cmd/launcher/tools.go:92 cutNote: "with long lines neither count includes it" is approximate; exact: "and when its last MiB holds fewer than 300 lines, neither count includes it". 2) tools.go:57: the logs description names "48 KiB" twice in one sentence. Fix both together with the undercount.
+
+Decision 2026-11-21 (main agent): the marker count includes what the supervisor already dropped. If that number is not available, the marker says honestly 'at least N bytes'. The k149 nits on cutNote and the logs description are fixed here too. Bundled with k173 in one worker.
+
+Worker result (tree commit-ready, not committed).
+
+Choice: an exact count, not "at least N". The dropped byte count was not exposed, so CommandResult gets an unexported dropped field (set in headTailBuffer.result) and Gap(n) (index, dropped int, ok bool) in internal/supervisor/ringbuffer.go: the index of the "[... N bytes omitted]" line among the last n lines of Output, counted the way LinesBefore counts. commandReply hands it to capReply(head, lines, gap, dropped); logs passes -1, 0. When the cut reaches that line, the whole line goes, because a cut inside it would leave a fragment that names no count. The count then adds N and subtracts the line text and the two line breaks String() inserts around it. So the count is of the output own bytes. The marker is sized for size+N, so the reply stays within the cap. In the one case where the cut stops short of that line (the output ends in nearly 1 MiB of blank lines), the line survives and shows the middle itself.
+
+Nits: cutNote now ends "Past 2 MiB the middle of the output is dropped as well, and those counts include it." The suggested wording would be false after the fix. The logs description names 48 KiB once now: "Past the reply size cap its oldest bytes go, of a single long line too, and a line [... N bytes omitted; a reply holds at most 48 KiB] takes their place."
+
+Tests: TestCommandResultGap (supervisor); TestCapReplyCountsTheDroppedMiddle (head lines above the marker / marker first / cut inside the marker / control: marker kept); TestRunCommandCountsTheDroppedMiddle, end to end with cat: the card case of 3 MiB of 10,000-byte lines goes from 2048094 to 3100913, the real count; short lines then long ones with a line marker goes from 1024247 to 2079930; control 3 MiB of 1,000-byte lines. They are red without the fix via go test -overlay (capReply gap logic reverted; Gap always !ok). The two controls pass both ways by design.
+
+dropped is held as int like lines/keptLines: fine on amd64, the only target.
+
+Docs, not edited. For unreagent-skill-author: skills/unreagent-build/SKILL.md:100-105 ("neither number includes the dropped middle" is now false: the B count includes it); skills/unreagent-runtimes/SKILL.md:98-99 (can say the counts include it); .claude/skills/unreagent-mcp-tools/SKILL.md:107-109 (capReply(head, lines) is now capReply(head, lines, gap, dropped), plus CommandResult.Gap). README: no line on the dropped middle.
+
+Check: gofmt -l clean; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; -race ./cmd/launcher and ./internal/supervisor ok; make linux and make windows built. No Windows-specific path touched; the .exe is compiled, not run.
+
+To review: exact byte count incl. the dropped middle (CommandResult.Gap + capReply gap/dropped), both nits fixed, tests red without the fix. Bundled with k173, one tree.
+
+Skill-author result (worktree agent-a8b82ae6eae275f57, uncommitted). Checked against helpers.go capReply/commandReply, tools.go cutNote, supervisor ringbuffer.go Gap/result. skills/unreagent-build/SKILL.md: the 2 MiB bullet now says the markers count the dropped middle: N includes the dropped lines when the last MiB holds at least 300 lines; when it holds fewer, N counts only the lines above the 300 and B includes the dropped bytes; added the rare case where the supervisor's own [... D bytes omitted] line survives (it names the middle, B leaves it out). The B-marker row in the error table notes that B can include the dropped middle past 2 MiB. skills/unreagent-runtimes/SKILL.md: 'and the markers count it too'. .claude/skills/unreagent-mcp-tools/SKILL.md: capReply(head, lines, gap, dropped), CommandResult.Gap(n), logs passes -1, 0, the whole gap line goes when the cut reaches it and D replaces its text and two line breaks; LinesBefore sentence narrowed to 'when the last lines lie below its gap line'. Check: go test -count=1 ./internal/skills ok.
+
+Review 2026-11-21 (unreagent-reviewer), bundled tree k175 + k173 (worktree agent-a8b82ae6eae275f57, base ce9ef4a). Verdict: CHANGES NEEDED for k175. k173 has no findings, but it shares the tree, so the tree goes back to unreagent-worker.
+
+Check (run by me): gofmt -l cmd internal skills is empty; go vet ./... is clean for linux and GOOS=windows; go test -count=1 ./... ok; go test -race for ./internal/supervisor and ./cmd/launcher ok; make linux and make windows build. No platform-guarded code changed. The .exe was only compiled, never run.
+
+Findings, most important first:
+
+1. [k175, blocking] cmd/launcher/helpers.go:91-101 (commandReply) with internal/supervisor/ringbuffer.go:142-164 (LinesBefore, Gap). The counts are wrong when the last MiB holds exactly 300 or 299 lines as Output splits them (keptLines == n or n-1). Shown with a probe that compares commandReply on a real 1 MiB headTailBuffer against the real output: N must be the real lines above the window, B the real bytes of the window not shown.
+   a) keptLines == 300. The 300 lines start with the tail's first line, and that line starts in the dropped middle. Gap reports !ok, so B leaves out the part of that line that was dropped. Lines of 3,495-3,505 bytes, 3 MiB: B=999,513 against a real 999,737 to 1,002,737. Worst case, a 2.9 MiB line followed by 299 short ones: B=999,489 against a real 2,923,504, with N=0 and no gap line in the reply. That is the k175 symptom at full size.
+   b) keptLines == 299. The 300 lines start at the gap line (index 0). N counts the head's last line, which continues into the middle, and B adds all D bytes, so that continuation is counted twice. Width 3,506-3,510: B=2,048,140 against a real 2,048,123. When the head ends in a newline, N also counts the empty line that String() leaves before the gap line: N=129 for 128 real lines, and B is 3,511 too high.
+   The cutNote in cmd/launcher/tools.go:96-97 ("those counts include it") and skills/unreagent-build/SKILL.md:100-108 promise exact counts, and both are false here. Fix (worker's choice): never start the window at a line the gap splits. For example, when the middle was dropped and keptLines <= n < keptLines+2, widen the window to keptLines+2 lines so it starts at the head's last line. Gap index 1 came out exact in every shape the probe tried. Narrowing the window to start below the partial tail line also works. Add tests at both edges: 3,500- and 3,510-byte lines, and the 2.9 MiB line plus 299 short lines.
+   The sweep passed everywhere else: widths 99-3,494 and 3,520 up to one 3 MiB line, shifts 0-3, with and without a final newline, 3-byte runes, short then long lines, long then short, a blank tail, and a short tail swept across the cut (the cut above, on and inside the gap line). The 4 cases asked for (cut above the gap line, cut reaching it, fewer than 300 lines in the last MiB, logs passing -1, 0 at tools.go:85) are all correct.
+
+2. [k175, minor] cmd/launcher/helpers.go:150-160. When the cut stops exactly at the start of the kept gap line, so the body begins with that line, B also counts the line break that String() inserted before it: one byte too many. Short-tail sweep T=49,034/49,035: B=38,017 against a real 38,016. 8 of 783 cases. Fix: subtract that break in this case, or handle it like a cut that reaches the gap line.
+
+3. [nit] cmd/launcher/helpers.go:77-82. The toolReplyBytes comment was not reflowed; line 80 is 117 columns wide.
+
+k173: no findings. A probe through tools/call on a 1 MiB file gave:
+- default, limit=1 GiB and offset=-2^40 each return [bytes 0-48128 of 1048576; continue with offset=48128], 48,183 bytes;
+- offset=-48128 returns [bytes 1000448-1048576 of 1048576], with no continue;
+- offset=-65536 returns [bytes 983040-1031168 of 1048576; continue with offset=1031168], 48,192 bytes, as skills/unreagent-files/SKILL.md:227-233 says.
+The description and the limit schema are built from readFileLimit (filetools.go:76-86). The trailer bound of 113 bytes holds. Invalid UTF-8 does not matter for the cap: 48,128 bytes of 0xFF decode to 144,438 bytes, but that is 48,182 characters (and UTF-16 units). The cap is about characters, and only the wire size grows (encoding/json writes �).
+
+Docs against code: README.md:1134 is right, and so are the five skills, apart from the exactness claims in finding 1. A grep for 256 KiB, 262144, 64 KiB, 65536 and 96 KiB finds only valid uses, plus Changes:147 ("offset=-65536 returns the last 64 KiB"), which belongs to the release manager's entry.
+
+Tests can fail. I ran 6 mutations with go test -overlay and the tests caught every one:
+- dropping dropped from the count: TestCapReplyCountsTheDroppedMiddle and TestRunCommandCountsTheDroppedMiddle fail;
+- readFileLimit = toolReplyBytes: TestReadFileReplyFitsTheCap and 2 more fail;
+- removing the rule that the whole gap line goes, removing the break after it from the count, or sizing the marker without dropped: TestCapReply... fails;
+- Gap index off by one: TestCommandResultGap and the end-to-end test fail.
+
+Applies: git apply --cached --check -3 is clean for all 14 files on 602304e, and on current main 4ac817d (k170 changed one agent file). README.md is the only file both sides touch, and no hunk conflicts. k179 (worktree agent-a935a15f5aa02c886) edits supervisor.go at 52, 71, 158 and 718+; this tree edits it only at 120. The hunks do not overlap.
+
+Subject: amend. The proposed one is 79 characters, over the ~72 limit. Use: "Cap read_file at 47 KiB and count the dropped middle (k173, k175)".
+
+Changes, for after the fix: fold both into the existing unreleased entries, and add no new bullets.
+- k149 entry: "...and a line "[... N bytes omitted; a reply holds at most 48 KiB]" below any lines marker says how much, the middle dropped from an output past 2 MiB included."
+- read_file entry (k73): "read_file takes offset and limit (bytes) and returns at most 47 KiB per call, so one reply with its trailer stays within 48 KiB: a negative offset counts from the end, so offset=-48128 returns the last 47 KiB of a log." Keep the rest as it is. 256 KiB was the 0.0.9 behaviour; leave it out, since the entry describes where things stand.
+
+Main agent 2026-11-21, on the review: findings 1-3 go to unreagent-worker.
+- Finding 1: the window never starts on a line the gap splits. The reviewer's widening, when keptLines ≤ n < keptLines+2, is fine, but the worker picks the mechanism, as long as the counts come out exact. Tests go at both edges: exactly 300 and 299 lines in the last MiB, a head ending in a newline, and one very long line followed by 299 short ones.
+- Finding 2: the byte for the inserted line break is not counted when the cut stops at the start of the gap line.
+- Finding 3: rewrap the comment.
+- The tool description and the unreagent-build skill keep their 'exact' claim. If the fix cannot make it hold, the worker says so and both are toned down.
+- Subject and Changes: the reviewer's folding into the k149 and read_file entries, and the subject 'Cap read_file at 47 KiB and count the dropped middle (k173, k175)'.
+
+Worker, round 2 (review findings 1-3). The tree is commit-ready and not committed. Only Go and test files changed; I left the docs other agents edited in the tree untouched.
+
+1. Fixed: the window never starts on a line the gap splits. The new method CommandResult.Window(n) in internal/supervisor/ringbuffer.go returns n, except when the middle was dropped and keptLines <= n < keptLines+2. Then it returns keptLines+2, so the shown lines start at the kept head's last line, which begins where a line of the output does: the gap line is index 1. commandReply (cmd/launcher/helpers.go) takes n = res.Window(n) before LinesBefore, Gap and tailLines. I widened rather than narrowed, so the reply never shows fewer of the newest lines. The window then holds up to 2 lines more (the head's last line and the gap line); the 48 KiB cut takes both except in the rare reply that still shows the gap line.
+
+2. Fixed: when the cut stops right at a kept gap line, the line break before it no longer counts. capReply now normalizes "a line the cut leaves empty goes with its break" (i++) before counting. Then: the break before the gap line counts off whenever gap <= i; the line's own text, the break after it and D count only when it went (gap < i).
+
+3. Fixed: the toolReplyBytes comment is rewrapped (helpers.go:77-82).
+
+Exactness: the reviewer probes (zz_probe_k175_test.go, zz_probe_k175b_test.go, zz_probe_export.go overlaid via -overlay) now run 0 failures in 1,048 sweep cases plus 3 head-newline cases; before the fix they had 135 + 2. The counts are exact in every shape tried, so the cutNote keeps "those counts include it". Nothing needs toning down.
+
+Tests, each red without its fix via go test -overlay (scratch copies, tree untouched):
+- TestCommandResultWindow (supervisor): with Window disabled, 3 subtests fail.
+- TestRunCommandCountsTheDroppedMiddle, new end-to-end cases: the last MiB holds 300 lines; it holds 299; both with a head ending in a line break; a 2.9 MiB line then 299 short ones. With Window disabled, all 5 fail; the long line gives B=999489 instead of 2923504, the reviewer's figure. Control: 302 lines, window unchanged, passes both ways. For the new cases the expected N is the first MiB's whole lines (strings.Count of the first MiB), and B is checked against the real output from there.
+- TestCapReplyCountsTheDroppedMiddle, 2 new subtests, the cut stopping at the gap line (on its start, and the line above going with its break): with finding 2 reverted, both fail with 10008 instead of 10007.
+
+Check: gofmt -l is clean; go vet ./... is clean for linux and windows; go test -count=1 ./... ok; go test -race ./internal/supervisor ok; make linux and make windows built (the .exe is compiled, not run). go test -race ./cmd/launcher: the first run FAILED. I cut its output to the last three lines, so the failing test is unknown, and I report it as unexplained, not as a pass. Then 6 iterations in a row passed: 1, then -count=2, then -count=3, the last two with the full log kept. No DATA RACE line appeared in any kept log. The fix adds no goroutines or timing: Window is a pure function on CommandResult, and capReply is pure. A reviewer re-run of -race on ./cmd/launcher is worth it.
+
+Docs for unreagent-skill-author. The edits already in the tree stay true, with two precisions:
+- skills/unreagent-build/SKILL.md:101-108: "When the last MiB holds at least 300 lines, N includes the dropped lines" should say more than 300 lines, counting its first line, which begins in the dropped part. At exactly 300 or 299, the reply reaches back to the first MiB's last line: N counts the first MiB's whole lines, and B includes the dropped bytes.
+- .claude/skills/unreagent-mcp-tools/SKILL.md (the commandReply/capReply paragraph): commandReply first widens n with CommandResult.Window(n).
+
+Subject and Changes: as the review set them. "Cap read_file at 47 KiB and count the dropped middle (k173, k175)", folded into the k149 and read_file entries.
+
+Round 2 to review: findings 1-3 fixed (CommandResult.Window widens a window that would start on a gap-split line; capReply no longer counts the break before a kept gap line; comment rewrapped). Reviewer probes 0/1051 failures, new tests red without the fix. One -race ./cmd/launcher run failed unexplained before 6 passes, see note.
+
+Skill-author, round 2 (worktree agent-a8b82ae6eae275f57, uncommitted). Checked against CommandResult.Window/Gap/LinesBefore and headTailBuffer.result (ringbuffer.go) and commandReply/capReply (helpers.go). skills/unreagent-build/SKILL.md, the 2 MiB bullet: N whole lines and then B bytes are everything above what you see. More than 300 lines in the last MiB (its first line, which can begin in the dropped part, counts as one): the 300 lines all come from it, N includes the dropped lines, B counts bytes of the 300 only. 300 or fewer: the lines reach back into the first MiB, at least to its last line; N counts only the first MiB's lines above them, B includes the dropped bytes. The rare reply that still shows the launcher's [... D bytes omitted] line: that line names the middle, B leaves it out, and the reply can hold up to 302 lines (Window's keptLines+2 when nothing is cut), that line included. .claude/skills/unreagent-mcp-tools/SKILL.md: commandReply first widens n with CommandResult.Window(n) (keptLines <= n < keptLines+2 -> keptLines+2, start at the kept head's last line, gap index 1), LinesBefore/Gap/tailLines take the widened n. skills/unreagent-runtimes ('and the markers count it too', pointing at unreagent-build) and skills/unreagent-iterate (no dropped-middle claim; logs only) are still true, unchanged. The error-table B row ('past 2 MiB, B can include the dropped middle') stays true, unchanged. Check: go test -count=1 ./internal/skills ok.
+
+Main agent 2026-11-21, round-2 re-review: the reviewer hung after its probe run timed out and was stopped. These are its saved results (scratchpad k175-rr).
+- **Green:** the full check on the worktree, the merged tree on 84bec97 (Windows build included) and go test -race -count=5 ./cmd/launcher (316 s). The round-1 sweep (1,048 cases) and the head-newline probes: 0 failures.
+- **Mutations:** all five killed (rb_nowindow, rb_only300, rb_plus1, hp_oldbreak, hp_nowindowcall).
+- **Open:** the new probe TestProbeK175Round2 (zz_probe_k175c_test.go) flags 'huge line then 300 short' and its no-final-newline variant: a 2,900 KiB line followed by 300 short ones, so the last MiB holds the huge line's fragment plus 300 lines (kept 301). The probe expects 'N=1 lines omitted' and a body that is a real suffix. The reply gives N=0, and its 3,020-byte body is not a suffix of the real output. It may be a code bug, or the probe's expectation may be wrong about how the fragment is counted.
+- The probe's gap-window section is too slow (it is what hit the 10-minute timeout) and never finished.
+- Back to unreagent-worker to settle the open point.
+
+Worker, round 3: the open point from the round-2 re-review ("huge line then 300 short", with and without the final newline). Verdict: the probe is wrong, not the code. The tree is commit-ready and not committed.
+
+Why. The content is a 2,900 KiB line, then 300 short lines. The last MiB holds the long line's end plus the 300, so keptLines is 301. n=300 < keptLines, so Window leaves the window as it is (it widens only for keptLines <= n < keptLines+2). The 300 short lines are the window, and LinesBefore gives r.lines - n = 301 - 300 = 1: the long line, the one real line above them. That is right. The reply fits the cap, so there is no byte marker. The reply is exactly "exit 0", a blank line, "[... 1 line omitted]", then the 300 short lines whole: 8 + 21 + 2,999 = 3,028 bytes.
+
+omittedMarker writes the singular for one ("1 line omitted"), but the probe's regexes take only the plural: probeLineRE in zz_probe_k175_test.go:14 and probeLineRE2 in zz_probe_k175c_test.go:13, both (\d+) lines omitted. So the probe read N=0 and counted the 21-byte marker line as body: body (3020) is not a suffix, N=0 want 1. Its expectK (N=1, kept 301) was right. This is the only section-2 case where exactly one line lies above the window: at 297 to 299 the window reaches back to the long line (N=0), and at 301 and 302, N is 2 and 3, plural.
+
+Evidence, without editing the tree: section 2 alone, in a trimmed copy (TestProbeK175Round2S2, sections 1 and 3 removed), run via go test -overlay. As given, it fails these 2 cases, and its log shows the reply's first line as "[... 1 line omitted]". With only the two regexes changed to lines? omitted, it passes 12 of 12 with 0 failures. Section 3 (gapwin) I left out and did not run; section 1 I did not run this round either.
+
+Skill: no edit needed. skills/unreagent-build/SKILL.md:90 already says "[... 1 line omitted]" for one. :103-106 already covers the count: the last MiB holds more than 300 lines with its first line counted, so the 300 lines all come from it and N includes the dropped lines. That is N=1, the long line. I touched no skill.
+
+Pin: no code fix, but I added a control subtest to TestRunCommandCountsTheDroppedMiddle, "a 2.9 MiB line, then 300 short ones". It asserts that exact reply. It passes with and without k175, since this shape never reached the gap code. It is not vacuous: with Window's lower bound off by one (keptLines <= n+1, overlaid), it is the one subtest that fails.
+
+Check: gofmt -l is clean; go vet ./... is clean for linux and GOOS=windows; go test -count=1 ./... ok in all packages; go test -race ./internal/supervisor ok; make windows built (the .exe is compiled, not run). No test failed. I did not re-run -race on ./cmd/launcher this round; the brief did not ask for it.
+
+Round 3 to review: the open probe case is a probe bug (its regexes miss the singular "[... 1 line omitted]"); code unchanged, reply N=1 is right. Pinned as a control subtest; full check green. See note.
+
+Main agent 2026-11-21: verdict on round 3, ready. The worker's explanation holds, checked by me: omittedLine (helpers.go:188-196) writes the singular 'line' for a count of 1, while both probe regexes match only 'lines omitted'. With 'lines? omitted' (overlay k175-w/rr/s2-singular.json), I ran it myself: TestProbeK175Sweep reports 0 failures in 1,048 cases, and section 2 of TestProbeK175Round2 reports 0 failures in 12 cases, kept 298-303. The other round-2 re-review results (saved before that reviewer hung) are green: the full check, the merged tree on 84bec97, -race -count=5 ./cmd/launcher, and all five mutations killed. Section 3 of the round-2 probe, the gap window, never finished because it is too slow; the round-1 sweep's 409 gap-kept cases cover that layout. The new control subtest is in replycap_test.go. Next: unreagent-release-manager, after k182 (both touch supervisor.go). Subject 'Cap read_file at 47 KiB and count the dropped middle (k173, k175)'; Changes folds into the k149 and read_file entries, as the round-1 reviewer proposed.
+
+Committed as dae0492 (k173+k175 one commit; rebased on 9c8c567 without conflicts)
