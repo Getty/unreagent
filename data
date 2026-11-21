@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-21T23:50:31Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-21T23:50:15Z
+created: 2026-11-21T23:07:00Z
+id: 206
+priority: medium
+started: 2026-11-21T23:38:54Z
+status: done
+tags:
+- skills
+- ue
+title: Shipped skills state unverified UE build facts as settled
+updated: 2026-11-21T23:50:31Z
+---
+
+Found in k198. skills/unreagent-build says -waitmutex makes the second UnrealBuildTool wait for the first; the only Epic page showing the flag explains nothing. skills/unreagent-build and skills/unreagent-iterate quote "Unable to build while Live Coding is active", and the run_command description in cmd/launcher/tools.go states the refusal; no source for the refusal or its text. skills/unreagent-iterate says -unattended also suppresses the recovery prompt (see the -unattended card).
+
+Owner: unreagent-skill-author for the two skills (hedge the three statements as documented-or-unverified until experiment U7 has run on Windows); the tool description in tools.go is unreagent-worker, a second card if the wording has to change.
+
+Skill-author finished (main tree, uncommitted): skills/unreagent-build, unreagent-iterate and unreagent-files (the third made the same claim, :332). None of the three statements is left as fact: -waitmutex is documented only as a flag name; what UnrealBuildTool does with the editor up is not verified (expect the build to fail or to wait), the quoted message text is gone; -unattended is not said to cover the package recovery prompt. 'UE 5 enables Live Coding by default' dropped as unsourced. No test pins a changed sentence. Short check green. The run_command description is k210. Proposed subject: Hedge unverified UnrealBuildTool and recovery claims in the build, iterate and files skills (k206).
+
+unreagent-reviewer 2026-11-21: verdict READY. None of the three claims survives as fact anywhere in skills/; the guidance survived; hedges are one clause each; no shipped skill references unreagent-ue; no test pins a changed sentence. Full check green (make windows compiled only). After review the author took two wording nits (build :235-238, :261) and updated the two now-stale 'code that depends on it' cells in .claude/skills/unreagent-ue/SKILL.md (:94, :95). Main agent reran the full check on the final tree: green.
+
+2026-11-21 23:50 Committed as f2ec67b (includes the two unreagent-ue table cells; Changes entry for the three skills).
