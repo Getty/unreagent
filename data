@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-21T02:45:06Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:45:06Z
+created: 2026-11-21T02:07:07Z
+depends_on:
+- 92
+id: 112
+priority: low
+started: 2026-11-21T02:17:40Z
+status: done
+tags:
+- ci
+- release
+title: Guard scripts/changes-section.sh in CI
+updated: 2026-11-21T02:45:17Z
+---
+
+From the k92 review: the release-notes extraction (scripts/changes-section.sh) is only exercised by a tag push; its test cases lived in a session scratchpad. Add a ci.yml step that runs the script on the newest stamped version in Changes (and expects failure for {{$NEXT}}), so a broken edit shows up before a tag. Optional (same review): release.yml silently omits the Full Changelog link in a shallow clone — print a ::warning:: in the else branch so a dropped fetch-depth: 0 is noticed.
+
+Worker done (same worktree as k108; files .github/workflows/ci.yml, release.yml; plus .claude/agents/unreagent-reviewer.md check line by the main agent): ci.yml step runs scripts/changes-section.sh on the newest stamped version (first version line after {{$NEXT}}), requires non-empty output and a refused {{$NEXT}}; gofmt step now 'gofmt -l cmd internal skills' (for k9's skills/embed.go); release.yml prints a ::warning:: when no previous tag is found. Run blocks executed locally from the parsed YAML against the real Changes and four broken copies; only mawk tested.
+
+Reviewer verdict: APPROVE WITH NITS (non-blocking). Files: .github/workflows/ci.yml, .github/workflows/release.yml, .claude/agents/unreagent-reviewer.md (owner: main, disclosed). Check run by reviewer in the worktree, green: gofmt -l cmd internal skills, go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test ./... -count=1 -race, make windows. Both workflows parse (yaml.safe_load); checkout@v6, setup-go@v6 and go 1.27.x match in both. release.yml: +4 lines, nothing removed, only the new else branch; its run block run in a scratch git repo without tags printed the ::warning:: and wrote no Full Changelog line, rc=0. ci.yml gofmt block: rc=0 (skills/ holds 4 .md files, no .go). ci.yml release-notes block extracted from the parsed YAML, run under bash --noprofile --norc -eo pipefail with mawk and busybox awk (gawk not available, unverified): real Changes, entries under {{$NEXT}} -> 0.0.9 notes, rc=0; worktree itself -> rc=0; first stamped release -> rc=0; just stamped (empty {{$NEXT}}) -> rc=0; CRLF -> rc=0; empty file, {{$NEXT}} with no version line, no {{$NEXT}} line, tab-indented version, stamped section with no entries -> rc=1; script that prints nothing -> rc=1. Nits: (1) ci.yml:49-52, the {{$NEXT}} refusal check only bites while {{$NEXT}} has entries. With the explicit guard removed from scripts/changes-section.sh:22-25: real Changes -> rc=1, but just-stamped Changes -> rc=0, because the script still fails, with exit 4 (empty section). The refusal still holds in that case, so impact is low; passing a fixture with an entry under {{$NEXT}} as FILE would make the check independent of the state of Changes. (2) ci.yml:37-40, a Changes without a {{$NEXT}} line fails as 'No version line after {{$NEXT}}', which names the wrong cause; failing is right (the stamp keeps {{$NEXT}}, see b4107a8), only the message is off. Drift already on k115: .claude/skills/unreagent-core/SKILL.md:99 still says 'gofmt -l cmd internal'.
+
+Committed as 3c88864, fast-forwarded to main.
