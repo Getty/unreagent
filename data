@@ -1,0 +1,27 @@
+---
+class: standard
+completed: 2026-11-21T16:36:56Z
+created: 2026-11-21T13:21:40Z
+id: 172
+priority: low
+started: 2026-11-21T15:30:53Z
+status: done
+tags:
+- permissions
+- agent
+title: claudeIntegration adds a second --permission-prompt-tool next to a hand-wired
+  one
+updated: 2026-11-21T16:37:38Z
+---
+
+From the k38/k46 re-review. A headless agent with claudeIntegration: true and --permission-prompt-tool already in agent.args gets the launcher's own --permission-prompt-tool mcp__unreagent__approve as well (cmd/launcher/main.go, the agent-start block). No warning fires, and whether Claude Code takes the first flag, the last, or refuses the duplicate is unverified. Done when the launcher either skips its own flag when one is hand-wired (and says so in the log), or the README documents which one wins after a real Claude Code run. Lane: unreagent-worker. Related: k168.
+
+Main agent 2026-11-21: bundled with k181 (same block in run()). The decision note on k181 covers both.
+
+unreagent-worker 2026-11-21: done together with k181, in the same tree; the full note is on k181. With claudeIntegration, the launcher passes no second --permission-prompt-tool next to a hand-wired one, in either form. One naming mcp__unreagent__approve gets one INFO line. One naming another tool, or approve mixed with another, gets the not-enforced WARN through permissionsInertReason; my choice: also without claudeIntegration. Tests: TestRunPassesNoSecondPermissionPromptTool and 5 new rows in TestPermissionsInertReason. Red on today's code, and both mutations (flag duplicated; no WARN for another tool) are caught. Which flag Claude Code takes when it gets two is still unverified, but the launcher no longer produces that case. The README's permission layer follows (see k181).
+
+To review together with k181: same tree, same commit (see the k181 notes).
+
+unreagent-reviewer 2026-11-21: reviewed together with k181, same tree. The verdict and findings are on k181: changes needed, one doc fix (README.md:731, the INFO line has no INFO tag), then ready. On k172: the flag reaches the agent once in either form. A hand-wired approve gets the log line, and another tool gets the not-enforced WARN, also with claudeIntegration: false. That extension is sound. Mutations noeqform and infoany are caught.
+
+unreagent-release-manager: committed as 3fea8a6 (rebased onto cf77ca8, full check green, Changes entries added). Fast-forwarded into main.
