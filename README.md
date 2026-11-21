@@ -195,9 +195,11 @@ The launcher is **dropped into the UE project** and the config is **committed**:
 1. Put `unreagent.exe` (from the release) next to the `.uproject` — gitignored.
 2. Rename `unreagent.example.yaml` -> **`unreagent.yaml`**, place it next to
    the `.uproject` and **commit it to the repo**. This file is portable.
-3. Start `unreagent.exe` (double-click or console). Alternative config path
-   via `-config <path>`. The .exe opens no file passed to it: dropping a
-   file onto it ends with a usage error (exit 2) instead of starting.
+3. Start `unreagent.exe` (double-click or console). It reads `unreagent.yaml`
+   next to the .exe, or `unreagent.yml` when there is no `unreagent.yaml`;
+   alternative config path via `-config <path>`. The .exe opens no file
+   passed to it: dropping a file onto it ends with a usage error (exit 2)
+   instead of starting.
 
 `unreagent.yaml` contains **no machine-specific paths**. Editor, `compile` and
 `package` are auto-derived. A minimal config is enough:
@@ -304,8 +306,11 @@ error rather than being ignored: `<file>: it holds more than one YAML document
 `<file>` is the file's name (`unreagent.yaml` or `unreagent.local.yaml`;
 `foo.yaml` or `foo.local.yaml` with `-config foo.yaml`). A bare `---` or `...`
 at the end is fine.
-`unreagent.local.yaml` may be a symlink, but one that leads to no file is a
-load error naming the link, not skipped like a missing overlay:
+The config files may be symlinks — `unreagent.yaml` or `unreagent.yml` next
+to the .exe, and the overlay (`unreagent.local.yaml`, or `unreagent.local.yml`
+next to an `unreagent.yml`) — but one that leads to no file is a load error
+naming the link, not skipped like a missing file; a broken `unreagent.yaml`
+link is never passed over for an `unreagent.yml`:
 
 - dangling: `config not readable: <link> is a symlink to <target>, which does
   not exist`;
@@ -651,7 +656,7 @@ the UE 5.7 source and **has not been re-checked for UE 5.8 or newer**.
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
 | `unattended` | `true` | appends `-unattended` — no crash dialog, no recovery prompt |
-| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before a start (belt and suspenders), except a start that follows a crash — an automatic restart, a `ue_start` / `ue_restart` / console `start` / `r` issued in place of a pending automatic restart (during the restart delay, or the retry delay of a failed start), or the first start after the launcher gave up on the editor — where the reporter may still be writing the dump; off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
+| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before a start (belt and suspenders), except a start that follows a crash — an automatic restart, a `ue_start` / `ue_restart` / console `start` / `r` issued in place of a pending automatic restart (during the restart delay, or the retry delay of a failed start), or the first start after the launcher gave up on the editor — where the reporter may still be writing the dump; a `ue_stop` / console `stop` during the restart delay ends the crash episode, so a later start kills the reporter again; off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
 | `cleanOnRestart` | `false` | removes `Saved/Autosaves/PackageRestoreData.json` before every start; empties `Saved/Crashes/` before a start that does not follow a crash: the first start of a launcher run and every other manual start (console `start` / `r`, MCP `ue_start` / `ue_restart`). The crash folder is kept on an automatic restart by the restart policy (including a retry of a failed start), on a start issued in place of a pending automatic restart (during the restart delay after a crash, or the retry delay of a failed start; the log reason reads `start in place of the pending automatic restart`) and on the first start after the launcher gave up on the editor, so the dumps stay readable. A `ue_stop` / console `stop` during the restart delay cancels the pending restart and ends the crash episode, so a later start counts as a fresh manual start and empties the folder. When it holds anything the launcher logs `Recovery: Saved/Crashes kept (…)` with the reason |
 
 If a **human** is working interactively in the editor in parallel, set

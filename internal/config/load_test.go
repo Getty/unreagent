@@ -664,6 +664,111 @@ func TestLoadFollowsLocalOverlayLink(t *testing.T) {
 	}
 }
 
+// k157: findConfig looked for unreagent.yaml and unreagent.yml with a check
+// that follows a symlink, so a dangling or looping unreagent.yaml read as "not
+// there", and an unreagent.yml beside it was loaded without a word although
+// the link named the config the user meant. A candidate that is a symlink
+// leading to no file stops the search with an error naming it, and no later
+// candidate is tried; only one that does not exist falls through.
+func TestFindConfigRefusesBrokenLink(t *testing.T) {
+	for name, tc := range map[string]struct {
+		broken string // the candidate that is a broken link
+		yml    bool   // a real unreagent.yml beside it
+		loop   bool   // a loop instead of a dangling link
+	}{
+		"dangling unreagent.yaml beside unreagent.yml": {broken: "unreagent.yaml", yml: true},
+		"looping unreagent.yaml beside unreagent.yml":  {broken: "unreagent.yaml", yml: true, loop: true},
+		"dangling unreagent.yml, no unreagent.yaml":    {broken: "unreagent.yml"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.yml {
+				if err := os.WriteFile(filepath.Join(dir, "unreagent.yml"), []byte("mcp:\n  address: 127.0.0.1:1111\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			link := filepath.Join(dir, tc.broken)
+			want, exact := "", true
+			if tc.loop {
+				partner := filepath.Join(t.TempDir(), "partner.yaml")
+				symlink(t, partner, link)
+				symlink(t, link, partner)
+				want, exact = "config not readable: "+link+" is a symlink that cannot be resolved: ", false
+			} else {
+				missing := filepath.Join(t.TempDir(), "gone", tc.broken)
+				symlink(t, missing, link)
+				want = "config not readable: " + link + " is a symlink to " + missing + ", which does not exist"
+			}
+
+			path, err := findConfig(dir)
+			if err == nil {
+				t.Fatalf("findConfig = %q; want an error for %s, a symlink that leads to no file", path, tc.broken)
+			}
+			got, want := filepath.ToSlash(err.Error()), filepath.ToSlash(want)
+			if exact && got != want || !exact && !strings.HasPrefix(got, want) {
+				t.Errorf("error %q,\nwant %q", got, want)
+			}
+		})
+	}
+}
+
+// k157 control: where findConfig gives no error, it picks what it picked
+// before — the first of unreagent.yaml and unreagent.yml that is there, else
+// unreagent.yaml — and a symlinked candidate that resolves is used under its
+// own name and loads.
+func TestFindConfigPicksCandidate(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	write := func(t *testing.T, path, address string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("mcp:\n  address: "+address+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		setup func(t *testing.T, dir string)
+		want  string // the name findConfig picks
+		addr  string // mcp.address Load reads from it; "" = not loaded
+	}{
+		"neither": {func(*testing.T, string) {}, "unreagent.yaml", ""},
+		"only unreagent.yml": {func(t *testing.T, dir string) {
+			write(t, filepath.Join(dir, "unreagent.yml"), "127.0.0.1:2222")
+		}, "unreagent.yml", "127.0.0.1:2222"},
+		"both": {func(t *testing.T, dir string) {
+			write(t, filepath.Join(dir, "unreagent.yaml"), "127.0.0.1:1111")
+			write(t, filepath.Join(dir, "unreagent.yml"), "127.0.0.1:2222")
+		}, "unreagent.yaml", "127.0.0.1:1111"},
+		"unreagent.yaml linked to a file": {func(t *testing.T, dir string) {
+			target := filepath.Join(t.TempDir(), "shared.yaml")
+			write(t, target, "127.0.0.1:3333")
+			symlink(t, target, filepath.Join(dir, "unreagent.yaml"))
+			write(t, filepath.Join(dir, "unreagent.yml"), "127.0.0.1:2222")
+		}, "unreagent.yaml", "127.0.0.1:3333"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.setup(t, dir)
+
+			path, err := findConfig(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(dir, tc.want); path != want {
+				t.Fatalf("findConfig = %q; want %q", path, want)
+			}
+			if tc.addr == "" {
+				return
+			}
+			c, _, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.MCP.Address != tc.addr {
+				t.Errorf("mcp.address = %q; want %q", c.MCP.Address, tc.addr)
+			}
+		})
+	}
+}
+
 // symlink creates the symlink link -> target, and skips the test where the
 // system or the account cannot create one (Windows without the privilege or
 // developer mode).

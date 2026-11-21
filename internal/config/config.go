@@ -91,15 +91,28 @@ type UnrealConfig struct {
 	// Unattended appends -unattended (default true): it suppresses the crash
 	// reporter dialog AND both recovery prompts on restart.
 	Unattended *bool `yaml:"unattended"`
-	// KillCrashReporter kills CrashReportClientEditor.exe before every (re)start
-	// except one that follows a crash, whose reporter may still be writing
-	// (default true) — a safeguard in case a reporter window is stuck after all.
+	// KillCrashReporter (default true) kills CrashReportClientEditor.exe and
+	// CrashReportClient.exe before a start — a safeguard in case a reporter
+	// window is stuck after all. A start that follows a crash spares it, as
+	// the reporter may still be writing the dump: an automatic restart (a
+	// retry of a failed start too), a start issued in place of a pending
+	// automatic restart (ue_start, ue_restart, console start or r during the
+	// restart delay, or the retry delay of a failed start), and the first
+	// start after the editor failed and was not restarted. A ue_stop or
+	// console stop during that delay cancels the pending restart and ends the
+	// crash episode, so a later start kills the reporter.
 	KillCrashReporter *bool `yaml:"killCrashReporter"`
-	// CleanOnRestart removes Saved/Autosaves/PackageRestoreData.json before
-	// every start, and Saved/Crashes/* before every start except one that
-	// follows a crash — an automatic restart, and the first start after the
-	// editor failed and was not restarted — which keeps the crash dumps for
-	// diagnosis (default false).
+	// CleanOnRestart (default false) removes
+	// Saved/Autosaves/PackageRestoreData.json before every start, and empties
+	// Saved/Crashes before a start that does not follow a crash: the first
+	// start of a launcher run and every other manual start (console start or
+	// r, ue_start, ue_restart). Saved/Crashes is kept, so the crash dumps stay
+	// readable, on an automatic restart (a retry of a failed start too), on a
+	// start issued in place of a pending automatic restart (during the
+	// restart delay, or the retry delay of a failed start), and on the first
+	// start after the editor failed and was not restarted. A ue_stop or
+	// console stop during that delay cancels the pending restart and ends the
+	// crash episode, so a later start empties the folder.
 	CleanOnRestart bool `yaml:"cleanOnRestart"`
 }
 
@@ -296,15 +309,19 @@ type Info struct {
 }
 
 // Load reads the configuration. explicitPath is optional; if it is empty,
-// unreagent.yaml is looked for next to the executable. An unreagent.local.yaml
-// sitting beside it is overlaid on top; a symlink there that leads to no file
-// is an error, not a missing overlay. Each file holds one YAML document.
+// unreagent.yaml, else unreagent.yml, is looked for next to the executable
+// (findConfig). An unreagent.local.yaml sitting beside it is overlaid on top.
+// A symlink in any of these places that leads to no file is an error, not a
+// file that is not there. Each file holds one YAML document.
 func Load(explicitPath string) (*Config, Info, error) {
 	var info Info
 
 	path := explicitPath
 	if path == "" {
-		path = findConfig()
+		var err error
+		if path, err = findConfig(exeDir()); err != nil {
+			return nil, info, err
+		}
 	}
 	// Absolute, because every project path derives from the config directory
 	// and lands in placeholders: a relative "-config unreagent.yaml" made
@@ -322,7 +339,7 @@ func Load(explicitPath string) (*Config, Info, error) {
 		return nil, info, err
 	}
 	local := localPathFor(path)
-	present, err := overlayPresent(local)
+	present, err := configPresent(local)
 	if err != nil {
 		return nil, info, err
 	}
@@ -1098,11 +1115,12 @@ func EmptyDocument(d *yaml.Node) bool {
 		n.Anchor == "" && n.HeadComment == "" && n.LineComment == "" && n.FootComment == ""
 }
 
-// overlayPresent reports whether the overlay at path is there to be read. Only
+// configPresent reports whether the config file at path is there to be read:
+// a candidate findConfig looks for, or the unreagent.local.yaml overlay. Only
 // a path that does not exist is absent. The check does not follow a symlink,
 // so one that leads to no file, dangling or looping, is an error naming it
-// instead of an overlay skipped without a word.
-func overlayPresent(path string) (bool, error) {
+// instead of a file skipped without a word.
+func configPresent(path string) (bool, error) {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return false, nil
 	} else if err != nil {
@@ -1186,15 +1204,24 @@ func danglingEnd(path string) (missing string, chain bool) {
 	return "", false
 }
 
-func findConfig() string {
-	dir := exeDir()
+// findConfig returns the config in dir, the executable's directory: the first
+// of unreagent.yaml and unreagent.yml that is there, else unreagent.yaml. Only
+// a name that does not exist is passed over (configPresent): a symlink that
+// leads to no file, or any other error looking for one, ends the search with
+// an error naming it, so an unreagent.yml is never loaded in place of a
+// broken unreagent.yaml link.
+func findConfig(dir string) (string, error) {
 	for _, name := range []string{"unreagent.yaml", "unreagent.yml"} {
 		p := filepath.Join(dir, name)
-		if fileExists(p) {
-			return p
+		present, err := configPresent(p)
+		if err != nil {
+			return "", err
+		}
+		if present {
+			return p, nil
 		}
 	}
-	return filepath.Join(dir, "unreagent.yaml")
+	return filepath.Join(dir, "unreagent.yaml"), nil
 }
 
 func localPathFor(path string) string {

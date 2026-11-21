@@ -16,12 +16,24 @@ placeholder system exists.
 
 ## Load order (`config.Load`)
 
-1. Resolve the path: `-config <path>`, else `unreagent.yaml` (then
-   `unreagent.yml`) next to the executable (`findConfig`) — and make it
-   absolute. The auto-detected or relative project path derives from the
-   config directory and lands in placeholders and permission rules: a relative
-   `-config` once made
-   `${PROJECT_DIR}` `.`, and `Write(${PROJECT_DIR}/*)` then matched anything.
+1. Resolve the path: `-config <path>`, else the first of `unreagent.yaml` and
+   `unreagent.yml` next to the executable that is there, else
+   `unreagent.yaml` (`findConfig(dir)`) — and make it absolute. Each
+   candidate goes through `configPresent` (`os.Lstat`, then `ResolveLink`,
+   the check hermes-setup's `writeTarget` uses): only a name that does not
+   exist falls through. A symlink that leads to no file (dangling, a chain,
+   a loop), or any other `Lstat` error, ends the search with a load error
+   naming it, so `unreagent.yml` is never loaded in place of a broken
+   `unreagent.yaml` link (`TestFindConfigRefusesBrokenLink`). A valid link
+   counts under its own name: the config directory is the link's directory,
+   and the overlay is named after the link and looked up next to it, not next
+   to its target (`Load` takes `filepath.Dir` and `localPathFor` of the path
+   it found, which `filepath.Abs` does not resolve). An explicit `-config`
+   skips the check: a broken link there fails in `decodeYAML`'s read, without
+   naming its target. The auto-detected or relative project path derives from
+   the config directory and lands in placeholders and permission rules: a
+   relative `-config` once made `${PROJECT_DIR}` `.`, and
+   `Write(${PROJECT_DIR}/*)` then matched anything.
 2. Decode `unreagent.yaml`. Unknown keys are an error (`KnownFields(true)`,
    typo protection); an empty file is fine. In it and in the overlay, a
    second YAML document, even one holding only a comment, is an error naming
@@ -32,20 +44,19 @@ placeholder system exists.
    (`TestLoadAcceptsEmptyTrailingDocument`).
 3. If `unreagent.local.yaml` (the config's name with `.local` before the
    extension, `localPathFor`) is there, decode it **into the same struct**.
-   Only a missing path is absent (`overlayPresent`, `os.Lstat`): a symlink
-   that leads to no file, dangling or looping, is a load error from
-   `ResolveLink`, the check hermes-setup's `writeTarget` uses. This is
-   a YAML-decode overlay with yaml.v3 semantics, not a deep merge (pinned by
-   `internal/config/overlay_test.go`): a scalar wins; an absent key leaves the
-   base value alone; a nested struct (`unreal:`, `agent.hermes:`, `skills:` …)
-   is decoded field by field, so only the fields given change; a list
-   **replaces** the base list; a map **merges by key**: base-only keys
-   survive, and each key the local file gives replaces that entry's value
-   whole, even when the value is a map or struct
-   (`commands.hello: {command: x}` drops the base entry's `args` and
-   `description`). So `{}` cannot clear a base map; `~` (null) can.
-   Users expecting to append one item to `agent.args` will instead replace the
-   list — remember this when documenting a new list- or map-valued field.
+   Only a missing path is absent: the overlay goes through the same
+   `configPresent` check as the step 1 candidates, so a broken link there is
+   a load error too. This is a YAML-decode overlay with yaml.v3 semantics,
+   not a deep merge (pinned by `internal/config/overlay_test.go`): a scalar
+   wins; an absent key leaves the base value alone; a nested struct
+   (`unreal:`, `agent.hermes:`, `skills:` …) is decoded field by field, so
+   only the fields given change; a list **replaces** the base list; a map
+   **merges by key**: base-only keys survive, and each key the local file
+   gives replaces that entry's value whole, even when the value is a map or
+   struct (`commands.hello: {command: x}` drops the base entry's `args` and
+   `description`). So `{}` cannot clear a base map; `~` (null) can. Users
+   expecting to append one item to `agent.args` will instead replace the list
+   — remember this when documenting a new list- or map-valued field.
 4. `applyDefaults()` — fills unset values and returns the built-in commands it
    added (`compile`, `package`, each only when the user defined none of that
    name). Note that the zero value is indistinguishable from "not set" for

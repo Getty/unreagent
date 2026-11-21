@@ -36,8 +36,10 @@ Revision history for unreagent
   - The config load refuses an unreagent.yaml or unreagent.local.yaml that
     holds more than one YAML document, naming the file and the line the
     second one starts on, instead of reading only the first; a bare trailing
-    --- or ... still loads. A dangling or looping unreagent.local.yaml
-    symlink is a load error naming the link, not a missing overlay.
+    --- or ... still loads. A dangling or looping unreagent.yaml,
+    unreagent.yml or unreagent.local.yaml symlink is a load error naming the
+    link, not a missing overlay; the launcher no longer loads an
+    unreagent.yml in place of a broken unreagent.yaml link.
   - hermes-setup symlink errors name the path: a loop no longer prints a bare
     "too many links", and a dangling chain names its missing end, read through
     symlinked directories.
