@@ -271,7 +271,13 @@ Recommended `.gitignore` entry in the UE project:
 ```
 unreagent.exe
 unreagent.local.yaml
+unreagent.local.yaml.tmp-*
 ```
+
+The last line covers a leftover of `unreagent hermes-setup`: it saves the
+bearer token through a temp file, and a kill mid-write can leave
+`unreagent.local.yaml.tmp-<digits>` behind with the token in it. Delete such
+a file or keep it out of git.
 
 ### When the agent ends (`/quit` or crash)
 
@@ -616,36 +622,117 @@ What `hermes-setup` does, in order:
    editor. Set `UE_ROOT` or `engineRoot` in `unreagent.local.yaml`.
 2. Checks `agent.hermes.enabled`. If it is not set, it prints
    "nothing to do" and exits 0.
-3. If `mcp.token` is empty, generates 32 random bytes (hex) and writes
-   `mcp.token:` into `unreagent.local.yaml` (git-ignored). The launcher
-   reads it back on the next start, so the token survives restarts. The file
-   is re-serialized, so its comments are lost.
+3. If `mcp.token` is empty, generates 32 random bytes (hex). The token is
+   only held in memory for now; step 7 saves it.
 4. Resolves the target config: explicit `agent.hermes.configPath` (it takes the
    path placeholders) → `$HERMES_HOME/config.yaml` → `~/.hermes/config.yaml`.
-5. Reads the existing Hermes config and merges into it: every other key and
-   every other MCP server stays. A missing, empty or `null` file counts as an
-   empty config.
+5. Reads the existing Hermes config and edits it node by node: every other key
+   and every other MCP server stays. A missing, empty or `null` file counts as
+   an empty config. If `mcp_servers` is refused (see below), nothing is
+   written at all.
 6. Backs up the original, byte for byte, to `<path>.bak` — **once**. An
    existing `<path>.bak` is never overwritten, so it keeps the oldest copy.
-   (No backup is made for a missing or empty file.)
-7. Sets `mcp_servers.unreagent: { url, headers: { Authorization: Bearer } }`
-   in the Hermes config. A second run **overwrites** the entry rather than
-   duplicating it — the operation is idempotent.
-8. Writes the file atomically (temp + rename) so a crash mid-write cannot
-   leave a half-written config.
+   (No backup is made for a missing or zero-byte file; a file holding only
+   whitespace does get one.)
+7. Writes, in this order: the new token to `unreagent.local.yaml` (only if
+   step 3 generated one — an existing `mcp.token` is never touched), then the
+   Hermes config. The launcher reads the token back on the next start, so it
+   survives restarts and keeps matching the bearer header Hermes sends. The
+   edit of `unreagent.local.yaml` keeps its comments and other keys; the new
+   `mcp.token` key carries a short comment.
+8. In the Hermes config, the entry `mcp_servers.unreagent: { url, headers:
+   { Authorization: Bearer } }` is replaced in place, or appended as the last
+   server if it is new; a new `mcp_servers` block goes at the end of the file.
+   A second run **overwrites**
+   the entry rather than duplicating it — the operation is idempotent. The
+   entry is headed by a comment, `# unreagent-managed: re-run ... edits to it
+   are overwritten`; the one-line marker that earlier releases put on top of
+   the file is removed.
+9. Writes each file atomically: a temp file `<name>.tmp-<digits>` in the
+   target's directory, synced to disk, then renamed over the target, so a
+   crash mid-write cannot leave a half-written config.
 
-The file is re-serialized, so **comments and key order in the Hermes config are
-not preserved**; only the data survives, and a one-line
-`# unreagent-managed ...` marker is put on top. Keep anything you want to
-retain verbatim in the `.bak`.
+**What stays, what changes.** Outside its own entry the Hermes config keeps
+its comments, key order, quoting style, anchors, aliases and merge keys, and
+the other MCP servers are not touched. Comments *inside* the replaced entry
+are dropped; comments on its key stay. The file is re-encoded, though, so its
+formatting is normalised:
 
-If `mcp_servers` is not a mapping with string keys — a list, or a key YAML
-reads as a number — `hermes-setup` refuses with
-`Hermes config <path> left untouched: mcp_servers is not a mapping of server names ...`
-and the Hermes config is left untouched (no backup, no write). The same goes for
-a Hermes config that cannot be parsed. A token generated in step 3 may already
-be saved in `unreagent.local.yaml` by then; the re-run reuses it. Fix the block
-by hand and re-run.
+- spaces before an inline comment collapse to one (`model: x   # m` becomes
+  `model: x # m`), so a hand-aligned config changes in many lines;
+- two-space indentation, and block sequences under a key are indented;
+- blank lines between nodes are dropped;
+- a leading `---`, a `...` and a byte-order mark are dropped (a file that
+  holds only comments keeps its byte-order mark on the first run), and only
+  the first YAML document is kept (the multi-document case is tracked as
+  k118);
+- CRLF line breaks become LF (the `.bak` keeps the original bytes);
+- a foot comment can move to the deepest node before it;
+- folded and multi-line plain or quoted scalars are joined onto one line with
+  the same value (a literal `|` block is kept unless it holds an emoji, see
+  below; a folded `>` block can gain a trailing blank line);
+- a flow collection written over several lines is put on one line;
+- an emoji or other character outside the Basic Multilingual Plane is
+  rewritten as a `\U` escape inside double quotes — in plain, single- and
+  double-quoted values, in keys, and in a literal `|` block, which then
+  becomes one double-quoted line — with the same value;
+- a flow-style `mcp_servers: { ... }` loses its own layout: the marker comment
+  breaks it over several lines, and a comma that follows an inner comment
+  moves to the next line.
+
+The `.bak` holds the exact original if you want any of it back.
+
+**When it refuses.** Nothing is written, the file stays as it was and no
+`.bak` is made, in these cases. For the first three the message reads
+`Hermes config <path> left untouched: ...`:
+
+- `mcp_servers` is not a mapping of server names (a list), has a key YAML
+  reads as a number, is an alias (`*name`), carries an anchor (`&name`), or
+  comes in through a merge key (`<<`);
+- the existing `mcp_servers.<name>` entry contains an anchor, since replacing
+  it would leave its aliases undefined;
+- the edited result would not decode back to the old config plus the new entry
+  (a built-in safety check);
+- the Hermes config has a duplicate key anywhere, or cannot be parsed: the
+  message is `Hermes config <path> not parseable: ...`;
+- the Hermes config is a dangling symlink (a link whose target does not
+  exist), or `unreagent.local.yaml` is one and a token has to be generated
+  (an existing `mcp.token` means that file is not written at all). The
+  message names the link and the target as the link stores it, so a relative
+  target prints relative, as `ls -l` shows it:
+
+  ```
+  Error: <link> is a symlink to <target>, which does not exist; refusing to replace the link with a new file (nothing written)
+  ```
+
+  The exit code is 1; the link and both files stay as they were, with no
+  `.bak` and no temp file. The target was moved, renamed or deleted, the link
+  has a typo, or the target lives somewhere unavailable right now (for
+  example an unmounted drive or a missing dotfiles checkout): bring it back,
+  point the link at a real file, or delete the link so `hermes-setup` writes
+  a new file, and re-run.
+
+Fix the file by hand and re-run. A token generated in step 3 is **not** saved
+in these cases: it goes to `unreagent.local.yaml` only after the Hermes merge
+has succeeded. An `unreagent.local.yaml` that cannot be parsed, or whose `mcp`
+is not a mapping, is refused earlier still, when the config loads.
+
+**When a write fails.** The token is saved first, so the Hermes config never
+holds a token the launcher does not know. If the Hermes write then fails, the
+error says that the new token is already in `unreagent.local.yaml`: fix the
+cause and re-run, which reuses the saved token. If writing
+`unreagent.local.yaml` itself fails, the Hermes config is left as it was (the
+`.bak` may already exist). Writes need a writable *directory*, not just a
+writable file, because of the temp file: a read-only Hermes config
+directory is refused, and so is a read-only project directory (the one
+holding `unreagent.local.yaml`) — the latter only when a token has to be
+generated and saved. The error names the directory. A symlinked config file
+is followed and its target replaced, so the link stays a link; a dangling
+one is refused (see above). A path that goes through a symlinked directory is
+used as given. A replaced file keeps its permission
+bits and a new file gets mode 0600 (modes do not apply on Windows; the
+rename-replace step there is the same code path, but has only been compiled,
+not run).
 
 **Recovering after 0.0.9 or earlier.** Those releases moved the Hermes
 config to `<path>.bak` and wrote a new file holding only the unreagent entry. If

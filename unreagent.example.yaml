@@ -152,10 +152,15 @@ mcp:
 # Hermes Agent (Nous Research) as an alternative agent. Activation is
 # explicit via the sub-command `unreagent hermes-setup` — no auto-merge on
 # normal start. Setup writes our MCP server (with bearer token) into
-# $HERMES_HOME/config.yaml (default ~/.hermes/config.yaml). The Hermes config
-# is re-serialized (comments and key order are not kept); the original is
-# copied once to <config>.bak and that backup is never overwritten. Like a
-# normal start, hermes-setup needs a resolvable engine (UE_ROOT / engineRoot).
+# $HERMES_HOME/config.yaml (default ~/.hermes/config.yaml). Only the entry
+# mcp_servers.<serverName> is replaced (or appended); comments, key order and
+# the other servers stay, but the file is re-encoded, so its formatting is
+# normalised (see README). The entry carries a comment that a re-run
+# overwrites edits to it. Both files are written atomically; the original is
+# copied once to <config>.bak and that backup is never overwritten. A
+# generated mcp.token goes into unreagent.local.yaml, and only after the
+# merge succeeded. Like a normal start, hermes-setup needs a resolvable
+# engine (UE_ROOT / engineRoot).
 # agent:
 #   hermes:
 #     enabled: true

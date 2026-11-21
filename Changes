@@ -5,6 +5,13 @@ Revision history for unreagent
     it: other keys and MCP servers survive, the original is copied to .bak and
     an existing .bak is never overwritten. If a release up to 0.0.9 wiped your
     config, the original is in config.yaml.bak.
+  - hermes-setup edits only its own entry in the Hermes config: comments, key
+    order, anchors and other MCP servers survive, and the managed marker sits
+    on that entry. It refuses entries it cannot edit safely (anchored or
+    aliased mcp_servers, anchors inside the old entry) and a dangling symlink
+    at either file. Both files are written atomically, keep their permissions
+    and follow symlinks; a new token is saved to unreagent.local.yaml only
+    once the merge has succeeded.
   - hermes-setup no longer panics on an mcp.token shorter than eight
     characters, and only a token it generated is described as 64 hex chars.
   - run_command and the runtimes return as soon as the command exits, even
