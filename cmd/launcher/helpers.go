@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -14,7 +16,7 @@ import (
 
 // warnIfMissing warns when path names nothing that could be started. A bare
 // name is looked up on PATH, by the rule exec.Command applies when the
-// service starts; anything else must exist as given.
+// service starts; anything else must exist as given (see pathFound).
 func warnIfMissing(logger func(string), label, path string) {
 	if filepath.Base(path) == path {
 		found, err := exec.LookPath(path)
@@ -26,9 +28,23 @@ func warnIfMissing(logger func(string), label, path string) {
 		}
 		return
 	}
-	if !fileExists(path) {
+	if !pathFound(path) {
 		logger(fmt.Sprintf("WARN %s: path not found: %s", label, path))
 	}
+}
+
+// pathFound reports whether path, which has a directory part, names a file
+// that exec.Command finds. On Windows exec adds a PATHEXT extension to a path
+// that has none, so C:/UE/Engine/Binaries/Win64/UnrealEditor starts
+// UnrealEditor.exe; exec.LookPath applies that rule to a path with
+// separators and does not search PATH for it. Elsewhere exec adds nothing,
+// and the path must exist as given.
+func pathFound(path string) bool {
+	if runtime.GOOS == "windows" {
+		_, err := exec.LookPath(path)
+		return err == nil
+	}
+	return fileExists(path)
 }
 
 func fileExists(path string) bool {
@@ -67,15 +83,24 @@ func stringArg(args map[string]interface{}, key string) (string, bool) {
 	return v, ok
 }
 
-// getInt reads an integer argument. A JSON number arrives as float64 and is
-// truncated; a numeric string ("5") is accepted too, because some MCP clients
-// send every argument as a string. An absent key, null or "" yields def, as
-// for getString. Anything else is an error, not a silent default.
+// getInt reads an integer argument. A JSON number arrives as float64 and must
+// be integral and fit an int; a numeric string ("5") is accepted too, because
+// some MCP clients send every argument as a string. An absent key, null or ""
+// yields def, as for getString. Anything else is an error, not a silent
+// default.
 func getInt(args map[string]interface{}, key string, def int) (int, error) {
 	switch v := args[key].(type) {
 	case nil:
 		return def, nil
 	case float64:
+		if v != math.Trunc(v) { // also NaN
+			return 0, fmt.Errorf("'%s' must be an integer, got %v", key, v)
+		}
+		// -float64(math.MinInt) is the first value past math.MaxInt;
+		// float64(math.MaxInt) rounds up to it and cannot be the bound.
+		if v < float64(math.MinInt) || v >= -float64(math.MinInt) {
+			return 0, intRangeErr(key, fmt.Sprint(v))
+		}
 		return int(v), nil
 	case int:
 		return v, nil
@@ -85,6 +110,9 @@ func getInt(args map[string]interface{}, key string, def int) (int, error) {
 			return def, nil
 		}
 		n, err := strconv.Atoi(s)
+		if errors.Is(err, strconv.ErrRange) {
+			return 0, intRangeErr(key, strconv.Quote(v))
+		}
 		if err != nil {
 			return 0, fmt.Errorf("'%s' must be an integer, got %q", key, v)
 		}
@@ -92,6 +120,12 @@ func getInt(args map[string]interface{}, key string, def int) (int, error) {
 	default:
 		return 0, fmt.Errorf("'%s' must be an integer, got %T", key, v)
 	}
+}
+
+// intRangeErr refuses an integer argument that does not fit an int; got is
+// the value as the caller received it.
+func intRangeErr(key, got string) error {
+	return fmt.Errorf("'%s' must be an integer between %d and %d, got %s", key, math.MinInt, math.MaxInt, got)
 }
 
 func firstString(args map[string]interface{}, keys ...string) string {

@@ -156,6 +156,14 @@ Revision history for unreagent
     starts anyway.
   - `skills.enabled: false` turns both paths off. Switching both paths off
     while `skills.enabled` is true is a load error.
+  - An absolute unreal.editor path without .exe no longer logs "path not found"
+    on Windows: the check resolves the path the way starting it does. A
+    directory or a file without such an extension now warns there, since it
+    does not start either.
+  - Numeric tool arguments must be whole numbers within the int64 range:
+    read_file offset=1.5 is refused instead of read as 1, and offset=1e20 is
+    refused instead of silently reading the whole file (likewise logs
+    lines=1e20, which returned the whole buffer).
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
