@@ -1,0 +1,38 @@
+---
+claimed_at: 2026-11-21T01:10:33Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T01:10:44Z
+created: 2026-08-21T23:23:21Z
+id: 19
+priority: medium
+started: 2026-11-21T01:10:44Z
+status: done
+tags:
+- skills
+- legal
+title: 'NOTICE: MIT attribution for skill text adapted from VibeUE'
+updated: 2026-11-21T01:10:44Z
+---
+
+VibeUE (kevinpbuckley/VibeUE) is MIT-licensed, so its skill documents may be copied and modified with the copyright notice preserved. It is a quarry for text, never a runtime dependency -- the plugin itself was rejected in June 2026 over its remote API-key validation, and that decision is not revisited.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 1 and 4.
+Agent: unreagent-doc-writer.
+
+Acceptance:
+- a NOTICE file at the repo root carrying the collected attribution
+- the per-skill convention documented: skills adapted from VibeUE carry an MIT attribution line in the document
+- the convention is stated where skill authors will actually read it (.claude/skills/unreagent-skill-authoring)
+
+Do this before the Class A batches start adapting text.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, not premature as a gate: must land before k20-k26. No VibeUE-derived text in the repo yet; the attribution convention is already in .claude/skills/unreagent-skill-authoring. NOTICE needs the VibeUE copyright holder and year. Lane: unreagent-doc-writer. Size S.
+
+Doc-writer done, main working tree, uncommitted, based on c013f77. NOTICE at the repo root: attribution header plus the MIT text verbatim from VibeUE's LICENSE (github.com/kevinpbuckley/VibeUE, branch master), copyright line 'Copyright (c) 2025 Kevin Buckley / Buckley Builds LLC'. The per-skill attribution convention in .claude/skills/unreagent-skill-authoring is unchanged. Reviewer: check NOTICE against the VibeUE LICENSE.
+
+2026-11-21 01:07 Review (unreagent-reviewer): APPROVE. NOTICE checked against VibeUE's LICENSE (raw.githubusercontent.com/kevinpbuckley/VibeUE/master/LICENSE, fetched during review): the copyright line 'Copyright (c) 2025 Kevin Buckley / Buckley Builds LLC' and the MIT text (NOTICE:10-30) are byte-identical (diff empty). ASCII, LF, trailing newline. It matches the convention in .claude/skills/unreagent-skill-authoring/SKILL.md:105-107 (an MIT attribution line in the skill plus an entry in the collected NOTICE). Owner: unreagent-doc-writer, which matches OWNERS. Check at f7581b3: gofmt/vet/test/make windows all green.
+Follow-ups, not blocking (no VibeUE text in the repo yet): (a) the release zip (release.yml:47) ships unreagent.exe, unreagent.yaml, unreagent.example.yaml and README.md but not NOTICE. Once VibeUE-derived skills are go:embed-ed (k9, k20-k26), MIT needs the copyright and permission notice to go with the binary. Either ship NOTICE in the zip, or have each adapted skill carry the full notice rather than one line. This should be a card before the Class A batches. (b) skill-authoring does not fix the wording or placement of the per-skill attribution line; pinning it would keep k20-k26 consistent.
+
+Committed as 321f2bb
