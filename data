@@ -1,0 +1,84 @@
+---
+claimed_at: 2026-11-21T05:58:13Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:58:27Z
+created: 2026-11-21T01:59:11Z
+depends_on:
+- 54
+id: 106
+priority: medium
+started: 2026-11-21T04:40:54Z
+status: done
+tags:
+- bridge
+- bug
+title: Detect a partial node_modules left by an aborted bridge npm install
+updated: 2026-11-21T05:58:27Z
+---
+
+Found while working k54: prepareNodeBridge skips npm install whenever node_modules exists. A timed-out or Ctrl-C-aborted install (k54 added a 5-minute deadline and cancellation) can leave a partial node_modules, so the next start skips the install; the smoke test then fails on the missing module and the WARN tells the user to delete the folder by hand. Fix: a completion marker written after a successful install (or compare against package-lock), so an interrupted install reruns. cmd/launcher/bridge.go, Linux-testable with a fake npm.
+
+**Also (from k107):** the comment at cmd/launcher/bridge.go:159-160 says the smoke test runs in a job 'like every process the launcher spawns' — the short-lived taskkill/pkill (lifecycle.go killCrashReporter) and reg query (internal/config/engine.go regQuery) helpers run without one. Tighten the comment in the same pass.
+
+Decision 2026-11-21 (main agent): a completion marker inside node_modules, written only after a successful npm install; node_modules without the marker gets npm install again (no deletion). An offline user whose complete node_modules predates the marker must not lose the bridge: if that install fails, the smoke test decides, and a passing smoke test writes the marker. Plus the job-comment fix at bridge.go:159-160. Bundled with k117 and k119 (one worker, disjoint files).
+
+Worker done (2026-11-21, worktree-agent-a39460cfbed68205d, bridge.go + bridge_test.go): marker node_modules/.unreagent-installed after a finished install; without it npm install runs again over what is there; a failed re-install over an earlier node_modules keeps it and lets the smoke test decide, a pass writes the marker. Job comment tightened. Accepted: the smoke test checks only initialize; a hand-made node_modules costs one extra install. For the release manager: Changes {{$NEXT}} lines 48-49 (remove the partial node_modules) and 52 (smoke test in a job 'like every other process') are now wrong. README follow-up by the doc-writer.
+
+Ready for review (2026-11-21, worktree-agent-a39460cfbed68205d): code + tests by the worker; k106 README + unreagent.example.yaml by the doc-writer. One commit per card (k106 bridge.go/bridge_test.go + docs, k117 ci.yml, k119 helpers.go/helpers_test.go).
+
+Review (unreagent-reviewer, 2026-11-21): CHANGES NEEDED. Tree: worktree-agent-a39460cfbed68205d on 3ab0142 (the diff applies cleanly on main b04e79a). Files: cmd/launcher/bridge.go, cmd/launcher/bridge_test.go, README.md, unreagent.example.yaml. Check run by the reviewer: gofmt -l cmd internal skills (empty); go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux + make windows ok (byte-identical scratch copy); go mod verify ok.
+
+F1 (blocking, needs a decision by the main agent): the premise "npm install over a partial node_modules completes it" is false for a half-extracted package. Verified with real npm 11.17.0 (Linux, offline, file: tarball dependency) through prepareMCPBridges itself: node_modules/dep with its package.json but without index.js, no marker -> npm install exits 0 "up to date" -> bridge.go:167-170 writes the marker -> the smoke test fails with MODULE_NOT_FOUND on that start and on every later one, which skips the install. The documented remedy (README.md:509 "Delete the marker to force a re-install", unreagent.example.yaml:130) does not repair it: npm reports up to date again and the marker is written again. Only deleting node_modules (or that package) fixes it, and that advice was removed from the README and from the abort log. Options: move an unmarked node_modules aside before the install and restore it when the install fails (keeps the offline case), or at least keep "delete node_modules" as the sure fix in README troubleshooting item 3 and in the smoke-test failure path. How often a kill leaves package.json without the rest is unmeasured (npm pack puts package.json late in the tarball, node-tar writes asynchronously).
+
+F2 (minor): bridge.go:143-145 "npm install over it completes the first and deletes nothing" and README.md:504 "(nothing is deleted)": npm 11 prunes extraneous packages (an extra folder in node_modules: "removed 1 package"). The launcher deletes nothing; npm can. bridge.go:113 "left as it was": a failed install can change it, and the earlier tree can be the failed first install's own leftover.
+
+F3 (minor, tests): untested paths, code correct in the reviewer's probes: a timeout over an earlier node_modules (mutation "timeout sets earlier=false" survives); the marker-write WARN (mutation "error swallowed" survives); MkdirAll in markInstalled (removing it survives; npm 11 creates no node_modules for a package without dependencies, verified).
+
+Verified OK: marker present -> no install; absent -> install, the launcher removes nothing; a failed install over an earlier node_modules keeps it, the smoke test decides, a pass marks and a fail does not; Ctrl-C during an install over an earlier node_modules -> no marker, folder kept, no smoke test, no WARN; marker write fails -> WARN, smoke test still runs, the next start installs again; no package.json -> no install, no marker. npm keeps a dotfile at the node_modules root: verified with npm 11.17.0 on Linux, with and without lockfiles. Mutations: 12 of 15 killed.
+
+Changes (for the release-manager): both stale lines confirmed. On main b04e79a they are Changes:59-60 ("the log says to remove the partial node_modules"; that text is gone from bridge.go) and Changes:63 ("in a job object like every other process"; taskkill/pkill at lifecycle.go:321 and reg query at engine.go:266 run without a job). Changes:58-59 "the bridge is left out" now holds only when no node_modules was there before.
+
+Windows: unverified, only compiled. The new tests skip on Windows (shell-script fakes); the npm.cmd lookup, the job close during an install and the marker on NTFS are not exercised.
+
+Decision on review finding 1 (main agent, not the maintainer): no automatic move-aside of an unmarked node_modules. The launcher keeps deleting nothing, and a rename of node_modules on Windows fails on locked files anyway. Instead: (1) the marker is written only after the smoke test passes, on every path, including a successful npm install. So a partial tree that npm calls "up to date" is never locked in. (2) When the smoke test fails for a node_modules that existed before this start, the abort log names the sure fix: delete node_modules in <dir> and start again, because npm install can report a partial tree as up to date. README troubleshooting item 3 says the same. (3) Finding 2: the wording becomes "the launcher deletes nothing; npm itself may remove extraneous packages", and the "left as it was" comment is corrected. (4) Finding 3: tests for a timeout over an existing node_modules, a failed marker write and a package without dependencies. Also: the k117 positive control and the k119 ErrDot nit. Back to the worker.
+
+2026-11-21 05:31 Rework after review (worker, worktree-agent-a39460cfbed68205d, still on 3ab0142, not rebased). F1 per the main agent's decision: the marker is written only after a passing smoke test, on every path, a successful npm install included (bridge.go: prepareNodeBridge hands bridgeModules{path, earlier, marked} on; settleModules marks on a pass). A failing smoke test over a node_modules that was there before this start (marked or not), and not a Ctrl-C, logs: WARN ... delete <node_modules> and start again — npm install can report a partial one as up to date. README item 3: marker written once the smoke test passes; 'the launcher deletes nothing; npm itself may remove extraneous packages'; 'Delete the marker to force a re-install' replaced by the delete-node_modules fix. F2: comments corrected (no 'deletes nothing' for npm, no 'left as it was'). F3 + regression tests in bridge_test.go: UpToDateButBrokenStaysUnmarked (red on the reviewed code), FreshInstallBrokenStaysUnmarked, MarkedButBrokenNamesRepair, CancelledSmokeTestNamesNoRepair, TimeoutOverEarlierModules, MarkerWriteFails (skips itself only if a 0555 dir is writable, e.g. root), WithoutDependencies. Mutations 8/8 killed, the reviewer's three survivors (timeout earlier=false, swallowed marker WARN, MkdirAll removed) included. Real npm 11.17.0 offline (reviewer's fixture, copied): half-extracted dep -> no marker, repair hint on every start; deleting node_modules as the log says -> next start installs, smoke OK, marked. Check: gofmt empty, vet linux+windows ok, go test ./... ok, -race cmd/launcher ok, make linux + make windows ok, go mod verify ok. Windows unverified (compile only). Also on this tree, approved cards: k117 positive control on the fixture, k119 ErrDot warning + test.
+
+Re-review round 2 (unreagent-reviewer, 2026-11-21): READY. No blocking findings; finding A below is a should-fix the main agent can take before the commit or as a follow-up. Tree: worktree-agent-a39460cfbed68205d on 3ab0142, uncommitted. Files: cmd/launcher/bridge.go, cmd/launcher/bridge_test.go, README.md, unreagent.example.yaml. Check run by the reviewer: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; go mod verify ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux and make windows ok (byte-identical scratch copy); no test skipped itself. The diff also applies on main 9792365 (offset only), and gofmt, vet on both GOOS and go test ./... pass on that scratch copy.
+
+Worker's claims verified:
+- The round-2 bridge_test.go against the reviewed round-1 bridge.go: UpToDateButBrokenStaysUnmarked, FreshInstallBrokenStaysUnmarked and MarkedButBrokenNamesRepair go red. The F3 tests pass there, as expected: they are coverage tests, and the round-1 code was right on those paths.
+- Real npm 11.17.0, offline, the reviewer's fixture, through prepareMCPBridges. A half-extracted dependency: npm says up to date, the smoke test fails, no marker is written, and the hint appears on every start. After node_modules is deleted as the hint says, the next start installs, the smoke test passes and the tree is marked; the start after that skips the install.
+- Mutations: 14 of 14 killed. They include the three round-1 survivors (timeout sets earlier=false, the marker WARN swallowed, MkdirAll removed), marking after npm exit 0, a hint on Ctrl-C, a hint only for unmarked trees, a hint for a tree this start installed, and settleModules never called.
+
+A (should-fix, the hint on marked trees, as asked): keeping a hint for marked trees is right. Without it, a plugin update that adds a module keeps the install skipped with no guidance. But the reason given does not fit a marked tree: bridge.go:211 says "npm install can report a partial one as up to date", and no npm install ran on that start. The fix offered is also heavier than needed. Real npm, plugin update with a new dependency on a marked tree: deleting only the marker made the next start install the new module, pass and mark. The hint also fires for any failure, not just a missing module. A marked complete tree whose bridge fails with "Error: UNREAL_MCP_URL is not set" is told to delete node_modules, and offline that costs the bridge until the network is back. Suggestion, for the main agent to decide: on a failed smoke test over a marked tree, settleModules removes the launcher's own marker (the next start then runs npm install, and if that still fails the unmarked hint follows), or the marked-tree hint names the marker first. In both cases, say "if the error above names a missing module or file".
+
+Consequence of the decision (reasoned, not measured): a bridge whose smoke test keeps failing for a reason outside node_modules now gets npm install on every start. The reviewer's probe showed that on 3 of 3 starts. With a stalled registry, each of those installs can hold the editor start up to the 5-minute cap.
+
+B (nit, README.md:503-504): "An install cut short (the timeout, or Ctrl-C) leaves no marker". After a timeout over an earlier tree, a passing smoke test marks it in the same start; TestPrepareNodeBridgeTimeoutOverEarlierModules pins exactly that.
+C (nit, cosmetic): README.md:77 was not re-wrapped (115 chars, from the main agent's edit); unreagent.example.yaml:130-131 run to 88 and 87 chars.
+
+README.md:76-80, README item 3 (:501-513) and the example comment match the code otherwise. The comments at bridge.go:117-122 and :154-157 (finding 2) are now accurate.
+
+Proposed Changes entry: accurate clause by clause. Two things for the release-manager. First, the stale k54 lines on main 9792365 contradict it: Changes:58-60 ("the bridge is left out with a warning ... the log says to remove the partial node_modules") and Changes:63 ("in a job object like every other process"). Second, the entry could add that a node_modules from before this version gets one npm install on the first start, and that a bridge failing its smoke test gets npm install on every start.
+
+Windows: unverified, compiled only. The tests skip on Windows (shell-script fakes); the npm.cmd lookup, the job close during an install and the marker on NTFS are not exercised.
+
+Re-review round 3, finding A only (unreagent-reviewer, 2026-11-21): READY. Finding A and nits B and C are closed. Files changed since round 2: cmd/launcher/bridge.go, cmd/launcher/bridge_test.go, README.md, unreagent.example.yaml. Check run by the reviewer: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; go mod verify ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux and make windows ok (byte-identical scratch copy); no test skipped itself.
+
+1. The hint texts against the round-2 probes, rerun on this code:
+- Plugin update with real npm 11.17.0 (marked tree, new dependency): the marked form names node_modules/.unreagent-installed first and node_modules only as the fallback. Deleting just the marker made the next start install the new module, pass the smoke test and mark. Correct.
+- A marked tree whose bridge fails with "Error: UNREAL_MCP_URL is not set": the hint now opens with "if the error above names a missing module or file", so it no longer tells the user flatly to delete anything, and the npm reason no longer appears for a marked tree. Correct.
+- A half-extracted package, unmarked: the unmarked form appears on every start; deleting node_modules repairs it.
+- settleModules (bridge.go:206-223) gives the same outcome as round 2 on every path; only the hint wording and its split differ.
+
+2. README troubleshooting item 3 (README.md:501-517) matches the code clause by clause: the marker after a passing smoke test; npm install over whatever node_modules is there; the launcher deletes nothing and npm may prune; a failed install over an existing folder keeps it and leaves the decision to the smoke test; the two repair forms. The claim "an install cut short leaves no marker" is gone. README.md:74-80 and unreagent.example.yaml:129-132 are rewrapped; no line in the changed areas runs past 80 characters.
+
+3. Mutations on the new hint logic: 6 of 7 killed (marked tree gets the unmarked form and the reverse, condition prefix dropped, marked hint naming node_modules instead of the marker, a hint on Ctrl-C, a hint for a tree installed fresh this start). Survivor, minor and non-blocking: dropping "passed ||" from the no-op case in settleModules makes a marked tree that PASSES its smoke test log the delete hint on every start, and no test notices. TestPrepareNodeBridgeSkipsInstallWithMarker (bridge_test.go:238) checks "smoke test OK" but not the absence of a WARN. One assertion there would pin it. The code itself is correct.
+
+Observation, older than k106 (a ticket if wanted): smokeTestMCP shows only the last 15 stderr lines. For node 24's CJS MODULE_NOT_FOUND, that cuts the "Error: Cannot find module 'dep'" line itself; what stays visible is code: 'MODULE_NOT_FOUND' and requestPath: 'dep', so "the error above" still names the module, but only through those fields.
+
+Windows: unverified, compiled only (as in rounds 1 and 2).
+
+Committed as eff9777 on main (reviewed; Windows behaviour unverified, compile-only)
