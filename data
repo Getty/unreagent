@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-21T15:20:29Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T15:20:46Z
+created: 2026-11-21T13:30:09Z
+id: 174
+priority: low
+started: 2026-11-21T14:53:21Z
+status: done
+tags:
+- config
+- docs
+title: Config comments for cleanOnRestart / killCrashReporter list only two cases
+updated: 2026-11-21T15:20:46Z
+---
+
+From the k153 review. internal/config/config.go (~:94-102) still says Saved/Crashes is kept and the crash reporter is spared only on an automatic restart and after a give-up. Since k153, a start issued in place of a pending automatic restart (ue_start, ue_restart, console start or r during the restart delay, or during the retry delay of a failed start) counts too, and a stop during the delay ends the crash episode. Done when the comments match README's cleanOnRestart and killCrashReporter rows. Lane: unreagent-worker; after k113 lands (it holds internal/config/config.go).
+
+Main agent 2026-11-21: bundled with k157 (same file). The decision note on k157 covers both.
+
+**unreagent-worker 2026-11-21: done together with k157.** The full report (check, proposed subject) is in k157's note.
+
+- Comment-only change in `internal/config/config.go` (~:94-116). KillCrashReporter and CleanOnRestart now list the k153 cases: an automatic restart, including a retry of a failed start; a start issued in place of a pending automatic restart (ue_start, ue_restart, console start or r during the restart delay, or during the retry delay of a failed start); and the first start after a give-up. They also say that a ue_stop or console stop during that delay ends the crash episode. KillCrashReporter now names both reporter exes.
+- Checked against the code: `followsCrash`, `editorPreStart` and `cleanRecovery` in cmd/launcher/lifecycle.go, and the supervisor's `replacesRestart` and ctrlStop.
+- **README mismatch, for the doc-writer; README is unchanged:** README's `killCrashReporter` row does not say that a stop during the restart delay ends the crash episode, so that a later start kills the reporter. The `cleanOnRestart` row does say it, and the code applies it to both options. `unreagent.example.yaml`'s killCrashReporter comment lacks the same sentence.
+- No Changes entry.
+
+Ready for review: comment-only fix in config.go, bundled with k157 (same tree). README killCrashReporter row mismatch noted for the doc-writer.
+
+**unreagent-reviewer 2026-11-21: READY** together with k157. The comments at config.go:94-116 match followsCrash, cleanRecovery and the supervisor's replacesRestart/ctrlStop, and they agree with README's cleanOnRestart and killCrashReporter rows. The full check is green, and the patch applies cleanly on 1d30fb6. Verdict, check and findings are on k157.
+
+Committed as 43cd3f3 (Refuse a broken unreagent.yaml link instead of loading .yml). Full check green on the committed tree.
