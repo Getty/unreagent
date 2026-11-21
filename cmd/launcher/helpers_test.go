@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -276,4 +277,250 @@ func TestReadFileRefusesOffsetBeyondInt(t *testing.T) {
 	if !res.IsError || res.Text != want {
 		t.Fatalf("offset=1e20: IsError=%v\n got  %q\n want %q", res.IsError, res.Text, want)
 	}
+}
+
+// assertNoTempFiles fails when dir holds a temp file of writeFileAtomic.
+func assertNoTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	if tmp, _ := filepath.Glob(filepath.Join(dir, "*.tmp-*")); len(tmp) > 0 {
+		t.Errorf("temp files left behind: %v", tmp)
+	}
+}
+
+// k178: writeFileAtomic is the one writer of the files that can hold a
+// secret, the MCP configs (k44) and hermes-setup's files (k96, k167). A new
+// file is created 0600, with tighten or without, and its mode is not
+// returned: it was never open to anyone.
+func TestWriteFileAtomicCreatesANewFile0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not apply on Windows")
+	}
+	for _, tighten := range []bool{true, false} {
+		t.Run(fmt.Sprintf("tighten=%v", tighten), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "new.yaml")
+			was, err := writeFileAtomic(path, []byte("a: 1\n"), tighten)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if was != 0 {
+				t.Errorf("a new file returned mode %04o, want 0", was)
+			}
+			assertMode(t, path, 0o600)
+			if got := readFile(t, path); got != "a: 1\n" {
+				t.Errorf("content %q, want %q", got, "a: 1\n")
+			}
+			assertNoTempFiles(t, dir)
+		})
+	}
+}
+
+// k178: a replaced file keeps its permission bits, unless they let group or
+// others at it and tighten is set: then it comes out 0600. Either way such
+// open bits are returned, for the caller to report, and 0 for a closed file.
+// The new content replaces the old whole, also when the old was longer.
+func TestWriteFileAtomicTightensOnlyWhenAsked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits do not govern who can read a file on Windows; nothing is tightened or returned there")
+	}
+	for _, tc := range []struct {
+		mode os.FileMode
+		open bool
+	}{
+		{0o644, true},
+		{0o640, true},
+		{0o604, true}, // others only
+		{0o620, true}, // a write bit only
+		{0o600, false},
+		{0o400, false},
+		{0o700, false},
+	} {
+		for _, tighten := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%04o tighten=%v", tc.mode, tighten), func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "file")
+				writeFile(t, path, strings.Repeat("old content, longer than the new\n", 100))
+				if err := os.Chmod(path, tc.mode); err != nil {
+					t.Fatal(err)
+				}
+				was, err := writeFileAtomic(path, []byte("new\n"), tighten)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantWas, wantMode := os.FileMode(0), tc.mode
+				if tc.open {
+					wantWas = tc.mode
+					if tighten {
+						wantMode = 0o600
+					}
+				}
+				if was != wantWas {
+					t.Errorf("returned mode %04o, want %04o", was, wantWas)
+				}
+				assertMode(t, path, wantMode)
+				if got := readFile(t, path); got != "new\n" {
+					t.Errorf("the file is not the new content alone: %q", got)
+				}
+				assertNoTempFiles(t, dir)
+			})
+		}
+	}
+}
+
+// k178: the old file is never written in place. When the temp file cannot be
+// created, the write fails naming the directory, returns 0, and the old file
+// keeps its content and its mode, also the open mode tighten would have
+// closed. An in-place write, as k44's writePrivateFile did for the MCP
+// config, goes through here: the file itself is writable.
+func TestWriteFileAtomicLeavesTheOldFileOnFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to (POSIX permissions, not root)")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file")
+	const old = "old content\n"
+	writeFile(t, path, old)
+	if err := os.Chmod(path, 0o644); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) }) // before TempDir's cleanup
+
+	was, err := writeFileAtomic(path, []byte("new\n"), true)
+	if err == nil {
+		t.Fatal("expected an error for a read-only directory, got nil")
+	}
+	if want := "create a temp file in directory " + dir + ": "; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not name the directory (%q)", err, want)
+	}
+	if was != 0 {
+		t.Errorf("a failed write returned mode %04o, want 0", was)
+	}
+	if got := readFile(t, path); got != old {
+		t.Errorf("the old file was changed: %q", got)
+	}
+	assertMode(t, path, 0o644)
+}
+
+// k178: a write that fails after its temp file holds the data, here the
+// rename onto a directory, removes the temp file and returns 0, although the
+// directory's own bits (0755) are open. The directory stays as it was.
+func TestWriteFileAtomicRemovesItsTempFileOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
+	kept := filepath.Join(path, "kept")
+	writeFile(t, kept, "kept\n")
+
+	was, err := writeFileAtomic(path, []byte("token: secret\n"), true)
+	if err == nil {
+		t.Fatal("expected an error for a rename onto a directory, got nil")
+	}
+	if was != 0 {
+		t.Errorf("a failed write returned mode %04o, want 0", was)
+	}
+	assertNoTempFiles(t, dir)
+	if got := readFile(t, kept); got != "kept\n" {
+		t.Errorf("the directory's file was changed: %q", got)
+	}
+}
+
+// k96: only a symlinked file is followed. A file reached through a symlinked
+// directory keeps its path, so an error names the directory the user gave.
+func TestWriteFileAtomicKeepsSymlinkedDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to (POSIX permissions, not root)")
+	}
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	writeFile(t, filepath.Join(target, "unreagent.local.yaml"), "a: 1\n")
+	if err := os.Chmod(target, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(target, 0o755) }) // before TempDir's cleanup
+
+	_, err := writeFileAtomic(filepath.Join(link, "unreagent.local.yaml"), []byte("a: 2\n"), false)
+	if err == nil {
+		t.Fatal("expected an error for a read-only directory, got nil")
+	}
+	if want := "in directory " + link + ":"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not name the directory as given (%q)", err, want)
+	}
+}
+
+// k178: a symlink whose target is missing is refused, not replaced by a new
+// file: the error wraps os.ErrNotExist and names the link, the mode is 0, the
+// link still points where it did, nothing appears at its target and no temp
+// file is left behind.
+func TestWriteFileAtomicRefusesADanglingSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing")
+	link := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(missing, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	mode, err := writeFileAtomic(link, []byte("token: secret\n"), true)
+	if err == nil {
+		t.Fatal("expected an error for a dangling symlink, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("error %q does not wrap os.ErrNotExist", err)
+	}
+	if !strings.Contains(err.Error(), link) {
+		t.Errorf("error %q does not name the link %s", err, link)
+	}
+	if mode != 0 {
+		t.Errorf("a refused write returned mode %04o, want 0", mode)
+	}
+	if dest, err := os.Readlink(link); err != nil || dest != missing {
+		t.Errorf("the link was changed: Readlink = %q, %v; want %q", dest, err, missing)
+	}
+	if _, err := os.Lstat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something was created at the link's target: Lstat err = %v", err)
+	}
+	assertNoTempFiles(t, dir)
+}
+
+// k178: a symlink to an existing file is followed: the real file gets the
+// data and the link stays a link.
+func TestWriteFileAtomicFollowsASymlinkedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.yaml")
+	link := filepath.Join(dir, "link.yaml")
+	writeFile(t, real, "a: 1\n")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	if _, err := writeFileAtomic(link, []byte("a: 2\n"), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, real); got != "a: 2\n" {
+		t.Errorf("the real file holds %q, want the new content", got)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link is no longer a symlink: %v, %v", fi, err)
+	}
+	if dest, err := os.Readlink(link); err != nil || dest != real {
+		t.Errorf("the link was changed: Readlink = %q, %v; want %q", dest, err, real)
+	}
+	assertNoTempFiles(t, dir)
 }

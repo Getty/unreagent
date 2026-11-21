@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -37,11 +36,12 @@ func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
 }
 
 // writeMCPConfigs writes the MCP config to the configured file targets, each
-// private to its owner (writePrivateFile): it holds the bearer token and the
-// extra servers' env values. With tokenSet, a target inside projectDir that
-// git does not ignore gets a WARN (unignoredTokenFile). The WARN also goes to
-// alert unless alert is nil, as run() passes it: stderr in window mode, where
-// the log is a file and the console the agent's.
+// replaced atomically and private to its owner (writeFileAtomic, tightening
+// an open file): it holds the bearer token and the extra servers' env
+// values. With tokenSet, a target inside projectDir that git does not ignore
+// gets a WARN (unignoredTokenFile). The WARN also goes to alert unless alert
+// is nil, as run() passes it: stderr in window mode, where the log is a file
+// and the console the agent's.
 func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{}, baseDir, projectDir string, tokenSet bool, logger func(string), alert io.Writer) {
 	for _, out := range outputs {
 		path := out.Path
@@ -60,7 +60,7 @@ func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{},
 			logger("WARN MCP config (" + path + "): " + err.Error())
 			continue
 		}
-		was, err := writePrivateFile(path, append(b, '\n'))
+		was, err := writeFileAtomic(path, append(b, '\n'), true)
 		if was != 0 {
 			logger(fmt.Sprintf("MCP config %s: mode %04o tightened to 0600 — it can hold the bearer token and the extra servers' env values", path, was))
 		}
@@ -83,43 +83,6 @@ func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{},
 	}
 }
 
-// writePrivateFile writes data to path, readable and writable by its owner
-// only. A new file is created 0600. os.WriteFile would keep an existing
-// file's mode, so one open to group or others is tightened to 0600 before
-// data goes in, and was is the mode it had (0: nothing tightened); if the
-// chmod fails, the file is left as it was. Not on Windows, where Chmod sets
-// only the read-only attribute and the mode a Stat reports is not the file's
-// ACL: there the file is written as it is.
-func writePrivateFile(path string, data []byte) (was os.FileMode, err error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-	}()
-	if runtime.GOOS != "windows" {
-		fi, err := f.Stat()
-		if err != nil {
-			return 0, err
-		}
-		if perm := fi.Mode().Perm(); perm&0o077 != 0 {
-			if err := f.Chmod(0o600); err != nil {
-				return 0, fmt.Errorf("mode %04o is open to others and cannot be tightened to 0600, so the file is not written: %w", perm, err)
-			}
-			was = perm
-		}
-	}
-	// Truncated only now: a file that cannot be made private keeps its content.
-	if err := f.Truncate(0); err != nil {
-		return was, err
-	}
-	_, err = f.Write(data)
-	return was, err
-}
-
 // agentMCPConfigName is the name of the file writeAgentMCPConfig writes.
 const agentMCPConfigName = "mcp-config.json"
 
@@ -129,7 +92,7 @@ const agentMCPConfigName = "mcp-config.json"
 // holds the bearer token and the extra servers' env values, so it goes into
 // a file and never inline onto the agent's command line, which every local
 // user can read (/proc/<pid>/cmdline, ps). os.MkdirTemp creates the
-// directory 0700 and writePrivateFile the file 0600; on Windows the mode
+// directory 0700 and writeFileAtomic the file 0600; on Windows the mode
 // bits do not apply, and the per-user %TEMP% keeps them private. The caller
 // removes the directory (removeAgentMCPConfig); after an error nothing is
 // left behind. The error is meant to end the launcher: falling back to the
@@ -141,7 +104,7 @@ func writeAgentMCPConfig(servers map[string]interface{}) (string, error) {
 	}
 	path := filepath.Join(dir, agentMCPConfigName)
 	b, _ := json.MarshalIndent(map[string]interface{}{"mcpServers": servers}, "", "  ")
-	if _, err := writePrivateFile(path, append(b, '\n')); err != nil {
+	if _, err := writeFileAtomic(path, append(b, '\n'), true); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", agentMCPConfigError(err)
 	}

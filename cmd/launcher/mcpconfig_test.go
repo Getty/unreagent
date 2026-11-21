@@ -18,27 +18,49 @@ import (
 	"github.com/conflict-industries/unreagent/internal/config"
 )
 
-// k44: the generated MCP config holds the bearer token and the extra servers'
-// env values, and was written 0644 — readable by every user of the machine.
-// A new file is created 0600.
-func TestWriteMCPConfigsCreatesTheFilePrivate(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("file modes do not apply on Windows")
+// k178: the MCP config is replaced atomically, never written in place, so a
+// crash mid-write cannot leave a truncated file. A directory the temp file
+// cannot be created in is a WARN naming the target and the directory; the
+// old file keeps its content and its open mode, and the log reports neither
+// a tightening nor a write. k44's in-place writer went through here, the
+// file itself being writable. (A new file's 0600, which k44 pinned here,
+// is TestWriteFileAtomicCreatesANewFile0600.)
+func TestWriteMCPConfigsLeavesTheOldFileOnFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to (POSIX permissions, not root)")
 	}
 	dir := t.TempDir()
+	path := filepath.Join(dir, ".mcp.json")
+	const old = "{\"mcpServers\": {}}\n"
+	mustWriteFile(t, path, old)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) }) // before TempDir's cleanup
 	var log syncLog
 	writeMCPConfigs([]config.MCPOutput{{Path: ".mcp.json"}}, testServers(), dir, "", true, log.log, nil)
 
-	path := filepath.Join(dir, ".mcp.json")
+	want := "WARN MCP config (" + path + "): create a temp file in directory " + dir + ": "
+	if !strings.Contains(log.String(), want) {
+		t.Errorf("no %q in the log:\n%s", want, log.String())
+	}
+	for _, not := range []string{"tightened", "MCP config written"} {
+		if strings.Contains(log.String(), not) {
+			t.Errorf("the log says %q for a write that failed:\n%s", not, log.String())
+		}
+	}
+	if got := mustReadFile(t, path); got != old {
+		t.Errorf("the old file was changed:\n%s", got)
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("stat %s: %v\nlog:\n%s", path, err, log.String())
+		t.Fatal(err)
 	}
-	if got := fi.Mode().Perm(); got != 0o600 {
-		t.Errorf("new MCP config has mode %04o, want 0600", got)
-	}
-	if strings.Contains(log.String(), "tightened") {
-		t.Errorf("a new file is reported as tightened:\n%s", log.String())
+	if got := fi.Mode().Perm(); got != 0o644 {
+		t.Errorf("the old file's mode is %04o, want 0644 kept", got)
 	}
 }
 

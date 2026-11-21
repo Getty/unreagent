@@ -1354,32 +1354,6 @@ func TestHermesSetupReadOnlyProjectDir(t *testing.T) {
 	}
 }
 
-// k96: only a symlinked file is followed. A file reached through a symlinked
-// directory keeps its path, so an error names the directory the user gave.
-func TestWriteFileAtomicKeepsSymlinkedDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs a directory the test cannot write to (POSIX permissions, not root)")
-	}
-	target := t.TempDir()
-	link := filepath.Join(t.TempDir(), "project")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("cannot create a symlink here: %v", err)
-	}
-	writeFile(t, filepath.Join(target, "unreagent.local.yaml"), "a: 1\n")
-	if err := os.Chmod(target, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(target, 0o755) }) // before TempDir's cleanup
-
-	_, err := writeFileAtomic(filepath.Join(link, "unreagent.local.yaml"), []byte("a: 2\n"), false)
-	if err == nil {
-		t.Fatal("expected an error for a read-only directory, got nil")
-	}
-	if want := "in directory " + link + ":"; !strings.Contains(err.Error(), want) {
-		t.Errorf("error %q does not name the directory as given (%q)", err, want)
-	}
-}
-
 // k96: a dangling symlink at either path is refused before anything is
 // written. The real file usually lives somewhere unavailable right now; a
 // write would replace the link with a new file, and for the Hermes config

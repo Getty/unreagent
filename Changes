@@ -351,11 +351,16 @@ Revision history for unreagent
     still being carried out says so, points to status and is not to be
     repeated; an editor busy with its pre-start step is named as busy, not as
     not responding.
-  - mcp.writeConfig and -write-mcp-config files are written 0600; an existing
-    file open to group or others is tightened first, and the log names its old
-    mode (Unix only). With mcp.token set, a file inside the project that git
-    does not ignore gets a WARN, in window mode also on stderr: add it to
-    .gitignore, and git rm --cached it if git already tracks it.
+  - mcp.writeConfig and -write-mcp-config files are written 0600 and replaced
+    atomically through a temp file <name>.tmp-<digits> in their directory, as
+    hermes-setup saves its files, so a crash mid-write cannot leave a
+    truncated file. That directory must be writable, and a dangling symlink
+    is refused with a WARN. An existing file open to group or others comes
+    out 0600, and the log names its old mode (Unix only). With mcp.token set,
+    a file inside the project that git does not ignore gets a WARN, in window
+    mode also on stderr: add it to .gitignore, and git rm --cached it if git
+    already tracks it. The recommended .gitignore lists .mcp.json.tmp-* for a
+    temp file that a kill mid-write leaves behind.
   - The logged agent command shows the launcher's own --mcp-config file path,
     any other --mcp-config value as <redacted>, and blanks the token in any
     other argument, so unreagent.log no longer holds the token or the extra

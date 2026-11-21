@@ -102,17 +102,22 @@ entry's url is the address clients connect to, so a wildcard `mcp.address`
 host is written as `127.0.0.1` (`[::1]` for `::`).
 
 The written file holds the bearer token when `mcp.token` is set, so it is
-created with mode `0600`. An existing file that is open to group or others is
-tightened to `0600` before the content goes in, and the log names the old mode;
-if that `chmod` fails, the old file is left untouched and a `WARN` is logged.
-This is Unix only: on Windows the mode is not handled. With `mcp.token` set, a
-written file that sits inside the project directory and that git does not
-ignore (`git check-ignore` exits 1) gets a `WARN` in the log (in window mode
-also on stderr), since a commit would take the token along: add the file to
-`.gitignore`, and if git already tracks it, `git rm --cached` it as well. No
-warning when git is missing, no project is known (`unreal.project` unset and no
-`.uproject` found), the project is not a git work tree, the path is outside the
-project, or git does not answer within 5 seconds.
+created with mode `0600`. It is written atomically: the content goes into a
+temp file `<name>.tmp-<digits>` in the target's directory, which is then
+renamed over the target, so a crash mid-write cannot leave a truncated file.
+That directory must be writable; if it is not, or the target is a dangling
+symlink, the old file is left untouched and a `WARN` is logged. An existing
+file keeps its mode, unless it is open to group or others: then it comes out
+`0600`, and the log names the old mode. This is Unix only: on Windows the mode
+is not handled. Since the target is replaced, not rewritten, a hard link to it
+keeps the old content. With `mcp.token` set, a written file that sits inside
+the project directory and that git does not ignore (`git check-ignore` exits
+1) gets a `WARN` in the log (in window mode also on stderr), since a commit
+would take the token along: add the file to `.gitignore`, and if git already
+tracks it, `git rm --cached` it as well. No warning when git is missing, no
+project is known (`unreal.project` unset and no `.uproject` found), the
+project is not a git work tree, the path is outside the project, or git does
+not answer within 5 seconds.
 
 ## Building
 
@@ -333,12 +338,16 @@ unreagent.exe
 unreagent.local.yaml
 unreagent.local.yaml.tmp-*
 unreagent.log*
+.mcp.json.tmp-*
 ```
 
-The `unreagent.local.yaml.tmp-*` line covers a leftover of `unreagent hermes-setup`: it saves the
-bearer token through a temp file, and a kill mid-write can leave
-`unreagent.local.yaml.tmp-<digits>` behind with the token in it. Delete such
-a file or keep it out of git.
+The `.tmp-*` lines cover a leftover of a file that holds the bearer token and
+is saved through a temp file: `unreagent hermes-setup` saves
+`unreagent.local.yaml` that way, and `mcp.writeConfig` and `-write-mcp-config`
+save their `.mcp.json` that way. A kill mid-write can leave
+`<name>.tmp-<digits>` behind with the token in it. Delete such a file or keep
+it out of git; for a target with another name (such as `.vscode/mcp.json`,
+or a `-write-mcp-config` path), add its own `<name>.tmp-*` line.
 
 `unreagent.log*` is there because in window mode the launcher log sits in the
 project directory, and the log of releases up to 0.0.9 can carry the bearer
@@ -1410,7 +1419,7 @@ gone once the list is set), or a different extension id. Uppercase is fine.
 | `-no-agent` | **do not** start the agent — only UE + MCP server. An external agent (your own Claude Code session) then connects to the MCP server. |
 | `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. Refused with a warning (file tools stay off) when `files.root` contains a placeholder that did not resolve — set `unreal.project` or an explicit `files.root`. |
 | `-no-skills-mcp` | deliver the skills as files in `skills.dir` instead of through the `skills` MCP tool (`skills.mcp: false`, `skills.materialize: true`). It is applied after both YAML files are loaded, so it wins over `unreagent.yaml` and `unreagent.local.yaml`; with `skills.enabled: false` it has no effect and says so in the log. See [Skills](#skills). |
-| `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). Created `0600` (an existing file open to group or others is tightened first; Unix only), since it holds `mcp.token` when set; with `mcp.token` set, a target inside the project that git does not ignore gets a `WARN` (in the log; in window mode also on stderr). |
+| `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). Created `0600` and replaced atomically through a temp file in its directory, which must be writable (an existing file open to group or others comes out `0600`; Unix only), since it holds `mcp.token` when set; with `mcp.token` set, a target inside the project that git does not ignore gets a `WARN` (in the log; in window mode also on stderr). |
 
 ## Sub-commands
 

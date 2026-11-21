@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -990,75 +989,4 @@ func bearerSummary(token string, generated bool) string {
 		return fmt.Sprintf("mcp.token from your unreagent config (%d chars, not shown)", len(token))
 	}
 	return token[:min(8, len(token))] + "… (64 hex chars, in unreagent.local.yaml)"
-}
-
-// writeTarget returns the file a write to path replaces: the target of a
-// symlinked file, or path itself. Only a symlinked file is resolved: a path
-// through a symlinked directory stays as given, so errors name the directory
-// the user knows, and the rename lands in the real directory either way. A
-// dangling symlink is refused: the real file usually lives somewhere that is
-// unavailable right now, and writing would replace the link with a new file
-// that holds none of it. So is a link that cannot be resolved at all, such as
-// a loop. Every error names path (config.ResolveLink).
-func writeTarget(path string) (string, error) {
-	target, err := config.ResolveLink(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("%w; refusing to replace the link with a new file", err)
-	}
-	return target, err
-}
-
-// writeFileAtomic writes data to path safely: to a temp file
-// <name>.tmp-<random> in the same directory, synced to disk, then renamed over
-// path, so a kill mid-write leaves the old file whole. A symlinked file is
-// followed and its target replaced, so the link stays a link; a dangling one
-// is refused (see writeTarget). A replaced file keeps its permission bits; a
-// new one gets 0600, since it may hold a token. The mode of a replaced file
-// whose bits let group or others at it is returned, 0 when they do not (a new
-// file never does). secret says that data holds a token: such a file then
-// gets 0600 instead of its bits. The temp file gets the final mode before the
-// rename, so the secret is never on disk under the old bits. On Windows the
-// bits do not decide who can read the file (it inherits its directory's ACL),
-// so nothing is tightened or returned there. The directory must be writable
-// for the temp file; there is no in-place fallback.
-func writeFileAtomic(path string, data []byte, secret bool) (os.FileMode, error) {
-	path, err := writeTarget(path)
-	if err != nil {
-		return 0, err
-	}
-	mode, open := os.FileMode(0o600), os.FileMode(0)
-	if fi, err := os.Stat(path); err == nil {
-		mode = fi.Mode().Perm()
-	}
-	if runtime.GOOS != "windows" && mode&0o077 != 0 {
-		open = mode
-		if secret {
-			mode = 0o600
-		}
-	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return 0, fmt.Errorf("create a temp file in directory %s: %w", dir, err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // in case a step below fails
-
-	_, err = tmp.Write(data)
-	if err == nil {
-		err = tmp.Chmod(mode)
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return 0, err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return 0, err
-	}
-	return open, nil
 }
