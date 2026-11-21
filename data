@@ -1,0 +1,50 @@
+---
+claimed_at: 2026-11-21T05:59:22Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:59:51Z
+created: 2026-11-21T03:10:40Z
+id: 119
+priority: low
+started: 2026-11-21T04:41:18Z
+status: done
+tags:
+- config
+- bug
+title: warnIfMissing warns falsely for a bare command on PATH
+updated: 2026-11-21T05:59:51Z
+---
+
+Found by the k69 worker (2026-11-21): warnIfMissing in cmd/launcher/helpers.go uses os.Stat, so a bare command resolved via PATH warns on every start — e.g. "WARN unreal.editor: path not found: ping" on every demo run. Done when: a bare name (no path separator) is looked up with exec.LookPath before warning, with a test. Lane: unreagent-worker.
+
+Worker done (2026-11-21, helpers.go + helpers_test.go): a bare name (filepath.Base(p) == p, the rule exec.Command uses) is looked up with exec.LookPath; missing → 'WARN unreal.editor: X not found on PATH'; paths keep os.Stat. Demo no longer warns about ping. Windows PATHEXT lookup unverified.
+
+Ready for review (2026-11-21, worktree-agent-a39460cfbed68205d): code + tests by the worker; k106 README + unreagent.example.yaml by the doc-writer. One commit per card (k106 bridge.go/bridge_test.go + docs, k117 ci.yml, k119 helpers.go/helpers_test.go).
+
+Review (unreagent-reviewer, 2026-11-21): READY. Tree: worktree-agent-a39460cfbed68205d on 3ab0142. Files: cmd/launcher/helpers.go, cmd/launcher/helpers_test.go (new). Check: same full run as noted on k106, all green.
+
+Bare-name rule: exec.Command (Go 1.26.6 os/exec/exec.go:446) calls LookPath exactly when filepath.Base(name) == name, and the supervisor starts the editor through exec.Command (supervisor.go:315/485). warnIfMissing uses the same test, so it warns in the cases where the start would fail to look the name up. Edge cases reasoned from the source: "" and "." behave as before or as exec does; "C:foo.exe" is not bare on Windows, because Base drops the volume, which matches exec.Command.
+
+Card claim reproduced: the demo config (editor: ping) with the base binary logs "WARN unreal.editor: path not found: ping"; with the new binary there is no such line.
+
+Mutations: 5 of 5 meaningful ones killed (os.Stat only, i.e. the bug; condition inverted; bare name never warns; bare branch falls through to os.Stat; path branch never warns). "LookPath for every path" survives, which is fine: on Linux it is equivalent.
+
+Nit (non-blocking): helpers.go:20 drops the LookPath error, so ErrDot (the name resolves only through "." or an empty PATH entry, or on Windows through the current directory) reads "not found on PATH" although the file was found and exec refuses it for that reason. The warning is right, the wording is off.
+
+Windows: unverified. LookPath with PATHEXT and the current-directory-first ErrDot path, and the test's fake-editor.exe branch, were not run. Separate from this card (pre-existing): on Windows, exec.Command resolves an absolute path without an extension through PATHEXT, but warnIfMissing os.Stat's it as given and would warn falsely.
+
+Re-review round 2 (unreagent-reviewer, 2026-11-21): READY, the round-1 nit is closed. Files: cmd/launcher/helpers.go (lines 17-32), cmd/launcher/helpers_test.go (TestWarnIfMissingFoundOnlyRelative at :53). Check: the same full run as noted on k106, all green.
+
+ErrDot: LookPath returns *exec.Error wrapping ErrDot, so errors.Is matches. Mutations: 7 of 7 killed, among them the ErrDot case never matching, the ErrDot case silent, comparing with == (no unwrap), and the round-1 set (os.Stat only, bare name never warns, path never warns).
+
+End to end with the round-2 Linux binary:
+- the demo config (editor: ping) logs no unreal.editor warning;
+- an editor reached only through "." on PATH logs "WARN unreal.editor: fake-ue is found only relative to the current directory (fake-ue), which exec refuses — give its full path", and the supervisor's start then fails with 'exec: "fake-ue": cannot run executable found relative to current directory', so the warning names the real cause.
+
+Nit (cosmetic): with "." on PATH, LookPath returns filepath.Join(".", name), so the parenthesis repeats the bare name. It is more useful for a relative PATH entry such as bin/.
+
+Proposed Changes entry: accurate. Every clause was checked: bare name looked up on PATH; the demo's ping does not warn; a missing name is reported as not on PATH; a name found relative to the current directory, which exec refuses, is named as that (unless GODEBUG=execerrdot=0, where exec accepts it and no warning is given; consistent).
+
+Windows: unverified. The implicit current-directory lookup (ErrDot), PATHEXT, and the tests' .exe branches were not run.
+
+Committed as c649355 on main (reviewed; Windows behaviour unverified, compile-only)
