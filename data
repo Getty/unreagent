@@ -1,0 +1,49 @@
+---
+class: standard
+completed: 2026-11-21T07:37:04Z
+created: 2026-08-21T23:24:04Z
+depends_on:
+- 10
+- 11
+- 12
+id: 27
+priority: medium
+started: 2026-11-21T07:37:04Z
+status: done
+tags:
+- skills
+- docs
+title: 'Docs: skills section in README and unreagent.example.yaml'
+updated: 2026-11-21T07:37:20Z
+---
+
+Document the subsystem for users once it works.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md sections 3, 5 and 6.3.
+Agent: unreagent-doc-writer.
+
+Acceptance:
+- README explains the two delivery paths and why MCP is the default (the generated tool description carries the skill list, so selection costs no extra round trip)
+- --no-skills-mcp documented as the file-based-skills switch
+- the materialization path, the unreagent- prefix guarantee and the removal of dropped skills are stated plainly -- users need to know what the launcher will and will not touch under <Project>/.claude/skills
+- unreagent.example.yaml comments match the shipped defaults
+- English throughout
+
+Depends on #10, #11, #12.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, premature until k10, k11, k12 land. Lane: unreagent-doc-writer. Size S.
+
+**Decision 2026-11-21** (main agent): covered by the k10–k12 docs (doc-writer, same worktree). The README gets a ## Skills section: both paths, MCP as the default because the tool description carries the skill list, -no-skills-mcp, the unreagent- prefix, replacement and removal of dropped skills, and what is never touched. unreagent.example.yaml gets a skills block with the defaults. All acceptance points are met, so the card closes with the k10–k12 commit; the release-manager names that commit here.
+
+2026-11-21 07:10 Coverage check (unreagent-reviewer) against the acceptance list, in the k10-k12 worktree (worktree-agent-af98a3815ee9336cb): COVERED, nothing missing.
+- Two delivery paths, and MCP as the default because the tool description carries the skill list (no extra round trip): README.md Skills section (849-861, 857).
+- -no-skills-mcp documented as the file-based switch: the README CLI row and the Skills section; the flag help text in cmd/launcher/main.go matches.
+- Materialization path, the unreagent- prefix guarantee, removal of dropped skills, what is never touched, and the name rewrite: README.md 869-878; failure modes at 890-904.
+- unreagent.example.yaml skills block matches the defaults in internal/config/config.go (enabled true, mcp true, materialize false, dir ${PROJECT_DIR}/.claude/skills).
+- English throughout.
+Closes with the k10-k12 commit. Its open items (the flaky test on k11, the docs on k12) are not k27 acceptance points.
+
+Closed by b78a5fc (skills delivery commit)
+
+Closed by b78a5fc (skills delivery commit)
