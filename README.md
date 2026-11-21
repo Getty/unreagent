@@ -620,7 +620,7 @@ you which of the remaining causes applies.
 | Section | Purpose |
 |---|---|
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`; the logged `Agent command:` line shows `--mcp-config <redacted>` and the token blanked in any other argument, while the agent itself gets the real arguments); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
-| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules; enforced only for a headless Claude Code agent with `claudeIntegration` (`-p`/`--print` with a task); for an interactive agent or with `claudeIntegration: false` the launcher logs a startup `WARN` and the policy is not applied (exceptions, and the open `agent.window: false` case: see Permission layer) — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
+| `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules; enforced only for a headless Claude Code agent with `claudeIntegration` (`-p`/`--print` with a task); for an interactive agent or with `claudeIntegration: false` the launcher logs a startup `WARN` and the policy is not applied (exceptions, and the open `agent.window: false` case: see Permission layer) — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders; a path rule for a file tool must be absolute, see Permission layer |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535, anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
@@ -737,11 +737,61 @@ wrap. This is a **heuristic, not a shell parser** — it cannot follow variable
 indirection, aliases, or data piped into an interpreter (`python -c ...`). A
 deny list under `allow_all` is a guard rail, not a security boundary.
 
+**Redirections.** In allowlist mode a segment with a file-writing output
+redirection (`>`, `>>`, `>|`, `&>file`, `>&file`) is covered only by an allow
+rule that spells the redirection out before its trailing `*`:
+`Bash(echo *)` does not allow `echo x > notes.txt`, `Bash(echo x > *)` does.
+`Bash(*)` does not cover a redirection either; the bare `Bash` rule (no
+brackets) allows everything. File-descriptor duplication (`2>&1`) and
+the null device write no file and do not count: `/dev/null` for `Bash`,
+the bare `$null` for `PowerShell`. For `PowerShell` a redirection to `NUL` or
+`/dev/null` counts as a file.
+
+**Unreadable command lines are denied.** A `Bash` command the tokenizer
+cannot read with certainty is refused rather than guessed at: in allowlist
+mode no allow rule grants it, and every `Bash(...)` deny rule matches it, so
+it is blocked under `allow_all` too as soon as one such deny rule exists (a
+bare `allow_all` with no `Bash` deny rule has nothing to match). That covers
+`$'...'` ANSI-C quoting it cannot follow, `${...}` bodies outside the plain
+forms (`${x}`, `${x:-default}`, `${#x}`, `${x%.*}` and the like — not
+indirection `${!x}`, replacement `${x/a/b}`, substring `${x:1}`, `${x@P}`,
+subscripts or assignments `${x:=...}`), process substitution (`<(...)`,
+`>(...)`) and command substitutions nested too deep. Rewrite the command in
+plain form and it goes through.
+
+**What no rule sees.** A matcher reads the command line, not what the tool
+does with it, so every escape that lives inside a tool is invisible to it:
+`git -c core.pager=...` / `core.sshCommand` / `alias.x=!sh`, `GIT_*` /
+`PAGER` / `EDITOR` in the environment, `find -exec` / `-execdir` / `-delete`,
+`xargs` reading its commands from a file, `tar --to-command` /
+`--checkpoint-action`, `rsync -e`, `ssh -o ProxyCommand`, `awk 'BEGIN{system(...)}'`,
+`sed -i` / `sed e`, `tee` / `cp` / `dd of=` / `Out-File` / `Set-Content`
+writing a file, `python -c` / `node -e` / `perl -e`, and `npm` / `make`
+scripts. `Bash(git *)` grants all of these. An allowlist is therefore a guard
+rail against an agent's mistakes, not a security boundary against a hostile
+one.
+
 Bracket rules also work on non-Bash tools, matched against the tool's
 path-like input — `Write(/etc/*)`, `Read(/secrets/*)`,
 `mcp__unreagent__write_file(/etc/*)`. A rule whose tool carries no evaluable
 input field fails closed: a deny rule still blocks, an allow rule still does
 not grant.
+
+**Path rules for file tools** (`Read`, `Write`, `Edit`, `MultiEdit`,
+`NotebookEdit`) must name an absolute path (`${PROJECT_DIR}/Source/*` or a
+full path) below a root. A relative rule is a load error, in `allow` and in
+`deny` (`Write(./*)` would otherwise clean to `*` and match everything).
+An `allow` rule at a root (`Write(/*)`, `Write(C:\*)`) is a load error as
+well, because it would allow the whole file system; a `deny` rule at a root
+loads, since it can only block. To cover every path, write the bare tool name
+(`Write`). Other tools get no load error, but an allow rule that names no
+absolute path never grants a call that carries a path: `Grep(*)`, `Glob(*)`
+and `mcp__x__*(*)` do not (the bare name does).
+
+On Windows write rules with a drive letter (`'Write(C:\Proj\*)'`, single
+quoted in YAML): a drive-less deny rule such as `Write(/etc/*)` loads but
+never matches a `C:\` path. Path rules ignore case there, and `..` cannot
+climb above a drive letter or a `\\server\share` root.
 
 **Windows:** `claudeIntegration` sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` by
 default (see the `agent` row above), so Claude Code's shell tool is named

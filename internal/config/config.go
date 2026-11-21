@@ -559,10 +559,11 @@ func (c *Config) substitute(engine, project, projectDir, projectName string, bui
 	// config path is made absolute in Load (the project values derive from
 	// it) and resolveEngine makes the engine root absolute. Then the only glob
 	// character is a trailing *, and the rule's own "(" comes before any
-	// substituted path. A relative value would break this: matchPath cleans
-	// "Write(./*)" to "*", which grants everything, and "Write(sub/*)" never
-	// matches the absolute paths Claude Code sends, which leaves a deny rule
-	// inert. An empty one is caught by the unresolved check ("Edit(/*)").
+	// substituted path. A relative value would break this: "Write(./*)"
+	// cleans to "*" (checkRules and matchValue refuse it rather than let it
+	// grant everything, k104), and "Write(sub/*)" never matches the absolute
+	// paths Claude Code sends, which leaves a deny rule inert. An empty one is
+	// caught by the unresolved check ("Edit(/*)").
 	c.Permissions.Allow = subList("permissions.allow", c.Permissions.Enabled, c.Permissions.Allow)
 	c.Permissions.Deny = subList("permissions.deny", c.Permissions.Enabled, c.Permissions.Deny)
 
@@ -706,6 +707,11 @@ func (c *Config) validate() error {
 	}
 	if c.Permissions.Enabled && !c.MCP.Enabled {
 		return fmt.Errorf("permissions.enabled requires mcp.enabled (the approve tool is served by the MCP server)")
+	}
+	if c.Permissions.Enabled {
+		if err := c.Permissions.checkRules(); err != nil {
+			return err
+		}
 	}
 	for name, cmd := range c.Commands {
 		if cmd.Command == "" {

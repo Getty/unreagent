@@ -674,6 +674,76 @@ func symlink(t *testing.T, target, link string) {
 	}
 }
 
+// k104: a path rule for a file tool has to name an absolute path below a file
+// system root. Anything else is a load error naming the rule — not an allow
+// rule that cleaning widens to "*" ("Write(./*)" granted Write on /etc/passwd)
+// or a deny rule that never meets the absolute paths the tools send.
+func TestPathRulesMustBeAbsolute(t *testing.T) {
+	t.Setenv("UE_ROOT", filepath.ToSlash(t.TempDir()))
+	load := func(t *testing.T, enabled bool, list, rule string) error {
+		t.Helper()
+		dir := t.TempDir()
+		writeUProject(t, dir, "Game.uproject")
+		yaml := fmt.Sprintf("mcp: {enabled: true}\npermissions:\n  enabled: %v\n  mode: allowlist\n  %s: ['%s']\n", enabled, list, rule)
+		_, _, err := Load(writeConfigFiles(t, dir, yaml, ""))
+		return err
+	}
+
+	climb := "${PROJECT_DIR}" + strings.Repeat("/..", 64) + "/*"
+	for _, tc := range []struct{ name, list, rule, why string }{
+		{"dot star", "allow", "Write(./*)", "is not an absolute path"},
+		{"dot-dot star", "allow", "Write(x/../*)", "is not an absolute path"},
+		{"bare star", "allow", "Write(*)", "is not an absolute path"},
+		{"relative directory", "allow", "Read(Source/*)", "is not an absolute path"},
+		{"empty pattern", "allow", "Edit()", "is not an absolute path"},
+		{"drive-relative", "allow", `Edit(C:*)`, "is not an absolute path"},
+		{"POSIX root", "allow", "Read(/*)", "names a file system root"},
+		{"drive root", "allow", `Edit(C:\*)`, "names a file system root"},
+		{"traversal to the root", "allow", "MultiEdit(/proj/../*)", "names a file system root"},
+		{"placeholder climbed to the root", "allow", "Write(" + climb + ")", "names a file system root"},
+		{"relative deny rule", "deny", "Edit(Config/*)", "is not an absolute path"},
+		{"notebook deny rule", "deny", "NotebookEdit(*)", "is not an absolute path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The bare tool name is the way to cover every path, and the
+			// message says so in the list's own words.
+			every := `to allow every path, write the bare tool name`
+			if tc.list == "deny" {
+				every = `to deny every path, write the bare tool name`
+			}
+			errContains(t, load(t, true, tc.list, tc.rule), "permissions."+tc.list+"[0]", tc.why, every)
+		})
+	}
+
+	for _, tc := range []struct{ name, list, rule string }{
+		{"absolute POSIX rule", "allow", "Write(/proj/Source/*)"},
+		{"absolute drive rule", "allow", `Edit(C:\Proj\Source\*)`},
+		{"placeholder rule", "deny", "Write(${PROJECT_DIR}/Config/*)"},
+		// A deny rule can only block: one anchored at a root blocks that
+		// whole file system and is not refused.
+		{"deny at the POSIX root", "deny", "Read(/*)"},
+		{"deny at a drive root", "deny", `Write(C:\*)`},
+		{"deny traversing to the root", "deny", "MultiEdit(/proj/../*)"},
+		{"UNC rule", "allow", `Read(\\server\share\proj\*)`},
+		{"bare tool name", "allow", "Write"},
+		{"Bash rule with a relative path", "allow", "Bash(./build.sh *)"},
+		{"MCP tool rule, not known to be a path", "allow", "mcp__foo__bar(secret*)"},
+		{"Grep rule, pattern or path", "deny", "Grep(TODO*)"},
+	} {
+		t.Run("accepted: "+tc.name, func(t *testing.T) {
+			if err := load(t, true, tc.list, tc.rule); err != nil {
+				t.Errorf("%s %q rejected: %v", tc.list, tc.rule, err)
+			}
+		})
+	}
+
+	t.Run("not checked while permissions are disabled", func(t *testing.T) {
+		if err := load(t, false, "allow", "Write(./*)"); err != nil {
+			t.Errorf("disabled permissions rejected an unused rule: %v", err)
+		}
+	})
+}
+
 func hasString(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {

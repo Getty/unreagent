@@ -310,6 +310,19 @@ Revision history for unreagent
     token in any other argument, so unreagent.log no longer holds the token or
     the extra servers' env values. The recommended .gitignore lists
     unreagent.log*: a log of 0.0.9 or earlier can hold the token.
+  - In allowlist mode a Bash command that writes a file through a
+    redirection is allowed only by a rule that spells the redirection out
+    (Bash(echo x > *)); Bash(*) no longer covers it. fd duplication (2>&1)
+    and /dev/null do not count as writes.
+  - A path rule for a file tool (Read, Write, Edit, MultiEdit, NotebookEdit)
+    must be absolute; a relative one is a load error, and so is an allow rule
+    at a root. Grep(*), Glob(*) and mcp__x__*(*) no longer grant a call that
+    carries a path; the bare tool name still does.
+  - A Bash command the tokenizer cannot read with certainty (an unfollowable
+    $'...', a non-plain ${...}, process substitution, nesting too deep) is
+    denied.
+  - On Windows path rules ignore case, and .. cannot climb above a drive or
+    \\server\share root.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
