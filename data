@@ -1,0 +1,34 @@
+---
+claimed_at: 2026-11-21T18:01:42Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:01:42Z
+created: 2026-11-21T16:48:32Z
+id: 187
+priority: low
+started: 2026-11-21T17:36:11Z
+status: done
+tags:
+- tests
+- refactor
+title: Share one launcher starter in the cmd/launcher tests instead of a stdin copy
+updated: 2026-11-21T18:01:42Z
+---
+
+Found by the k186 review (2026-11-21).
+
+**Problem:** startLauncherWithStdin (cmd/launcher/mcpconfig_test.go, about 50 lines) is a copy of startLauncherIn (lifecycle_test.go). It differs only in three ways: a stdin pipe, a check for sh instead of false, and no extra arguments.
+
+**Done looks like:** startLauncherIn takes an optional stdin pipe, for example a stdin field on launcherRun. TestRunRestartedAgentFindsTheSameMCPConfigFile uses it, and the copy is gone. Pure test refactor; the tests stay green under -race.
+
+**Lane and order:** unreagent-test-writer, after k150-k152 land, since that bundle may touch lifecycle_test.go.
+
+Test-only. lifecycle_test.go: launcherRun gains stdin io.WriteCloser; startLauncherIn now delegates to startLauncherCmd(t,dir,yaml,piped,args), a new startLauncherPiped(t,dir,yaml,args...) sets piped (StdinPipe -> l.stdin, and sh is also required on PATH, as the deleted copy did). Existing startLauncherIn callers unchanged. mcpconfig_test.go: startLauncherWithStdin (about 50 lines) deleted, TestRunRestartedAgentFindsTheSameMCPConfigFile uses startLauncherPiped and l.stdin, unused bufio import dropped. Net +28/-63. Checks: gofmt -l clean; go vet and GOOS=windows go vet clean; go test -count=1 ./... green; go test -race -count=5 -timeout 600s ./cmd/launcher ok (565s). Proposed subject: Share one launcher starter for the stdin restart test (k187)
+
+Ready for review: see the note above; tree uncommitted in the worktree.
+
+Review (unreagent-reviewer): READY. Files: cmd/launcher/lifecycle_test.go, cmd/launcher/mcpconfig_test.go (worktree agent-a19f6c7ac03bab57e on f0c7132, uncommitted, +28/-63). Test-only, in OWNERS (cmd/ -> unreagent-worker; tests there are the test-writer's per OWNERS). No German added. Checks run by the reviewer: gofmt -l cmd internal skills clean; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 -timeout 600s ./... green; go test -race -timeout 900s ./cmd/launcher ok (116 s); make linux and make windows ok (Windows: compiles only, the run() tests skip themselves there); git apply --check onto main d61227a ok. Behavior: startLauncherIn keeps its signature and its 23 callers. Stdin stays nil for them, so the launcher reads os.DevNull as before (not inherited). The sh check is applied only when piped. Mutation: rmonexit (RemoveAll of the MCP config dir in the agent OnExit, before onAgentExit) via go test -overlay makes TestRunRestartedAgentFindsTheSameMCPConfigFile FAIL (starts 2 and 3 "missing"); unmutated passes -count=5. Wrapper: the right call. startLauncherIn is variadic on args, so an option would change every caller, including the ones in in-flight worktrees; the bool in startLauncherCmd is private and only reached through two named wrappers. Nits, not blocking: (1) lifecycle_test.go:108 startLauncherCmd has no doc comment, unlike every sibling helper. (2) lifecycle_test.go:113-116 ties the sh check to piped. sh belongs to that test's agent script, not to the pipe, and the script runs through its #!/bin/sh shebang rather than PATH. The piped path also requires false, which the deleted copy did not; that only means a stricter skip. Both come from the old copy; move the check into the test if a second piped test arrives. Subject OK (60 chars): Share one launcher starter for the stdin restart test (k187). No Changes entry (test-only).
+
+Review nit 1 fixed: doc comment added on startLauncherCmd (lifecycle_test.go). Nit 2 left as is. gofmt -l cmd clean, go vet ./cmd/launcher clean, go test -count=1 -run 'TestRunRestartedAgentFindsTheSameMCPConfigFile|TestRun' ./cmd/launcher ok (35s). Nothing committed.
+
+Committed as 7dff112 on main (ff-merge).
