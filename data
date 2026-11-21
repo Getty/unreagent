@@ -1,0 +1,77 @@
+---
+claimed_at: 2026-11-21T08:43:08Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T08:43:21Z
+created: 2026-08-24T23:43:58Z
+id: 74
+priority: medium
+started: 2026-11-21T07:43:41Z
+status: done
+tags:
+- mcp
+- bug
+title: 'Tool output truncation is silent: run_* keep the last 300 lines, logs clips
+  to a 500-line buffer'
+updated: 2026-11-21T08:43:21Z
+---
+
+main.go:421, :570: tailLines(res.Output, 300) leaves no marker; the agent gets exit 0 plus lines 101..400 and cannot know that 100 lines vanished (compile errors above the tail). Observed: 400-line command -> 302 lines returned starting at 101. main.go:391 + supervisor.go:118: logs has a hard 500-line ring buffer and a larger lines argument is clipped without a marker (observed lines=1000 on a 600-line producer -> 500 lines).
+Acceptance: a '[... N lines omitted]' prefix when cut, optionally a lines argument and a byte cap for run_*; logs says 'last 500 of buffer' or the buffer size is configurable; tests.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: tailLines(..., 300) truncates run_* output without a marker; logs is capped by the 500-line ring buffer. Share a truncation marker with k73. Size M.
+
+**Decision 2026-11-21 (main agent):** k74 also takes the non-blocking nits from the k130/k133 review, since it touches cmd/launcher/helpers.go next. (1) helpers.go:19 comment "anything else must exist as given" is no longer true on Windows (exec.LookPath applies PATHEXT). (2) helpers_test.go:117 comment "The Windows lookup must not reach these platforms" claims more than the test shows; it pins only that no extension is added off Windows. (3) helpers_test.go:161: add a -1.5 case; the mutant v-math.Trunc(v) > 0 survives and would turn -1.5 into -1 and NaN into MinInt. The 2^63 wording nit (a JSON number 9223372036854775807 arrives as float64 2^63 and is refused with a message naming it allowed) is accepted as float precision; no change.
+
+2026-11-21 08:03 Decisions (main agent): run_* cut output starts with a '[... N lines omitted]' line; 300-line limit stays, no lines argument, no byte cap. logs says so when a request reaches past what the 500-line buffer still holds after it dropped lines; buffer size fixed, no config; no marker when nothing was dropped. One marker style shared with k73 ([bytes X-Y of Z]) and k135 ([...]). bridge.go/lifecycle.go callers of tailLines unchanged. Tool descriptions updated. Doc/skill spots go to doc-writer and skill-author.
+
+Worker decisions: (a) Past 2 MiB the supervisor keeps only the first and the last MiB of a command's output (headTailBuffer), so counting the lines of res.Output undercounts. Measured: 30000 lines (3 MB) gave '[... 20465 lines omitted]' instead of 29700. UE package logs run to tens of MB, so that is the common case for package. headTailBuffer now counts newlines as the output streams, and CommandResult.LinesBefore(n) gives the exact count. That puts part of the change in internal/supervisor. (b) The supervisor's byte marker '... [N bytes omitted] ...' is now '[... N bytes omitted]', so one run_* reply never shows two marker styles. (c) Singular form: '[... 1 line omitted]'. (d) logs: lines<=0 asks for the whole buffer, so it gets the marker too.
+
+2026-11-21 08:04 Worker done (worktree-agent-a743d92eb4f2a4854 on 6a6f8b5, uncommitted). Files: cmd/launcher/{helpers.go,scripts.go,tools.go,helpers_test.go,scriptaction_test.go,tools_test.go}, internal/supervisor/{ringbuffer.go,supervisor.go,ringbuffer_test.go,stream_test.go}.
+
+Markers: run_command/run_python/run_node: '[... N lines omitted]' ('1 line'), first line after 'exit N' + blank line, via commandTail beside tailLines. logs: '[... N lines omitted; the log keeps only the last 500]', N = lines the buffer dropped, when dropped>0 and (lines<=0 or lines > lines held). Supervisor byte marker now '[... N bytes omitted]'. tailLines unchanged for bridge/lifecycle.
+
+Supervisor API: Logs(name,n) returns (lines, dropped, err); const LogLines = 500; CommandResult.LinesBefore(n) (unexported counts set by headTailBuffer.result; a zero-value result counts Output's own lines).
+
+k130/k133 nits: helpers.go warnIfMissing comment names PATHEXT; helpers_test.go comment narrowed to 'no extension may be added here'; getInt rows -1.5 and NaN (NaN pins the code's own '// also NaN').
+
+Tests, red first: TestRunCommandMarksCutOutput (301/400 red on old code, 300 control), TestRunCommandCountsLinesTheOutputBufferDropped (red on old code; under the naive count red with 20465 vs 29700), TestScriptActionMarksCutOutput (400 red), TestLogsMarksLinesTheBufferDropped (1000/501/0 red; 500/10 controls), TestLogsNoMarkerWhenNothingWasDropped (300, 500: controls), supervisor TestRingBufferCountsDroppedLines, TestCommandResultLinesBefore (13 rows), TestRunOnceBoundsCommandOutput + LinesBefore on a real 3 MiB flood. Mutations: 21 run, all killed (e.g. always-marker, n>=len, dropping n<=0, keptLines < instead of <=, trailing = instead of +=, all-newline tail guard, getInt v-Trunc(v)>0, old byte-marker format). Two survived at first and got rows: trailing '=' (newlines written apart) and the r.lines>0 guard (n=0).
+
+Check: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ./internal/... ok; make linux, make windows, CGO_ENABLED=0 windows build ok; GOOS=windows go test -c for cmd/launcher and internal/supervisor compiles. One skip: TestWarnIfMissingAppliesPathExtOnWindows (Windows-only, older). Windows unverified: compile only; the new launcher tests use sh and skip without it; the supervisor tests run on Windows.
+
+For doc-writer/skill-author (not edited): skills/unreagent-build/SKILL.md:68,85-89,99,171,173 ('without a marker', 'exactly 300 lines'); skills/unreagent-runtimes/SKILL.md:85,90; skills/unreagent-iterate/SKILL.md:202 ('no truncation marker'),206-208,228,316 ('exactly 500 lines'); .claude/skills/unreagent-mcp-tools/SKILL.md:101 ('tailLines(output, 300)' is now commandTail); skills/unreagent-build/SKILL.md:89 (byte marker form). README/example yaml/docs state neither limit.
+
+Byte cap (reported, not built): one long line can make a reply big. A run_* reply can reach ~2 MiB (head+tail kept, fewer than 300 lines). A logs line can be up to 1 MiB (maxLogLine), so lines=50 can return 50 MiB and the buffer can hold up to 500 MiB.
+
+2026-11-21 08:10 Skill-author done (worktree-agent-a743d92eb4f2a4854, uncommitted, no .go touched). skills/unreagent-build/SKILL.md: :68 the reply block gains the [... N lines omitted] line; :72-75 it appears only past 300 lines; :87-98 'Reading the result' rewritten: marker and singular form, the 2 MiB head/tail cap (N counts the dropped lines; the gap line [... B bytes omitted] shows only when the last MiB holds fewer than 300 lines, and N then counts only the lines above), 'Nothing else is retained' kept; :104-108 follow-on errors tied to the marker instead of the '300-line window'; :177 row tied to the marker; :179 the 'exactly 300 lines, without a marker' row is now the marker row. skills/unreagent-runtimes/SKILL.md: :85 reply block gains the marker; :91-96 marker, singular form, pointer to the 2 MiB cap in unreagent-build. skills/unreagent-iterate/SKILL.md: :203-207 'no truncation marker' replaced by the logs marker text and when it appears (dropped>0 and lines<=0 or more than held; N since launcher start, restarts included); :212-213 'no sign that older lines were dropped' dropped, tip lines: 0 shows it; :321 'exactly 500 lines' row is now the marker row. :228 left unchanged: 'the last 500 lines' is still true. .claude/skills/unreagent-mcp-tools/SKILL.md:101-107 tailLines(output, 300) -> commandTail(res, toolOutputLines), omittedMarker, LinesBefore, logs, tailLines kept for bridge/lifecycle excerpts. Note: the brief said unreagent-build :89 stated the old byte marker; it did not (it only named the first/last MiB) — the new form is now stated at :93. Check in the worktree: gofmt -l cmd internal skills empty; go vet ./... ok; go test -count=1 ./... ok.
+
+Review (unreagent-reviewer) 2026-11-21: READY. Tree checked: worktree-agent-a743d92eb4f2a4854 on 6a6f8b5, uncommitted, diff unchanged during review; the same diff applied on main 82d67e9 applies cleanly and is green too (k135 touched bridge.go, no overlap).
+Check run by me in the worktree: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... ok; go test -race -count=1 ./cmd/launcher ./internal/... ok; make linux, make windows ok; GOOS=windows go test -c for cmd/launcher and internal/supervisor compiles. Skips on Linux: only TestWarnIfMissingAppliesPathExtOnWindows (Windows-only, older). Windows UNVERIFIED (compile only): the five new launcher tests (TestRunCommandMarksCutOutput, TestRunCommandCountsLinesTheOutputBufferDropped, TestScriptActionMarksCutOutput, TestLogsMarksLinesTheBufferDropped, TestLogsNoMarkerWhenNothingWasDropped) skip without sh; the supervisor rows do not need sh.
+Counting verified, by tests plus a scratch probe: plain tail, 300 (no marker), 301 ('1 line'), empty output, no trailing newline, trailing blank lines, CRLF past 2 MiB (29700 of 30000, with and without the last CRLF) all right. headTailBuffer is written by the one drain goroutine of the combined pipe (stdout and stderr share it, supervisor.go:722) and read after <-ss.done; ringBuffer.dropped sits under r.mu. logs: the buffer is made in AddService and never reset, so N counts since launcher start, restarts included, matching the buffer that also spans restarts (iterate skill 'It survives restarts').
+Mutation (scratch copy): 31 run, 28 killed, 3 survived: have<=n -> have<n (equivalent: the default branch gives 0 too), literal 500 for LogLines in the reason (equivalent by value; LogLines=501 is killed), and the gap below.
+Findings, none blocking:
+1. (recommended) internal/supervisor/ringbuffer_test.go:556-581: no CRLF row. The mutant bytes.TrimRight(p, "\r\n") at ringbuffer.go:84 survives and gives N one too low for every CRLF output past 2 MiB, which is what UE and MSBuild print on Windows. The code is right today; one CRLF row in TestCommandResultLinesBefore pins it. Back to unreagent-worker if wanted, or a follow-up card.
+2. (optional nit) skills/unreagent-build/SKILL.md:87-89 and the run_command/run_python/run_node descriptions (cmd/launcher/tools.go:88,125,141) say a marker leads the tail whenever the command printed more than 300 lines. Not when the output passes 2 MiB in lines so long that head+tail kept hold <= 300 lines (probe: 400 lines of 8 KiB -> 258 lines, no line marker, only '[... B bytes omitted]'). Rare for UE output; the next bullet half covers it.
+3. Card: no proposed Changes line is on k74. Proposed (no ticket ids):
+  - run_command, run_python and run_node say when they cut the output: a
+    line "[... N lines omitted]" leads the last 300 lines, and N also counts
+    the lines dropped from the middle of an output past 2 MiB. That gap now
+    reads "[... N bytes omitted]".
+  - logs says when its 500-line buffer has dropped lines a request asks for:
+    the reply starts with "[... N lines omitted; the log keeps only the last
+    500]".
+No behaviour change elsewhere: tailLines and its callers (bridge.go:191, lifecycle.go:320) unchanged; their excerpts differ only in the byte marker's new form, and only when a hook or bridge command passes 2 MiB with fewer than 100/20 lines in its last MiB. Nothing in the repo (tests, skills, README, docs, internal/mcp) parses the old '... [N bytes omitted] ...'; the toolkit bridge is outside this repo and could not be checked. Tool descriptions accurate and short. Skills: statements match the code, markers quoted verbatim, English, no ticket ids in skills/; build:87-98 (2 MiB gap) matches headTailBuffer.String/result and LinesBefore. k130/k133 nits done (helpers.go:18-21, helpers_test.go:117-118, :162-165). Owners: all paths resolve to the authors (ack-team owner): Go and tests unreagent-worker, skills and .claude/skills/unreagent-mcp-tools unreagent-skill-author. No German.
+
+Review correction: finding 1's location is internal/supervisor/ringbuffer_test.go:65-114 (TestCommandResultLinesBefore, table at :84-109), not :556-581, which were lines of the diff. Other line numbers stand.
+
+2026-11-21 08:25 Skill-author, reviewer finding (400 lines of 8 KiB: only the byte marker): skills/unreagent-build/SKILL.md:86-89 now says the lines marker leads the 300 lines unless what the 2 MiB cap kept fits in 300 lines and only its [... B bytes omitted] line marks the cut. That matches LinesBefore: have <= n (lines of head + marker line + tail) gives 0, so commandTail adds no marker. Same false claim fixed in skills/unreagent-runtimes/SKILL.md:95-97 (one clause added to the 2 MiB sentence). gofmt -l cmd internal skills empty; go test -count=1 ./internal/skills ok.
+
+2026-11-21 08:31 Follow-up after review (worker): (1) TestCommandResultLinesBefore has a new row 'dropped middle, \r\n lines': 8 CRLF lines, limit 8, LinesBefore(2)=6. Red against Write's bytes.TrimRight(p, "\n") -> "\r\n" (LinesBefore(2)=5, only that row fails); file restored byte for byte. (2) run_command/run_python/run_node descriptions share one const cutNote: 'A cut is marked by a line: [... N lines omitted] at the top, [... N bytes omitted] where the middle of output past 2 MiB was dropped.' run_command goes on: 'What was cut, which can hold the first compile errors, is gone: that output is kept nowhere else, and logs does not have it.' skills/ untouched. Check: gofmt -l empty; go vet linux+windows ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ./internal/... ok. make windows compiled but could not write dist/unreagent.exe: the host's root filesystem is full (0 bytes free; the 16 MB I freed from this worktree's own dist/ was used up by other writers within minutes). The same go build command with the output on tmpfs succeeds, CGO_ENABLED=0 too. Go cache and temp were on tmpfs for these runs. dist/ in this worktree is now empty (git-ignored; make linux/windows rebuild it). Windows behaviour still unverified (compile only).
+
+Re-check (unreagent-reviewer) 2026-11-21: READY, final. Only tools.go, ringbuffer_test.go and the two skills changed since my review.
+1. Finding 1 fixed: internal/supervisor/ringbuffer_test.go:86,108, row 'dropped middle, \r\n lines'. I ran the mutant bytes.TrimRight(p, "\r\n") at ringbuffer.go:84 in a scratch copy and it fails that row alone (LinesBefore(2) = 5, want 6). The row is correct without the mutant.
+2. Finding 2 fixed: cmd/launcher/tools.go:87 cutNote is accurate and is shared by run_command (:93), run_python (:130) and run_node (:146). skills/unreagent-build/SKILL.md:86-89 and skills/unreagent-runtimes/SKILL.md:95-97 now name the case where only the [... B bytes omitted] line marks the cut, and that matches LinesBefore (no line marker once the kept output has 300 lines or fewer).
+Check run by me in the worktree: gofmt -l cmd internal skills empty; go vet ./... ok on linux and with GOOS=windows; go test -count=1 ./... ok; go test -race -count=1 ./cmd/launcher ./internal/... ok; make windows ok (dist/unreagent.exe written). Linux skip: TestWarnIfMissingAppliesPathExtOnWindows only. Windows UNVERIFIED (compile only); the five new launcher tests skip without sh. The proposed Changes lines in my review note stand.
+
+Committed as 4f2661d on main (rebased onto 114237c, full check green; Windows behaviour compile-only)
