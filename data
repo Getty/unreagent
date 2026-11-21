@@ -1,0 +1,93 @@
+---
+claimed_at: 2026-11-21T06:27:15Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T06:27:26Z
+created: 2026-08-21T23:23:26Z
+depends_on:
+- 8
+id: 20
+priority: medium
+started: 2026-11-21T04:56:54Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: Blueprints, Widgets & Enhanced Input (Class A)'
+updated: 2026-11-21T06:27:26Z
+---
+
+- ue-blueprints -- blueprint_query, blueprint_modify (blueprint_query alone declares 15 operations; this is the largest of the batch)
+- ue-widgets -- widget_editor
+- ue-enhanced-input -- enhanced_input
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size L (blueprint_query has 15 operations). k19 first.
+
+Started 2026-11-21: toolkit checkout present (../ue-llm-toolkit, 43 MCPTool_*.h); k8 and k19 done. Written from the headers only — VibeUE is not checked out, so no adapted text and no attribution needed. The k18 lint does not exist yet: the skill-author checks toolkit_tools against Info.Name by hand and reports the mapping.
+
+Skill-author finished (worktree-agent-a0e64e6959939eebc, base b04e79a): skills/ue-blueprints (+ query/modify/graphs sections), ue-widgets (+ properties/events/animations sections), ue-enhanced-input; written from the toolkit C++ source, toolkit_tools checked by hand (k18 lint still missing). Upstream issues added to k132.
+
+Ready for review: three Class A skills in worktree-agent-a0e64e6959939eebc.
+
+Review (unreagent-reviewer, worktree-agent-a0e64e6959939eebc, base b04e79a): CHANGES NEEDED, two small text fixes.
+
+Reviewed: skills/ue-blueprints/{SKILL,query,modify,graphs}.md, skills/ue-widgets/{SKILL,properties,events,animations}.md, skills/ue-enhanced-input/SKILL.md (all untracked, nothing else in the tree changed). Check run myself: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 ./... && make windows. All green; TestLoadParsesEveryEmbeddedSkill and TestEmbedMissesNoSourceFile pass. This is a docs-only change with no Windows code path.
+
+Confirmed: toolkit_tools matches Info.Name and MCPToolRegistry.cpp for all four tools; no skill needs unreal_classes; every dispatched operation is documented (15 query, 21 modify, 23 widget, 8 enhanced_input). The four succeed-without-effect warnings hold: compile and compile_all always succeed (BlueprintModify.cpp:2066, :2182); set_pin_value ignores the TrySetDefaultValue result (BlueprintGraphEditor.cpp:497); widget batch never saves (WidgetEditor.cpp:2192-2259); bind_event never reads function_name (WidgetEditor.cpp:1954-2045). About 40 further claims spot-checked, all correct apart from the findings below. Hedges on Add_FloatFloat, TextDelegate and trigger/modifier persistence are fine. No VibeUE text, no German.
+
+Must fix:
+1. skills/ue-blueprints/SKILL.md:143-144 says a wrongly typed optional parameter is silently replaced by the default. That is an overclaim. The helpers use UE TryGetNumberField/TryGetBoolField (ue-llm-toolkit/.../MCP/MCPToolBase.h:122-147), whose string conversion is engine behaviour, and the skill's own modify.md:203-207 calls that conversion unverified. Hedge the line the same way, or drop it.
+2. skills/ue-enhanced-input/SKILL.md:83-84 and :193-194 say a 'Failed to load ...' result means the name is free. Not so: the load is typed (MCPTool_EnhancedInput.cpp:585-595), so another asset type at the same path also fails to load. The create step then runs CreatePackage, NewObject and SaveAsset with no existence check (:119-139, :180-200), which can overwrite or clash with that asset. The skill's own Errors table (:215) says it correctly: 'no asset of that type at the path'. Say that, and point to an asset-level existence check before creating.
+
+Should fix:
+3. skills/ue-blueprints/query.md:44-46 lists truncated as always returned. It is set only when true (MCPTool_BlueprintQuery.cpp:222-225), so a missing field means not truncated.
+
+Nits (optional):
+4. modify.md:29-30 says every other operation compiles. Reparent to the same parent and remove_debug_print with nothing removed return before compiling (BlueprintModify.cpp:281-284, :1977-1983); both no-ops are documented at :63 and :243.
+5. ue-widgets/events.md:24 says 'the class from the last compile'. BindEvent prefers SkeletonGeneratedClass (WidgetEditor.cpp:1976). The retry advice still holds.
+6. ue-enhanced-input/SKILL.md:122 says 'one past the end'. The check is index >= count (:316).
+
+Cross-card follow-up, not blocking: the save steps name the asset tool (save_asset, save_all) but not skill ue-assets (k24, not landed yet). Add the handoff once both cards are in.
+
+Back to unreagent-skill-author for 1 and 2 (3 recommended). Rerun the check after the edits.
+
+Review round 2 (unreagent-reviewer, worktree-agent-a0e64e6959939eebc, base b04e79a): READY.
+
+Diffed against the pre-rework copy. Only the body text of ue-blueprints/{SKILL,query,modify}.md, ue-widgets/{SKILL,events}.md and ue-enhanced-input/SKILL.md changed; frontmatter is unchanged.
+
+Check run myself: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 ./... && make windows. All green, including go test -count=1 -v ./internal/skills (TestLoadParsesEveryEmbeddedSkill, TestEmbedMissesNoSourceFile and the rest). Docs-only change with no Windows code path.
+
+All six round-1 findings are fixed and verified against the source:
+1. ue-blueprints/SKILL.md:150-154 is hedged and matches modify.md:205-209.
+2. ue-enhanced-input/SKILL.md:96-106 and :214-216: the load is typed and create does no existence check (MCPTool_EnhancedInput.cpp:119-139, :585-595). The asset_search check matches MCPTool_AssetSearch.cpp: name_pattern is a substring match (:84-94), the search is recursive (:26), and package_path is the content folder (:160). That is the same folder meaning as enhanced_input's package_path (:84, :119), so comparing name and package_path exactly is correct and agrees with k24 ue-assets.
+3. query.md:45-47 matches BlueprintQuery.cpp:222-225.
+4. modify.md:31-33 matches BlueprintModify.cpp:281-284 and :1977-1983.
+5. events.md:24-29 matches WidgetEditor.cpp:1976-1980.
+6. ue-enhanced-input/SKILL.md:143 matches :316.
+
+The new bridge text checks out:
+- Task envelope: ue-blueprints/SKILL.md:105-116, ue-widgets/SKILL.md:213-225 and ue-enhanced-input/SKILL.md:45-57 match the bridge (index.js:307, 333-335; lib.js:234-259; asyncEnabled is on by default, index.js:47), task_result (MCPTool_TaskResult.h:79-86) and the envelope fields (MCPAsyncTask.h:105-145).
+- Timeouts: the 300 s timeout and its message match lib.js:255-259 and index.js:48. 'Ends the wait, not the work' matches MCPTaskQueue.cpp:454-474, which only sets bCancellationRequested.
+- Wording matches k24 ue-levels/ue-assets and k26 ue-tasks.
+
+Notes for the commit, not blocking:
+(a) The three skills now name skill ue-tasks (k26, still in review). See ue-blueprints/SKILL.md:108,116, ue-widgets/SKILL.md:216,222 and ue-enhanced-input/SKILL.md:50,56. k24 also names ue-blueprints. The loader does not check cross-references, so landing k20, k24 and k26 together avoids names that point nowhere in the meantime.
+(b) Optional: the save steps and the asset_search check name the tool but not skill ue-assets (k24). Round-1 follow-up, still open.
+
+Committed as 8060465
