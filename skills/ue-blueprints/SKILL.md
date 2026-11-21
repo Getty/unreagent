@@ -113,7 +113,9 @@ had already created in the graph.
 - **Timeouts.** After 300 s the bridge returns
   `Error: Task timed out after 300000ms (task_id: …)`. That ends the wait, not
   the work: a long `compile_all` may still finish. Read the state back before
-  you retry (skill `ue-tasks`).
+  you retry (skill `ue-tasks`). A `compile_all` over many Blueprints can hold
+  the editor for more than 30 s; run it as skill `ue-tasks`, "A 30 s timeout
+  can crash the editor", describes.
 
 ## Node IDs
 

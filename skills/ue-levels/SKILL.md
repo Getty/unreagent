@@ -38,7 +38,9 @@ against a running editor.
 - **Timeouts.** After 300 s (`MCP_ASYNC_TIMEOUT_MS`) the bridge returns `Error:
   Task timed out after 300000ms (task_id: …)`. That ends the wait, not the
   work: a level can still finish loading afterwards. Follow the task up
-  (`ue-tasks`) before you try again.
+  (`ue-tasks`) before you try again. Loading a large level can hold the editor
+  for more than 30 s; run `open_level` as skill `ue-tasks`, "A 30 s timeout
+  can crash the editor", describes.
 
 ## Level paths
 

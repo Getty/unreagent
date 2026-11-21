@@ -81,7 +81,9 @@ without arguments once, then ask for the one category you need.
   the bridge is a task of its own with 300 s. The 2 minutes apply only to a
   `task_submit` without `timeout_ms`. And four tasks may run at once, but they
   take turns on the editor's one game thread, so parallel calls save waiting,
-  not editor time (skill `ue-tasks`).
+  not editor time. Meanwhile each call's requests wait behind the other calls,
+  and one that waits 30 s may crash the editor (skill `ue-tasks`, "A 30 s
+  timeout can crash the editor").
 
 ## The domain documents
 

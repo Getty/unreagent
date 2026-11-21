@@ -124,7 +124,8 @@ Revision history for unreagent
     Input Mapping Contexts, triggers and modifiers with enhanced_input).
   - New shipped skills ue-python (execute_script and its script history),
     ue-tasks (poll, collect, list and cancel calls in the toolkit's task
-    queue) and ue-context (the toolkit's get_ue_context notes and its domain
+    queue, and keep long calls clear of the 30 s timeout that may crash the
+    editor) and ue-context (the toolkit's get_ue_context notes and its domain
     documents).
   - New shipped skills ue-viewport (capture_viewport: level, PIE and
     asset-editor previews, camera presets, animation frames, and how to get

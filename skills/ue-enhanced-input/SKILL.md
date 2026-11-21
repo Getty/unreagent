@@ -229,6 +229,11 @@ An action fires at runtime only when the game adds the mapping context to the
 player's Enhanced Input subsystem. This tool does not do that; the plugin's
 context notes show the game code.
 
+To try an action in Play In Editor, inject it with `gameplay_debug` (skill
+`ue-pie-testing`, section `input`). Injection hands the engine the action's
+value, not a key press, so it shows whether the game reacts to the action, not
+whether the key mapping works.
+
 ## Errors
 
 | Error | Cause |
@@ -264,5 +269,6 @@ context notes show the game code.
 ## See also
 
 - `ue-blueprints`: the `EnhancedInputAction` node that reacts to an action.
+- `ue-pie-testing`: injecting actions in Play In Editor, and the input monitor.
 - `ue-widgets`: widget events, for input handled by the UI.
 - `unreagent-iterate`: starting the editor and waiting for the plugin.

@@ -4,7 +4,8 @@ description: >
   Poll, collect, list and cancel calls in the UE LLM Toolkit's task queue
   (task_submit, task_status, task_result, task_list, task_cancel). Use when a
   toolkit call returned a task_id or timed out, after every execute_script
-  call, or to give one call a longer limit than the bridge's 300 s.
+  call, before a call that may hold the editor for more than 30 s, or to give
+  one call a longer limit than the bridge's 300 s.
 toolkit_tools: [task_submit, task_status, task_result, task_list, task_cancel]
 ---
 
@@ -43,7 +44,8 @@ been exercised against a running editor.
   (a script, an import, a level load), a `task_status` call waits behind it.
   After 30 s it fails with `Error: Failed to execute tool: Request timeout
   after 30000ms` or `Error: Tool 'task_status' execution timed out after 30
-  seconds`. That means busy, not lost: wait, then ask again.
+  seconds`. That is not an ordinary error: it may crash the editor (see
+  "A 30 s timeout can crash the editor").
 - **Tasks live in editor memory.** An editor stop, crash or restart loses every
   task and every result.
 
@@ -80,11 +82,67 @@ Three consequences apply to every toolkit skill:
 The bridge reads `MCP_ASYNC_ENABLED` (`false` makes every call direct),
 `MCP_ASYNC_TIMEOUT_MS`, `MCP_POLL_INTERVAL_MS` and `MCP_REQUEST_TIMEOUT_MS`
 from its environment. `MCP_REQUEST_TIMEOUT_MS` (default 30000) is the
-bridge's 30 s limit on each direct call, the `task_*` calls included. In
-unreagent, these variables go in the bridge server's `env` under
-`mcp.extraServers`. `extraServers` is a map keyed by server name: an entry of
-the same name in `unreagent.local.yaml` replaces that server's whole
-definition, `env` included.
+bridge's 30 s limit on each direct call, the `task_*` calls included. If the
+plugin handles requests off the game thread, it has a 30 s limit of its own,
+and raising this one gives no call more time; on the game thread it has none,
+and a higher value lets the bridge wait longer (see "A 30 s timeout can crash
+the editor"). In unreagent, these variables go in the bridge server's
+`env` under `mcp.extraServers`. `extraServers` is a map keyed by server name:
+an entry of the same name in `unreagent.local.yaml` replaces that server's
+whole definition, `env` included.
+
+## A 30 s timeout can crash the editor
+
+Each time the bridge calls a plugin tool, it waits at most 30 s for the
+answer: a direct call, each `task_*` call, and so each step of a queued call.
+Which thread handles the request is up to the engine's HTTP server, and this
+skill could not check it. On the game thread, the plugin runs the tool at once
+and sets no limit of its own. Off it, as the plugin's comments say, the plugin
+queues the job for the game thread and waits at most 30 s as well.
+
+When a wait on your call runs out, you see `Error: Failed to execute tool:
+Request timeout after 30000ms` (the bridge's limit) or `Error: Tool '<name>'
+execution timed out after 30 seconds` (the plugin's). The plugin gives that
+second answer only off the game thread, so it confirms the dangerous case
+below. The first one tells you nothing either way: with the default settings,
+the bridge's limit often runs out first.
+
+That timeout is not an ordinary error:
+
+- **In any case**, the call may still run once the game thread is free, and
+  its change lands. After a timed-out `task_submit` it may run twice (below).
+- **Off the game thread**, the timed-out request leaves its job queued, and
+  when the job runs it writes its result into memory the plugin has already
+  given back (`UnrealClaudeMCPServer.cpp`, an upstream bug). That can crash the
+  editor, possibly minutes after the timeout.
+
+The bridge's own steps can run into this with no error shown. It asks again
+without a word when a status check times out, and when `task_submit` fails or
+times out, it makes the call directly instead. After a timeout, the submitted
+copy can still run later, so the change may land twice, even after the direct
+call succeeds; that result has no task envelope around its JSON.
+
+What to do:
+
+- **Make long calls as tasks.** A queued call's tool runs inside the queue,
+  which handles a long wait safely; only the quick steps around it come under
+  the 30 s limit. A direct call puts the whole tool under it. Leave
+  `MCP_ASYNC_ENABLED` on. For a call that may hold the game thread for more
+  than about 30 s, `task_submit` it yourself (see "task_submit"): the bridge
+  checks a queued call every 2 s, a check sent while the tool runs waits
+  behind it, and you would not see that check time out.
+- **Leave a busy editor alone.** While a script, an import, a level load or
+  another long call holds the game thread, every further call waits behind
+  it, the `task_*` calls included. Send only what you must. Poll a long task
+  seldom: first when you expect it to be done, then at intervals under about
+  5 minutes, because a result is gone 5 minutes after its task ends.
+- **Do not retry after such a timeout.** Before a long call, note the `ue`
+  service's `pid` and `restarts` from unreagent's `status` (skill
+  `unreagent-iterate`), not the bridge's `unreal_status`. After a timeout,
+  call it again: another `pid` or a higher `restarts` means the editor crashed
+  and was restarted. Then read the state back before you repeat anything,
+  because the call may still land. If a later call cannot reach the editor,
+  check `status` again.
 
 ## Statuses
 
@@ -133,9 +191,11 @@ The message is `Task submitted: <id>`.
 - **A limit of 30000 or less** does not end the wait sooner than 30 s: such a
   task goes through the plugin's ordinary 30 s wait for the game thread.
 
-Submit a call yourself when it needs more than the bridge's 300 s: pass a
-larger `timeout_ms`, then poll. While that call holds the game thread, your
-`task_status` calls time out as described above. That is expected.
+Submit a call yourself when it may hold the game thread for more than about
+30 s, or needs more than the bridge's 300 s: pass a `timeout_ms` that covers
+it, then poll as "A 30 s timeout can crash the editor" says. A
+`task_status` sent while the call still holds the game thread waits behind
+it, and one that waits 30 s is the timeout described there.
 
 ## task_status
 
@@ -187,8 +247,10 @@ Treat `task_cancel` as "forget the result", never as "undo".
 **After a bridge timeout**
 
 1. Take the id from `Error: Task timed out after 300000ms (task_id: <id>)`.
-2. `task_status` `{"task_id": "<id>"}`. While it says `running`, wait and ask
-   again.
+2. Wait before the first `task_status` `{"task_id": "<id>"}` too: the
+   bridge's and the task's 300 s run out together, so the tool may still hold
+   the game thread. While it says `running`, poll as "A 30 s timeout can crash
+   the editor" says.
 3. `completed`: `task_result` gives the result you were waiting for.
 4. `failed`, `timed_out` or `cancelled`: the tool may still be at work. Read
    the state back with the domain's own read tool, such as `get_level_actors`
@@ -203,8 +265,8 @@ at the top of the JSON, which is the bridge's finished task for the call. Skill
 **A call that needs more time**
 
 `task_submit` `{"tool_name": "<tool>", "params": {<the tool's arguments>},
-"timeout_ms": 900000}`, then `task_status` and `task_result` with the returned
-`task_id`.
+"timeout_ms": 900000}`, then `task_status` and `task_result` with the
+returned `task_id`, polled as "A 30 s timeout can crash the editor" says.
 
 **An id you did not note**
 
@@ -220,8 +282,8 @@ are only listed for about 5 minutes.
 | `Error: Invalid task_id format` | the string is not a task id | copy the id exactly |
 | `Error: Task is still running - use task_status to poll` | `task_result` came too early | poll `task_status` |
 | `Error: Failed to submit task - queue may be at capacity or tool not found` | `tool_name` is unknown, prefixed with `unreal_`, or a bridge-only tool, or 100 tasks are unfinished | use the bare name. Check `task_list` |
-| `Error: Failed to execute tool: Request timeout after 30000ms` | the game thread is busy with another call | wait, then ask again |
-| `Error: Tool 'task_status' execution timed out after 30 seconds` | the same | the same |
+| `Error: Failed to execute tool: Request timeout after 30000ms` | the bridge waited 30 s for the editor. The call may still run, and if the plugin handles requests off the game thread, the job left queued may crash the editor | do not retry. Check unreagent's `status`, then read the state back ("A 30 s timeout can crash the editor") |
+| `Error: Tool '<name>' execution timed out after 30 seconds` | the plugin waited 30 s off the game thread. The job left queued may crash the editor, and the call may still run | the same |
 | status `failed` or `cancelled`, and the change appears later anyway | the limit ended the wait, not the tool | read the state back before you repeat anything |
 | a parameter seems to have no effect | its name is wrong, and queued calls do not warn | check the name against the tool's schema |
 
@@ -235,5 +297,6 @@ are only listed for about 5 minutes.
   subagent's calls against the 2-minute task limit, although each bridge call
   is a task of its own with 300 s, and it treats four running tasks as four
   at once, although they share one game thread.
-- `unreagent-iterate`: editor restarts, which drop the queue, and waiting for
-  the plugin to come back.
+- `unreagent-iterate`: `status`, for checking the editor after a 30 s timeout,
+  editor restarts, which drop the queue, and waiting for the plugin to come
+  back.

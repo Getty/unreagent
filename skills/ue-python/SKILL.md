@@ -47,7 +47,8 @@ how to read what comes back, not the editor's Python API.
 - **The editor world.** A script runs on the game thread, against the level
   open in the editor. It fails with `Editor not available` or `No active
   world` when there is none. While it runs, and while the approval window is
-  open, other toolkit calls probably wait (skill `ue-tasks`).
+  open, other toolkit calls probably wait, so send none you do not need
+  (skill `ue-tasks`, "A 30 s timeout can crash the editor").
 - **Nothing is saved.** What a script changes stays unsaved in the editor
   until something saves it, such as `asset save_all` (skill `ue-assets`).
   An editor restart drops unsaved changes.
@@ -91,7 +92,9 @@ Script execution queued. Task ID: <id>. Poll task_status('<id>') for progress.
 
 1. `task_status` `{"task_id": "<id>"}` until the status is no longer
    `pending` or `running`. A poll can time out while the approval window is
-   open or the script runs. That means busy: wait, then ask again.
+   open or the script runs, and that timeout may crash the editor. Poll
+   seldom, and after a timeout follow skill `ue-tasks`, "A 30 s timeout can
+   crash the editor", before you poll again.
 2. `task_result` `{"task_id": "<id>"}` within 5 minutes of the end, or the
    result is gone.
 

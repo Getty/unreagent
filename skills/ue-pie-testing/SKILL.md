@@ -55,6 +55,9 @@ This skill has three sections:
   restart loses them.
 - **PIE starts and stops later.** `start_pie` and `stop_pie` only ask the
   editor, and return at once. Poll `pie_status` until `running` changes.
+  Starting a session in a large project can keep the game thread busy for a
+  while, so poll seldom (skill `ue-tasks`, "A 30 s timeout can crash the
+  editor").
 - **The game waits for every toolkit call.** Toolkit calls run on the game
   thread, which also runs PIE, so the game does not advance while a call runs.
 - **Focus.** The plugin's notes say PIE runs at about 3 fps while the editor

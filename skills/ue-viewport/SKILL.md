@@ -205,14 +205,20 @@ The relative path lands in the runtime's working directory, normally the
 project.
 
 **Call directly only while the editor is idle**: no other toolkit call,
-script, import or `run_sequence` in progress. A direct call waits at most 30 s
-for the game thread to run it, then answers
-`Tool 'capture_viewport' execution timed out after 30 seconds`. That timeout is
+script, import or `run_sequence` in progress. Which thread handles the request
+is up to the engine's HTTP server; the plugin's comments say one other than
+the game thread. In that case a direct call waits at most 30 s for the game
+thread to run it, then answers
+`Tool 'capture_viewport' execution timed out after 30 seconds`. That answer is
 not an ordinary error. From the plugin's code (`UnrealClaudeMCPServer.cpp`, an
 upstream bug), the job is still queued on the game thread when the answer
 goes out, and when it runs later it writes into memory the plugin has already
-given back. That can crash the editor. Do not retry: check with `status` that
-the editor is still running (skill `unreagent-iterate`) before anything else.
+given back. That can crash the editor. Do not retry: check with unreagent's
+`status` that the editor is still running (skill `unreagent-iterate`) before
+anything else. On the game thread there is no such answer: the sketch's own
+60 s timeout ends the wait with a Python exception, and the capture may still
+run. Skill `ue-tasks`, "A 30 s timeout can crash the editor", covers both
+cases for every toolkit call.
 
 ## Typical sequences
 
@@ -255,7 +261,7 @@ Capture without `asset_path` while PIE runs, or use `gameplay_debug`
 | the asset is cut off or tiny | the presets are fixed positions | pass your own camera |
 | a distorted picture | the viewport is not 16:9 | compare `original_width` and `original_height` |
 | `Error: Task timed out after 300000ms (task_id: …)` | the bridge stopped waiting | skill `ue-tasks` |
-| `Tool 'capture_viewport' execution timed out after 30 seconds`, from the `run_python` sketch | the game thread was busy; the job left queued can crash the editor | do not retry; check the editor with `status` ("Getting the picture") |
+| `Tool 'capture_viewport' execution timed out after 30 seconds`, from the `run_python` sketch | the request was handled off the game thread and waited 30 s for it; the job left queued can crash the editor | do not retry; check the editor with unreagent's `status` ("Getting the picture") |
 
 ## Background in the plugin
 

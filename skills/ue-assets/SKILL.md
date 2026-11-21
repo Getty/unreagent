@@ -42,7 +42,10 @@ against a running editor.
   Task timed out after 300000ms (task_id: …)`. That ends the wait, not the
   work. Before you start the job again, follow the task up (`ue-tasks`). After
   an import, also read the state back with `asset_search`, `path_filter` set to
-  the `dest_path`.
+  the `dest_path`. A large import or `batch_import`, a `save_all` over many
+  dirty packages and a `migrate` of many packages each run as one call and can
+  hold the editor for more than 30 s; run them as skill `ue-tasks`, "A 30 s
+  timeout can crash the editor", describes.
 
 ## Asset paths
 
