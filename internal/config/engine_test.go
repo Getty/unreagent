@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -276,7 +277,7 @@ func TestHighestEngine(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		if got := highestEngine(c.cands, editorIn(c.editor...)); got != c.want {
+		if got := highestEngine(c.cands, editorIn(c.editor...)).Dir; got != c.want {
 			t.Errorf("%s: got %q; want %q", c.name, got, c.want)
 		}
 	}
@@ -299,27 +300,46 @@ func TestChooseEngine(t *testing.T) {
 		"D:/Epic Games/UE_5.9", "D:/Epic Games/UE_5.6", "D:/Source/UnrealEngine",
 	)
 
+	// warn is the version of the fallback the warning names, "" for no
+	// warning: one is due exactly when the association names an engine and
+	// another one is chosen (k88). With nothing chosen, the launcher's own
+	// "engine not found" warning says enough.
 	cases := []struct {
 		name      string
 		assoc     string
 		launcher  []engineCandidate
 		hasEditor func(string) bool
 		want      string
+		warn      string
 	}{
-		{"no association: highest", "", launcher, all, "D:/Epic Games/UE_5.9"},
-		{"association beats a higher version", "5.7", launcher, all, "C:/Program Files/Epic Games/UE_5.7"},
-		{"association found via default path", "5.6", launcher, all, "D:/Epic Games/UE_5.6"},
-		{"association found via default path without registry", "5.9", nil, all, "D:/Epic Games/UE_5.9"},
-		{"association not installed: highest", "5.5", launcher, all, "D:/Epic Games/UE_5.9"},
-		{"association without editor: highest", "5.7", launcher, editorIn("C:/Program Files/Epic Games/UE_5.8"), "C:/Program Files/Epic Games/UE_5.8"},
-		{"source build guid", "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", launcher, all, "D:/Source/UnrealEngine"},
-		{"source build guid lower case, no braces", "6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c", launcher, all, "D:/Source/UnrealEngine"},
-		{"source build unknown: highest", "{00000000-0000-0000-0000-000000000000}", launcher, all, "D:/Epic Games/UE_5.9"},
-		{"nothing installed", "5.8", nil, editorIn(), ""},
+		{"no association: highest", "", launcher, all, "D:/Epic Games/UE_5.9", ""},
+		{"association beats a higher version", "5.7", launcher, all, "C:/Program Files/Epic Games/UE_5.7", ""},
+		{"association found via default path", "5.6", launcher, all, "D:/Epic Games/UE_5.6", ""},
+		{"association found via default path without registry", "5.9", nil, all, "D:/Epic Games/UE_5.9", ""},
+		{"association not installed: highest", "5.5", launcher, all, "D:/Epic Games/UE_5.9", "5.9"},
+		{"association without editor: highest", "5.7", launcher, editorIn("C:/Program Files/Epic Games/UE_5.8"), "C:/Program Files/Epic Games/UE_5.8", "5.8"},
+		{"source build guid", "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", launcher, all, "D:/Source/UnrealEngine", ""},
+		{"source build guid lower case, no braces", "6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c", launcher, all, "D:/Source/UnrealEngine", ""},
+		{"source build unknown: highest", "{00000000-0000-0000-0000-000000000000}", launcher, all, "D:/Epic Games/UE_5.9", "5.9"},
+		{"nothing installed", "5.8", nil, editorIn(), "", ""},
 	}
 	for _, c := range cases {
-		if got := chooseEngine(c.assoc, c.launcher, defaults, builds, c.hasEditor); got != c.want {
+		got, warning := chooseEngine(c.assoc, c.launcher, defaults, builds, c.hasEditor)
+		if got != c.want {
 			t.Errorf("%s: got %q; want %q", c.name, got, c.want)
+		}
+		if c.warn == "" {
+			if warning != "" {
+				t.Errorf("%s: warning %q; want none", c.name, warning)
+			}
+			continue
+		}
+		// "no usable engine", not "no installed engine": the case without an
+		// editor binary has the associated engine installed.
+		for _, w := range []string{`"` + c.assoc + `" names no usable engine`, c.warn + " at " + c.want, "engineRoot", "UE_ROOT"} {
+			if !strings.Contains(warning, w) {
+				t.Errorf("%s: warning %q does not mention %q", c.name, warning, w)
+			}
 		}
 	}
 }
@@ -360,11 +380,11 @@ func TestDefaultPathsOnDisk(t *testing.T) {
 			t.Errorf("ID %q does not match dir %q", c.ID, c.Dir)
 		}
 	}
-	if got := chooseEngine("", nil, found, nil, hasEditor); got != filepath.ToSlash(want) {
+	if got, _ := chooseEngine("", nil, found, nil, hasEditor); got != filepath.ToSlash(want) {
 		t.Errorf("got %q; want %q", got, filepath.ToSlash(want))
 	}
 	e56 := filepath.ToSlash(filepath.Join(root, "E", "Epic Games", "UE_5.6"))
-	if got := chooseEngine("5.6", nil, found, nil, hasEditor); got != e56 {
+	if got, _ := chooseEngine("5.6", nil, found, nil, hasEditor); got != e56 {
 		t.Errorf("association 5.6: got %q; want %q", got, e56)
 	}
 }

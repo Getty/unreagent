@@ -249,6 +249,10 @@ type Info struct {
 	// SkippedCommands are the built-in commands (compile, package) left out
 	// because a placeholder they need resolved to nothing — sorted.
 	SkippedCommands []string
+	// Warnings are what Load noticed without failing, each a complete message
+	// for the launcher to log as a WARN line: today only an EngineAssociation
+	// that names no usable engine (see chooseEngine).
+	Warnings []string
 }
 
 // Load reads the configuration. explicitPath is optional; if it is empty,
@@ -290,9 +294,12 @@ func Load(explicitPath string) (*Config, Info, error) {
 	if err != nil {
 		return nil, info, err
 	}
-	engine, err := resolveEngine(&c, project)
+	engine, warning, err := resolveEngine(&c, project)
 	if err != nil {
 		return nil, info, err
+	}
+	if warning != "" {
+		info.Warnings = append(info.Warnings, warning)
 	}
 	info.EngineRoot = engine
 	info.Project = project
@@ -726,19 +733,21 @@ var autodetect = autodetectEngine
 // A relative UE_ROOT or engineRoot is made absolute against the working
 // directory, which is where it pointed before: as typed, it would land in
 // placeholders and permission rules relative ("Write(${ENGINE}/*)" with
-// engineRoot "." would match anything).
-func resolveEngine(c *Config, project string) (string, error) {
+// engineRoot "." would match anything). warning is auto-detection's (see
+// chooseEngine); an engine given by UE_ROOT or engineRoot gets none.
+func resolveEngine(c *Config, project string) (root, warning string, err error) {
 	for _, v := range []string{strings.TrimSpace(os.Getenv("UE_ROOT")), c.EngineRoot} {
 		if v == "" {
 			continue
 		}
 		abs, err := filepath.Abs(v)
 		if err != nil {
-			return "", fmt.Errorf("engine root %s: %w", v, err)
+			return "", "", fmt.Errorf("engine root %s: %w", v, err)
 		}
-		return filepath.ToSlash(abs), nil
+		return filepath.ToSlash(abs), "", nil
 	}
-	return autodetect(project), nil
+	root, warning = autodetect(project)
+	return root, warning, nil
 }
 
 // resolveProject determines the .uproject: unreal.project if set (absolute or

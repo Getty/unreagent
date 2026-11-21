@@ -80,6 +80,9 @@ func run() error {
 	} else {
 		logger("WARN engine not found — set UE_ROOT or engineRoot in unreagent.local.yaml")
 	}
+	for _, w := range info.Warnings {
+		logger("WARN " + w)
+	}
 	if info.Project != "" {
 		logger("Project: " + info.Project)
 	} else {

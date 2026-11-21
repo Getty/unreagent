@@ -10,8 +10,11 @@
 #    ${ENGINE}        UE installation root. Resolved in this order: env UE_ROOT,
 #                     engineRoot (usually in local.yaml), the .uproject's
 #                     EngineAssociation (Launcher version or a registered
-#                     source build), then the highest installed version found
-#                     via the registry / Epic default paths
+#                     source build), then the highest installed version with
+#                     an editor binary, found via the registry / Epic default
+#                     paths (this last step logs a WARN when the
+#                     EngineAssociation names no usable engine: not
+#                     installed, or installed without an editor binary)
 #    ${PROJECT}       full path to the .uproject: unreal.project if set,
 #                     otherwise the first .uproject next to this file
 #    ${PROJECT_DIR}   directory containing the .uproject

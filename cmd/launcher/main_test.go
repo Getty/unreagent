@@ -203,6 +203,60 @@ func TestRunLogsMCPListeningOnlyOnceAConnectSucceeds(t *testing.T) {
 	}
 }
 
+// k88: an EngineAssociation that names no usable engine fell back to the
+// highest installed one silently — the editor then opens the project in a
+// newer engine and offers to convert it. run() now warns, naming the
+// association, the engine chosen and how to pin one.
+//
+// The engine is found for real: off Windows the Epic default paths
+// ("C:/Program Files/Epic Games/UE_*") are relative paths, so they resolve
+// under the launcher's working directory, where the test installs a 5.9.
+func TestRunWarnsWhenTheEngineAssociationIsNotInstalled(t *testing.T) {
+	for _, tc := range []struct {
+		name, assoc string
+		warn        bool
+	}{
+		{"association not installed", "5.7", true},
+		{"association installed", "5.9", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UE_ROOT", "")
+			dir := t.TempDir()
+			engine := "C:/Program Files/Epic Games/UE_5.9"
+			mustWriteFile(t, filepath.Join(dir, filepath.FromSlash(engine), "Engine", "Binaries", "Win64", "UnrealEditor.exe"), "")
+			mustWriteFile(t, filepath.Join(dir, "Demo.uproject"), `{"EngineAssociation": "`+tc.assoc+`"}`)
+			l := startLauncherIn(t, dir, launcherYAML("sleep", "  enabled: false\n"))
+			// The warning comes with the engine line, before the project line.
+			l.waitLine(t, "Project: ")
+
+			out := l.stdout.String()
+			if !strings.Contains(out, "Engine: "+engine) {
+				t.Fatalf("auto-detection did not pick the test's engine %s:\n%s", engine, out)
+			}
+			var warning string
+			for _, line := range strings.Split(out, "\n") {
+				if strings.Contains(line, "WARN") && strings.Contains(line, "EngineAssociation") {
+					warning = line
+				}
+			}
+			if !tc.warn {
+				if warning != "" {
+					t.Errorf("warned although the associated engine is installed: %s", warning)
+				}
+				return
+			}
+			if warning == "" {
+				t.Fatalf("no WARN about the EngineAssociation:\n%s", out)
+			}
+			for _, want := range []string{`"5.7"`, "5.9", engine, "engineRoot", "UE_ROOT"} {
+				if !strings.Contains(warning, want) {
+					t.Errorf("warning does not mention %q: %s", want, warning)
+				}
+			}
+		})
+	}
+}
+
 // brokenListener is a bound port that breaks: Accept fails with an error that
 // is not temporary, so http.Server.Serve gives up at once.
 type brokenListener struct{}

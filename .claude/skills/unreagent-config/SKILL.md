@@ -62,8 +62,13 @@ placeholder system exists.
    not an error — the project values are then empty.
 6. `resolveEngine` — env `UE_ROOT` (trimmed), then `engineRoot`; a relative
    value is made absolute against the **working directory**, not the config
-   directory (unlike `unreal.project`). Otherwise `autodetect(project)`;
-   finding nothing is an empty engine, not an error by itself.
+   directory (unlike `unreal.project`). Otherwise `autodetect(project)`, which
+   returns `(root, warning)`; finding nothing is an empty engine, not an error
+   by itself. The warning comes from `chooseEngine` when an `EngineAssociation`
+   names no usable engine and the highest-installed fallback picks one; `Load`
+   appends it to `Info.Warnings`, and `run()` logs each entry as a WARN after
+   the `Engine:` line (`hermes-setup` does not). `UE_ROOT` and `engineRoot`
+   never warn.
 7. Write the resolved project path back into `unreal.project`, then
    `substitute(...)` (next section). It drops a built-in command that needs an
    unresolved placeholder and returns its name in `Info.SkippedCommands`
@@ -94,7 +99,7 @@ engine every `Load` fails unless `unreal.editor` is set literally — the
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the `.uproject`'s `EngineAssociation` (version → Launcher registry / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds) → highest installed version, compared numerically (Launcher registry + Epic default paths); see `internal/config/engine.go` |
+| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the `.uproject`'s `EngineAssociation` (version → Launcher registry / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds) → highest installed version, compared numerically (Launcher registry + Epic default paths), with a WARN via `Info.Warnings` when an association was set (step 6); see `internal/config/engine.go` |
 | `${PROJECT}` | full path to the `.uproject`: `unreal.project` if set, else the first `*.uproject` next to the config (step 5) |
 | `${PROJECT_DIR}` | its directory |
 | `${PROJECT_NAME}` | its filename without extension |
@@ -172,7 +177,9 @@ together:
    `substitute`. Nothing is substituted by default.
 4. **Validation** in `validate()` for an enum, a range or a cross-field
    requirement — gated on the section's `enabled` where the section can be off,
-   as the `agent.*` checks are.
+   as the `agent.*` checks are. A value that works but is likely wrong is no
+   load error: `Load` reports it in `Info.Warnings` as a complete message
+   (step 6) — `internal/config` never logs.
 5. **Use site** — usually `run()` in `cmd/launcher/main.go`, plus the file that
    owns the feature (`tools.go`, `scripts.go`, `bridge.go`, `mcpconfig.go`,
    `lifecycle.go`, `hermes.go`, `skills.go`).
@@ -185,8 +192,9 @@ together:
    in `TestUnresolvedPlaceholderInUsedFieldFails`. `noEngine(t)` makes
    `${ENGINE}` unresolvable whatever the host has installed — it clears
    `UE_ROOT` and swaps `autodetect`, the auto-detection seam of
-   `resolveEngine`; a test that needs an engine sets `UE_ROOT` instead (the
-   default `unreal.editor` needs one).
+   `resolveEngine` (`func(project string) (root, warning string)`); a test
+   that needs an engine sets `UE_ROOT` instead (the default `unreal.editor`
+   needs one).
 
 Skipping 6 and 7 is the usual failure — an option nobody can discover is an
 option that does not exist.

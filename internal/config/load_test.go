@@ -44,7 +44,7 @@ func noEngine(t *testing.T) {
 	t.Helper()
 	t.Setenv("UE_ROOT", "")
 	saved := autodetect
-	autodetect = func(string) string { return "" }
+	autodetect = func(string) (string, string) { return "", "" }
 	t.Cleanup(func() { autodetect = saved })
 }
 
@@ -406,6 +406,61 @@ func TestRelativeEngineRootIsAbsolute(t *testing.T) {
 			}
 			if info.EngineRoot != want || c.Unreal.Editor != want+"/Engine/Binaries/Win64/UnrealEditor.exe" {
 				t.Errorf("engine %q, editor %q; want under %q", info.EngineRoot, c.Unreal.Editor, want)
+			}
+		})
+	}
+}
+
+// k88: the fallback warning belongs to auto-detection. An engine given by
+// UE_ROOT or engineRoot is the user's choice; auto-detection is not even
+// consulted then, so its warning cannot reach Info.Warnings. An auto-detected
+// engine's warning does, once.
+func TestEngineWarningOnlyFromAutodetection(t *testing.T) {
+	ue := filepath.ToSlash(t.TempDir())
+	const autoRoot, autoWarning = "/auto/UE_5.9", "auto-detection's warning"
+	for _, tc := range []struct {
+		name, env, yaml string
+		wantRoot        string
+		autodetected    bool
+	}{
+		{"auto-detected", "", "unreal: {}\n", autoRoot, true},
+		{"UE_ROOT", ue, "unreal: {}\n", ue, false},
+		{"engineRoot", "", "engineRoot: " + ue + "\n", ue, false},
+		{"UE_ROOT and engineRoot", ue, "engineRoot: /other\n", ue, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UE_ROOT", tc.env)
+			var calls []string
+			saved := autodetect
+			autodetect = func(project string) (string, string) {
+				calls = append(calls, project)
+				return autoRoot, autoWarning
+			}
+			t.Cleanup(func() { autodetect = saved })
+			dir := t.TempDir()
+			project := writeUProject(t, dir, "Game.uproject")
+
+			_, info, err := Load(writeConfigFiles(t, dir, tc.yaml, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.EngineRoot != tc.wantRoot {
+				t.Errorf("engine root %q; want %q", info.EngineRoot, tc.wantRoot)
+			}
+			if !tc.autodetected {
+				if len(calls) != 0 {
+					t.Errorf("auto-detection consulted (for %q) although the engine is given", calls)
+				}
+				if len(info.Warnings) != 0 {
+					t.Errorf("warnings %q; want none for an engine that is given", info.Warnings)
+				}
+				return
+			}
+			if !reflect.DeepEqual(calls, []string{project}) {
+				t.Errorf("auto-detection called for %q; want once, for %q", calls, project)
+			}
+			if !reflect.DeepEqual(info.Warnings, []string{autoWarning}) {
+				t.Errorf("warnings %q; want auto-detection's, once", info.Warnings)
 			}
 		})
 	}

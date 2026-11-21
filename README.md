@@ -196,7 +196,7 @@ mcp:         { enabled: true }
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> the `.uproject`'s `EngineAssociation` (Launcher version, or a registered source build) -> the highest installed version found via the registry / Epic default paths. A relative `UE_ROOT` / `engineRoot` is resolved against the **working directory** and made absolute |
+| `${ENGINE}` | env `UE_ROOT` -> `engineRoot` (local.yaml) -> the `.uproject`'s `EngineAssociation` (Launcher version, or a registered source build) -> the highest installed version with an editor binary, found via the registry / Epic default paths (when the `EngineAssociation` names no usable engine — not installed, or installed without an editor binary — this last step logs a `WARN` naming the engine it picked, because the editor may then offer to convert the project). A relative `UE_ROOT` / `engineRoot` is resolved against the **working directory** and made absolute |
 | `${PROJECT}` | `unreal.project` if set (absolute, or relative to the **config directory**; the file must exist), otherwise the first `.uproject` next to the config |
 | `${PROJECT_DIR}` / `${PROJECT_NAME}` | directory of that `.uproject` / its file name without the extension |
 

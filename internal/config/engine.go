@@ -10,6 +10,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,8 +49,9 @@ type engineCandidate struct {
 }
 
 // autodetectEngine finds the engine root for project (path to the .uproject,
-// may be empty); chooseEngine documents the order.
-func autodetectEngine(project string) string {
+// may be empty) and the warning chooseEngine gives for it; chooseEngine
+// documents the order.
+func autodetectEngine(project string) (root, warning string) {
 	assoc := readEngineAssociation(project)
 	var builds []engineCandidate
 	if kind, _ := classifyAssociation(assoc); kind == assocBuild {
@@ -69,7 +71,10 @@ func autodetectEngine(project string) string {
 //     numerically (5.10 > 5.9).
 //
 // Only directories for which hasEditor is true count; "" if none qualifies.
-func chooseEngine(assoc string, launcher, defaults, builds []engineCandidate, hasEditor func(dir string) bool) string {
+// When an association names no usable engine and step 2 picks one, warning
+// says so: the editor would open the project in another engine and may offer
+// to convert it (k88).
+func chooseEngine(assoc string, launcher, defaults, builds []engineCandidate, hasEditor func(dir string) bool) (root, warning string) {
 	installed := append(append([]engineCandidate(nil), launcher...), defaults...)
 
 	kind, id := classifyAssociation(assoc)
@@ -90,16 +95,22 @@ func chooseEngine(assoc string, launcher, defaults, builds []engineCandidate, ha
 	}
 	for _, c := range named {
 		if hasEditor(c.Dir) {
-			return filepath.ToSlash(c.Dir)
+			return filepath.ToSlash(c.Dir), ""
 		}
 	}
-	return highestEngine(installed, hasEditor)
+	best := highestEngine(installed, hasEditor)
+	if kind != assocNone && best.Dir != "" {
+		warning = fmt.Sprintf("the .uproject's EngineAssociation %q names no usable engine (not installed, or installed without an editor binary) — using the highest usable one instead, %s at %s, and the editor may offer to convert the project; install or build the associated engine, or pin one with engineRoot in unreagent.local.yaml (or env UE_ROOT)",
+			strings.TrimSpace(assoc), best.ID, best.Dir)
+	}
+	return best.Dir, warning
 }
 
-// highestEngine returns the directory of the candidate with the highest
-// version that has an editor. IDs that are not a version rank below every
-// version; on a tie the earlier candidate wins.
-func highestEngine(cands []engineCandidate, hasEditor func(dir string) bool) string {
+// highestEngine returns the candidate with the highest version that has an
+// editor, its directory with forward slashes; the zero candidate if none has
+// one. IDs that are not a version rank below every version; on a tie the
+// earlier candidate wins.
+func highestEngine(cands []engineCandidate, hasEditor func(dir string) bool) engineCandidate {
 	best := -1
 	var bestVer []int
 	bestOK := false
@@ -113,9 +124,9 @@ func highestEngine(cands []engineCandidate, hasEditor func(dir string) bool) str
 		}
 	}
 	if best < 0 {
-		return ""
+		return engineCandidate{}
 	}
-	return filepath.ToSlash(cands[best].Dir)
+	return engineCandidate{ID: cands[best].ID, Dir: filepath.ToSlash(cands[best].Dir)}
 }
 
 // parseEngineVersion parses a dotted engine version of at least major.minor
