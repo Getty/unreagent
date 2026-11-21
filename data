@@ -1,0 +1,58 @@
+---
+class: standard
+completed: 2026-11-21T01:13:54Z
+created: 2026-08-21T23:22:49Z
+depends_on:
+- 8
+id: 13
+priority: high
+started: 2026-11-21T00:37:21Z
+status: done
+tags:
+- skills
+- class-d
+title: 'Skills: unreagent-iterate + unreagent-build (Class D, editor loop)'
+updated: 2026-11-21T01:14:10Z
+---
+
+Author the two Class D skills that describe driving the editor and the build from the agent side. No external source covers these -- only this project can supply them.
+
+- skills/unreagent-iterate/SKILL.md -- ue_restart, logs, status: the edit -> compile -> restart -> read-logs loop
+- skills/unreagent-build/SKILL.md -- run_command (compile/package), logs
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class D).
+Agent: unreagent-skill-author.
+
+Acceptance:
+- same frontmatter conventions as #8
+- describes the actual restart/log semantics implemented in internal/supervisor and cmd/launcher, including what a Job Object teardown means for in-flight child processes
+- agent-agnostic prose
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, can start now (depends only on k8, done). Documents this repo's own tools; no toolkit needed. Lane: unreagent-skill-author. Size M.
+
+Skill-author done, main working tree, uncommitted, based on c013f77. New skills/unreagent-iterate/SKILL.md (status, ue_start/stop/restart, logs) and skills/unreagent-build/SKILL.md (run_command, compile/package, commands: config), name+description frontmatter like k8. Written against tools.go, scripts.go, helpers.go, main.go, lifecycle.go, internal/supervisor, internal/config at c013f77; restart and log-buffer behaviour confirmed by a Linux supervisor experiment. They describe current behaviour incl. the k32/k43/k72/k74/k75/k77/k78 gaps (refresh tracked on a follow-up card). UE-side claims to check: UBT refuses to build while Live Coding is active; Saved/Logs/<Project>.log; Blueprint-only projects have no <Project>Editor target; -waitmutex. Job Object behaviour read from job_windows.go, unverified.
+
+2026-11-21 01:06 Review (unreagent-reviewer): CHANGES NEEDED. Checked against cmd/launcher (tools.go, scripts.go, helpers.go, lifecycle.go, main.go) and internal/supervisor at c013f77 and again at f7581b3 (HEAD moved during review: k39/k53, k94, k32 landed). Check run at f7581b3 with the prose diff applied: gofmt -l . empty, go vet ./... ok, go test -count=1 ./... ok (4 pkgs), make windows ok.
+1) skills/unreagent-build/SKILL.md:121-125 and the failure row at :165 are false since f7581b3 (k32): runOnce now returns when the command itself exits, closes the job before draining, bounds the drain at 2 s and drops later output (supervisor.go:279-333). The 'call stays open while a helper holds the output' section has to go or be rewritten; k100 cannot wait for this one, k32 is already in HEAD.
+2) skills/unreagent-iterate/SKILL.md:67-70: 'a pending restart then shows running: true with restarts one higher' is wrong. restarts is incremented when the restart is scheduled (supervisor.go:501-502, also :436-437 for a failed spawn), not when it runs (:485). During the wait status already shows restarts N+1; after the delay only running flips, restarts stays N+1. Reproduced on a scratch copy: pending {running:false restarts:1}, after delay {running:true restarts:1}.
+3) skills/unreagent-build/SKILL.md:107-108: the server does not close the connection after 4 hours. WriteTimeout (main.go:284) only makes the late response write fail, so a run longer than 4 h ends in EOF with no result when it finishes, not at the 4 h mark (stdlib experiment: 1 s WriteTimeout, 3 s handler, client EOF at 3.0 s).
+4) skills/unreagent-build/SKILL.md:31-33 and :162: 'Blueprint-only project, there is nothing to compile' is wrong when the project has C++ plugins under Plugins/ (e.g. the in-editor plugin as source). Those build through the UnrealEditor target with -Project=, which the built-in compile does not run; the user adds a command. UE-side, my belief, not checkable here.
+Nits: iterate:97-101 has no row for restart: never (failed spawn gives running:false, desired:true, restarts:0, no retry). iterate:141-142 'nothing is left behind as an orphan' holds only when the job was created and assigned; otherwise the launcher log shows 'WARN job object could not be created' or 'WARN job assign failed'.
+UE-side claims, stated as facts an agent acts on: the Live Coding refusal is right (the real UBT text goes on 'Exit the editor and game, or press Ctrl+Alt+F11 ...'), and stopping first is safe either way. Saved/Logs/<Project>.log is right. 'No <Project>Editor target in Blueprint-only projects' is right, but see 4 for the conclusion. -waitmutex is right. Bridge claims (iterate:286-291) match ../ue-llm-toolkit mcp-bridge/index.js at 9f6a0f7. Frontmatter (name + description) matches unreagent-files and unreagent-runtimes and parses. Prose is agent-agnostic and English. Everything else matches the code. The Windows claims (Job Object teardown, taskkill by image name, -stdout capture through pipes) come from reading the code and are unverified on Windows. If k43 lands first, re-check build:77,159 and iterate:100,297 (engine-root-not-found behaviour).
+
+2026-11-21 01:12 Re-review (unreagent-reviewer): APPROVE. Each new statement checked against the code at 077439a (no Go changes since f7581b3).
+1) build:126-130 and :175, the k32 drain, now match runOnce (internal/supervisor/supervisor.go:279-333): Wait returns on command exit, the job is closed before the drain, the drain is capped at drainTimeout (2 s), and close() drops later output. The >4 h row matches.
+3) build:112-116, the 4 h write deadline, is right: the reply cannot be sent and the connection drops when the run ends. [cmd:<name>] done is still logged first (:330), so the advice in row :175 holds.
+4) build:31-37 and :172, code plugins under Plugins/ in a project without Source/, need an UnrealEditor -Project= build the user adds. UE-side, consistent with my understanding.
+build:134-141: the job is closed when the command exits, but only if it exists. Both WARN strings match supervisor.go:299 and :313 with label cmd:<name>.
+2) iterate:67-72, :108-110 and :276-277: restarts counted at scheduling (supervisor.go:436-437, :501-502) is now described correctly and matches my scratch experiment.
+Nits: iterate:104, the restart: never row (restarts 0, no retry), matches start(). iterate:145-151 is now qualified; the WARN strings match :446 and :450 with spec.Name ue, and without a job stop() kills only the editor process via Process.Kill.
+Remaining sections unchanged and still correct. Frontmatter parses (name + description). English, agent-agnostic.
+Nit, not blocking: build:31-32 'the <ProjectName>Editor target: the project's own C++ modules under Source/' reads as exhaustive. In a code project that target also builds the enabled code plugins under Plugins/. Mention that so an agent that edits plugin source in a code project does not ask for an extra command. UE-side.
+Windows claims (Job Object teardown, taskkill, pipe capture) come from reading the code and are unverified on Windows.
+Check at 077439a with both skills in the tree: gofmt -l cmd internal empty, go vet ok, go test -count=1 ./... ok (4 pkgs), make windows ok.
+
+Committed as d16f8a1 (Add the unreagent-iterate and unreagent-build skills). Non-blocking nit tracked on k100.
