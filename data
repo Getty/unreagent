@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-11-21T10:21:44Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T10:21:44Z
+created: 2026-11-21T03:10:52Z
+depends_on:
+- 69
+id: 120
+priority: medium
+started: 2026-11-21T08:44:49Z
+status: done
+tags:
+- lifecycle
+- ux
+title: 'Window mode: launcher console replies go to unreagent.log, not the console'
+updated: 2026-11-21T10:21:55Z
+---
+
+Found by the k69 worker (2026-11-21): in window mode the launcher log goes to unreagent.log, and the k-console replies (status, c <name> results, hints) go through the same logger — so the user typing in the console does not see the answers. Done when: console replies reach the console the user types in (and still the log), with a test using a fake console. Lane: unreagent-worker. Touches cmd/launcher/lifecycle.go — after k69/k70/k71 lands.
+
+**Confirmed by the k69 review (2026-11-21):** in window mode the k-console's command list and its status output go to unreagent.log, not to the terminal.
+
+2026-11-21 09:20 Worker: the launcher console's replies now reach the console and still the log. console carries logSeparate (newConsole sets it when the launcher log is not stdout, i.e. window mode's unreagent.log); console.reply prints on the console and logs, once when the log is the console. Every commandLoop answer goes through it: the command list, the status JSON, c <name> results, Error / Unknown command, 'Stopping …', and the busy hint 'Launcher console active …'. Red first: TestConsoleAnswersOnTheConsoleInWindowMode (fake console: a pipe in, a buffer out, a separate logger); control: TestConsoleAnswersOnceWhenTheLogIsTheConsole. Also found, not fixed (for a card): in window mode the supervisor's own lines (started / stopped / restarted) still go to the log only, so a successful 'start ue' gets no confirmation on the console; the onExit=leave/shutdown messages likewise. Checks green: gofmt, go vet (linux + GOOS=windows), go test ./..., go test -race, make linux, make windows. The Windows console path is compile-only, unverified. Ready for review.
+
+2026-11-21 Worker: rebased onto ce31def (k45/k123/k141, k88); the console is now built below the MCP block, next to the exit handlers. Checks green on the rebased tree, and the k141 tests pass with -count=50. Still in review.
+
+2026-11-21 10:17 Review (unreagent-reviewer): verdict READY. Check run by the reviewer on the bundle worktree (base ce31def, uncommitted): gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... and go test -race ./... green; make linux and make windows OK; go mod verify OK; TestRunLogsMCPListeningOnlyOnceAConnectSucceeds -count=100 green; the new and nearby tests -race -count=20 green in cmd/launcher and internal/supervisor. Red-without-fix checked by mutating a scratch copy (worktree untouched). Red without the fix: reply() never printing on the console fails TestConsoleAnswersOnTheConsoleInWindowMode; always printing fails TestConsoleAnswersOnceWhenTheLogIsTheConsole. Finding (low, worker): cmd/launcher/lifecycle.go:36 newConsole's 'logSeparate: log != out', the window-mode switch run() relies on (main.go:353), is untested: forcing it true or false survives the whole cmd/launcher suite. A two-case unit test of newConsole would pin it. Windows console output in window mode is compile-only, unverified.
+
+Committed in b8e300c (Windows behaviour compiled only, unverified on a real .exe)
