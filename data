@@ -1,0 +1,31 @@
+---
+class: standard
+completed: 2026-11-21T23:28:28Z
+created: 2026-08-21T22:13:16Z
+id: 5
+priority: low
+started: 2026-11-21T23:28:28Z
+status: done
+tags:
+- skills
+- decision
+title: 'Decide: fold Class C into the offline-writable batch?'
+updated: 2026-11-21T23:28:44Z
+---
+
+Open decision flagged in spec section 7: character, character_data, lighting, game_framework, control_rig, sequencer, retarget were deferred with Class B, but by the criterion actually used (a dedicated tool with an in-repo documented schema) they qualify for offline authoring exactly as Class A does. ~7 skills, no editor needed. Maintainer call.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): OPEN DECISION. Class C (character, character_data, lighting, game_framework, control_rig, sequencer, retarget) meets the Class A criterion (dedicated tool, schema documented in the toolkit) and could be written offline from the headers. Either fold it in as 2-3 new Class A cards (equally blocked on the toolkit checkout) or close this and keep Class C deferred with Class B. Maintainer call.
+
+2026-11-21 21:47 **Decision 2026-11-21** (maintainer, relayed by the main agent; recorded by unreagent-planner): fold Class C in and write it offline. What the maintainer said is that the shipped set feels thin and they want more UE skills; the main agent reads that as approval for Class C. It is an inferred approval, not a quoted "yes to Class C" -- the new Class C cards are filed in backlog, so promoting them to todo is the explicit confirmation.
+
+Checked against the toolkit checkout (../ue-llm-toolkit, HEAD 9f6a0f7 of 2026-04-02): MCPToolRegistry.cpp:89-194 registers 43 tools; the 19 ue-* skills cover 36 of them, and the seven without a skill are exactly the Class C list: character (5 operations), character_data (10), lighting (10), game_framework (12), control_rig (16), sequencer (7), retarget (23) -- 83 operations. None of the seven is registered under an #if. The bridge tool `status` is in no skill's toolkit_tools either (ue-context lists only get_ue_context).
+
+Class B stays deferred: no running editor.
+
+2026-11-21, main agent: the maintainer, shown k193-k195 as started, said to carry on with the cards on this machine. Still the main agent's reading, not a quoted yes to Class C; the maintainer is asked once more before the Class C skills are committed.
+
+Decision 2026-11-21 (maintainer, quoted): 'ja class c committen und alles pushen'. Class C is folded into the offline-writable batch; k193, k194, k195 are approved for commit.
+
+2026-11-21 23:28 unreagent-release-manager: decided per the maintainer's quoted yes above; k193, k194, k195 committed as 9380262, ff7674a, d4edd23.
