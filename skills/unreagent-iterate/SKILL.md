@@ -296,10 +296,22 @@ What the buffer holds:
 | `Saved/Logs/<ProjectName>.log` in the project | the log file the editor writes itself | written by UE, not by the launcher |
 
 When the launcher runs its own agent in the foreground (the default), it writes
-its log to `unreagent.log` next to the `.uproject`. The file is truncated at
-every launcher start. Without a foreground agent (an external agent, or
-headless), the log goes to the launcher's console, which no tool can read.
-Each line starts with a `HH:MM:SS` timestamp. Lines to look for:
+its log to `unreagent.log` next to the `.uproject`. Such a run, once it has
+loaded its config and bound the MCP port, first renames the existing
+`unreagent.log` to `unreagent.log.1`, replacing the one there, and then begins
+`unreagent.log` empty. One earlier log is kept; older ones are gone. A restart
+of the editor or the agent within one launcher run does not rotate the log.
+When the rename fails, the new run is appended to `unreagent.log` and
+`unreagent.log.1` stays as it was. The warning that says so goes to the
+launcher's console before the agent takes it over, not into the log. Every
+launcher run opens its part of the file with a line that reads
+`unreagent <version> — Config: <path>` after the timestamp, so more than one
+such line in `unreagent.log` marks a failed rename; this run starts at the
+last one. Without a foreground agent (an external agent, as with `-no-agent`,
+or headless), the log goes to the launcher's console, which no tool can read,
+and neither file is touched: such a run leaves no log file, and an
+`unreagent.log` on disk is an earlier run's. Each line starts with a
+`HH:MM:SS` timestamp, with no date. Lines to look for:
 
 ```
 [ue] started (pid 12345)
@@ -319,8 +331,18 @@ start that failed logs `start failed: …` instead.
 
 `read_file` (`unreagent-files`) returns at most 47 KiB per call, and a negative
 `offset` counts from the end of the file: `offset: -48128` returns the last
-47 KiB of `unreagent.log` or of the editor's log file, where a crash is. To
-search a long log, use `run_python` / `run_node` (`unreagent-runtimes`).
+47 KiB of `unreagent.log` or of the editor's log file, where a crash is.
+`unreagent.log.1` holds the last earlier run that had a foreground agent and
+got as far as opening the log. That is not always the run right before this
+one: a run without a foreground agent rotates nothing, nor does one that ended
+on a config error or on an MCP port already taken. After such a run,
+`unreagent.log.1` holds an older run, and with no date on the timestamps the
+file does not show it. A crash from the run in `unreagent.log.1` is at the
+file's end: read it the same way. After a failed rename, the earlier run sits
+in `unreagent.log` instead, just above the last `Config:` line. Both files sit
+next to the `.uproject`, in the default `files.root`, and `read_file` exists
+only while file access is enabled. To search a long log, use `run_python` /
+`run_node` (`unreagent-runtimes`).
 
 ## The edit loop
 
