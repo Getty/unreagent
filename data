@@ -1,0 +1,24 @@
+---
+claimed_at: 2026-11-21T02:04:35Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:04:49Z
+created: 2026-11-21T00:52:21Z
+id: 98
+priority: medium
+started: 2026-11-21T01:42:19Z
+status: done
+tags:
+- mcp
+- descriptions
+title: MCP tool descriptions contradict the code (run_command, logs)
+updated: 2026-11-21T02:04:49Z
+---
+
+Found during k13: (1) run_command says "After compile, ue_restart is recommended", but UBT refuses to build while Live Coding is active, so the editor has to be stopped before compiling (the new unreagent-build skill says so). (2) logs says to use service=ue for "editor/build output", but run_command output never reaches the ue log buffer. (3) logs promises agent output, but that buffer is empty while the agent runs in the foreground (overlaps k78 item 3; fold together). Tool descriptions are prompt surface; fix them in cmd/launcher/tools.go. Lane: unreagent-worker. Size S.
+
+Worker done (same worktree as k78): run_command description says it returns when the command exits with the last 300 lines that nothing else keeps, and to ue_stop before compile (Live Coding blocks UBT; UE claim from k13, not code) then ue_start; logs no longer claims build output. ue_restart description left as is — reviewer judges. Follow-up after landing: skills/unreagent-iterate:282 via k100.
+
+Review (unreagent-reviewer, worktree-agent-a02c899f0fb94b507 on 2e72af4, uncommitted; same diff as k78): APPROVE WITH NITS. Check run in the worktree, all green: gofmt -l cmd internal (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./cmd/launcher, make linux, make windows. Descriptions checked against the code: run_command (tools.go:80-81) 'returns once it exits' = runOnce waits on cmd.Wait plus a drain of at most 2 s; 'last 300 lines, stdout+stderr merged' = newCombinedStreamSet + tailLines(res.Output, 300); 'kept nowhere else; logs does not have it' = output goes only to a headTailBuffer, and the launcher log gets only the starting/done lines. logs (tools.go:55): the ring buffer (500 lines, per service) is fed only by non-foreground services. The agent service is registered only when cfg.Agent.Enabled is set. Foreground means interactive, which is the default unless -p or window:false. The ue output comes from the default -stdout -FullStdOutLogOutput. All true. The Live Coding claim (UBT refuses to build while Live Coding is active) is UE behaviour from k13 and not verifiable here; it matches skills/unreagent-build/SKILL.md:153-155. Follow-ups: (1) skills/unreagent-iterate/SKILL.md:281-283 still says the run_command description suggests compile then ue_restart, which is now false (skill-author, same commit preferred). (2) tools.go:48 ue_restart 'Use this after a C++ build' is not wrong (restart starts a stopped editor, and the build skill uses ue_restart when the editor kept running), but it reads against the new stop-compile-start advice. Reword it as a follow-up, not a blocker. Nit: the 'run_command output is not in logs' point is stated in both descriptions (tools.go:55 and :80), so the tokens are paid twice per request; one of them would do.
+
+Committed as 3c920ef on main; reviewer nits tracked in k108.
