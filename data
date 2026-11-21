@@ -1,0 +1,62 @@
+---
+claimed_at: 2026-11-21T23:27:05Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-21T23:26:44Z
+created: 2026-11-21T21:48:22Z
+id: 193
+priority: medium
+started: 2026-11-21T22:57:48Z
+status: done
+tags:
+- skills
+- class-c
+title: 'Skills: Characters & Game Framework (Class C)'
+updated: 2026-11-21T23:27:05Z
+---
+
+- ue-character -- character (5 operations)
+- ue-character-data -- character_data (10 operations)
+- ue-game-framework -- game_framework (12 operations)
+
+Lane: unreagent-skill-author (OWNERS: skills/). Depends on: nothing open. Parallel with the other two Class C cards: new directories only, and the inbound links below name files no other Class C card touches.
+Decision of record: k5 (Class C is written offline). Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7. Format precedent: k20 and the 19 shipped ue-* skills. Working rules: skill unreagent-skill-authoring.
+
+Sources (toolkit checkout ../ue-llm-toolkit at 9f6a0f7, paths under Plugin/UELLMToolkit/Source/UELLMToolkit/Private/):
+- MCP/Tools/MCPTool_Character.h (Info.Name :35) and .cpp (dispatch :21-37)
+- MCP/Tools/MCPTool_CharacterData.h (Info.Name :44) and .cpp (dispatch :25-63); the config types are the plugin's own (UCharacterConfigDataAsset, Public/CharacterDataTypes.h)
+- MCP/Tools/MCPTool_GameFramework.h (Info.Name :14) and .cpp (dispatch :77-121), GameFrameworkEditor.cpp
+- background to point at, not to copy: Resources/mcp-bridge/contexts/character.md
+No VibeUE text: Class C has no VibeUE precedent and VibeUE is not checked out.
+
+Known from planning, to be settled by the author from the source:
+- game_framework accepts operation aliases the header does not list (MCPTool_GameFramework.cpp:40-72).
+- set_game_mode_defaults writes the CDO of the editor world's WorldSettings DefaultGameMode (GameFrameworkEditor.cpp:102-140). Establish whether anything marks dirty or saves, and say what the code does.
+- set_input_mode, show_widget, remove_widget, set_pause and set_mouse_cursor need a running PIE session (GameFrameworkEditor.cpp:178, :213, :246, :276): hand over to skill ue-pie-testing.
+- character works on ACharacter actors in the level; whether set_movement_params outlives the session is for the author to read out of MCPTool_Character.cpp.
+
+Inbound links (only these existing files): skills/ue-context/SKILL.md (:68 names the character tools), skills/ue-widgets/SKILL.md (show_widget), skills/ue-enhanced-input/SKILL.md if a link is warranted.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill above; long material in <section>.md sub-documents that the body names
+- frontmatter in the plain form: name equals the directory, description says when to reach for the skill in one or two lines (it is permanently in the agent's context), toolkit_tools lists exactly the tools named above and passes TestToolkitToolsExistInToolkit; unreal_classes only if the skill really works through execute_script
+- every documented operation, parameter, default, result field and error string is traceable to a header or cpp line; the hand-off note lists operation -> file:line, and the dispatched operations are all covered (5 / 10 / 12, plus the game_framework aliases)
+- each skill opens with task recipes (the calls for the common jobs, in order) before the reference tables
+- each skill states what a success result does not prove (saved or not, compiled or not, applied in PIE only, silently ignored parameters)
+- where the header and the code disagree, the skill follows the code and says so; where runtime behavior cannot be read off the source, it states the documented contract and stops -- no example that looks tested
+- other skills are named by their shipped names (ue-pie-testing, never unreagent-ue-pie-testing)
+- upstream bugs found on the way are appended to k132, not worked around silently
+
+Verification: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 ./... && make windows, and go test -count=1 -v ./internal/skills to see that the toolkit lint ran rather than skipped. Run it where Go is installed; the planning machine has none. Docs-only change, no Windows code path: make windows proves the embed builds, nothing more.
+
+Risk: written against source, not against a running editor (spec section 9). Three more description lines in the skills tool description, paid on every request.
+
+Skill-author finished (main tree, uncommitted): skills/ue-character, ue-character-data, ue-game-framework (+ section datatables); inbound links in ue-context, ue-widgets, ue-enhanced-input. Operations 5/5, 10/10, 12/12 plus 15 aliases, each mapped to dispatch and handler lines at toolkit 9f6a0f7. Short check green: gofmt, go test ./internal/skills ./cmd/launcher, toolkit lint ran (43 tools). set_game_mode_defaults writes the class default object and marks the package dirty, saves nothing; a C++ game mode has no asset to save. 15 upstream bugs noted on k132. Proposed subject: Ship the skills ue-character, ue-character-data and ue-game-framework (k193).
+
+unreagent-reviewer 2026-11-21: verdict CHANGES NEEDED. Check: gofmt -l / go vet ./... / go test -count=1 ./... / make windows green; toolkit lint ran. Docs only. Confirmed against 9f6a0f7: toolkit_tools, all 5 + 10 + 12 operations, 16 aliases (not 15; the skill lists all 16), all five succeeds-without-effect claims, about 50 further claims. Must fix: (1) JSON type conversion stated as fact in four places (ue-character/SKILL.md:68-70; ue-character-data/SKILL.md:79-80 and :149; ue-game-framework/SKILL.md:239-240; ue-game-framework/datatables.md:84, :87): parameters are read through UE TryGet*Field (MCPToolBase.h:103-147) whose cross-type conversion is engine behaviour and unverified; hedge as ue-blueprints/SKILL.md:152-156 does and tell the agent to send real JSON types. Should fix: (2) ue-game-framework/SKILL.md:278 implies saving makes a CDO write last; name the recompile case and set_cdo_default. Nits: :205-210 remove_widget does not use the player controller; :88-89 'at most until' the editor closes; :41 class path versus asset path. Back to unreagent-skill-author.
+
+Skill-author round 2 (2026-11-21): all five findings applied. JSON type conversion hedged in all four places with 'send real JSON types'; set_pause/set_mouse_cursor now say a string such as "false" gives an unknown state, read the result; datatables value table reworded with an unverified paragraph; failure row names the recompile case and set_cdo_default; remove_widget, 'at most until', class path versus asset path. Left for the reviewer: the number and bool rows of the datatables table still say a numeric string or "true"/"false" is accepted. Short check green. Narrow re-review requested.
+
+unreagent-reviewer 2026-11-21, narrow re-review: verdict READY. All five fixes confirmed; nothing else moved. Check: gofmt, go vet, go test ./internal/skills (loader tests and toolkit lint ran); go test ./... and make windows green in round 1, text-only edits since. The number and bool rows of the datatables table need no hedge in the row (a JSON number or boolean is safe on either path; only the string forms are unverified, covered below the table). For the commit: game_framework has 16 aliases, not 15; the skill documents all 16. Commit waits for the maintainer's word on Class C (k5).
+
+2026-11-21 23:27 unreagent-release-manager: committed as 9380262.
