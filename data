@@ -1,0 +1,80 @@
+---
+claimed_at: 2026-11-21T07:51:05Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:53:02Z
+created: 2026-11-21T05:55:51Z
+id: 135
+priority: low
+started: 2026-11-21T07:20:10Z
+status: done
+tags:
+- mcp
+- bridge
+title: 'Bridge smoke test follow-ups after k106: stderr tail and a no-WARN pin'
+updated: 2026-11-21T07:53:15Z
+---
+
+From the k106 round-3 review. (1) The smoke test reports only the last 15 lines of the bridge's stderr; for node 24's missing-module error that cuts off the "Cannot find module 'dep'" line itself, so the k106 repair hint ("if the error above names a missing module or file") is only answered by the code/requestPath fields. Pre-existing. Fix: keep the first line that names the error as well as the tail, or raise the limit; lane unreagent-worker (cmd/launcher/bridge.go). (2) A surviving mutation: dropping "passed ||" in settleModules' no-op case makes a marked tree that passes its smoke test log the repair hint on every start; TestPrepareNodeBridgeSkipsInstallWithMarker checks "smoke test OK" but not that no WARN appears. One assertion pins it; lane unreagent-test-writer.
+
+Worker done (2026-11-21, worktree-agent-a9378f955ec792f05 on c0a5178, uncommitted; files cmd/launcher/bridge.go, cmd/launcher/bridge_test.go).
+
+(1) stderr tail: new stderrTail(detail, 15) in bridge.go replaces tailLines at the smoke-test call site. Last 15 lines as before; when the line that names the error (jsErrorLine: an unindented name ending in Error, optional [CODE], colon) is not among them, it leads the tail, with a '[...]' line when lines lie between (none when it sits right above the tail). It takes the LAST such line, not the first as the card suggested: node prints the uncaught error last, and a bridge's own earlier 'Error: ...' log line would otherwise win (real node 24 sample in the test). Bounded at n+2 lines. Raising the limit was rejected: the CJS trace grows two lines per require-stack level and any earlier stderr pushes the error out again. Self-contained instead of built on tailLines, so a future k74 marker in tailLines cannot double up with '[...]'. Measured with real node 24.19.0 on Linux: CJS missing module 24 lines (error on line 5), half-extracted package 21 (line 5), ESM 19 (line 5, already in the tail, output unchanged), all through smokeTestMCP with the real binary.
+
+(2) no-WARN pin: TestPrepareNodeBridgeSkipsInstallWithMarker now also fails on any WARN.
+
+Tests: TestSmokeTestMCPKeepsNodeErrorLine (captured node 24 CJS trace, exact log match; red on the old code, the log started at a stack frame), TestStderrTail (8 cases incl. a real node 24 TypeError-with-cause sample). Mutations: 6/6 on stderrTail killed; dropping 'passed ||' in settleModules survived all bridge tests before the assertion and is killed after it (red at the new assertion, the marked-tree hint after 'smoke test OK'); bridge.go restored byte for byte (sha256 equal). Check: gofmt empty, vet linux+windows ok, go test -count=1 ./... ok, -race cmd/launcher ok, no skips in cmd/launcher, make linux + make windows ok. Windows unverified (compile only; the new tests use shell fakes and skip there).
+
+Drift for k74 (unreagent board): if tailLines gets an omission marker, consider sharing its form with stderrTail's '[...]'.
+
+Ready for review: worktree-agent-a9378f955ec792f05 (c0a5178), bridge.go + bridge_test.go uncommitted. stderrTail keeps node's error line ahead of the 15-line tail; no-WARN pin on SkipsInstallWithMarker. Full check green; Windows unverified (compile only).
+
+Review (unreagent-reviewer, 2026-11-21): READY. Nothing blocks. A is a should-fix the main agent can send back before the commit (one table row) or file as a follow-up. Tree: worktree-agent-a9378f955ec792f05 on c0a5178, uncommitted. Files: cmd/launcher/bridge.go, cmd/launcher/bridge_test.go, both owned by unreagent-worker per ack-team owner, so the scope is fine. No German. Check run by the reviewer: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; no test in cmd/launcher skipped itself; make linux and make windows ok (byte-identical scratch copy); GOOS=windows go test -c ./cmd/launcher compiles.
+
+A (should-fix, test gap in the worker's own deviation): the "last error line" rule is pinned only for a crash outside the tail. Mutant: bridge.go:341 `case i >= cut: return tail` emptied, so the scan goes on upward. It survives all bridge tests. Under it, a crash whose error line is in the tail (node 24 ESM missing package: line 5 of 19) gets an earlier bridge log line such as "Error: config not found" put on top, which is exactly what the deviation is meant to prevent. The real code is correct (verified). Fix: add a TestStderrTail row (bridge_test.go:653) "Error: early\nlog\nError: boom\n    at f\n    at g" with n=3 and want the tail alone. Verified: this row kills the mutant.
+
+B (nit, test gaps in jsErrorLine, bridge.go:356-362): three more survivors. HasSuffix->Contains. Any name without spaces counts (the "ends in Error" part is not pinned: node's own "node:internal/process/promises:392" header would match). Cut at the last colon instead of the first (that would break "Error: Cannot find module 'C:\...'" on Windows). Rows that kill all three, verified: "node:internal/...:392\nUnhandledPromiseRejection: x\n..." -> tail alone; "Errors: 3\n..." -> tail alone; "Error: Cannot find module 'C:\\b\\index.js'\n..." -> led by it. Also: node 24 prints unhandled rejections of errors that carry properties in brackets: "[AggregateError: All promises were rejected] {", "[TypeError: fetch failed] {". These match only because the leading "[" passes the no-space test. The result is right, but it is undocumented in the jsErrorLine comment and unpinned. A row for it is worth adding.
+
+C (nit, optional): no line is capped. That is unchanged from tailLines, and the stderr buffer has no bound either (both older). The total stays at most n+2 = 17 lines (verified: aggregate and CJS samples give 17). The added leader is unbounded, though. In a contrived case, a one-line bundle whose source excerpt begins `console.error("Error:` and that throws a message-less Error (an unrecognised line), a 200 KB excerpt line led the output (tailLines: 2.3 KB). Real minified bundles start with "var "/"use strict"; and do not match. A cap on the leader (a few hundred bytes) would close it.
+
+D (report accuracy): the card says the new tests skip on Windows. That holds only for TestSmokeTestMCPKeepsNodeErrorLine, through newScripts' shell fake, and that skip is justified. TestStderrTail is pure, has no skip and runs on Windows. Windows behaviour is still unverified (compiled only).
+
+Probed with real node 24.19.0 on Linux, 15 samples. Matches as intended: CJS missing module (now led, with [...]); ESM, internal TypeError and SyntaxError with an excerpt (in the tail, output unchanged); AggregateError (28 lines, led); a custom McpError (20 lines, led); MCPError log + exit (led by it, which names the error, fine); JSON log lines with "Error:" inside (no match, unchanged). Misses, which are harmless because the tail still shows them, but an earlier out-of-tail error log line would lead instead: a bare "Error" (message-less throw, no colon), "UnhandledPromiseRejection: ..." (throw of a non-Error), "DOMException [AbortError]: ...". "Uncaught Error:" only comes from REPL/console.error. CRLF: all 15 samples give the same output with \r\n. "Last" over "first" is right: with first, an early bridge log line leads instead of the crash.
+
+k106 repair hint, end to end through prepareMCPBridges with real node (marked tree, missing dep, an earlier "Error:" log line): the WARN block opens with "Error: Cannot find module 'dep'", then [...], then the last 15 lines; the marked hint follows and its "the error above" now points at a visible line. The WARN header is unchanged and pinned by the exact match in TestSmokeTestMCPKeepsNodeErrorLine.
+
+Mutations by the reviewer: 9 of 13 killed. Old call site tailLines: red at TestSmokeTestMCPKeepsNodeErrorLine. First-match rule, no-gap case removed, gap off by one, space check dropped, [CODE] cut dropped, cut off by one, marker dropped: all killed. Dropping "passed ||" in settleModules: killed by the new assertion at bridge_test.go:250. Survivors as in A and B.
+
+Changes entry (for the release-manager): the content is accurate, but drop "(k135)". No {{$NEXT}} entry on main carries a ticket id. Suggested: "A failed bridge smoke test now also logs the line that names the error, such as node's "Error: Cannot find module 'dep'", which a long stack trace used to push out of the last 15 lines of stderr shown.
+
+Rework after review (worker, 2026-11-21, same worktree, still uncommitted; bridge.go comment only, bridge_test.go rows).
+
+Decisions (main agent, not the maintainer): C accepted, no length cap on the added error line (the stderr buffer is unbounded and predates this change; real bundles do not start with a matching line). D: correction to my earlier note: TestStderrTail runs on Windows too. Only the tests built on the shell-script fakes skip there: the new TestSmokeTestMCPKeepsNodeErrorLine, and TestPrepareNodeBridgeSkipsInstallWithMarker (it skipped there already).
+
+Rows added to TestStderrTail (code unchanged, no row showed a bug): A 'Error: early / log / Error: boom / at f / at g' with n=3 gives the tail alone; B1 a node:internal/... source-location header is no error line; B2 'Errors: 3' is no error line; B3 'Error: Cannot find module 'C:\...\dep\index.js'' is one (constructed Windows form, the first colon ends the name); plus node 24's bracketed unhandled-rejection form '[TypeError: fetch failed] {' (real node 24.19.0 fetch rejection captured on Linux, as const nodeFetchRejection). The jsErrorLine comment now says the bracketed form matches because the leading [ is no space.
+
+Mutants, whole cmd/launcher package, before the rows -> after: emptying 'case i >= cut: return tail' green -> red (row A); HasSuffix->Contains green -> red (B2); dropping the ends-in-Error check green -> red (B1 and B2); cutting at the last colon green -> red (B3); rejecting '[' in the name -> red (bracket row only). bridge.go restored byte for byte after each (sha256 equal). The first bracket mutant tried (cut at '[' instead of ' [') was already killed by the [CODE] row, so it was swapped for one only the bracket row exercises.
+
+Check: gofmt -l empty; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make windows ok. Windows unverified (compile only).
+
+Rework ready for review: TestStderrTail rows A, B1-B3 and the bracketed rejection form; each new row red against its mutant; full check green; Windows unverified (compile only).
+
+Re-review round 2 (unreagent-reviewer, 2026-11-21): READY. Findings A and B are closed; C (no cap, accepted) and D (skip note corrected) are settled on the card. Tree: worktree-agent-a9378f955ec792f05 on c0a5178, uncommitted. Files: cmd/launcher/bridge.go, cmd/launcher/bridge_test.go.
+
+Diff since the first review, compared against the reviewer's snapshot of that tree: bridge.go only gains the three-line comment at jsErrorLine (bridge.go:356-358, accurate). bridge_test.go only gains const nodeFetchRejection and five TestStderrTail rows. Nothing else changed.
+
+Each row kills its own mutant. Checked by the reviewer per row with go test -run 'TestStderrTail$', on a scratch copy restored byte for byte after each mutant:
+- A, `case i >= cut: return tail` emptied: only "the last error line in the tail: no earlier one put on top" fails.
+- B3, cut at the last colon: only "a drive-letter colon in the message" fails.
+- B2, HasSuffix->Contains: only "a name that does not end in Error" fails.
+- B1, the ends-in-Error check dropped: the "source-location header" and "does not end in Error" rows fail.
+- Bracket, '[' rejected in the name: only the "bracketed form" row fails.
+- Rerun of the earlier mutants, all still killed: the old tailLines call site (TestSmokeTestMCPKeepsNodeErrorLine), first-match (TestStderrTail), and dropping "passed ||" (TestPrepareNodeBridgeSkipsInstallWithMarker).
+
+Check run by the reviewer: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; GOOS=windows go test -c ./cmd/launcher compiles; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; no test in cmd/launcher skipped itself; make linux and make windows ok (byte-identical scratch copy, a PE32+ exe).
+
+Windows: unverified, compiled only. TestStderrTail runs on Windows (no skip); TestSmokeTestMCPKeepsNodeErrorLine and TestPrepareNodeBridgeSkipsInstallWithMarker skip there (shell-script fakes).
+
+Changes entry for the release-manager, without a ticket id: "A failed bridge smoke test now also logs the line that names the error, such as node's "Error: Cannot find module 'dep'", which a long stack trace used to push out of the last 15 lines of stderr shown.
+
+Committed as 0e29ad7 (rebased onto d535e87, ff-merged to main). Windows behaviour compile-checked only.
