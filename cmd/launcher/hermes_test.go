@@ -1592,3 +1592,212 @@ func TestHermesSetupChecksTheEditBeforeWriting(t *testing.T) {
 		t.Errorf("the generated token was saved although the Hermes edit was refused (stat: %v)", err)
 	}
 }
+
+// assertNothingWritten checks that a refused run left the fixture as it was:
+// the Hermes config holds hermesConfig, and neither directory holds anything
+// new — no .bak, no temp file, no unreagent.local.yaml with a generated token.
+func assertNothingWritten(t *testing.T, f hermesFixture, hermesConfig string) {
+	t.Helper()
+	if got := readFile(t, f.hermesPath); got != hermesConfig {
+		t.Errorf("Hermes config was changed:\n%s", got)
+	}
+	for dir, want := range map[string]string{f.dir: "hermes unreagent.yaml", filepath.Dir(f.hermesPath): "config.yaml"} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		if got := strings.Join(names, " "); got != want {
+			t.Errorf("%s holds %q after a refused run, want %q", dir, got, want)
+		}
+	}
+}
+
+// k145: a value yaml.v3 writes back differently is still refused, but the
+// message names where it is and what the user can do about it. The vendored
+// yaml.v3 (v3.0.1) adds a blank line to a folded block scalar with a
+// more-indented line, and drops the leading blank line of a literal one.
+func TestHermesSetupNamesTheValueTheWriterWouldChange(t *testing.T) {
+	for name, c := range map[string]struct{ config, path string }{
+		"folded with a more-indented line":   {"mcp_servers:\n  github:\n    command: npx\n    description: >\n      Tools:\n        - issues\n", "mcp_servers.github.description"},
+		"literal starting with a blank line": {"model: hermes-3\nprompts:\n  - name: greet\n    text: |\n\n      Hello\n", "prompts[0].text"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, "", c.config)
+
+			_, err := f.run(t)
+			if err == nil {
+				t.Fatalf("hermes-setup accepted a config yaml.v3 does not write back as read, and wrote:\n%s", readFile(t, f.hermesPath))
+			}
+			for _, want := range []string{
+				"the result would change more than mcp_servers.unreagent: the value at " + c.path + " would change (the YAML writer re-encodes it differently, e.g. a block scalar)",
+				"rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+			assertNothingWritten(t, f, c.config)
+		})
+	}
+}
+
+// k145: changedPath names the first value that differs, keys joined by dots,
+// list indexes in brackets, keys that are not strings as they print.
+func TestChangedPath(t *testing.T) {
+	for _, c := range []struct{ a, b, want string }{
+		{"a: 1\nb: 2\n", "a: 1\nb: 3\n", "b"},
+		{"a: 1\nb: 2\n", "a: 1\nb: 2\n", ""},
+		{"a: 1\n", "a: 1\nb: 2\n", "b"},
+		{"a: {x: [1, {y: 2}]}\n", "a: {x: [1, {y: 3}]}\n", "a.x[1].y"},
+		{"l: [[1, 2]]\n", "l: [[1, 3]]\n", "l[0][1]"},
+		{"l: [1, 2]\n", "l: [1]\n", "l"},
+		{"ports: {8080: a}\n", "ports: {8080: b}\n", "ports.8080"},
+		{"a: {x: 1}\n", "a: [x]\n", "a"},
+		{"a: 1\nb: 1\n", "a: 2\nb: 2\n", "a"},
+	} {
+		var a, b map[string]interface{}
+		if err := yaml.Unmarshal([]byte(c.a), &a); err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal([]byte(c.b), &b); err != nil {
+			t.Fatal(err)
+		}
+		if got := changedPath(a, b); got != c.want {
+			t.Errorf("changedPath(%q, %q) = %q, want %q", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// k145: a merge key written quoted with the !!merge tag is a merge key to
+// yaml.v3, but the encoder writes it back as a quoted "<<" without the tag,
+// which every reader takes for a plain string key. It is refused before
+// anything is edited, in the Hermes config and in unreagent.local.yaml.
+func TestHermesSetupRefusesQuotedMergeKey(t *testing.T) {
+	const want = `the merge key at line 4 is written quoted with the !!merge tag (!!merge "<<"); the YAML writer would turn it into a plain string key "<<" that merges nothing; write it unquoted as <<, then re-run hermes-setup`
+	for name, hermesConfig := range map[string]string{
+		"double-quoted": "defaults: &d\n  timeout: 120\nmcp_servers:\n  !!merge \"<<\": *d\n  github:\n    command: npx\n",
+		"single-quoted": "defaults: &d\n  timeout: 120\nother:\n  !!merge '<<': *d\n  x: 1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, "", hermesConfig)
+
+			_, err := f.run(t)
+			if err == nil {
+				t.Fatalf("hermes-setup accepted a quoted merge key, and wrote:\n%s", readFile(t, f.hermesPath))
+			}
+			if !strings.Contains(err.Error(), "left untouched: "+want) {
+				t.Errorf("error %q does not give the reason %q", err, want)
+			}
+			assertNothingWritten(t, f, hermesConfig)
+		})
+	}
+
+	t.Run("unreagent.local.yaml", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "unreagent.local.yaml")
+		writeFile(t, path, "defaults: &d\n  address: 127.0.0.1:8765\nmcp:\n  !!merge \"<<\": *d\n")
+		if _, err := localConfigWithToken(path, "t"); err == nil || err.Error() != want {
+			t.Errorf("localConfigWithToken = %v, want the refusal %q", err, want)
+		}
+	})
+
+	// Only the quoted form with the tag is refused. A plain !!merge << is
+	// written back as << and still merges; a quoted "<<" without the tag is a
+	// plain string key, and stays one.
+	t.Run("plain !!merge and untagged quoted key kept", func(t *testing.T) {
+		const hermesConfig = "defaults: &d\n  timeout: 120\ntagged:\n  !!merge <<: *d\n  x: 1\nquoted:\n  \"<<\": *d\n  x: 1\n"
+		f := newHermesFixture(t, "user-token-0123456789", hermesConfig)
+
+		if _, err := f.run(t); err != nil {
+			t.Fatalf("hermes-setup refused a merge key it can write back: %v", err)
+		}
+		got := readFile(t, f.hermesPath)
+		for _, want := range []string{"tagged:\n  <<: *d\n  x: 1\n", "quoted:\n  \"<<\": *d\n  x: 1\n"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Hermes config lacks %q:\n%s", want, got)
+			}
+		}
+		doc := readYAMLMap(t, f.hermesPath)
+		for _, c := range []struct {
+			keys []string
+			want interface{}
+		}{
+			{[]string{"tagged", "timeout"}, 120},
+			{[]string{"quoted", "<<", "timeout"}, 120},
+			{[]string{"quoted", "timeout"}, nil},
+		} {
+			if v := lookup(doc, c.keys...); v != c.want {
+				t.Errorf("%s = %#v, want %#v", strings.Join(c.keys, "."), v, c.want)
+			}
+		}
+		assertUnreagentEntry(t, doc, "user-token-0123456789")
+	})
+}
+
+// k145: a key on the way to what hermes-setup edits that reads as mcp_servers,
+// the entry's name, url, headers or Authorization but is not written as a
+// plain string — an alias, or a tag such as !!binary — is refused early and
+// named. The node edit finds keys by their plain spelling: it would add a
+// second key beside it, which checkEdit refused without saying why (url), or
+// which went through unnoticed (Authorization: the later key wins). A tagged
+// key got a message that blamed a merge key (mcp_servers) or a key that is not
+// a string (headers).
+func TestHermesSetupRefusesKeysNotWrittenPlain(t *testing.T) {
+	for name, c := range map[string]struct{ config, wantErr string }{
+		"alias for url": {
+			"names: [&u url]\nmcp_servers:\n  unreagent:\n    *u : http://old.invalid/mcp\n",
+			"the key mcp_servers.unreagent.url is written as *u, not as a plain string; hermes-setup would add a second url instead of changing it; write the key as plain url, then re-run hermes-setup",
+		},
+		"alias for Authorization": {
+			"names: [&a authorization]\nmcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers:\n      *a : Bearer old\n",
+			"the key mcp_servers.unreagent.headers.authorization is written as *a, not as a plain string; hermes-setup would add a second authorization instead of changing it",
+		},
+		"!!binary for headers": {
+			"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    !!binary aGVhZGVycw==: {X-Trace: \"on\"}\n",
+			"the key mcp_servers.unreagent.headers is written as !!binary aGVhZGVycw==, not as a plain string",
+		},
+		"!!binary for mcp_servers": {
+			"!!binary bWNwX3NlcnZlcnM=:\n  github:\n    command: npx\n",
+			"the key mcp_servers is written as !!binary bWNwX3NlcnZlcnM=, not as a plain string",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, "", c.config)
+
+			_, err := f.run(t)
+			if err == nil {
+				t.Fatalf("hermes-setup accepted a key not written as a plain string, and wrote:\n%s", readFile(t, f.hermesPath))
+			}
+			if !strings.Contains(err.Error(), "left untouched: "+c.wantErr) {
+				t.Errorf("error %q does not give the reason %q", err, c.wantErr)
+			}
+			assertNothingWritten(t, f, c.config)
+		})
+	}
+
+	// The token edit of unreagent.local.yaml looks for mcp and token the same
+	// way. Without the check, checkEdit blamed the YAML writer for an alias;
+	// a tagged token key, which makes mcp decode with a key that is not a
+	// string, got "mcp is not a mapping" while that check came first.
+	for name, c := range map[string]struct{ config, want string }{
+		"local alias for mcp": {
+			"names: [&m mcp]\n*m :\n  address: 127.0.0.1:9000\n",
+			"the key mcp is written as *m, not as a plain string; hermes-setup would add a second mcp instead of changing it; write the key as plain mcp, then re-run hermes-setup",
+		},
+		"local !!binary for token": {
+			"mcp:\n  address: 127.0.0.1:9000\n  !!binary dG9rZW4=: old\n",
+			"the key mcp.token is written as !!binary dG9rZW4=, not as a plain string; hermes-setup would add a second token instead of changing it; write the key as plain token, then re-run hermes-setup",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "unreagent.local.yaml")
+			writeFile(t, path, c.config)
+			if _, err := localConfigWithToken(path, "t"); err == nil || err.Error() != c.want {
+				t.Errorf("localConfigWithToken = %v, want the refusal %q", err, c.want)
+			}
+		})
+	}
+}

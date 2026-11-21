@@ -227,6 +227,14 @@ func localConfigWithToken(path, token string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("not parseable: %w", err)
 	}
+	// The key checks come first: a token key written with a tag makes mcp
+	// decode with a key that is not a string, and the message should name it.
+	if err := checkMergeKeys(doc.doc); err != nil {
+		return nil, err
+	}
+	if err := checkPlainKeys(doc.root, []string{"mcp"}, []string{"token"}); err != nil {
+		return nil, err
+	}
 	if v := doc.data["mcp"]; v != nil {
 		if _, ok := v.(map[string]interface{}); !ok {
 			return nil, fmt.Errorf("mcp is not a mapping")
@@ -525,11 +533,19 @@ func backupHermesConfig(path string, raw []byte) (bak string, created bool, err 
 // servers are left alone.
 //
 // What cannot be edited that way without dropping or changing more is refused,
-// and doc stays unchanged: an mcp_servers that is not a mapping with string
-// keys (a list, or a key YAML reads as a number), an alias, one that carries
-// an anchor (a mapping or a null), or one that comes in through a merge key
-// (<<); and an entry, or its headers, that checkHermesEntry refuses.
+// and doc stays unchanged: a merge key written quoted anywhere in the file
+// (checkMergeKeys); a key on the way to the entry that is not written as a
+// plain string (checkPlainKeys); an mcp_servers that is not a mapping with
+// string keys (a list, or a key YAML reads as a number), an alias, one that
+// carries an anchor (a mapping or a null), or one that comes in through a
+// merge key (<<); and an entry, or its headers, that checkHermesEntry refuses.
 func mergeHermesServer(doc *yamlFile, name, url, token string) error {
+	if err := checkMergeKeys(doc.doc); err != nil {
+		return err
+	}
+	if err := checkPlainKeys(doc.root, []string{"mcp_servers"}, []string{name}, []string{"headers", "url"}, []string{"Authorization"}); err != nil {
+		return err
+	}
 	switch doc.data["mcp_servers"].(type) {
 	case nil, map[string]interface{}:
 	default:
@@ -588,6 +604,64 @@ func mergeHermesServer(doc *yamlFile, name, url, token string) error {
 		doc.prefix = []byte(p)
 	} else {
 		doc.prefix = nil
+	}
+	return nil
+}
+
+// checkMergeKeys refuses a merge key below n that is written quoted (or as a
+// block scalar) with the !!merge tag, such as !!merge "<<". yaml.v3 reads it
+// as a merge key, but encode clears the tag (plainMergeKeys), and a quoted
+// "<<" without one is a plain string key to every reader: the merge would be
+// lost. The first one in the file is named by its line.
+func checkMergeKeys(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!merge" && n.Value == "<<" &&
+		n.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
+		return fmt.Errorf("the merge key at line %d is written quoted with the !!merge tag (!!merge \"<<\"); the YAML writer would turn it into a plain string key \"<<\" that merges nothing; write it unquoted as <<, then re-run hermes-setup", n.Line)
+	}
+	for _, c := range n.Content {
+		if err := checkMergeKeys(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkPlainKeys refuses a key on the way to what an edit sets that reads as
+// one of the keys it looks for but is not written as a plain string: an alias
+// (*u) or a tag (!!binary dXJs). levels holds the keys looked for in root, in
+// the mapping under the first of them, and so on down; Authorization matches
+// in any case, as header names do. The node edit finds keys by their plain
+// spelling, so it would add a second one beside it; and another YAML reader
+// may not read it as that name at all (Python reads !!binary as bytes). Merge
+// keys are left to the checks that follow.
+func checkPlainKeys(root *yaml.Node, levels ...[]string) error {
+	m, where := root, ""
+	for _, keys := range levels {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			k := m.Content[i]
+			if k.Kind == yaml.ScalarNode && (k.ShortTag() == "!!str" || k.ShortTag() == "!!merge") {
+				continue
+			}
+			var v interface{}
+			if k.Decode(&v) != nil {
+				continue
+			}
+			s, _ := v.(string)
+			for _, key := range keys {
+				if s == key || key == "Authorization" && strings.EqualFold(s, key) {
+					form := "*" + k.Value
+					if k.Kind != yaml.AliasNode {
+						form = k.ShortTag() + " " + k.Value
+					}
+					return fmt.Errorf("the key %s%s is written as %s, not as a plain string; hermes-setup would add a second %s instead of changing it; write the key as plain %s, then re-run hermes-setup", where, s, form, s, s)
+				}
+			}
+		}
+		i := mappingEntry(m, keys[0])
+		if i < 0 || m.Content[i+1].Kind != yaml.MappingNode {
+			return nil
+		}
+		m, where = m.Content[i+1], where+keys[0]+"."
 	}
 	return nil
 }
@@ -695,7 +769,8 @@ func authorizationKey(headers interface{}) string {
 // checkEdit is the safety net between encoding an edit and writing it: out
 // must parse, hold want at path, and hold everything else as before did. It
 // catches what the node edit and yaml.v3's encoder could break unnoticed, such
-// as an alias left without its anchor.
+// as an alias left without its anchor. A change outside path is named by where
+// it is (changedPath), with the fix the user can make by hand.
 func checkEdit(before map[string]interface{}, out []byte, want interface{}, path ...string) error {
 	var after map[string]interface{}
 	if err := yaml.Unmarshal(out, &after); err != nil {
@@ -710,10 +785,91 @@ func checkEdit(before map[string]interface{}, out []byte, want interface{}, path
 	if !sameValue(got, want) {
 		return fmt.Errorf("the result would not hold the new %s", where)
 	}
-	if !sameValue(withoutPath(before, path...), withoutPath(after, path...)) {
+	if old, rest := withoutPath(before, path...), withoutPath(after, path...); !sameValue(old, rest) {
+		// The node edit leaves every other value as it was parsed, so what
+		// differs is a value yaml.v3 writes back differently: v3.0.1 adds a
+		// blank line to a folded block scalar with a more-indented line, and
+		// drops the leading blank line of a literal one.
+		if at := changedPath(old, rest); at != "" {
+			return fmt.Errorf("the result would change more than %s: the value at %s would change (the YAML writer re-encodes it differently, e.g. a block scalar); rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup", where, at)
+		}
 		return fmt.Errorf("the result would change more than %s", where)
 	}
 	return nil
+}
+
+// changedPath returns the path to the first value that differs between a and
+// b, both decoded YAML: keys joined by dots, list indexes in brackets
+// (mcp_servers.github.args[1]), map keys taken in sorted order. The path ends
+// at a key only one of them has, at values of different kinds, and at lists
+// of different lengths. It is "" when a and b are the same, and when they
+// differ but are not both mappings or both lists of the same length.
+func changedPath(a, b interface{}) string {
+	if ma, ok := asMapping(a); ok {
+		mb, ok := asMapping(b)
+		if !ok {
+			return ""
+		}
+		var keys []interface{}
+		for k := range ma {
+			keys = append(keys, k)
+		}
+		for k := range mb {
+			if _, ok := ma[k]; !ok {
+				keys = append(keys, k)
+			}
+		}
+		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j]) })
+		for _, k := range keys {
+			va, inA := ma[k]
+			vb, inB := mb[k]
+			switch {
+			case inA && inB && sameValue(va, vb):
+			case inA && inB:
+				return pathTo(fmt.Sprint(k), va, vb)
+			default:
+				return fmt.Sprint(k)
+			}
+		}
+		return ""
+	}
+	la, okA := a.([]interface{})
+	lb, okB := b.([]interface{})
+	if !okA || !okB || len(la) != len(lb) {
+		return ""
+	}
+	for i := range la {
+		if !sameValue(la[i], lb[i]) {
+			return pathTo(fmt.Sprintf("[%d]", i), la[i], lb[i])
+		}
+	}
+	return ""
+}
+
+// pathTo returns head, the key or index of a and b, followed by changedPath
+// below it: a key after a dot, an index as it is.
+func pathTo(head string, a, b interface{}) string {
+	below := changedPath(a, b)
+	if below != "" && !strings.HasPrefix(below, "[") {
+		below = "." + below
+	}
+	return head + below
+}
+
+// asMapping returns a decoded YAML mapping, whichever map type yaml.v3 chose
+// for it, keyed by interface{}.
+func asMapping(v interface{}) (map[interface{}]interface{}, bool) {
+	switch v := v.(type) {
+	case map[interface{}]interface{}:
+		return v, true
+	case map[string]interface{}:
+		m := make(map[interface{}]interface{}, len(v))
+		for k, e := range v {
+			m[k] = e
+		}
+		return m, true
+	}
+	return nil, false
 }
 
 // sameValue is reflect.DeepEqual for decoded YAML, except that NaN equals

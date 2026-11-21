@@ -816,7 +816,7 @@ it is. The file is re-encoded, though, so its formatting is normalised:
 The `.bak` holds the exact original if you want any of it back.
 
 **When it refuses.** Nothing is written, the file stays as it was and no
-`.bak` is made, in these cases. For the first six the message reads
+`.bak` is made, in these cases. For the first eight the message reads
 `Hermes config <path> left untouched: ...`:
 
 - `mcp_servers` is not a mapping of server names (a list), has a key YAML
@@ -835,8 +835,52 @@ The `.bak` holds the exact original if you want any of it back.
 - the entry's `headers` spell `Authorization` more than one way
   (`Authorization` and `authorization`): header names ignore case, so which
   token counts is ambiguous. Keep one, then re-run;
-- the edited result would not decode back to the old config with `url` and
-  `headers.Authorization` refreshed (a built-in safety check);
+- a key hermes-setup looks for is not written as a plain string: an alias
+  (`*u` for `url`) or a tag other than `!!str` (`!custom url`,
+  `!!binary dXJs`; `!!str url` is a plain string and is accepted). The keys are
+  `mcp_servers`, the entry name, `url`, `headers` and `Authorization` (in any
+  case), and `mcp` and `token` in `unreagent.local.yaml`. hermes-setup finds
+  a key by its plain spelling, so it would add a second one beside it. The
+  message names the key and how it is written:
+
+  ```
+  the key mcp_servers.unreagent.url is written as *u, not as a plain string; hermes-setup would add a second url instead of changing it; write the key as plain url, then re-run hermes-setup
+  ```
+
+  Write the key as a plain `url`, then re-run;
+- a merge key is written quoted with the `!!merge` tag, `!!merge "<<"` or
+  `!!merge '<<'`, anywhere in the Hermes config or in
+  `unreagent.local.yaml`. The YAML writer would turn it into a plain string
+  key `"<<"` that merges nothing. A plain `!!merge <<` and an untagged
+  `"<<"` are not refused. The message names the line:
+
+  ```
+  the merge key at line N is written quoted with the !!merge tag (!!merge "<<"); the YAML writer would turn it into a plain string key "<<" that merges nothing; write it unquoted as <<, then re-run hermes-setup
+  ```
+
+  Write it unquoted as `<<`, then re-run. For `unreagent.local.yaml` the
+  message, like the plain-string one above, starts with `add the token to
+  <path>: ` instead of the Hermes prefix;
+- the edit would change a value other than the one it sets, because the YAML
+  writer re-encodes that value differently (a built-in safety check). Two
+  inputs trigger it: a folded `>` block scalar with a more-indented line, and
+  a literal `|` block scalar that starts with a blank line. The message names
+  the value, as `mcp_servers.github.description` or `prompts[0].text` (keys
+  are printed as they are, so a key that itself contains `.` or `[` reads
+  like a nested path):
+
+  ```
+  the result would change more than mcp_servers.unreagent: the value at <path> would change (the YAML writer re-encodes it differently, e.g. a block scalar); rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup
+  ```
+
+  Rewrite that value as a quoted string, or as a block scalar without a
+  leading blank line or extra-indented lines, then re-run. The same check
+  covers the token edit of `unreagent.local.yaml` (it then reads `more than
+  mcp.token`, and the line starts with `add the token to <path>: `); a
+  value it cannot name ends at `more than mcp_servers.unreagent` alone.
+  A block scalar inside the `mcp_servers.<name>` entry itself is not named:
+  the message reads `the result would not hold the new
+  mcp_servers.unreagent`.
 - the Hermes config has a duplicate key anywhere, or cannot be parsed: the
   message is `Hermes config <path> not parseable: ...`;
 - the Hermes config holds more than one YAML document (a `---` followed by

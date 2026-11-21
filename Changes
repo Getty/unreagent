@@ -19,6 +19,12 @@ Revision history for unreagent
     edit in place (not a mapping, an alias, or brought in by a merge key).
   - hermes-setup refuses a Hermes config that holds more than one YAML
     document, instead of dropping all but the first.
+  - hermes-setup names the value it refuses to rewrite (a folded block
+    scalar with a more-indented line, a literal one that starts with a blank
+    line) and how to fix it, and refuses early, with the key named, a quoted
+    !!merge "<<" and an alias or tagged key where it looks for mcp_servers,
+    the entry, url, headers or Authorization (and for mcp or token in
+    unreagent.local.yaml).
   - The config load refuses an unreagent.yaml or unreagent.local.yaml that
     holds more than one YAML document, naming the file and the line the
     second one starts on, instead of reading only the first; a bare trailing
