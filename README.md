@@ -664,8 +664,8 @@ What `hermes-setup` does, in order:
    path placeholders) → `$HERMES_HOME/config.yaml` → `~/.hermes/config.yaml`.
 5. Reads the existing Hermes config and edits it node by node: every other key
    and every other MCP server stays. A missing, empty or `null` file counts as
-   an empty config. If `mcp_servers` is refused (see below), nothing is
-   written at all.
+   an empty config. If `mcp_servers` or the unreagent entry in it is refused
+   (see below), nothing is written at all.
 6. Backs up the original, byte for byte, to `<path>.bak` — **once**. An
    existing `<path>.bak` is never overwritten, so it keeps the oldest copy.
    (No backup is made for a missing or zero-byte file; a file holding only
@@ -676,32 +676,43 @@ What `hermes-setup` does, in order:
    survives restarts and keeps matching the bearer header Hermes sends. The
    edit of `unreagent.local.yaml` keeps its comments and other keys; the new
    `mcp.token` key carries a short comment.
-8. In the Hermes config, the entry `mcp_servers.unreagent: { url, headers:
-   { Authorization: Bearer } }` is replaced in place, or appended as the last
-   server if it is new; a new `mcp_servers` block goes at the end of the file.
-   A second run **overwrites**
-   the entry rather than duplicating it — the operation is idempotent. The
-   entry is headed by a comment, `# unreagent-managed: re-run ... edits to it
-   are overwritten`; the one-line marker that earlier releases put on top of
-   the file is removed.
+8. In the Hermes config, the entry `mcp_servers.unreagent` is edited in place,
+   or appended as the last server if it is new; a new `mcp_servers` block goes
+   at the end of the file. unreagent owns two keys of the entry, `url` and
+   `headers.Authorization` (`Bearer <token>`): `url` is replaced where it
+   stands, or put first if missing; a missing `headers` is added at the end of
+   the entry, and a missing `Authorization` at the end of `headers`. The
+   header name is matched ignoring case, so an existing `authorization:` keeps
+   its spelling and gets the new token. Every other key of the entry — a
+   `timeout`, other headers — keeps its value, place and comments, and so do
+   the comments on `url` and `Authorization`. A second run **refreshes** those
+   two keys rather than duplicating the entry — the operation is idempotent.
+   The entry is headed by a comment, ``# unreagent-managed: re-running
+   `unreagent hermes-setup` refreshes url and headers.Authorization; other
+   keys in this entry are kept``; the one-line marker that earlier releases
+   put on top of the file is removed.
 9. Writes each file atomically: a temp file `<name>.tmp-<digits>` in the
    target's directory, synced to disk, then renamed over the target, so a
    crash mid-write cannot leave a half-written config.
 
 **What stays, what changes.** Outside its own entry the Hermes config keeps
 its comments, key order, quoting style, anchors, aliases and merge keys, and
-the other MCP servers are not touched. Comments *inside* the replaced entry
-are dropped; comments on its key stay. The file is re-encoded, though, so its
-formatting is normalised:
+the other MCP servers are not touched. Inside the entry, only `url` and
+`headers.Authorization` change; the rest of it keeps its keys, order and
+comments. One exception: when the entry is the last server, a comment at its
+very end — even one inside `headers` — is moved behind the entry, at the
+servers' indentation, since YAML cannot tell it from a comment that follows
+the entry. With another server after the entry, such a comment stays where
+it is. The file is re-encoded, though, so its formatting is normalised:
 
 - spaces before an inline comment collapse to one (`model: x   # m` becomes
   `model: x # m`), so a hand-aligned config changes in many lines;
 - two-space indentation, and block sequences under a key are indented;
 - blank lines between nodes are dropped;
 - a leading `---`, a `...` and a byte-order mark are dropped (a file that
-  holds only comments keeps its byte-order mark on the first run), and only
-  the first YAML document is kept (the multi-document case is tracked as
-  k118);
+  holds only comments keeps its byte-order mark on the first run), and so is
+  a bare trailing `---` (a second YAML document that holds anything is
+  refused, see below);
 - CRLF line breaks become LF (the `.bak` keeps the original bytes);
 - a foot comment can move to the deepest node before it;
 - folded and multi-line plain or quoted scalars are joined onto one line with
@@ -719,23 +730,45 @@ formatting is normalised:
 The `.bak` holds the exact original if you want any of it back.
 
 **When it refuses.** Nothing is written, the file stays as it was and no
-`.bak` is made, in these cases. For the first three the message reads
+`.bak` is made, in these cases. For the first six the message reads
 `Hermes config <path> left untouched: ...`:
 
 - `mcp_servers` is not a mapping of server names (a list), has a key YAML
   reads as a number, is an alias (`*name`), carries an anchor (`&name`), or
   comes in through a merge key (`<<`);
-- the existing `mcp_servers.<name>` entry contains an anchor, since replacing
-  it would leave its aliases undefined;
-- the edited result would not decode back to the old config plus the new entry
-  (a built-in safety check);
+- the existing `mcp_servers.<name>` entry, or its `headers`, is not a mapping
+  with string keys (a list, a single value, a key YAML reads as a number), is
+  an alias, or comes in through a merge key (`<<`) — editing it would change
+  the anchored mapping or hide the new keys;
+- the entry contains an anchor, since changing it would change what its
+  aliases see or leave them undefined; the message ends `refusing to change
+  it`;
+- the entry is a stdio server (it sets `command`): hermes-setup only manages
+  an HTTP entry. Remove `command` and `args` from it, or rename or delete the
+  entry, then re-run;
+- the entry's `headers` spell `Authorization` more than one way
+  (`Authorization` and `authorization`): header names ignore case, so which
+  token counts is ambiguous. Keep one, then re-run;
+- the edited result would not decode back to the old config with `url` and
+  `headers.Authorization` refreshed (a built-in safety check);
 - the Hermes config has a duplicate key anywhere, or cannot be parsed: the
   message is `Hermes config <path> not parseable: ...`;
+- the Hermes config holds more than one YAML document (a `---` followed by
+  content, even only `--- ~` or `--- # note` on that line), since the rewrite
+  would drop all but the first. A bare trailing `---` or `...` at the end of
+  the file is not refused, and neither is a comment directly below a single
+  trailing `---`; a blank line, a `...` or another `---` before such a
+  comment starts a second document, which is. The message is `Hermes config
+  <path> not parseable: it holds more than one YAML document (another one
+  starts at line N); refusing to drop all but the first`, with N the line of
+  the next document's `---`. The same check covers `unreagent.local.yaml` when
+  a token has to be written there. Merge the documents into one, or delete the
+  extra ones, and re-run;
 - the Hermes config is a dangling symlink (a link whose target does not
-  exist), or `unreagent.local.yaml` is one and a token has to be generated
-  (an existing `mcp.token` means that file is not written at all). The
-  message names the link and the target as the link stores it, so a relative
-  target prints relative, as `ls -l` shows it:
+  exist) or one that cannot be resolved, or `unreagent.local.yaml` is one and
+  a token has to be generated (an existing `mcp.token` means that file is not
+  written at all). The message names the link and the target as the link
+  stores it, so a relative target prints relative, as `ls -l` shows it:
 
   ```
   Error: <link> is a symlink to <target>, which does not exist; refusing to replace the link with a new file (nothing written)
@@ -746,7 +779,16 @@ The `.bak` holds the exact original if you want any of it back.
   has a typo, or the target lives somewhere unavailable right now (for
   example an unmounted drive or a missing dotfiles checkout): bring it back,
   point the link at a real file, or delete the link so `hermes-setup` writes
-  a new file, and re-run.
+  a new file, and re-run. When the link points at another link, the message
+  names the first hop and the missing end of the chain:
+
+  ```
+  Error: <link> is a symlink to <hop1>; following the links leads to <missing>, which does not exist; refusing to replace the link with a new file (nothing written)
+  ```
+
+  A link that cannot be resolved at all, such as a loop, reads
+  `<path> is a symlink that cannot be resolved: ... (nothing written)`; break
+  the loop and re-run.
 
 Fix the file by hand and re-run. A token generated in step 3 is **not** saved
 in these cases: it goes to `unreagent.local.yaml` only after the Hermes merge

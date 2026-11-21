@@ -286,6 +286,99 @@ func TestHermesSetupEmptyDocuments(t *testing.T) {
 	}
 }
 
+// k118: yaml.v3 reads the first YAML document of a file, so a rewrite would
+// drop the others. A Hermes config that holds more than one is refused with
+// nothing written; a document that holds nothing but a comment counts, since
+// the comment would be lost.
+func TestHermesSetupRefusesMultipleDocuments(t *testing.T) {
+	for name, c := range map[string]struct {
+		config string
+		line   int
+	}{
+		"two documents":                    {"model: hermes-3\n---\nmcp_servers:\n  github:\n    command: npx\n", 2},
+		"after an explicit end":            {"model: hermes-3\n...\n---\nmodel: other\n", 3},
+		"content after an empty first one": {"---\n---\nmodel: hermes-3\n", 2},
+		"after an empty second one":        {"model: hermes-3\n---\n---\nmodel: other\n", 3},
+		"a comment-only second document":   {"model: hermes-3\n--- # kept for later\n", 2},
+		"a comment after a blank line":     {"model: x\n---\n\n# c\n", 2},
+		"a null second document":           {"model: hermes-3\n--- ~\n", 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, "user-token-0123456789", c.config)
+
+			want := fmt.Sprintf("Hermes config %s not parseable: it holds more than one YAML document (another one starts at line %d); refusing to drop all but the first", filepath.ToSlash(f.hermesPath), c.line)
+			if _, err := f.run(t); err == nil {
+				t.Error("expected an error for a multi-document config, got nil")
+			} else if err.Error() != want {
+				t.Errorf("error %q,\nwant %q", err, want)
+			}
+			if got := readFile(t, f.hermesPath); got != c.config {
+				t.Errorf("config was changed:\n%s", got)
+			}
+			if _, err := os.Stat(f.hermesPath + ".bak"); !os.IsNotExist(err) {
+				t.Errorf("a .bak was created although nothing was written (stat: %v)", err)
+			}
+		})
+	}
+}
+
+// k118: a bare "---" or "..." at the end of the file starts or ends a document
+// that holds nothing, so there is nothing to drop: the config is edited as a
+// single document. A comment after a trailing "---" belongs to the first
+// document for yaml.v3, and stays.
+func TestHermesSetupAcceptsEmptyTrailingDocument(t *testing.T) {
+	for name, hermesConfig := range map[string]string{
+		"trailing ---":             "model: hermes-3\n---\n",
+		"trailing ...":             "model: hermes-3\n...\n",
+		"trailing --- then ...":    "model: hermes-3\n---\n...\n",
+		"two trailing ---":         "model: hermes-3\n---\n---\n",
+		"comment after the ---":    "model: hermes-3\n---\n# the end\n",
+		"leading and trailing ---": "---\nmodel: hermes-3\n---\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			const token = "user-token-0123456789"
+			f := newHermesFixture(t, token, hermesConfig)
+
+			if _, err := f.run(t); err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, f.hermesPath)
+			assertCommentsKept(t, "Hermes config", hermesConfig, got)
+			doc := readYAMLMap(t, f.hermesPath)
+			assertUnreagentEntry(t, doc, token)
+			if got := lookup(doc, "model"); got != "hermes-3" {
+				t.Errorf("model = %#v, want \"hermes-3\"", got)
+			}
+		})
+	}
+}
+
+// k118: a generated token is not written into an unreagent.local.yaml that
+// holds more than one YAML document either; the rewrite would drop the others.
+func TestHermesSetupRefusesMultiDocumentLocalConfig(t *testing.T) {
+	f := newHermesFixture(t, "", userHermesConfig)
+	localPath := localOverridePath(f.cfgPath)
+	const local = "agent:\n  hermes:\n    serverName: unreagent\n---\n# second document\nmcp:\n  address: 127.0.0.1:9999\n"
+	writeFile(t, localPath, local)
+
+	_, err := f.run(t)
+	if err == nil {
+		t.Fatal("expected an error for a multi-document unreagent.local.yaml, got nil")
+	}
+	if want := "add the token to " + localPath + ": not parseable: it holds more than one YAML document (another one starts at line 4)"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not say %q", err, want)
+	}
+	if !strings.HasSuffix(err.Error(), "(nothing written)") {
+		t.Errorf("error %q does not say that nothing was written", err)
+	}
+	if got := readFile(t, localPath); got != local {
+		t.Errorf("unreagent.local.yaml was changed:\n%s", got)
+	}
+	if got := readFile(t, f.hermesPath); got != userHermesConfig {
+		t.Errorf("Hermes config was changed:\n%s", got)
+	}
+}
+
 // mcp_servers that is not a mapping with string keys cannot be merged into
 // without dropping what is there, so the command refuses and touches nothing.
 // Neither can an mcp_servers that is an alias, carries an anchor, or comes in
@@ -293,8 +386,10 @@ func TestHermesSetupEmptyDocuments(t *testing.T) {
 // its aliases, or hide the merged servers. An unreagent entry that carries an
 // anchor, on itself or below, is not replaced either: the aliases of that
 // anchor would be left undefined. A duplicate key is refused as unparsable, as
-// before k96. Each refusal names its reason: checkEdit would refuse most of
-// these inputs, too, but with a message that does not say why.
+// before k96. k116: so is an entry that is a stdio server, or whose headers
+// spell Authorization more than one way. Each refusal names its reason:
+// checkEdit would refuse most of these inputs, too, but with a message that
+// does not say why.
 func TestHermesSetupRefusesUnmergeableServers(t *testing.T) {
 	for name, c := range map[string]struct{ config, wantErr string }{
 		"list":                 {"model: hermes-3\nmcp_servers:\n  - github\n", "mcp_servers is not a mapping of server names"},
@@ -313,7 +408,7 @@ mcp_servers:
     <<: *unreagent
     tools:
       include: [logs, status]
-`, "mcp_servers.unreagent carries the anchor &unreagent, which other parts of the config may use; refusing to replace it"},
+`, "mcp_servers.unreagent carries the anchor &unreagent, which other parts of the config may use; refusing to change it"},
 		"anchor inside the entry": {`mcp_servers:
   unreagent:
     url: http://old.invalid/mcp
@@ -322,7 +417,29 @@ mcp_servers:
   other:
     url: http://127.0.0.1:9000/mcp
     headers: *h
-`, "mcp_servers.unreagent carries the anchor &h, which other parts of the config may use; refusing to replace it"},
+`, "mcp_servers.unreagent carries the anchor &h, which other parts of the config may use; refusing to change it"},
+		// k116: the entry is edited in place, so it and its headers have to be
+		// mappings of the entry's own.
+		"entry is a scalar":           {"mcp_servers:\n  unreagent: http://127.0.0.1:8765/mcp\n", "mcp_servers.unreagent is not a mapping with string keys (a list, a single value, or a key that is not a string); refusing to change it"},
+		"entry is a list":             {"mcp_servers:\n  unreagent: [http://127.0.0.1:8765/mcp]\n", "mcp_servers.unreagent is not a mapping with string keys"},
+		"entry has a non-string key":  {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    8765: port\n", "mcp_servers.unreagent is not a mapping with string keys"},
+		"headers is a scalar":         {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    timeout: 120\n    headers: Bearer old-token\n", "mcp_servers.unreagent.headers is not a mapping with string keys (a list, a single value, or a key that is not a string); refusing to change it"},
+		"headers is a list":           {"mcp_servers:\n  unreagent:\n    headers: [Authorization]\n", "mcp_servers.unreagent.headers is not a mapping with string keys"},
+		"entry is an alias":           {"shared: &s\n  url: http://old.invalid/mcp\nmcp_servers:\n  unreagent: *s\n", "mcp_servers.unreagent is an alias (*s); adding to it would change the anchored mapping too; refusing to change it"},
+		"headers is an alias":         {"auth: &h\n  Authorization: Bearer old\nmcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers: *h\n", "mcp_servers.unreagent.headers is an alias (*h); adding to it would change the anchored mapping too; refusing to change it"},
+		"entry through a merge key":   {"base: &base\n  unreagent:\n    url: http://old.invalid/mcp\n    timeout: 120\nmcp_servers:\n  <<: *base\n  github:\n    command: npx\n", "mcp_servers.unreagent comes in through a merge key (<<); refusing to override it"},
+		"headers through a merge key": {"defaults: &d\n  headers:\n    X-Trace: \"on\"\nmcp_servers:\n  unreagent:\n    <<: *d\n    url: http://old.invalid/mcp\n", "mcp_servers.unreagent.headers comes in through a merge key (<<); refusing to override it"},
+		// k116: an entry that runs unreagent as a stdio server is the user's
+		// own; setting url and headers on it would leave Hermes a server with
+		// both. So is one that gets its command through a merge key.
+		"stdio entry":                 {"mcp_servers:\n  unreagent:\n    command: unreagent\n    args: [mcp]\n  github:\n    command: npx\n", "mcp_servers.unreagent is a stdio server (it sets command), and hermes-setup only manages an HTTP entry (url and headers); remove command and args from the entry, or rename or delete the entry, then re-run hermes-setup"},
+		"stdio entry with a url":      {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    command: unreagent\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
+		"command through a merge key": {"stdio: &s\n  command: unreagent\nmcp_servers:\n  unreagent:\n    <<: *s\n    timeout: 120\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
+		// k116: header names ignore case, so two spellings of Authorization
+		// leave it open which token counts.
+		"Authorization twice":           {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers:\n      authorization: Bearer stale\n      Authorization: Bearer old\n", "mcp_servers.unreagent.headers sets the Authorization header more than once (Authorization, authorization); header names ignore case, so which token counts is ambiguous; keep one, then re-run hermes-setup"},
+		"Authorization three times":     {"mcp_servers:\n  unreagent:\n    headers: {AUTHORIZATION: a, authorization: b, Authorization: c}\n", "more than once (AUTHORIZATION, Authorization, authorization)"},
+		"Authorization twice via merge": {"auth: &a\n  authorization: Bearer stale\nmcp_servers:\n  unreagent:\n    headers:\n      <<: *a\n      Authorization: Bearer old\n", "more than once (Authorization, authorization)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newHermesFixture(t, "user-token-0123456789", c.config)
@@ -505,28 +622,189 @@ func TestHermesSetupCRLFConfig(t *testing.T) {
 	}
 }
 
+// k116: a re-run refreshes only the keys unreagent owns in its entry, url and
+// headers.Authorization. Every other key of the entry stays with its value,
+// its place and its comments, other headers among them.
+func TestHermesSetupKeepsUserKeysInEntry(t *testing.T) {
+	const token = "user-token-0123456789"
+	const hermesConfig = `model: hermes-3
+mcp_servers:
+  unreagent:
+    # where unreagent listens
+    url: http://old.invalid/mcp  # refreshed by hermes-setup
+    timeout: 120  # the editor is slow to answer
+    headers:
+      X-Trace: "on"  # my proxy wants it
+      Authorization: Bearer old-token
+    tools:
+      include: [ue_start, logs]
+  github:
+    command: npx
+`
+	f := newHermesFixture(t, token, hermesConfig)
+
+	want := map[string]interface{}{
+		"url":     "http://127.0.0.1:8765/mcp",
+		"timeout": 120,
+		"headers": map[string]interface{}{"X-Trace": "on", "Authorization": "Bearer " + token},
+		"tools":   map[string]interface{}{"include": []interface{}{"ue_start", "logs"}},
+	}
+	for run := 1; run <= 2; run++ {
+		if _, err := f.run(t); err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
+		got := readFile(t, f.hermesPath)
+		what := fmt.Sprintf("run %d: Hermes config", run)
+		assertCommentsKept(t, what, hermesConfig, got)
+		assertInOrder(t, what, got, "unreagent:", "url:", "timeout:", "headers:", "X-Trace:", "Authorization:", "tools:", "github:")
+		doc := readYAMLMap(t, f.hermesPath)
+		if entry := lookup(doc, "mcp_servers", "unreagent"); !reflect.DeepEqual(entry, want) {
+			t.Errorf("%s: mcp_servers.unreagent = %#v,\nwant %#v", what, entry, want)
+		}
+		if got := lookup(doc, "mcp_servers", "github", "command"); got != "npx" {
+			t.Errorf("%s: mcp_servers.github.command = %#v, want \"npx\"", what, got)
+		}
+	}
+}
+
+// k116: an entry hermes-setup creates, or one that is null, holds exactly the
+// keys unreagent owns, url first.
+func TestHermesSetupNewEntryHoldsOwnedKeys(t *testing.T) {
+	const token = "user-token-0123456789"
+	want := map[string]interface{}{
+		"url":     "http://127.0.0.1:8765/mcp",
+		"headers": map[string]interface{}{"Authorization": "Bearer " + token},
+	}
+	for name, hermesConfig := range map[string]string{
+		"no mcp_servers":   "model: hermes-3\n",
+		"no entry":         userHermesConfig,
+		"null entry":       "mcp_servers:\n  unreagent:\n  github:\n    command: npx\n",
+		"null headers":     "mcp_servers:\n  unreagent:\n    headers: ~\n",
+		"no config at all": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, token, hermesConfig)
+			if _, err := f.run(t); err != nil {
+				t.Fatal(err)
+			}
+			if entry := lookup(readYAMLMap(t, f.hermesPath), "mcp_servers", "unreagent"); !reflect.DeepEqual(entry, want) {
+				t.Errorf("mcp_servers.unreagent = %#v,\nwant %#v", entry, want)
+			}
+			got := readFile(t, f.hermesPath)
+			assertInOrder(t, "Hermes config", got, "unreagent:", "url:", "headers:", "Authorization:")
+		})
+	}
+}
+
+// k116: header names ignore case, so an Authorization header the entry spells
+// another way is the one a re-run refreshes, under its own spelling; adding
+// a second one would leave the stale token in the config next to the new one.
+// That holds for one that comes in through a merge key, too: the entry's own
+// key, in the same spelling, overrides it.
+func TestHermesSetupAuthorizationIgnoresCase(t *testing.T) {
+	const token = "user-token-0123456789"
+	for name, c := range map[string]struct{ config, key string }{
+		"lower case":                     {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers:\n      authorization: Bearer old  # keep me\n      X-Trace: \"on\"\n", "authorization"},
+		"upper case":                     {"mcp_servers:\n  unreagent:\n    headers: {X-Trace: \"on\", AUTHORIZATION: Bearer old}\n", "AUTHORIZATION"},
+		"lower case through a merge key": {"auth: &a\n  authorization: Bearer old\nmcp_servers:\n  unreagent:\n    headers:\n      <<: *a\n      X-Trace: \"on\"\n", "authorization"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, token, c.config)
+			want := map[string]interface{}{c.key: "Bearer " + token, "X-Trace": "on"}
+			for run := 1; run <= 2; run++ {
+				if _, err := f.run(t); err != nil {
+					t.Fatalf("run %d: %v", run, err)
+				}
+				what := fmt.Sprintf("run %d: Hermes config", run)
+				assertCommentsKept(t, what, c.config, readFile(t, f.hermesPath))
+				doc := readYAMLMap(t, f.hermesPath)
+				if got := lookup(doc, "mcp_servers", "unreagent", "headers"); !reflect.DeepEqual(got, want) {
+					t.Errorf("%s: headers = %#v,\nwant %#v", what, got, want)
+				}
+				if got := lookup(doc, "mcp_servers", "unreagent", "url"); got != "http://127.0.0.1:8765/mcp" {
+					t.Errorf("%s: url = %#v", what, got)
+				}
+			}
+		})
+	}
+}
+
 // k96: a comment the user put after the unreagent entry survives the run that
-// replaces the entry (yaml.v3 hangs such a comment on the entry's last line).
+// refreshes the entry (yaml.v3 hangs such a comment on the entry's last line
+// when the entry is the last server). k116: it stays after the entry, at the
+// indentation of the servers, both on the run that adds headers to the entry
+// and on the re-run that finds the entry complete.
 func TestHermesSetupKeepsCommentAfterReplacedEntry(t *testing.T) {
 	const token = "user-token-0123456789"
-	const hermesConfig = `mcp_servers:
+	const servers = `mcp_servers:
   github:
     command: npx
   unreagent:
     url: http://old.invalid/mcp
   # my-server:
   #   command: not-yet
-model: x
 `
-	f := newHermesFixture(t, token, hermesConfig)
-
-	if _, err := f.run(t); err != nil {
-		t.Fatal(err)
+	for name, hermesConfig := range map[string]string{
+		"before a top-level key": servers + "model: x\n",
+		"at the end of the file": servers,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newHermesFixture(t, token, hermesConfig)
+			tail := "\n      Authorization: Bearer " + token + "\n  # my-server:\n  #   command: not-yet\n" + strings.TrimPrefix(hermesConfig, servers)
+			for run := 1; run <= 2; run++ {
+				if _, err := f.run(t); err != nil {
+					t.Fatal(err)
+				}
+				got := readFile(t, f.hermesPath)
+				what := fmt.Sprintf("run %d: Hermes config", run)
+				assertCommentsKept(t, what, hermesConfig, got)
+				assertInOrder(t, what, got, "github:", "unreagent:", "Authorization:", "# my-server:")
+				if !strings.HasSuffix(got, tail) {
+					t.Errorf("%s: the comment after the entry did not stay after it, want the file to end in %q:\n%s", what, tail, got)
+				}
+				assertUnreagentEntry(t, readYAMLMap(t, f.hermesPath), token)
+			}
+		})
 	}
-	got := readFile(t, f.hermesPath)
-	assertCommentsKept(t, "Hermes config", hermesConfig, got)
-	assertInOrder(t, "Hermes config", got, "github:", "unreagent:", "# my-server:", "model:")
-	assertUnreagentEntry(t, readYAMLMap(t, f.hermesPath), token)
+}
+
+// k116: with another server after the entry, a comment at the end of the
+// entry stays inside it, right before that server, at least as deep as it was
+// written, with no blank line coming in. yaml.v3 gives a comment at the
+// servers' indentation to the next server, so what hangs on the entry's last
+// line is the entry's own. (yaml.v3 writes it at the indentation of the
+// entry's last key, as a plain round trip does: the one at the entry indent
+// comes out at the indent of headers.)
+func TestHermesSetupKeepsCommentInsideEntryBeforeNextServer(t *testing.T) {
+	const token = "user-token-0123456789"
+	for name, comment := range map[string]string{
+		"inside headers":      `      # X-Debug: "1"`,
+		"at the entry indent": "    # disabled: true",
+	} {
+		t.Run(name, func(t *testing.T) {
+			hermesConfig := "mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers:\n      Authorization: Bearer old\n" +
+				comment + "\n  github:\n    command: npx\n"
+			f := newHermesFixture(t, token, hermesConfig)
+			for run := 1; run <= 2; run++ {
+				if _, err := f.run(t); err != nil {
+					t.Fatal(err)
+				}
+				got := readFile(t, f.hermesPath)
+				what := fmt.Sprintf("run %d: Hermes config", run)
+				assertCommentsKept(t, what, hermesConfig, got)
+				if strings.Contains(got, "\n\n") {
+					t.Errorf("%s gained a blank line:\n%s", what, got)
+				}
+				before, _, found := strings.Cut(got, "\n  github:\n")
+				prev := before[strings.LastIndex(before, "\n")+1:] // the line before github:
+				indent := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+				if !found || strings.TrimSpace(prev) != strings.TrimSpace(comment) || indent(prev) < indent(comment) {
+					t.Errorf("%s: the comment %q is not right before the next server, indented %d or more:\n%s", what, strings.TrimSpace(comment), indent(comment), got)
+				}
+				assertUnreagentEntry(t, readYAMLMap(t, f.hermesPath), token)
+			}
+		})
+	}
 }
 
 // k96: a config that is nothing but comments, or a null with comments, keeps
@@ -553,13 +831,18 @@ func TestHermesSetupKeepsCommentsOfEmptyConfig(t *testing.T) {
 
 // k96: the unreagent-managed marker heads the unreagent entry, not the whole
 // file, appears once however often the command runs, and replaces the
-// file-wide marker an earlier release put on top.
+// file-wide marker an earlier release put on top. k116: it says which keys a
+// re-run refreshes, and replaces the entry marker of the builds that still
+// replaced the whole entry.
 func TestHermesSetupMarksOnlyTheEntry(t *testing.T) {
 	const legacy = "# unreagent-managed: do not edit — re-run `unreagent hermes-setup` to refresh"
+	const wholeEntry = "# unreagent-managed: re-run `unreagent hermes-setup` to refresh this entry; edits to it are overwritten"
+	const marker = "# unreagent-managed: re-running `unreagent hermes-setup` refreshes url and headers.Authorization; other keys in this entry are kept"
 	for name, hermesConfig := range map[string]string{
 		"user config":                        userHermesConfig,
 		"written by an earlier release":      legacy + "\nmcp_servers:\n    unreagent:\n        url: http://127.0.0.1:8765/mcp\n",
 		"comments only, with the old marker": legacy + "\n# my note\n",
+		"entry marker that predates k116":    "mcp_servers:\n  # my note\n  " + wholeEntry + "\n  unreagent:\n    url: http://127.0.0.1:8765/mcp\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newHermesFixture(t, "user-token-0123456789", hermesConfig)
@@ -568,7 +851,7 @@ func TestHermesSetupMarksOnlyTheEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := readFile(t, f.hermesPath)
-				assertCommentsKept(t, fmt.Sprintf("run %d", run), withoutLine(hermesConfig, legacy), got)
+				assertCommentsKept(t, fmt.Sprintf("run %d", run), withoutLine(withoutLine(hermesConfig, legacy), wholeEntry), got)
 				lines := strings.Split(got, "\n")
 				if strings.Contains(lines[0], "unreagent-managed") {
 					t.Errorf("run %d: the marker is on top of the file:\n%s", run, got)
@@ -582,8 +865,8 @@ func TestHermesSetupMarksOnlyTheEntry(t *testing.T) {
 						entry = i
 					}
 				}
-				if entry < 1 || !strings.Contains(lines[entry-1], "unreagent-managed") {
-					t.Errorf("run %d: the marker is not right above the unreagent entry:\n%s", run, got)
+				if entry < 1 || strings.TrimSpace(lines[entry-1]) != marker {
+					t.Errorf("run %d: the marker %q is not right above the unreagent entry:\n%s", run, marker, got)
 				}
 			}
 		})
@@ -944,6 +1227,163 @@ func TestHermesSetupRefusesDanglingSymlinks(t *testing.T) {
 	}
 }
 
+// k122: in a chain of links that ends at a missing file, the error names that
+// file, not the first hop, which exists as a link. A relative target is read
+// against the directory of the link that holds it.
+func TestHermesSetupNamesEndOfDanglingChain(t *testing.T) {
+	for _, which := range []string{"Hermes config", "unreagent.local.yaml"} {
+		t.Run(which, func(t *testing.T) {
+			f := newHermesFixture(t, "", "")
+			localPath := localOverridePath(f.cfgPath)
+			link, other, otherContent := f.hermesPath, localPath, "# machine overrides\n"
+			if which == "unreagent.local.yaml" {
+				link, other, otherContent = localPath, f.hermesPath, userHermesConfig
+			}
+			writeFile(t, other, otherContent)
+			shared := realTempDir(t)
+			hop1, hop2 := filepath.Join(shared, "hop1.yaml"), filepath.Join(shared, "hop2.yaml")
+			if err := os.Symlink(hop1, link); err != nil {
+				t.Skipf("cannot create a symlink here: %v", err)
+			}
+			if err := os.Symlink("hop2.yaml", hop1); err != nil { // relative: next to hop1
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join("gone", "config.yaml"), hop2); err != nil {
+				t.Fatal(err)
+			}
+			missing := filepath.Join(shared, "gone", "config.yaml")
+
+			want := link + " is a symlink to " + hop1 + "; following the links leads to " + missing +
+				", which does not exist; refusing to replace the link with a new file (nothing written)"
+			if _, err := f.run(t); err == nil {
+				t.Error("expected an error for a dangling chain of symlinks, got nil")
+			} else if filepath.ToSlash(err.Error()) != filepath.ToSlash(want) {
+				t.Errorf("error %q,\nwant %q", err, want)
+			}
+			for l, dest := range map[string]string{link: hop1, hop1: "hop2.yaml", hop2: filepath.Join("gone", "config.yaml")} {
+				if got, err := os.Readlink(l); err != nil || got != dest {
+					t.Errorf("the link %s was changed: Readlink = %q, %v", l, got, err)
+				}
+			}
+			if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+				t.Errorf("the end of the chain was created (lstat: %v)", err)
+			}
+			if got := readFile(t, other); got != otherContent {
+				t.Errorf("%s was changed:\n%s", filepath.Base(other), got)
+			}
+			if _, err := os.Lstat(f.hermesPath + ".bak"); !os.IsNotExist(err) {
+				t.Errorf("a .bak was created although nothing was written (lstat: %v)", err)
+			}
+		})
+	}
+}
+
+// realTempDir is t.TempDir with its symlinks resolved: an error that follows
+// a chain of links names the directories they really lead to.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// k122: a relative target is read against the directory its link really is
+// in. Through a symlinked directory, a ".." leads out of the directory the
+// link points to, not out of the one the path names: here ../shared is
+// dotfiles/shared, not a shared directory next to the fixture's hermes link.
+func TestHermesSetupNamesEndOfDanglingChainThroughLinkedDir(t *testing.T) {
+	f := newHermesFixture(t, "user-token-0123456789", "")
+	dotfiles := realTempDir(t)
+	realDir, sharedDir := filepath.Join(dotfiles, "hermes"), filepath.Join(dotfiles, "shared")
+	for _, d := range []string{realDir, sharedDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkDir := filepath.Dir(f.hermesPath) // <fixture>/hermes -> dotfiles/hermes
+	if err := os.Remove(linkDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	hop := filepath.Join("..", "shared", "hop.yaml")
+	if err := os.Symlink(hop, filepath.Join(realDir, "config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("gone.yaml", filepath.Join(sharedDir, "hop.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(sharedDir, "gone.yaml")
+
+	want := f.hermesPath + " is a symlink to " + hop + "; following the links leads to " + missing +
+		", which does not exist; refusing to replace the link with a new file (nothing written)"
+	if _, err := f.run(t); err == nil {
+		t.Error("expected an error for a dangling chain of symlinks, got nil")
+	} else if filepath.ToSlash(err.Error()) != filepath.ToSlash(want) {
+		t.Errorf("error %q,\nwant %q", err, want)
+	}
+	for _, p := range []string{missing, filepath.Join(f.dir, "shared"), localOverridePath(f.cfgPath)} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s was created (lstat: %v)", p, err)
+		}
+	}
+}
+
+// k122: a symlink loop at either path is refused before anything is written,
+// and the error names the path the user gave; filepath.EvalSymlinks alone
+// says only "too many links".
+func TestHermesSetupRefusesSymlinkLoop(t *testing.T) {
+	for _, which := range []string{"Hermes config", "unreagent.local.yaml"} {
+		t.Run(which, func(t *testing.T) {
+			f := newHermesFixture(t, "", "")
+			localPath := localOverridePath(f.cfgPath)
+			link, other, otherContent := f.hermesPath, localPath, "# machine overrides\n"
+			if which == "unreagent.local.yaml" {
+				link, other, otherContent = localPath, f.hermesPath, userHermesConfig
+			}
+			writeFile(t, other, otherContent)
+			partner := link + ".partner"
+			if err := os.Symlink(partner, link); err != nil {
+				t.Skipf("cannot create a symlink here: %v", err)
+			}
+			if err := os.Symlink(link, partner); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := f.run(t)
+			if err == nil {
+				t.Fatal("expected an error for a symlink loop, got nil")
+			}
+			msg := filepath.ToSlash(err.Error())
+			if want := filepath.ToSlash(link) + " is a symlink that cannot be resolved: "; !strings.HasPrefix(msg, want) {
+				t.Errorf("error %q does not start with %q", err, want)
+			}
+			if !strings.HasSuffix(msg, "(nothing written)") {
+				t.Errorf("error %q does not say that nothing was written", err)
+			}
+			for l, dest := range map[string]string{link: partner, partner: link} {
+				if got, err := os.Readlink(l); err != nil || got != dest {
+					t.Errorf("the link %s was changed: Readlink = %q, %v", l, got, err)
+				}
+			}
+			if got := readFile(t, other); got != otherContent {
+				t.Errorf("%s was changed:\n%s", filepath.Base(other), got)
+			}
+			if _, err := os.Lstat(f.hermesPath + ".bak"); !os.IsNotExist(err) {
+				t.Errorf("a .bak was created although nothing was written (lstat: %v)", err)
+			}
+			for _, dir := range []string{f.dir, filepath.Dir(f.hermesPath)} {
+				if tmp, _ := filepath.Glob(filepath.Join(dir, "*.tmp-*")); len(tmp) > 0 {
+					t.Errorf("temp files left behind: %v", tmp)
+				}
+			}
+		})
+	}
+}
+
 // k96: a .nan outside the entry goes through. NaN never equals itself as a
 // float, but it is the same value before and after the edit.
 func TestHermesSetupKeepsNaN(t *testing.T) {
@@ -987,6 +1427,47 @@ func TestCheckEdit(t *testing.T) {
 				t.Errorf("checkEdit = %v, want error: %v", err, c.wantErr)
 			}
 		})
+	}
+
+	// k116: for the unreagent entry the edit is the old entry with url and
+	// headers.Authorization set. An entry replaced whole loses the user's keys
+	// and is refused, as is a change to a key or header unreagent does not own.
+	var withEntry map[string]interface{}
+	if err := yaml.Unmarshal([]byte("mcp_servers:\n  unreagent: {url: http://old, timeout: 120, headers: {X-Trace: on, Authorization: Bearer old}}\n"), &withEntry); err != nil {
+		t.Fatal(err)
+	}
+	want := hermesEntryWant(lookup(withEntry, "mcp_servers", "unreagent"), "http://u", "Bearer t")
+	for out, wantErr := range map[string]bool{
+		"mcp_servers:\n  unreagent: {url: http://u, timeout: 120, headers: {X-Trace: on, Authorization: Bearer t}}\n":   false,
+		"mcp_servers:\n  unreagent: {url: http://u, headers: {Authorization: Bearer t}}\n":                              true,
+		"mcp_servers:\n  unreagent: {url: http://u, timeout: 120, headers: {Authorization: Bearer t}}\n":                true,
+		"mcp_servers:\n  unreagent: {url: http://u, timeout: 60, headers: {X-Trace: on, Authorization: Bearer t}}\n":    true,
+		"mcp_servers:\n  unreagent: {url: http://old, timeout: 120, headers: {X-Trace: on, Authorization: Bearer t}}\n": true,
+	} {
+		if err := checkEdit(withEntry, []byte(out), want, "mcp_servers", "unreagent"); (err != nil) != wantErr {
+			t.Errorf("checkEdit(%q) = %v, want error: %v", out, err, wantErr)
+		}
+	}
+	if url, auth := lookup(withEntry, "mcp_servers", "unreagent", "url"), lookup(withEntry, "mcp_servers", "unreagent", "headers", "Authorization"); url != "http://old" || auth != "Bearer old" {
+		t.Errorf("hermesEntryWant changed the entry it started from: url = %#v, Authorization = %#v", url, auth)
+	}
+
+	// k116: header names ignore case, so the bearer goes under the spelling
+	// the entry has; one added under another spelling, next to the old token
+	// or in its place, is a change checkEdit refuses.
+	var lower map[string]interface{}
+	if err := yaml.Unmarshal([]byte("mcp_servers:\n  unreagent: {url: http://old, headers: {authorization: Bearer old}}\n"), &lower); err != nil {
+		t.Fatal(err)
+	}
+	want = hermesEntryWant(lookup(lower, "mcp_servers", "unreagent"), "http://u", "Bearer t")
+	for out, wantErr := range map[string]bool{
+		"mcp_servers:\n  unreagent: {url: http://u, headers: {authorization: Bearer t}}\n":                            false,
+		"mcp_servers:\n  unreagent: {url: http://u, headers: {Authorization: Bearer t}}\n":                            true,
+		"mcp_servers:\n  unreagent: {url: http://u, headers: {authorization: Bearer old, Authorization: Bearer t}}\n": true,
+	} {
+		if err := checkEdit(lower, []byte(out), want, "mcp_servers", "unreagent"); (err != nil) != wantErr {
+			t.Errorf("checkEdit(%q) = %v, want error: %v", out, err, wantErr)
+		}
 	}
 
 	// A null or missing parent counts as empty, before and after.
