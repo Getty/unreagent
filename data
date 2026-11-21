@@ -1,0 +1,51 @@
+---
+claimed_at: 2026-11-21T04:16:24Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T04:16:36Z
+created: 2026-08-24T23:43:34Z
+id: 70
+priority: medium
+started: 2026-11-21T02:34:27Z
+status: done
+tags:
+- config
+- bug
+title: 'Agent restart loop is unbounded by default: a failing agent respawns every
+  3s forever'
+updated: 2026-11-21T04:16:36Z
+---
+
+main.go:238 + config default: agent.restart defaults to on-failure and MaxRestarts to 0 = unlimited (supervisor.go:36); OnExit fires only when restarts are exhausted, so the onExit prompt is unreachable and a headless run never terminates. Trigger: claude exits 1 at startup (not logged in, bad flag -- e.g. --permission-prompt-tool without -p, the case the comment at :215 warns about -- or an invalid --mcp-config) -> respawn every 3s; interactive: the error flashes in the console until Ctrl-C; headless: hangs. Same for an editor that exits non-zero immediately (bad project). Reasoned from code, not observed. Not covered by #34/#37/#47.
+Acceptance: maxRestarts defaults to a small number, or an exit within N seconds of start counts as terminal; documented in unreagent.example.yaml; test.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: maxRestarts 0 means unlimited; the default restart is on-failure with a 3s delay and shouldRestart has no bound. Design decision: default cap or fast-fail window. Decide with k69. Size S.
+
+
+**Decision 2026-11-21** (maintainer): fast-fail window, not a default restart cap: if the agent dies N times in quick succession within a few seconds of starting, the launcher gives up; a long-lived agent may still restart without bound.
+
+**Main-agent choice (2026-11-21, mine):** only failed runs (non-zero exit, failed start) count toward the fast-fail window; a clean exit 0 resets the count. 'restart: always' with a quick clean job is the user's explicit request, not a crash loop, and must not end in exit 1.
+
+Done (2026-11-21), worktree agent-a4deb084e697bd408 on main 4b71fea: fast-fail give-up in supervisor.runService — 3 failures in a row (non-zero exit or failed start), each within 10s of start, only with maxRestarts 0; a clean exit 0, a longer run or a manual start resets; one log line; OnExit now takes supervisor.Exit{Success, StartFailed}. internal/supervisor/fastfail_test.go, 7 mutations red. Docs: unreagent.example.yaml (agent + unreal), README restart section. Windows compile-only.
+
+2026-11-21 03:41 Review (unreagent-reviewer): CHANGES NEEDED, one missing test. The code is right.
+Check, run in worktree agent-a4deb084e697bd408 (base 4b71fea): gofmt -l cmd internal skills is empty; go vet ./... and GOOS=windows go vet ./... are clean; go test -count=1 ./... passes; go test -race -count=5 ./internal/supervisor ./cmd/launcher passes; make linux and make windows succeed. The same diff, applied to main 8f24738 in a scratch copy, applies cleanly, and vet, the tests and the Windows build are green there too.
+Mutations: the worker's 7 k70 mutations, re-run on a scratch copy, all fail the tests.
+1. [finding] internal/supervisor/supervisor.go:609 and :621: the manual start/restart reset of quickFails is not pinned. Changing 'restarts, quickFails = 0, 0' to 'restarts = 0' in ctrlStart or in ctrlRestart leaves every test green. The effect is visible: after a give-up, StartService gets 1 run instead of 3 before the next give-up (a probe test gave runs = 4, want 6). This is one of the decided rules, so it needs a test in fastfail_test.go: give up, call StartService, expect fastFailLimit more runs; the same for RestartService.
+2. [finding, minor] supervisor.go:591: 'StartFailed: quickFails >= fastFailLimit' on the exhausted-maxRestarts branch is not pinned. Removing it stays green, because TestExplicitMaxRestartsKeepsItsBound checks only Success. Through k69 it decides exit 1 for an editor with an explicit maxRestarts >= 2 that crash-loops, while maxRestarts 1 or restart: never leaves the launcher idling. Pin it or drop it, and say which.
+3. [nit] supervisor.go:412: the comment 'counts a run that ended ran after its start' reads garbled.
+Concurrency: quickFails and startedAt belong to the runService goroutine, and ctrlStart, ctrlRestart and the backoff run there too, so there is no data race (race x5 green). No-zombie: the give-up starts no process, job.Close still runs before the drain, and the Job Object path is unchanged. The OnExit(bool) to OnExit(Exit) change: every caller is updated (main.go ue and agent, the tests), and Success means the same for existing callers (a give-up implies the last run failed, because a success resets quickFails). Docs: the README restart section and the agent/unreal blocks in unreagent.example.yaml match the code; no list- or map-valued option is touched. Windows: compile-only, unverified.
+
+**Back to the worker (2026-11-21), review requested changes:** the manual start/restart reset of the fast-fail count is unpinned (supervisor.go:609/:621); garbled comment at :412. **Main-agent choice (mine) on :591:** Exit.StartFailed means 'the last run never got going' — a failed start, or a failure within the 10s window — independent of the count, so restart: never, an exhausted maxRestarts and the fast-fail give-up behave alike; pin it.
+
+Review fixes done (2026-11-21): manual start/restart reset pinned (TestManualStartResetsTheFailCount, M11/M12); StartFailed describes the last run only — failed start or non-zero exit within the window — one failedEarly value drives the count and StartFailed (TestStartFailedReportsTheLastRun); the old case 'one crash, never restarted → Exit{}' contradicted the rule and was replaced, not fixed; countRun comment rewritten. 12 mutations red.
+
+2026-11-21 04:09 Re-review (unreagent-reviewer): READY. Windows is compile-only and unverified.
+Check, run in worktree agent-a4deb084e697bd408: gofmt -l cmd internal skills is empty; go vet ./... and GOOS=windows go vet ./... are clean; go test -count=1 ./... passes; go test -race -count=5 ./internal/supervisor ./cmd/launcher passes; make linux and make windows succeed.
+Mutations, on a scratch copy identical to the worktree: all 12 in the worker's mutate_k70.sh (M1-M12) fail the tests. So do mine: R1' (StartFailed only on a give-up), R2 (no reset on manual start) and R3 (no reset on manual restart), caught by TestStartFailedReportsTheLastRun and TestManualStartResetsTheFailCount.
+Fixes checked: supervisor.go now computes one failedEarly value that drives both the count and Exit.StartFailed. A give-up still implies a failed last run, and Success is unchanged for every caller.
+The replaced test claim is correct. The old case 'one crash, never restarted gives Exit{}' contradicts the new rule. Its intent (ran, then ended, is not a failed start) survives as the case 'restart never, failure after the window gives Exit{}'. Nothing relies on the old meaning: StartFailed is read only by makeEditorExitHandler; the agent handler uses only Success; the run() tests use a missing editor or 'sleep 20', and the handler unit test builds its Exit values directly. The countRun comment now reads cleanly.
+Behaviour checked with dist/unreagent: no agent, MCP off, editor 'false' with restart: never gives exit 1, as the coordinator described for k69.
+
+Committed as 3ab0142
