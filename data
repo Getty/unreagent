@@ -1,0 +1,58 @@
+---
+claimed_at: 2026-11-21T12:29:13Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:32:19Z
+created: 2026-11-21T07:35:31Z
+id: 145
+priority: low
+started: 2026-11-21T11:54:46Z
+status: done
+tags:
+- hermes
+- bug
+title: hermes-setup refuses configs with certain block scalars, without naming the
+  cause; tagged keys slip past the early checks
+updated: 2026-11-21T12:32:32Z
+---
+
+Found by the k134 worker; on HEAD too. (1) User-visible: hermes-setup refuses any Hermes config that holds, anywhere in the file, a folded block scalar with a more-indented line, or a literal block scalar that starts with a blank line. The vendored yaml.v3 (v3.0.1) writes these back differently, so checkEdit refuses with 'the result would change more than mcp_servers.unreagent' and names neither the key nor the cause. Fix: name the cause and the offending key, or splice the new entry into the original text instead of re-encoding. Note: k134's TestHermesSetupChecksTheEditBeforeWriting uses exactly this quirk to reach checkEdit, so fixing (1) needs another input for that test. (2) Contrived: plainMergeKeys turns a quoted, tagged merge key (!!merge "<<") into a plain string key; only checkEdit catches it. (3) Contrived: an entry key with a non-string tag (!!binary for url) is missed, so a second url is added and the old one wins; only checkEdit catches it. Lane: unreagent-worker.
+
+**Decision (main agent) 2026-11-21:** (1) keep the refusal, but name the cause and the first key path whose decoded value differs (walk old vs re-encoded decode; say the YAML writer changes that value, e.g. a block scalar, and how to fix it by hand) — no text splicing, which would be a much riskier text-level YAML editor; k134's TestHermesSetupChecksTheEditBeforeWriting keeps its input. (2) a tagged merge key (!!merge "<<" or quoted) and (3) an entry key with a non-string tag are refused by the early checks with a message naming them, like the existing anchor/alias refusals. Worker in its own worktree from 29a605c; hermes.go is not touched by any other card in flight. k158 follows.
+
+Worker started in its own worktree (base 29a605c). Plan: checkEdit names the first differing key path + hand fix; early refusal for a tagged/quoted merge key and for a non-string-tagged entry key.
+
+Worker: implemented, tree commit-ready (no commit), card stays in-progress for docs routing. Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go.
+(1) checkEdit names the first changed value outside the edited path (changedPath, sorted keys, dots + [i]) plus the hand fix; bare old text is the fallback. Prefix kept, so k134's test passes unchanged.
+(2) checkMergeKeys: a !!merge-tagged quoted '<<' anywhere in the Hermes config or unreagent.local.yaml is refused early, named by line. A plain '!!merge <<' or untagged quoted '<<' already round-trips, so neither is refused.
+(3) Correction to the card: a !!binary key directly in the entry or its headers was ALREADY refused early at HEAD (yaml.v3 decodes it as a map with non-string keys -> 'not a mapping with string keys'). The real gaps: an ALIAS key (*u for url -> vague checkEdit text; *a for Authorization -> written silently with two Authorization keys), and a tagged/aliased mcp_servers / entry-name / headers key -> misleading 'comes in through a merge key'. checkPlainKeys refuses all of these, naming the key and how it is written. It also covers mcp/token in unreagent.local.yaml, because without that an alias 'mcp' key got the new block-scalar hint, which is wrong.
+Checks: gofmt -l clean; go vet linux+windows; go test -count=1 ./... and -race green; make linux + make windows OK. Red-proofs: 6 mutations, each turned its tests red; hermes.go restored byte-identical (sha256).
+Drift for this board: a block scalar INSIDE mcp_servers.<name> (a user key of the entry) still gives the bare 'the result would not hold the new mcp_servers.unreagent'. The brief scoped (1) to outside the entry. Option not taken, per decision: clearing Style in plainMergeKeys would keep a quoted merge key working instead of refusing it.
+
+**Decision (main agent) 2026-11-21 on the worker's result:** accepted, including the corrected scope of (3) (alias/tagged keys, not !!binary, which was already refused) and the local-file coverage. The quoted !!merge refusal stays as built and tested rather than switching to the one-line plainMergeKeys unquote. A block scalar inside mcp_servers.<name> gets its own card. Next: doc-writer for the README failure list, then review.
+
+Doc-writer: README hermes-setup failure list updated in the worktree (README.md only). Refusal list now 'first eight'; new bullets for a key not written as a plain string (alias/tag), a quoted !!merge merge key, and the checkEdit bullet rewritten to name the changed value (block scalar triggers, mcp.token case, in-entry block scalar caveat). Messages quoted from hermes.go.
+
+**Review (unreagent-reviewer) 2026-11-21: CHANGES NEEDED (small).** Tree: worktree on 29a605c, uncommitted; files README.md, cmd/launcher/hermes.go, cmd/launcher/hermes_test.go (all within OWNERS lanes: doc-writer / worker / worker). Check run by the reviewer in the worktree: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... green; go test -race -count=1 ./... green; make linux and make windows exit 0 (PE32+). Windows: compile-only, unverified (the change is platform-neutral). Patch applies on main 095bcc4 (git apply --check -3 and plain --check clean, scratch worktree removed).
+Verified by probes (scratch copy, worktree untouched): (1) both block-scalar triggers and prompts[0].text named; k134 input names system_prompt, old prefix kept. (2) quoted !!merge refused in Hermes config and unreagent.local.yaml (via hermes-setup: 'add the token to <path>: ... (nothing written)'); plain !!merge << and untagged "<<" kept and written back. (3) alias/tag refused for mcp_servers, entry, url, headers, Authorization/AUTHORIZATION/authorization, local mcp and token. At 29a605c an alias *a for Authorization (any case) was written silently next to the new key: confirmed. !!binary url/entry already refused at 29a605c: card correction confirmed. (4) no false positive for alias/tag keys at root, in another entry, in other entry keys or other headers, or in the local file outside mcp. (5) every refusal left the dirs unchanged (no .bak, temp or local.yaml). (6) mutations: dropping the case-insensitive Authorization match, always-dot pathTo, and the local checkPlainKeys call each go red. (7) README messages match hermes.go word for word except F1; the k165 sentence is accurate (entry and headers block scalar give the bare 'would not hold').
+Findings:
+F1 (unreagent-doc-writer, blocking) README.md:819 lists '!!str url' as a refused tag. It is not: checkPlainKeys skips !!str (cmd/launcher/hermes.go:640) and mappingEntry matches it, so hermes-setup edits it fine (probe: written back as '!!str url: http://127.0.0.1:8765/mcp'). Drop it or use a non-str tag (e.g. '!custom url').
+F2 (unreagent-worker, should fix) README.md:833-834 promises a plain '!!merge <<' and an untagged '"<<"' are not refused; no test pins either. Mutation: removing n.ShortTag() == "!!merge" from checkMergeKeys (hermes.go:620) refuses every quoted "<<" and the whole package stays green. Add a not-refused, written-back subtest for both.
+F3 (doc-writer or worker, low) changedPath (hermes.go:805-857) renders a key 'a.b' and nested a: {b:} both as 'a.b', and a key 'x[0]' like index 0 of x (probed). README.md:846-848 does not say so. Either one README sentence or quote such keys.
+F4 (unreagent-worker, low, may be a card) hermes.go:230-234: in unreagent.local.yaml a !!binary-tagged token key gets 'mcp is not a mapping' because that check runs before checkPlainKeys; README.md:818-823 says the message names the key for token. Refused and nothing written, only the message is off; moving checkMergeKeys/checkPlainKeys above the mcp type check would fix it.
+Subject: too long (~105 chars vs the ~72 rule, recent subjects ~85). Suggest: 'Name the value hermes-setup cannot write back, refuse quoted !!merge and alias keys (k145)'. Changes: no entry on the card and none in the diff, so nothing to confirm; release-manager drafts one.
+
+**Decision (main agent) 2026-11-21 on the review:** F1 and F3 fixed by the main agent in README (tag example is now `!custom url` / `!!binary dXJs`, with `!!str url` named as accepted; one sentence on keys containing . or [ reading like a nested path). F2 (pin that plain !!merge << and untagged "<<" are accepted) and F4 (move the two new checks above 'mcp is not a mapping' so a tagged token key is named) back to the worker. Subject: the reviewer's shorter 'Name the value hermes-setup cannot write back, refuse quoted !!merge and alias keys (k145)'. Changes: the worker's entry from its report, checked by the release-manager.
+
+Worker on review F2/F4 (hermes.go + hermes_test.go only; README untouched by me).
+F2: new subtest TestHermesSetupRefusesQuotedMergeKey/'plain !!merge and untagged quoted key kept'. The run succeeds; '!!merge <<: *d' is written back as '<<: *d' and still merges (tagged.timeout = 120); '"<<": *d' stays a plain string key (quoted.<<.timeout = 120, quoted.timeout absent). Red-proofs: M7, the reviewer's mutation (drop n.ShortTag() == "!!merge"), makes only this subtest red, whole package otherwise green. M8 (drop the quoting condition) makes it and TestHermesSetupKeepsMergeKeys red.
+F4: in localConfigWithToken, checkMergeKeys and checkPlainKeys now run before the 'mcp is not a mapping' check. New case TestHermesSetupRefusesKeysNotWrittenPlain/'local !!binary for token' wants 'the key mcp.token is written as !!binary dG9rZW4=, not as a plain string; hermes-setup would add a second token instead of changing it; write the key as plain token, then re-run hermes-setup'. Red under M9 (old order): it got 'mcp is not a mapping'.
+Message changes from the reorder (16 local inputs probed before and after): only inputs that got 'mcp is not a mapping' change; all of them are still refused.
+- mcp with a !!binary or !custom token key, even next to an int key: now the 'the key mcp.token is written as <form>, ...' text.
+- mcp not a mapping (mcp: [a] / mcp: 5) and a quoted !!merge "<<" elsewhere: now 'the merge key at line N is written quoted with the !!merge tag (!!merge "<<"); the YAML writer would turn it into a plain string key "<<" that merges nothing; write it unquoted as <<, then re-run hermes-setup'.
+- alias key *m for mcp with a non-mapping value (*m : 5 / *m : [a]): now 'the key mcp is written as *m, not as a plain string; hermes-setup would add a second mcp instead of changing it; write the key as plain mcp, then re-run hermes-setup'.
+- Unchanged: mcp: 5, mcp: [a], mcp: {8765: x} keep 'mcp is not a mapping'. Hermes-config messages are unaffected (mergeHermesServer order unchanged).
+- Side note: no test pins 'mcp is not a mapping' itself, at HEAD or now.
+hermes.go restored byte-identical after every mutation (sha256). Full check: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... and -race green; make linux + make windows OK (Windows compile-only). No commit.
+
+Committed as a582135 on main (reviewed; full check green, Windows compile-only)
