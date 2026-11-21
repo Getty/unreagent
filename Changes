@@ -293,9 +293,12 @@ Revision history for unreagent
     marker says how much. A run_* reply could reach about 2 MiB before, a logs
     reply hundreds of MiB; 48 KiB stays under the 50,000 characters past which
     Claude Code moves a reply into a file.
-  - A stop (ue_stop, console stop) that meets the process ending on its own
-    counts as the stop: no automatic restart and no exit handling, so a
-    headless launcher is not shut down by it.
+  - A stop, start or restart (ue_stop, ue_start, ue_restart, the console's
+    stop, start and r) that meets the process ending on its own, or its
+    automatic restart coming due, is carried out instead of the exit
+    handling and that restart: a stop leaves the service stopped with
+    nothing started, a start or restart starts it once. A headless launcher
+    keeps running through either, also when "r agent" races the agent's exit.
   - ue_start, ue_stop, ue_restart and the console's start, stop and r give up
     after 10 s in total. The error says whether the request was taken. One
     still being carried out says so, points to status and is not to be

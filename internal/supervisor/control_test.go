@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -200,5 +201,194 @@ func TestAddServiceRefusesADuplicateName(t *testing.T) {
 	}
 	if got := sup.services["ue"].spec.Command; got != "first" {
 		t.Fatalf("service command = %q, want the first registration kept", got)
+	}
+}
+
+// callResult is what a control call returned.
+type callResult struct {
+	st  ServiceStatus
+	err error
+}
+
+// runWithQueuedCall runs spec under sup until the test ends, with call made
+// to wait in the service's control channel the first time the loop reaches
+// seam (&sup.exitTaken or &sup.backoffTaken): the loop is held there until the
+// message sits in the channel, which is buffered for this, as in
+// TestStopWinsOverAnExitReadyWithIt. It returns the call's result once the
+// loop has answered it, and the OnExit events.
+func runWithQueuedCall(t *testing.T, sup *Supervisor, spec ServiceSpec, seam *func(), call func() (ServiceStatus, error)) (callResult, <-chan Exit) {
+	t.Helper()
+	exits := make(chan Exit, 4)
+	spec.OnExit = func(e Exit) { exits <- e }
+	if err := sup.AddService(spec); err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	svc := sup.services[spec.Name]
+	svc.ctrl = make(chan ctrlMsg, 1)
+	res := make(chan callResult, 1)
+	var once sync.Once
+	*seam = func() {
+		once.Do(func() {
+			go func() {
+				st, err := call()
+				res <- callResult{st, err}
+			}()
+			for len(svc.ctrl) == 0 {
+				runtime.Gosched()
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg)
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	select {
+	case r := <-res:
+		if r.err != nil {
+			t.Fatalf("the queued call failed: %v", r.err)
+		}
+		return r, exits
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call waiting at the seam was never answered")
+		return callResult{}, nil
+	}
+}
+
+// controlCall returns the named control call ("stop", "start", "restart" or
+// "status") on the service "svc" of sup.
+func controlCall(sup *Supervisor, kind string) func() (ServiceStatus, error) {
+	switch kind {
+	case "stop":
+		return func() (ServiceStatus, error) { return sup.StopService("svc") }
+	case "start":
+		return func() (ServiceStatus, error) { return sup.StartService("svc") }
+	case "restart":
+		return func() (ServiceStatus, error) { return sup.RestartService("svc") }
+	default:
+		return func() (ServiceStatus, error) {
+			st := sup.Status()
+			if len(st) != 1 || st[0].Unresponsive {
+				return ServiceStatus{}, fmt.Errorf("status = %+v", st)
+			}
+			return st[0], nil
+		}
+	}
+}
+
+// k179: a control message ready together with a due restart timer reached
+// the loop's select, which picks one at random. Picking the timer started the
+// process and only then carried out the message: a stop killed an editor that
+// had just been spawned, a start found it running and did nothing, so it did
+// not replace the pending restart (k153), and a restart spawned it twice. The
+// message is taken first and carried out instead of the timer's start; a
+// status is answered after that start, as on the next turn.
+//
+// Run 1 fails at once and the policy arms its restart; the call waits when
+// the timer comes due. Every later run keeps running until the test ends.
+// The delayed first start (a start delay) is the same timer: a stop waiting
+// when it comes due cancels it, and a start is a plain start there, since no
+// restart is pending.
+func TestControlCallWaitingWithADueRestart(t *testing.T) {
+	cases := []struct {
+		name, call          string
+		startDelay          bool   // the timer is the delayed first start
+		automatic, replaces string // PreStart flags of every start
+		running, desired    bool
+		lastExit            string
+	}{
+		{"stop", "stop", false, "[false]", "[false]", false, false, "exit 1"},
+		{"start", "start", false, "[false false]", "[false true]", true, true, ""},
+		{"restart", "restart", false, "[false false]", "[false true]", true, true, ""},
+		{"status", "status", false, "[false true]", "[false false]", true, true, "exit 1"},
+		{"stop at the delayed first start", "stop", true, "[]", "[]", false, false, ""},
+		{"start at the delayed first start", "start", true, "[false]", "[false]", true, true, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var pre preStarts
+			sup := New(nil)
+			spec, _ := runsSpec(t, "fs", time.Minute)
+			if c.startDelay {
+				spec, _ = runsSpec(t, "s", time.Minute)
+				spec.StartDelay = 10 * time.Millisecond
+			}
+			spec.PreStart = pre.record
+			r, _ := runWithQueuedCall(t, sup, spec, &sup.backoffTaken, controlCall(sup, c.call))
+			// PreStart runs on the loop before the call is answered.
+			if got := pre.String(); got != c.automatic {
+				t.Fatalf("PreStart Automatic = %s, want %s with a %s waiting when the timer came due", got, c.automatic, c.call)
+			}
+			if got := pre.replacesRestart(); got != c.replaces {
+				t.Fatalf("PreStart ReplacesRestart = %s, want %s", got, c.replaces)
+			}
+			if r.st.Running != c.running || r.st.Desired != c.desired || r.st.LastExit != c.lastExit {
+				t.Fatalf("%s answered %+v, want running %v, desired %v, lastExit %q", c.call, r.st, c.running, c.desired, c.lastExit)
+			}
+		})
+	}
+}
+
+// k179, from the k37 review: a start or restart waiting when the process
+// ended on its own was carried out after the exit, but OnExit fired first.
+// For a headless agent, OnExit is what shuts the launcher down, so a console
+// "r agent" that raced the agent's exit ended the launcher. The call is the
+// user's action: OnExit does not fire and the call is carried out.
+//
+// Design choice (k179): the exit still counts as an exit. Under restart:
+// never the start after it is the first start after a failure that is not
+// restarted (AfterGiveUp, so the crash evidence is kept, k128); where the
+// policy restarts it, the start takes that restart's place (ReplacesRestart,
+// k153). The call clears lastExit and the counts as it always does.
+//
+// Only a start or restart takes the exit over: a status waiting at it is
+// answered, and the exit is judged as any exit, so OnExit fires.
+func TestStartOrRestartWinsOverAnExitReadyWithIt(t *testing.T) {
+	cases := []struct {
+		name, call, restart              string
+		afterGiveUp, replaces, automatic string // PreStart flags of every start
+		running                          bool
+		lastExit                         string
+		onExit                           bool
+	}{
+		{"start, restart never", "start", "never", "[false true]", "[false false]", "[false false]", true, "", false},
+		{"restart, restart never", "restart", "never", "[false true]", "[false false]", "[false false]", true, "", false},
+		{"start, the exit arms a restart", "start", "on-failure", "[false false]", "[false true]", "[false false]", true, "", false},
+		{"status, restart never", "status", "never", "[false]", "[false]", "[false]", false, "exit 1", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var pre preStarts
+			sup := New(nil)
+			spec, _ := runsSpec(t, "fs", time.Minute) // run 1 exits 1 at once
+			spec.Restart = c.restart
+			spec.RestartDelay = time.Hour
+			spec.PreStart = pre.record
+			r, exits := runWithQueuedCall(t, sup, spec, &sup.exitTaken, controlCall(sup, c.call))
+			if r.st.Running != c.running || !r.st.Desired || r.st.Restarts != 0 || r.st.LastExit != c.lastExit {
+				t.Fatalf("%s answered %+v, want running %v, desired, restarts 0, lastExit %q", c.call, r.st, c.running, c.lastExit)
+			}
+			if got := pre.afterGiveUp(); got != c.afterGiveUp {
+				t.Fatalf("PreStart AfterGiveUp = %s, want %s", got, c.afterGiveUp)
+			}
+			if got := pre.replacesRestart(); got != c.replaces {
+				t.Fatalf("PreStart ReplacesRestart = %s, want %s", got, c.replaces)
+			}
+			if got := pre.String(); got != c.automatic {
+				t.Fatalf("PreStart Automatic = %s, want %s: no automatic start may follow the exit", got, c.automatic)
+			}
+			if c.onExit {
+				// The run failed at once and restart: never does not restart it.
+				if e := waitExit(t, exits, 10*time.Second, "a status waiting at the exit suppressed OnExit"); e != (Exit{StartFailed: true}) {
+					t.Fatalf("OnExit got %+v, want a failed start", e)
+				}
+				return
+			}
+			// OnExit runs in a goroutine of its own, so its absence gets a wait.
+			select {
+			case e := <-exits:
+				t.Fatalf("OnExit fired (%+v) for an exit a %s was waiting on", e, c.call)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
 	}
 }

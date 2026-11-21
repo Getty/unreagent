@@ -49,8 +49,10 @@ type ServiceSpec struct {
 	// (policy, MaxRestarts exhausted, a start that cannot be retried, or the
 	// fast-fail give-up) but was still "desired" — i.e. an unexpected end, not
 	// a manual stop. A StopService that is already waiting when the process
-	// ends on its own wins over the exit: OnExit does not fire for it. It is
-	// called in its own goroutine, so it may block / control the supervisor.
+	// ends on its own wins over the exit: OnExit does not fire for it. Nor
+	// does it for a StartService or RestartService waiting then, which is
+	// carried out instead. It is called in its own goroutine, so it may
+	// block / control the supervisor.
 	OnExit func(Exit)
 }
 
@@ -68,8 +70,9 @@ type Start struct {
 	AfterGiveUp bool
 	// ReplacesRestart is true for a StartService or RestartService that comes
 	// while the restart policy's start is pending — within RestartDelay of an
-	// exit or of a failed start — and so takes its place: that start does not
-	// come any more. It is never Automatic.
+	// exit or of a failed start, including one waiting when that delay runs
+	// out — and so takes its place: that start does not come any more. It is
+	// never Automatic.
 	ReplacesRestart bool
 }
 
@@ -156,6 +159,10 @@ type Supervisor struct {
 	// run's exit, right before it looks for a control message that came in the
 	// meantime. A test seam: it lets a test make a stop wait at that point.
 	exitTaken func()
+	// backoffTaken is the same seam for a due restart timer (or the delayed
+	// first start): called once the loop has taken the timer, right before it
+	// looks for a waiting control message.
+	backoffTaken func()
 }
 
 // New creates a supervisor with the given log sink.
@@ -716,9 +723,33 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			return
 
 		case <-backoff:
+			// A control message that is ready together with the due timer —
+			// select picks either at random — is taken before the timer's
+			// start. A start, restart or stop is carried out instead of it:
+			// a stop cancels the start, so nothing comes up just to be killed,
+			// and a start or restart takes the place of a pending restart
+			// (backoff is still set, so it says ReplacesRestart), as during
+			// the delay. A status is answered after the timer's start, as on
+			// the next turn.
+			if s.backoffTaken != nil {
+				s.backoffTaken()
+			}
+			var pending *ctrlMsg
+			select {
+			case msg := <-svc.ctrl:
+				pending = &msg
+			default:
+			}
+			if pending != nil && pending.kind != ctrlStatus {
+				handle(*pending)
+				break // out of the select: the message took the timer's place
+			}
 			backoff = nil
 			if desired && cmd == nil {
 				start(Start{Automatic: backoffAuto})
+			}
+			if pending != nil {
+				handle(*pending)
 			}
 
 		case err := <-waitChOrNil(waitCh):
@@ -741,7 +772,14 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			// acted on. A stop wins: the run ends as the stop's, with no
 			// restart, no OnExit and lastExit kept, as when select picks the
 			// stop first and stop() collects the exit. Any other message is
-			// carried out after the exit, as on the next turn.
+			// carried out after the exit, as on the next turn. A start or
+			// restart is the user's action, not an end for OnExit to judge:
+			// the exit counts as any exit does (lastExit, the fast-fail count,
+			// a give-up, the restart it arms), but OnExit does not fire, and
+			// the call then starts the service — in place of the restart the
+			// exit armed (ReplacesRestart) or as the first start after a
+			// failure that is not restarted (AfterGiveUp), and clearing
+			// lastExit and the counts as it always does.
 			if s.exitTaken != nil {
 				s.exitTaken()
 			}
@@ -756,6 +794,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			} else {
 				lastExit = exit
 			}
+			takenOver := pending != nil && (pending.kind == ctrlStart || pending.kind == ctrlRestart)
 			restart := desired && shouldRestart(spec, restarts, success)
 			gaveUp := restart && giveUp()
 			if restart && !gaveUp {
@@ -767,7 +806,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 					s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
 				}
 				afterGiveUp = !success
-				if spec.OnExit != nil {
+				if spec.OnExit != nil && !takenOver {
 					// Own goroutine: the handler may block (TTY prompt) and steer us
 					// via svc.ctrl (start/restart) — doing it synchronously would
 					// deadlock, because we are exactly that loop.
