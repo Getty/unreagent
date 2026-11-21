@@ -1,0 +1,50 @@
+---
+claimed_at: 2026-11-21T23:19:33Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-21T23:19:01Z
+created: 2026-11-21T21:51:19Z
+id: 198
+priority: medium
+started: 2026-11-21T22:58:37Z
+status: done
+tags:
+- skills
+- team
+title: 'Project skill unreagent-ue: the UE and toolkit facts the launcher code depends
+  on'
+updated: 2026-11-21T23:19:33Z
+---
+
+One project skill under .claude/skills/unreagent-ue/ for the developer agents (not shipped, not embedded): the Unreal Engine and UE LLM Toolkit facts the Go code depends on, each marked verified-from-source or unverified.
+
+Why: the same UE-side facts were re-derived from code and comments several times (crash evidence destroyed in k77, k128, k153; engine discovery in k84, k88; started-is-not-ready in k72, k126). Port 3000 and the toolkit bridge are in no project skill; the registry layout lives only in comments in internal/config/engine.go. Scout gap analysis of 2026-11-21 recommends one skill, not a group.
+
+Input: the maintainer has the UE-side research (editor start and -unattended, crash handling, exit codes, engine discovery, build command lines, readiness) written outside the team as a draft. This card is the intake: the draft is checked, not trusted.
+
+Owner: unreagent-skill-author (.claude/skills/unreagent-*). Waits for the draft.
+
+Work:
+- check every fact of the draft against its cited source and against the code that depends on it (internal/config/engine.go, cmd/launcher/lifecycle.go, cmd/launcher/bridge.go, cmd/launcher/main.go); a fact whose source does not hold is dropped or labelled unverified
+- add the toolkit server and bridge facts from the toolkit source at 9f6a0f7: port 3000, the three HTTP routes, the bridge env variables and defaults, the async task envelope, the 30 s and 300 s limits, the npm install need, and that a TCP connect does not prove the tools are registered
+- keep an open-facts list nobody may state as settled: k136, k154, the UE 5.8 re-check, log encoding, editor exit codes
+
+Acceptance:
+- every fact carries its source (engine or toolkit file and symbol, documentation URL, Go file and symbol, or a card) or the label unverified with the reason
+- no restating of the shipped ue-*, unreagent-build, unreagent-iterate skills or of unreagent-windows: link to them
+- the UE section of .claude/skills/unreagent-windows is cut to a pointer so each fact lives in one place
+- description says when to reach for the skill; SKILL.md stays near 150 lines; English only
+
+Follow-up for the main agent after review: add unreagent-ue to briefing.skills of worker, test-writer, reviewer and scout.
+
+Research input 2026-11-21: docs/research/2026-11-21-unreal-editor.md (external, from Epic documentation only; the engine source could not be read). Input, not truth: check each fact against its source and the code. Its open experiments U1-U8 need a Windows machine with an editor.
+
+Skill-author finished (main tree, uncommitted): .claude/skills/unreagent-ue/SKILL.md (140 lines) and the UE section of .claude/skills/unreagent-windows cut to a pointer. Toolkit rows read from source at 9f6a0f7; eight Epic pages re-fetched and marked doc; the rest marked research; no unverified upgraded. k136 has no fitting experiment in the research. Short source tags resolve through the research document's link list. Contradictions between research and code filed as separate cards. Proposed subject: Add the unreagent-ue project skill: sourced UE and toolkit facts (k198).
+
+unreagent-reviewer 2026-11-21: verdict CHANGES NEEDED. Check: gofmt -l / go vet ./... / go test ./... / make windows green; no Go change. Verified: toolkit rows at 9f6a0f7, every Go symbol, re-fetched Epic pages; nothing the research labels unverified was upgraded; unreagent-windows lost no fact. Findings on .claude/skills/unreagent-ue/SKILL.md: (1) :72 quotes Epic with words the page does not contain (blank association): quote verbatim or paraphrase without quotation marks; (2) :106 'if it cannot start, the editor logs an error' is source only for the router-failure path; a failed bind (port taken) is not reported by the toolkit, engine side unverified; (3) :75-76 tag tk-unreal rows as source outside the legend's definition; the method is EngineLauncher._find_software_from_registry; (4) :74 a third Builds location is missing: tk-unreal also reads a Builds subkey under HKLM SOFTWARE EpicGames Unreal Engine; (5) :111 'one dependency' is one runtime dependency, plain npm install also pulls vitest devDependencies; (6) :55 the taskkill /IM consequence is an inference, label it; (9) :108 /mcp/status also returns version, :114 unreal_status and unreal_get_ue_context are answered by the bridge itself; (10) open facts lack a row for U1. Source tags resolving through the research document are acceptable. Main agent: OWNERS rows added for both new project skills; k204 and k207 corrected. Back to unreagent-skill-author.
+
+Skill-author round 2 (2026-11-21): all eight findings applied; 143 lines. Blank-association row paraphrased without quotation marks; server start split into router failure (source) and bind failure (unverified); legend widened to Epic's tk-unreal, method cited as EngineLauncher._find_software_from_registry; third Builds location added (with the author's own reading that launcherInstalls skips that subkey: for the re-review to check); runtime versus dev dependencies; taskkill /IM labelled inference; /mcp/status version; queue exclusions; U1 row added. Narrow re-review requested.
+
+unreagent-reviewer 2026-11-21, narrow re-review: verdict READY. All eight changes in place and correct; nothing else moved in either skill. Full check green (gofmt, go vet, go test ./..., make windows); no Go change. The borrowed claim on the third Builds location was re-fetched and holds; the reading that launcherInstalls skips that subkey is correct (regSubkeyName, InstalledDirectory test). Main agent: OWNERS rows for both project skills, unreagent-ue added to briefing.skills of worker, test-writer, reviewer and scout.
+
+Committed as 149a173 (release-manager).
