@@ -24,7 +24,7 @@ above silently.
 ## Check
 
 ```bash
-test -z "$(gofmt -l cmd internal)" && go vet ./... && go test ./... && make windows
+test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test ./... && make windows
 ```
 
 Use `gofmt -l`, not `make fmt`: that target runs `gofmt -w` and would rewrite the tree

@@ -29,6 +29,10 @@ jobs:
           if [ -n "$prev" ]; then
             printf '\n**Full Changelog**: %s/%s/compare/%s...%s\n' \
               "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$prev" "$GITHUB_REF_NAME" >> "$notes"
+          else
+            # Expected for the first release only. Otherwise the checkout is
+            # shallow and the previous tag is missing: keep fetch-depth: 0.
+            echo "::warning::No earlier v* tag found before ${GITHUB_REF_NAME}; the release notes have no Full Changelog link (shallow clone? the checkout needs fetch-depth: 0)"
           fi
           cat "$notes"
 

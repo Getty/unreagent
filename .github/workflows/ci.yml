@@ -22,10 +22,33 @@ jobs:
       - name: gofmt
         run: |
           # vendor/ is third-party code and is not checked.
-          unformatted="$(gofmt -l cmd internal)"
+          unformatted="$(gofmt -l cmd internal skills)"
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-clean:"
             echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Release notes from Changes
+        # release.yml builds the release notes with scripts/changes-section.sh,
+        # but only on a tag push. Run it here on the newest stamped version, so
+        # a broken script or Changes layout shows up before a tag does.
+        run: |
+          # The newest stamped version is the first version line after {{$NEXT}}.
+          version="$(awk '{ sub(/\r$/, "") } seen && /^[^ \t]/ { print $1; exit } $1 == "{{$NEXT}}" { seen = 1 }' Changes)"
+          if [ -z "$version" ]; then
+            echo 'No version line after {{$NEXT}} in Changes'
+            exit 1
+          fi
+          notes="$(scripts/changes-section.sh "$version")"
+          if [ -z "$notes" ]; then
+            echo "scripts/changes-section.sh printed no release notes for $version"
+            exit 1
+          fi
+          echo "Release notes for $version:"
+          echo "$notes"
+          if scripts/changes-section.sh '{{$NEXT}}' > /dev/null 2>&1; then
+            echo 'scripts/changes-section.sh accepted {{$NEXT}}, which is not a version'
             exit 1
           fi
 
