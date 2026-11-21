@@ -1,0 +1,235 @@
+---
+claimed_at: 2026-11-21T19:06:54Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T19:07:07Z
+created: 2026-11-21T13:46:30Z
+id: 178
+priority: low
+started: 2026-11-21T18:35:18Z
+status: done
+tags:
+- refactor
+- security
+title: One private-file writer for the MCP config and unreagent.local.yaml
+updated: 2026-11-21T19:07:07Z
+---
+
+After k44 and k169: two writers now keep a secret-holding file private.
+- `writePrivateFile` (cmd/launcher/mcpconfig.go, k44) writes the MCP config 0600 and tightens an open existing file.
+- `writeFileAtomic(path, data, secret)` (cmd/launcher/hermes.go, k167/k169) does the same for unreagent.local.yaml, atomically via a temp file and a rename, and reports an open mode on every write.
+
+They overlap: the mode check, the Unix-only tightening, and the returned old mode.
+
+**To do:** fold them into one helper in helpers.go, with one behaviour and one test set:
+- atomic replace;
+- 0600 for a new file;
+- tighten an open file only when asked;
+- return the open mode.
+
+Check the MCP config path in particular: it is not atomic today, so a crash mid-write could leave a truncated file. Decide whether it should become atomic too.
+
+Pure refactor plus that one decision. Lane: unreagent-worker. Touches helpers.go, mcpconfig.go and hermes.go, so it goes after k44, k169 and k147.
+
+**Decision 2026-11-21 (main agent):** one helper in helpers.go with one behavior, used for both the MCP config file and unreagent.local.yaml.
+- **Atomic:** always, via a temp file in the same directory and a rename. That includes the MCP config, so a crash mid-write cannot leave a truncated file.
+- **Mode:** 0600 for a new file.
+- **Tightening:** an existing file open to group or others is tightened only when the caller asks (Unix only).
+- **Return value:** the old mode, so callers keep their warnings.
+- **Behavior kept:** the messages and warnings of both callers stay as they are; only the mechanics merge.
+- **MCP config:** since k181 it is written into a MkdirTemp dir (0700) and removed when run() returns. Keep that, and check that the temp file lands in that dir. Leave nothing behind on failure.
+- **Leftover:** check how the k137 sweep / k164 leftover handling deals with a temp file left by a crash.
+
+Worker report (k178). Base 0c1839c; tree commit-ready, nothing committed.
+
+**Change**
+- helpers.go: `writeFileAtomic(path, data, tighten)` is the one writer, moved from hermes.go together with `writeTarget`. The parameter `secret` is renamed `tighten`, because the Hermes config also holds the token but passes false. It always writes a temp `<name>.tmp-<random>` in the target's directory, then fsync, then rename. A new file gets 0600. A replaced file keeps its bits, or gets 0600 when they are open and `tighten` is set. It returns the open old mode and 0 on any failure. On failure it removes the temp file. Only on failure now: the old code ran a deferred Remove after a successful rename too.
+- mcpconfig.go: `writePrivateFile` is gone. `writeMCPConfigs` and `writeAgentMCPConfig` call `writeFileAtomic(..., true)`. Every caller message is byte-identical. The hermes.go callers are unchanged.
+
+**Decision: leftover for writeConfig / -write-mcp-config targets.** A hard kill during the few-KB write plus fsync leaves `<target>.tmp-<digits>` next to the target, with the token in it. A `.mcp.json` gitignore line does not match that file. I chose a doc counterpart and no code sweep:
+- The launcher does not own the target's directory.
+- A sweep could delete a concurrent launcher's in-flight temp file.
+- hermes-setup handles its leftover the same way, by the README alone.
+
+The agent's own config needs nothing. Its temp file lands inside the 0700 `unreagent-*` MkdirTemp dir, which run() removes, and a hard kill already leaves that dir behind, as the README says.
+
+**Behavior deltas for the MCP config files.** hermes-setup is unchanged.
+1. The directory must be writable. A writable file in a read-only directory now gets a WARN "create a temp file in directory ...", where it used to be written in place.
+2. A closed read-only file (0400) is now replaced and keeps 0400. It used to fail to open, with a WARN.
+3. A dangling symlink is refused with a WARN. O_CREATE used to create the link's target. An existing link target is still followed.
+4. The error "mode %04o is open to others and cannot be tightened ..." is gone: the old file is never chmodded. A failed write no longer logs "tightened". It used to when the chmod succeeded and the write then failed.
+5. The file is a new inode. Hardlinks break, and the owner becomes the launcher's user.
+
+**Windows: unverified, compiled only.** `os.Rename` is MoveFileEx with REPLACE_EXISTING, which replaces an existing file. This is kept as writeFileAtomic already had it. Two cases are new for the MCP config:
+- A target held open by another process without FILE_SHARE_DELETE fails at the rename.
+- A target with the read-only attribute fails at the rename.
+
+The in-place write may have succeeded in both cases.
+
+**Tests**
+- New in helpers_test.go:
+  - `TestWriteFileAtomicCreatesANewFile0600`: tighten on and off.
+  - `TestWriteFileAtomicTightensOnlyWhenAsked`: 7 modes × tighten, checking the mode, the returned mode and whole replacement.
+  - `TestWriteFileAtomicLeavesTheOldFileOnFailure`: read-only dir; content, mode and the returned 0 are kept.
+  - `TestWriteFileAtomicRemovesItsTempFileOnFailure`: the rename onto a directory fails, so no temp file is left and 0 is returned.
+- New in mcpconfig_test.go: `TestWriteMCPConfigsLeavesTheOldFileOnFailure`, a caller-level test that pins the atomic MCP config, its WARN text, and no tightened or written line.
+- Moved from hermes_test.go to helpers_test.go, unchanged: `TestWriteFileAtomicKeepsSymlinkedDirectory`.
+- Dropped: `TestWriteMCPConfigsCreatesTheFilePrivate`. Its new-file 0600 is now `TestWriteFileAtomicCreatesANewFile0600`, and its "no tightened line" is the 0600 row of TightensAFileOpenToOthers.
+- Kept, because they pin each caller's wiring and messages: `TestWriteMCPConfigsTightensAFileOpenToOthers` and `TestHermesSetupKeepsFileMode`, `TightensOpenLocalConfig`, `WarnsOpenHermesConfig`, `ReadOnlyProjectDir`.
+
+**Mutation** (`go test -overlay`, run with `-run 'WriteFileAtomic|WriteMCPConfigs|HermesSetup'`). All 9 mutants were killed:
+
+| Mutant | Killed by |
+|---|---|
+| inplace | LeavesTheOldFileOnFailure (+MCP), KeepsSymlinkedDirectory, TightensOnlyWhenAsked, HermesSetupReadOnlyProjectDir/KeepsFileMode/HermesWriteFailureKeepsSavedToken |
+| newmode0644 | CreatesANewFile0600, HermesSetupKeepsFileMode/WarnsOpenHermesConfig |
+| alwaystighten | TightensOnlyWhenAsked, HermesSetupKeepsFileMode/WarnsOpenHermesConfig |
+| nevertighten | TightensOnlyWhenAsked, HermesSetupTightensOpenLocalConfig, WriteMCPConfigsTightensAFileOpenToOthers |
+| returnonlytightened (the old writePrivateFile semantics) | TightensOnlyWhenAsked, HermesSetupWarnsOpenHermesConfig |
+| noremove | RemovesItsTempFileOnFailure |
+| openonfail | RemovesItsTempFileOnFailure |
+| tempelsewhere (CreateTemp in "") | LeavesTheOldFileOnFailure (+MCP), KeepsSymlinkedDirectory, HermesSetupReadOnlyProjectDir |
+| mcpnotighten (caller passes false) | WriteMCPConfigsTightensAFileOpenToOthers |
+
+**Full check: all green.**
+- gofmt -l: clean.
+- go vet ./... and GOOS=windows go vet ./...: ok.
+- go test -count=1 -timeout 600s ./...: ok.
+- go test -race -timeout 900s ./cmd/launcher: ok (118 s).
+- make linux and make windows: ok.
+
+**Docs to change** (not touched; for the dispatcher to route).
+
+README, unreagent-doc-writer:
+- ~:104-108, the MCP config paragraph: "tightened to 0600 before the content goes in ... if that chmod fails, the old file is left untouched". It should say instead:
+  - the file is replaced atomically (temp `<name>.tmp-<digits>`, then rename), and the directory must be writable;
+  - an open file comes out 0600 and the log names the old mode;
+  - a failure is a WARN and leaves the old file untouched;
+  - a symlink is followed, and a dangling one is refused.
+- ~:329-341, the .gitignore block and the leftover paragraph: add a `.mcp.json.tmp-*` line (or `<path>.tmp-*` per writeConfig target), and extend the kill-mid-write sentence to the MCP config files.
+- :1411, the `-write-mcp-config` row: "an existing file open to group or others is tightened first". It should say the file is replaced atomically and comes out 0600.
+- :1164-1165 is still true.
+
+Skills, unreagent-skill-author:
+- unreagent-core :62, the mcpconfig.go row: "each target 0600 via `writePrivateFile`" should become "replaced atomically via `writeFileAtomic` (helpers.go)".
+- unreagent-core :65, the helpers.go row: add `writeFileAtomic` / `writeTarget`, the one writer of secret-holding files.
+- unreagent-config :285-305: "helpers in cmd/launcher/hermes.go" and "`writeFileAtomic(path, data, secret)` is the house writer for user config" should say it now lives in helpers.go, takes `tighten`, and also writes the MCP configs.
+- unreagent-config :324: "`writeFileAtomic` with `secret` set" should read `tighten`.
+
+**Proposed subject:** Fold the private-file writers into one atomic writer (k178)
+
+**Changes:** amend the unreleased k44 entry ("mcp.writeConfig and -write-mcp-config files are written 0600; ...") rather than add one. Suggested text:
+
+  - mcp.writeConfig and -write-mcp-config files are written 0600 and replaced atomically through a temp file in their directory, as hermes-setup writes its files, so a crash mid-write cannot leave a truncated file; that directory must be writable. An existing file open to group or others comes out 0600, and the log names its old mode (Unix only). With mcp.token set, ...(rest unchanged)
+
+The change is user-visible: deltas 1-3, and a file that can no longer be truncated.
+
+Ready for review: one atomic writeFileAtomic(path, data, tighten) in helpers.go for the MCP configs and hermes-setup; full check green (gofmt, vet linux+windows, go test, -race, make linux/windows), 9/9 mutants killed; Windows rename path unverified. Report, doc pointers and proposed subject/Changes in the note above.
+
+Main agent 2026-11-21, after the worker's handoff.
+
+Decisions:
+- The worker's behavior changes 1-5 for the MCP config files are accepted:
+  1. The directory must be writable.
+  2. A 0400 file is replaced and keeps 0400.
+  3. A dangling symlink is refused.
+  4. The "cannot be tightened" path is gone.
+  5. The file is a new inode.
+  These are the same as hermes-setup.
+- On Windows, a target that is held open or read-only may now fail at the rename. That is accepted and stays unverified.
+- Leftover temp files get a README counterpart, not cleanup code.
+
+Docs, done by the main agent in the worktree:
+- README MCP config paragraph (~:104-113).
+- The .gitignore block gains `.mcp.json.tmp-*`, and the leftover paragraph is generalized (~:330-345).
+- The -write-mcp-config flag row.
+- The unreagent.example.yaml writeConfig comment (~:251-255).
+
+Skill rows (unreagent-core, unreagent-config) are with unreagent-skill-author, then review.
+
+Changes: amend the unreleased k44 entry, as the worker proposed.
+
+skill-author: project skills updated to the worktree code. unreagent-core/SKILL.md:62 (mcpconfig.go row: writeMCPConfigs and writeAgentMCPConfig go through writeFileAtomic(..., true), writePrivateFile gone), :65 (helpers.go row now names writeFileAtomic(path, data, tighten) and writeTarget); hermes.go row :66 names no writer, unchanged. unreagent-config/SKILL.md:23 (writeTarget no longer called hermes-setup's, located in helpers.go), :284-286 (the two helpers split by file), :293-314 (writeFileAtomic bullet: tighten, the MCP config callers, temp <name>.tmp-*, temp removed on failure, writable directory, hard link keeps the old content), :319 and :334 (secret -> tighten). No other unreagent-* skill mentioned the writer. No shipped skills/ file changed.
+
+Reviewer verdict (unreagent-reviewer), k178: CHANGES NEEDED. One test is missing. The code and the docs are otherwise right.
+
+Files reviewed (worktree agent-a07d6b175a7fa2100, base 0c1839c): cmd/launcher/helpers.go, helpers_test.go, mcpconfig.go, mcpconfig_test.go, hermes.go, hermes_test.go, README.md, unreagent.example.yaml, .claude/skills/unreagent-core/SKILL.md, .claude/skills/unreagent-config/SKILL.md.
+
+Check, run by me in the worktree, all green:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 -timeout 600s ./...: ok.
+- go test -race -count=1 -timeout 900s ./cmd/launcher: ok (114 s).
+- make linux and make windows: ok.
+
+The diff applies on main 65a3f77: git apply --check -3 is clean in a scratch clone, main untouched.
+
+Windows behavior is UNVERIFIED: vet and cross-compile only, and every new writer test skips on Windows or does not run there (CI is ubuntu only).
+
+Code: correct on Unix. On Windows it is correct as far as the Go source shows.
+- writeFileAtomic (helpers.go:115-153) creates the temp file in the resolved target's directory (:131). It writes, then chmods to the final mode, then syncs, closes and renames (:146).
+- On any failure it removes the temp file (:149) and returns 0. On success it returns the open old mode, with tighten or without.
+- Windows: os.Rename is MoveFileEx with MOVEFILE_REPLACE_EXISTING (internal/syscall/windows). os.Remove clears a read-only attribute before deleting, so a read-only temp file is still cleaned up.
+- writeAgentMCPConfig (mcpconfig.go:107) writes its temp file inside the 0700 MkdirTemp dir, and RemoveAll still leaves nothing behind on failure.
+- Caller messages: I compared the string literals of the base and worktree files. The only literal gone from mcpconfig.go is "mode %04o is open to others and cannot be tightened ..." (accepted delta 4). The hermes.go literals moved to helpers.go unchanged. Every caller format string is byte-identical.
+
+Mutants (go test -overlay, my own overlays regenerated from the current tree, -run 'WriteFileAtomic|WriteMCPConfigs|HermesSetup|AgentMCPConfig'):
+- inplace: killed (7 tests, among them LeavesTheOldFileOnFailure and WriteMCPConfigsLeavesTheOldFileOnFailure).
+- returnonlytightened: killed (TightensOnlyWhenAsked, HermesSetupWarnsOpenHermesConfig).
+- noremove: killed (RemovesItsTempFileOnFailure).
+These match the worker's table.
+
+Findings, most important first:
+
+1. BLOCKING: nothing tests that writeFileAtomic refuses a dangling symlink.
+   - Code: helpers.go:116-119.
+   - Claims: README.md:108-109 ("or the target is a dangling symlink ... a WARN is logged"), the skill unreagent-config (Secrets), and accepted delta 3.
+   - Mutant danglingok: writeFileAtomic ignores writeTarget's error and writes through the link path. With it, the WHOLE ./cmd/launcher package passes (41.9 s).
+   - Why nothing catches it: hermes-setup checks writeTarget itself first (hermes.go:103, :133), so TestHermesSetupRefusesDanglingSymlinks cannot see the helper's refusal. No MCP-config test has a link.
+   - The same gap covers following a symlinked file. My mutant nowritetarget is killed only by TestHermesSetupFollowsSymlinks, through the Hermes caller.
+   - Fix (helpers_test.go, owner unreagent-worker per OWNERS; the test-writer lane fits too): add a test in which writeFileAtomic on a dangling link returns an error matching os.ErrNotExist and naming the link, returns 0, leaves the link pointing where it did, creates nothing at the link's target and leaves no *.tmp-* file. Ideally also add a symlinked-file case in which the link stays a link and its target gets the data and the mode. Optionally add a writeMCPConfigs case that pins the WARN line.
+
+2. Windows (UNVERIFIED), a correction to the card's Windows note.
+   - The note says a read-only target is a new failure at the rename. It is not new: the old writePrivateFile's OpenFile(O_WRONLY) on a file with the read-only attribute fails with ACCESS_DENIED too. Only the target held open without FILE_SHARE_DELETE is a new failure.
+   - A new risk the note leaves out: the agent's --mcp-config file now goes through a rename too (mcpconfig.go:107, helpers.go:146), and a failure there ends the launcher (agentMCPConfigError).
+   - Go retries renames on Windows for exactly this case: cmd/internal/robustio treats ACCESS_DENIED and SHARING_VIOLATION as ephemeral (an AV scanner or indexer holding the fresh file).
+   - Not blocking, since hermes-setup already has the same rename. Add it to the Windows smoke list: launcher start with Defender on, and a writeConfig target held open by an editor or a client.
+
+3. Nit (doc-writer; the main agent edited it). README.md:349-350 says "for a `writeConfig` path with another name, add its own `<name>.tmp-*` line".
+   - The example config's own second target, .vscode/mcp.json, is such a path: it leaves mcp.json.tmp-*, which .mcp.json.tmp-* does not match.
+   - A -write-mcp-config path with another name is not covered by the sentence.
+   - Suggested: "for a target with another name (such as .vscode/mcp.json), add its own <name>.tmp-* line".
+
+4. Nit (doc-writer): two wrapping slips.
+   - README.md:113 is a 46-column line inside a paragraph wrapped near 78: "keeps the old content. With `mcp.token` set, a".
+   - unreagent.example.yaml:255 is 85 columns in a block wrapped at 80.
+
+Not findings:
+- README.md and unreagent.example.yaml are owned by unreagent-doc-writer in OWNERS, and the main agent edited them. The house rules allow the main agent to edit plain prose docs, and only comments changed.
+- No German in the changed text, and no ticket ids in the README.
+- Dropping TestWriteMCPConfigsCreatesTheFilePrivate is acceptable: a caller-level os.WriteFile mutant is still killed by TightensAFileOpenToOthers.
+- The docs otherwise match the code: README:104-113, the .gitignore block :341, the -write-mcp-config row, example yaml :251-255, unreagent-core :62/:65, unreagent-config :23/:284-314/:319/:334.
+
+Proposed Changes wording: amend the unreleased k44 entry (Changes:354-358). This assumes finding 1 is fixed, or that it is accepted as untested.
+  - mcp.writeConfig and -write-mcp-config files are written 0600 and replaced
+    atomically through a temp file <name>.tmp-<digits> in their directory, as
+    hermes-setup saves its files, so a crash mid-write cannot leave a
+    truncated file. That directory must be writable, and a dangling symlink
+    is refused with a WARN. An existing file open to group or others comes
+    out 0600, and the log names its old mode (Unix only). With mcp.token set,
+    a file inside the project that git does not ignore gets a WARN, in window
+    mode also on stderr: add it to .gitignore, and git rm --cached it if git
+    already tracks it. The recommended .gitignore lists .mcp.json.tmp-* for a
+    temp file that a kill mid-write leaves behind.
+
+Scratch (overlays, logs): the reviewer's session scratchpad, k178-rv/.
+
+Main agent 2026-11-21, after the review:
+- Finding 1 (no test for the dangling-symlink refusal) goes to unreagent-test-writer: one test in helpers_test.go, plus a followed-symlink case.
+- Findings 3 and 4 are fixed by the main agent in the worktree: README .tmp-* paragraph names .vscode/mcp.json and -write-mcp-config paths; README :104-120 and the example yaml :251-258 rewrapped.
+- Finding 2 is accepted, and the earlier note is corrected. On Windows only a target held open by another process is new; a read-only target already failed before. The agent's own config file now goes through a rename too, and a failure there stops the launcher. Unverified, so it belongs on the Windows smoke run: start with Defender on, and with a target held open by an editor.
+- Then the release-manager, with the reviewer's Changes wording.
+
+Tests added in cmd/launcher/helpers_test.go: TestWriteFileAtomicRefusesADanglingSymlink, TestWriteFileAtomicFollowsASymlinkedFile. Mutant (writeTarget returns path,nil on ErrNotExist, via go test -overlay) fails the first; both green on the real code. gofmt, vet (linux+windows), go test ./cmd/launcher clean.
+
+Committed as f98bad5 on main (ff from worktree branch). Full check green on the rebased tree. Windows rename path unverified; add to smoke run: start with Defender on, and a writeConfig target held open by an editor.
