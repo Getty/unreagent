@@ -59,25 +59,31 @@ type bridgeModules struct {
 //  2. Node bridges: script present? node_modules marked, i.e. the bridge
 //     passed a smoke test on it? (otherwise npm install)
 //  3. Smoke test: start the server, send MCP initialize, wait for the answer.
-//  4. UNREAL_MCP_URL: report asynchronously as soon as the in-editor server is
-//     reachable — or warn if it is not.
+//  4. UNREAL_MCP_URL: once every bridge is prepared, report asynchronously as
+//     soon as the in-editor server is reachable — or warn if it is not.
 //
 // An http/sse entry (no command) starts no process, so only the last check
-// applies to it: once every bridge is prepared, its url is watched the same
-// way, asynchronously — the agent is not held back for it (k87).
+// applies to it: its url is watched the same way, asynchronously — the agent
+// is not held back for it (k87).
 //
 // ctx is the launcher's signal context: once it is cancelled, the install or
 // smoke test in progress is stopped, the remaining bridges are skipped and no
-// watcher starts; the watchers already running end with it.
+// watcher starts; the watchers, once started, end with it.
 func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
-	var remote []string // names of the http/sse entries
+	type watch struct {
+		name string
+		ep   endpoint
+		url  string
+	}
+	var watches []watch // started once the loop is done
 	for name, def := range cfg.MCP.ExtraServers {
 		if ctx.Err() != nil {
 			return // shutting down — no further bridge to check
 		}
 		command, _ := def["command"].(string)
 		if command == "" {
-			remote = append(remote, name)
+			u, _ := def["url"].(string)
+			watches = append(watches, watch{name, remoteEndpoint, u})
 			continue
 		}
 		var args []string
@@ -116,18 +122,17 @@ func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		passed := smokeTestMCP(ctx, name, command, args, env, agentWorkdir, logger)
 		settleModules(ctx, name, modules, passed, logger)
 
-		if u := envMap["UNREAL_MCP_URL"]; u != "" && ctx.Err() == nil {
-			go waitForEndpoint(ctx, name, editorEndpoint, u, logger)
+		if u := envMap["UNREAL_MCP_URL"]; u != "" {
+			watches = append(watches, watch{name, editorEndpoint, u})
 		}
 	}
-	// After the loop, so an npm install of another bridge does not use up the
-	// window before the editor has even been started.
+	// After the loop, so a later bridge's npm install does not use up a
+	// window before the editor has even been started (k87, k163).
 	if ctx.Err() != nil {
 		return
 	}
-	for _, name := range remote {
-		u, _ := cfg.MCP.ExtraServers[name]["url"].(string)
-		go waitForEndpoint(ctx, name, remoteEndpoint, u, logger)
+	for _, w := range watches {
+		go waitForEndpoint(ctx, w.name, w.ep, w.url, logger)
 	}
 }
 

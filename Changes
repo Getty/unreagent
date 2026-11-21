@@ -281,6 +281,10 @@ Revision history for unreagent
     UNREAL_MCP_URL ones included, show only scheme, host and path, never user
     info or query; an https URL without a port is probed on 443 instead of
     80, and the watch ends silently on shutdown.
+  - The in-editor server's reachability watch (UNREAL_MCP_URL) starts once
+    every MCP bridge is prepared, so another bridge's npm install no longer
+    uses up its 5 minutes and warns "not reachable" before the editor has
+    even started.
   - New mcp.allowedOrigins: the browser origins the MCP server accepts in an
     Origin header, so a browser-based MCP client can be served from a
     non-loopback origin. Absent or empty keeps the built-in loopback

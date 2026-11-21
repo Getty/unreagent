@@ -1019,6 +1019,91 @@ func TestPrepareMCPBridgesStdioEntryUnchanged(t *testing.T) {
 	}
 }
 
+// k163: a stdio bridge's UNREAL_MCP_URL watch started inside the loop, right
+// after that bridge's smoke test, so a later bridge's npm install (up to five
+// minutes) used up the window before the editor had even been started, and
+// the user got a false "not reachable". The watch now starts after the loop,
+// as the http/sse one does (k87).
+//
+// Two node bridges, each with an UNREAL_MCP_URL that answers: the map gives no
+// order, so whichever is prepared first is the one whose watch must wait for
+// the other. Each npm install holds until the test releases it. A watch's
+// first connect is the start of its window and is logged at once, so no
+// "reachable" line may appear while the later install is held.
+func TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall(t *testing.T) {
+	s := newScripts(t)
+	shortenEndpointWait(t, time.Minute, 10*time.Millisecond)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	dir := t.TempDir()
+	// npm runs in the bridge's directory.
+	s.write(filepath.Join(dir, "bin", "npm"), "touch ready\nwhile [ ! -e release ]; do sleep 0.01; done\nexit 0\n")
+	s.write(filepath.Join(dir, "bin", "node"), initAnswer)
+	cfg := &config.Config{}
+	cfg.MCP.Enabled = true
+	cfg.MCP.ExtraServers = map[string]map[string]interface{}{}
+	cfg.Runtimes.Node.Npm = filepath.Join(dir, "bin", "npm")
+	names := []string{"alpha", "beta"}
+	for _, name := range names {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{"index.js", "package.json"} {
+			if err := os.WriteFile(filepath.Join(dir, name, f), []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg.MCP.ExtraServers[name] = map[string]interface{}{
+			"command": filepath.Join(dir, "bin", "node"),
+			"args":    []interface{}{name + "/index.js"},
+			"env":     map[string]interface{}{"UNREAL_MCP_URL": srv.URL + "/mcp"},
+		}
+	}
+	file := func(name, f string) string { return filepath.Join(dir, name, f) }
+	release := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(file(name, "release"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log syncLog
+	done := runBridges(ctx, cfg, dir, &log)
+
+	first, later := "", ""
+	for deadline := time.Now().Add(10 * time.Second); first == ""; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no npm install started within 10s:\n%s", log.String())
+		}
+		for i, name := range names {
+			if fileExists(file(name, "ready")) {
+				first, later = name, names[1-i]
+			}
+		}
+	}
+	release(first)
+	waitForFile(t, file(later, "ready"), 10*time.Second)
+	// The loop is on the later install now. Fixed code starts no watch here,
+	// so there is nothing to wait for: the hold is a bound, and a watch
+	// started in the loop was started before this install even began.
+	time.Sleep(200 * time.Millisecond)
+	if out := log.String(); strings.Contains(out, "is reachable") {
+		t.Fatalf("the watch of '%s' started while the npm install of '%s' was still running:\n%s", first, later, out)
+	}
+
+	release(later)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("bridge preparation still running 10s after the last release:\n%s", log.String())
+	}
+	for _, name := range names {
+		waitForLine(t, &log, "MCP server '"+name+"': in-editor server "+srv.URL+"/mcp is reachable.", 5*time.Second)
+	}
+}
+
 // k87: a url without a port was probed on :80 whatever its scheme, so an
 // https entry was watched on the wrong port. The scheme's default applies now,
 // and an IPv6 host keeps its brackets. The urls are parsed as waitForEndpoint
