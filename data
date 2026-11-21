@@ -1,0 +1,187 @@
+---
+class: standard
+completed: 2026-11-21T16:04:35Z
+created: 2026-11-21T14:48:02Z
+id: 182
+priority: medium
+started: 2026-11-21T15:31:52Z
+status: done
+tags:
+- supervisor
+- bug
+title: A shutdown that meets a due restart timer can still start the editor once
+updated: 2026-11-21T16:05:07Z
+---
+
+Found by the k179 review (finding 3). This is pre-existing and outside k179's scope.
+
+**The bug:** a shutdown can still start the editor once. In `internal/supervisor/supervisor.go` (main 602304e, the loop's select around :713-721), `ctx.Done()` and a due `backoff` timer are two ready cases of one `select`, and Go picks between them at random. When the launcher shuts down just as a restart or start delay comes due, the loop can take `<-backoff`, run PreStart and spawn the editor. Only on the next turn does `ctx.Done()` stop it again.
+
+**Done means:**
+- Once the context is done, a due backoff starts nothing: no PreStart, no spawn.
+- A test pins this. Only make it deterministic through the existing hooks (e.g. `backoffTaken`, after k179 lands) or a fake timer, never by sleeping.
+- The test fails against today's code. Show that with an overlay mutation.
+
+**Lane:** unreagent-worker. Start it after k179 lands, since both edit the same loop.
+
+Main agent 2026-11-21: decision before handing this to unreagent-worker (my choice, not the maintainer's).
+- When the backoff timer fires, the loop checks ctx.Err() before starting anything. If the context is done, it starts nothing (no PreStart, no spawn) and takes the shutdown path at once.
+- The same check covers a start that a control call triggers and the loop takes in the same turn as ctx.Done(), if such a path exists. The worker checks this and says so.
+- Test: deterministic through the backoffTaken seam from k179, or by cancelling ctx inside a PreStart hook of the previous start. No sleeps decide the outcome. It must fail on today's code, shown by an overlay mutation.
+- Changes: fold into the k37/k179 unreleased bullet if it fits; otherwise one short entry.
+
+unreagent-worker: tests first (internal/supervisor/cancel_test.go: TestShutdownAtADueTimerStartsNothing, TestControlCallTakenAtTheShutdownStartsNothing). Red on 84bec97: all 6 subtests fail 50/50 at -count=50. Step 5: yes, control calls do start the process in the same turn as ctx.Done(): a start/restart taken at an exit (exitTaken peek) or at a due timer (backoffTaken peek), and the main select can pick a waiting ctrl message over ctx.Done(). Fixing it with a single ctx check in start().
+
+unreagent-worker, done (worktree on 84bec97, not committed; CommandResult untouched):
+
+Change: internal/supervisor/supervisor.go, the loop's start() closure. It now returns at its top when ctx.Err() != nil and logs "[<name>] not started: shutting down". That means no PreStart, no spawn, and no state touched (afterGiveUp is kept). The comment on start() says why (k182).
+
+Choice (mine): one check in start(), not a return inside the backoff case. Every start the loop makes goes through start(): the due timer, the delayed first start, ctrlStart, ctrlRestart, and a call taken at an exit or at a due timer. So one check covers what the decision note asks for, control-call starts included. After a refused timer start, backoff is nil and no process runs. The next select can only see ctx.Done() and a waiting call, which is answered without a start, so the loop takes the shutdown on the turn right after.
+
+Step 5 (control call in the same turn as ctx.Done()): yes, the paths exist and all three started the process on 84bec97.
+(a) The main select picks a waiting ctrl message over ctx.Done(). Production ctrl is unbuffered, so a blocked StartService/RestartService is a ready case.
+(b) The exit branch takes a pending start/restart at the exitTaken peek.
+(c) The backoff case takes a pending start/restart at the backoffTaken peek.
+(b) and (c) are pinned by tests through the seams. (a) cannot be made deterministic without a new seam, but it goes through the same start() check.
+
+Tests (internal/supervisor/cancel_test.go, next to the k68 done-context tests):
+- TestShutdownAtADueTimerStartsNothing, subtests restart and delayed_first_start. backoffTaken cancels ctx once the timer is taken. The test asserts that PreStart ran only for run 1 ([false], or [] for the start delay) and that "started (pid" occurs once, or 0 times for the delay.
+- TestControlCallTakenAtTheShutdownStartsNothing, subtests start/restart at an exit (exitTaken) and start/restart at a due restart (backoffTaken). The call cancels ctx before it is sent. The test asserts PreStart [false], one spawn, and that the call is answered with not running.
+- control_test.go: runWithQueuedCall takes a parent context, so a call can cancel the loop's ctx. Its two k179 callers pass context.Background(), so nothing else changes.
+
+Results, -count=50, run filter on both tests:
+- red on 84bec97: all 6 subtests fail 50/50.
+- green with the fix: ok.
+- mutation through go test -overlay, which removes only the 4-line ctx check from supervisor.go (the tree was not edited): all 6 subtests fail 50/50.
+
+Full check, all green:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok.
+- go test -race ./internal/supervisor: ok.
+- make linux and make windows: built.
+Windows: this is platform-neutral loop code. The Windows build compiles, but none of it was run on Windows.
+
+Drift for this board (not fixed): a shutdown that comes while PreStart runs still spawns the process once. start() checks ctx only before PreStart, and the editor's PreStart shells out (crash reporter kill, Saved/Crashes), so that window can last seconds. The fix would be a second ctx check after PreStart, with a test that cancels inside PreStart.
+
+Proposed subject: Let a shutdown beat a due restart and a waiting start call (k182)
+
+Changes: fold into the k37/k179 bullet "A stop, start or restart (ue_stop, ...)". Append to its end:
+"Once the launcher shuts down, neither a restart or start delay coming due nor such a start or restart starts anything, so the editor is no longer spawned just to be killed.
+
+Ready for review: ctx check at the top of the loop's start() (supervisor.go). Tests are TestShutdownAtADueTimerStartsNothing and TestControlCallTakenAtTheShutdownStartsNothing (cancel_test.go). Red 50/50 on 84bec97, green with the fix, overlay mutant red 50/50. Full check green, incl. race and make windows (Windows not run). Details, the drift (a cancel during PreStart) and the commit subject and Changes wording are in the note above.
+
+Main agent 2026-11-21, on the worker's result:
+- I accept the single check in start(), which also covers control-call starts. That is my decision.
+- The drift the worker found, a shutdown that arrives while PreStart runs still spawns once, is folded into this card rather than given a new one, because it is the same race one step later. start() checks ctx again after PreStart returns. If the context is done, it does not spawn and logs the same 'not started: shutting down' line. A test cancels inside PreStart.
+- Back to the worker for that round, then unreagent-reviewer.
+
+unreagent-worker, the PreStart window is folded in (worktree on 84bec97, not committed):
+
+Change: start() in internal/supervisor/supervisor.go checks ctx.Err() again once PreStart returns, inside the PreStart branch. When the context is done it does not spawn and logs the same "[<name>] not started: shutting down" line. The comment on start() names this case as well. afterGiveUp was already cleared before PreStart, so a dropped start leaves it cleared; nothing reads it during the shutdown.
+
+Test: TestShutdownDuringPreStartSpawnsNothing (cancel_test.go), subtests first_start and restart. PreStart cancels the context itself, on its 1st call or on the restart after run 1. The test asserts how often PreStart ran, the processes spawned (0, or 1 for run 1 only) and the "not started: shutting down" line.
+
+Results, -count=50, -run TestShutdownDuringPreStartSpawnsNothing:
+- tree before the second check: both subtests fail 50/50.
+- overlay with supervisor.go from 84bec97: both fail 50/50 ("1 processes spawned, want 0", "2 ... want 1").
+- overlay that drops only the second check (the first check stays): both fail 50/50.
+- with the fix: ok, together with the two earlier k182 tests at -count=50.
+- I re-ran the first mutant (only the check before PreStart dropped) against the current tree: the 6 earlier subtests still fail 50/50, through the PreStart assertion, since the second check alone stops the spawn.
+
+Full check, all green:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok.
+- go test -race ./internal/supervisor: ok.
+- make linux and make windows: built.
+Windows: this is platform-neutral loop code. The Windows build compiles, but none of it was run on Windows.
+
+Proposed subject (68 chars, replaces the earlier one): Let a shutdown beat a due restart, a waiting call and PreStart (k182)
+
+Changes (replaces the earlier wording): fold into the k37/k179 bullet "A stop, start or restart (ue_stop, ...)". Append to its end:
+"Once the launcher shuts down, neither a restart or start delay coming due nor such a start or restart starts anything, and a shutdown during the pre-start step stops the start before its spawn, so the editor is no longer spawned just to be killed.
+
+Ready for review again. start() now has a second ctx check after PreStart, and TestShutdownDuringPreStartSpawnsNothing pins it: red 50/50 on 84bec97 and under the overlay that drops only that check, green with the fix. Full check green, incl. race and make windows (Windows not run). The new subject and Changes wording are in the note above.
+
+unreagent-reviewer, verdict: changes needed (one small finding). Everything else checks out. Worktree on 84bec97, files reviewed: internal/supervisor/supervisor.go, cancel_test.go, control_test.go. Owners: all three belong to unreagent-worker (ack-team owner), so the scope is fine.
+
+Check, run by me in the worktree, all green:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok.
+- go test -race -count=1 ./internal/supervisor: ok.
+- make linux and make windows: built.
+- go test -race -count=20 -run 'TestShutdown|TestControlCallTakenAtTheShutdown' ./internal/supervisor: ok, no flakes.
+Windows: platform-neutral loop code. The .exe compiles, but none of this ran on Windows, so it is unverified there.
+
+Finding 1 (must fix, small): a refused start gives a reply with no reason or a stale one.
+- Where: supervisor.go:583-586 and :593-596 return without setting lastErr. handle (:729-731) then answers with snapshot(): Running false, Desired true, LastError "".
+- What the user sees: serviceAction (cmd/launcher/tools.go:236-237, startFailure :245-247) and the console's act (cmd/launcher/lifecycle.go:365-366) turn that into: Error: service "ue" did not start: (nothing after the colon).
+- The MCP server stays up until wg.Wait() returns (main.go:415-418), so ue_start and ue_restart can reach this window.
+- If an earlier start failed and the backoff is pending, the reply shows that old error instead, which is misleading.
+- My probe confirmed the reply: {Running:false Desired:true LastError: LastExit:}.
+- Before k182 the reply said running, and the editor was then killed. k126 made this reply say why a start failed. This change gives it an empty reason.
+- Suggested fix: set lastErr (e.g. "shutting down") on both refused paths, and assert r.st.LastError in TestControlCallTakenAtTheShutdownStartsNothing (cancel_test.go:319). Nothing else reads lastErr, because the loop ends on the next turn.
+
+Confirmed, no finding:
+- Next turn after a refused start: backoff is nil, cmd is nil, and nothing re-arms the timer, so the loop can see only ctx.Done() and waiting calls. Each waiting call is answered without a start. With finitely many callers the loop ends; it cannot hang. A call that arrives after the loop has ended runs into the 10 s ctrlTimeout ("not responding"). That was already so in v0.0.9 and is not part of this card.
+- Desired flag: a refused ctrlStart or ctrlRestart leaves desired=true and clears restarts, quickFails and lastExit. No one reads any of them after shutdown. The reply says "desired, not running", which matches what the call asked for. ctrlRestart's stop() still kills the process, and the shutdown would have killed it anyway.
+- k37/k179 stop rule: unchanged. A stop never goes through start(). The stop peeks at :759-761 and :808-809 and the main select are untouched.
+- Path (a), the main select picking a waiting call over ctx.Done(): covered. Once Done is closed, ctx.Err() is non-nil, so start() refuses. My probe: exitTaken queues a status and then a start in a buffered ctrl (cap 2) and cancels. The peek takes the status, so the main select sees ctx.Done() and the start together. Tree: 50/50 pass; in 23 of them the main select took the start and refused it. Overlay without both checks: 26/50 fail (PreStart [false false]). A probabilistic check is all that path allows, which agrees with the worker's "no seam" note.
+- PreStart failing during shutdown: PreStart is func(Start) and cannot report a failure. editorPreStart drops kill and remove errors and logs no WARN. The refused path returns before c.Start, countRun, giveUp and startFailed, so there is no "start failed" WARN, no fast-fail count, no OnExit and no give-up line. Only "[<name>] not started: shutting down" is logged.
+- German: none in the touched text.
+
+Mutants (-count=20, run filter as above, each via go test -overlay):
+- 84bec97 supervisor.go: all 8 subtests fail 20/20.
+- Worker's mutant 1 (check before PreStart dropped): 6 fail 20/20.
+- Worker's mutant 2 (check after PreStart dropped): the 2 PreStart subtests fail 20/20. I confirmed both overlay files are one-hunk deletions of the current tree.
+- My own mutant, the original decision's design (both start() checks removed, ctx check only in the backoff case): the 4 control-call subtests and the 2 PreStart subtests fail 20/20. So the tests tell the single start() check from the narrower design.
+
+Subject, amend: "Start no service once the launcher shuts down (k182)" (52 chars).
+- "a waiting call" overstates: a waiting stop already won and a status is only answered; only a start or restart is refused.
+- "beat PreStart" misleads: PreStart still runs to its end; only the spawn after it is dropped.
+- "Spawn nothing" would overclaim: RunOnce and RunCommand use context.Background(), and the loop does not cover them.
+
+Changes, amend: append to the k37/k179 bullet (Changes:298-303):
+"Once the launcher shuts down, a restart or start delay coming due and a start or restart from these commands start nothing, and a start whose pre-start step is still running then stops before the spawn: the editor is no longer spawned just to be killed."
+If finding 1 lands, add: "ue_start and ue_restart then say it did not start because the launcher is shutting down."
+"No longer" fits. v0.0.9's start() has no ctx check, its select picks at random among ctx.Done, backoff and ctrl, and PreStart already ran before the spawn, so all three paths spawned the editor in v0.0.9 too. I dropped "such": the fix covers any of these commands during shutdown, not only the k179 ones that meet an exit or a due restart.
+
+Back to unreagent-worker for finding 1. Then a re-review of the two lines and the assertion is enough.
+
+Main agent 2026-11-21, on the review:
+- Finding 1 goes back to unreagent-worker. Both refusals set lastErr to 'the launcher is shutting down'. That covers ue_start, ue_restart and the console, so they read 'did not start: the launcher is shutting down'. It also replaces any stale earlier error. Pin it in cancel_test.go.
+- Subject: the reviewer's 'Start no service once the launcher shuts down (k182)'.
+- Changes: the reviewer's wording plus its finding-1 sentence.
+- After the worker, a narrow re-review of those lines.
+
+unreagent-worker, review finding 1 is fixed (worktree on 84bec97, not committed):
+
+Change: supervisor.go, start(). Both refusals now go through one small closure, shuttingDown(). When ctx is done, it sets lastErr = "the launcher is shutting down", logs the same "[<name>] not started: shutting down" line and returns true. It is called before PreStart and after PreStart, as the two checks were before. ue_start, ue_restart and the console now read "did not start: the launcher is shutting down", and a stale earlier error is replaced.
+
+Test: cancel_test.go, TestControlCallTakenAtTheShutdownStartsNothing. Next to the not-running check, the reply's LastError must now be "the launcher is shutting down". This covers all 4 control-call subtests. The doc comment says so.
+
+Results, -count=50:
+- with the fix: all 3 k182 tests pass.
+- overlay with supervisor.go as it was before this fix (both checks there, no lastErr): all 4 control-call subtests fail 50/50 on the new assertion: start answered {... LastError: ...}, want not running, LastError "the launcher is shutting down".
+
+Full check, all green:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok.
+- go test -race -count=1 ./internal/supervisor: ok.
+- make linux and make windows: built.
+Windows: platform-neutral code. It compiles for Windows but was not run there.
+
+Subject and Changes: as in the main agent's last note. Subject: "Start no service once the launcher shuts down (k182)". Changes: the reviewer's wording plus its finding-1 sentence, "ue_start and ue_restart then say it did not start because the launcher is shutting down.
+
+Finding 1 fixed: both refusals set lastErr to 'the launcher is shutting down' through shuttingDown() in start(). The control-call test asserts LastError: red 50/50 under the pre-fix overlay, green with the fix. Full check green (Windows compiled, not run). For the narrow re-review: start() in supervisor.go and the last assertion of TestControlCallTakenAtTheShutdownStartsNothing.
+
+Main agent 2026-11-21: narrow check of the finding-1 fix, by me.
+- The diff is one helper, shuttingDown(), called before and after PreStart; it sets lastErr to 'the launcher is shutting down'.
+- Checks: gofmt is clean, vet passes for both GOOS, 'go test -race -count=5 -run TestShutdown|TestControlCallTakenAtTheShutdown ./internal/supervisor' is ok, and go test ./internal/supervisor is ok.
+- The worker's full check (make windows included) is green.
+- Verdict: ready. Next: unreagent-release-manager.
+
+Committed as 9c8c567 (Start no service once the launcher shuts down); full check green, Windows compiled not run.
