@@ -16,11 +16,12 @@ them. Read first: the callers and the shared helpers around the change.
 ## Agent team
 
 `OWNERS` is the authoritative write-path map; this table routes responsibility. Before
-handing out or reviewing a card, resolve its touched or planned paths with
-`ack-team owner <file>`; an unknown path is fixed in `OWNERS` first.
+handing out or reviewing a card, look its touched or planned paths up in `OWNERS` (an exact path wins, otherwise the
+longest directory prefix); an unknown path is fixed in `OWNERS` first.
 
 | Task | Agent |
 |---|---|
+| Plan multi-card work, break down an epic, turn a vague goal into cards | `unreagent-planner` (read-only) |
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
 | Write/extend tests, a bug as a failing test | `unreagent-test-writer` |
 | Shipped UE skill documents + their parser (`internal/skills`); the project's `unreagent-*` skills — serving and materializing them (`cmd/launcher/skills.go`) is Go wiring for `unreagent-worker` | `unreagent-skill-author` |

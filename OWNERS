@@ -1,6 +1,6 @@
 # Write ownership for unreagent: one <path><TAB><owner> row per rule.
 # An exact path wins, otherwise the longest directory prefix (ending in /).
-# Every path has an owner; there is no fallback. Resolve with: ack-team owner <file>
+# Every path has an owner; there is no fallback. Resolve a path by reading this file.
 #
 # Tests (*_test.go) sit next to the code they test, inside the worker's paths;
 # unreagent-test-writer writes them there when a card's step is a test.

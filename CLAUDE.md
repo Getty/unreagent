@@ -85,6 +85,7 @@ in `.claude/rules/unreagent-rules.md`.
 
 | Task | Agent |
 |---|---|
+| Plan multi-card work, break down an epic, turn a vague goal into cards | `unreagent-planner` (read-only) |
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
 | Write/extend tests | `unreagent-test-writer` |
 | Shipped UE skill documents + their parser (`internal/skills`) | `unreagent-skill-author` |
@@ -93,8 +94,8 @@ in `.claude/rules/unreagent-rules.md`.
 | Review of a finished card before its commit | `unreagent-reviewer` |
 | Commits, `Changes`, card → done, pre-release audit | `unreagent-release-manager` |
 
-`OWNERS` (repo root) is the authoritative write-path map; `ack-team owner <file>`
-resolves it. `unreagent-release-manager` commits reviewed work; nothing is pushed,
+`OWNERS` (repo root) is the authoritative write-path map; its header says how a path
+resolves. `unreagent-release-manager` commits reviewed work; nothing is pushed,
 tagged or released without the maintainer's word.
 
 The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the
