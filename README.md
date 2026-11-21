@@ -401,7 +401,7 @@ as after an exit; `/M` only with an explicit `maxRestarts`).
 | `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup`, which prints the usage and starts nothing |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
 | `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 and a host that is empty, an IP address or a plain name (see `mcp` in the configuration quick reference; checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
-| `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
+| `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up. The order does not matter: MCP that stops serving after such a give-up ends the launcher too, unless the editor was started again in between |
 | `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
 
 An agent that fails and **is** restarted produces no exit code until it stops
@@ -416,7 +416,9 @@ give 1. How Ctrl-C reaches a foreground agent on Windows is unverified. An
 error line on stderr names the reason. With MCP on
 (including `-no-agent` and `manualStart` setups) an editor give-up does not end
 the launcher: it logs the failure and keeps serving MCP, so an external agent
-can read the logs and retry `ue_start`.
+can read the logs and retry `ue_start`. If no agent is configured and MCP
+then stops serving before anything started the editor again, nothing is left
+to retry with, and the launcher ends with exit 1.
 
 Every editor give-up, with or without an agent, ends its log line with where
 the crash dumps are, for example `The editor failed and is not restarted. Any
@@ -1489,6 +1491,9 @@ exit: it logs one `ERROR` line (in window mode also on stderr) saying that the
 agent's unreagent tools and permission prompts no longer work, and keeps
 everything else running: the editor, and the agent if one is configured. Save
 your work in the editor, then restart unreagent; there is no automatic rebind.
+The one exception is a launcher with no agent whose editor's last run was a
+quick failure with no restart following (see Exit codes): it ends with exit 1
+right after that line.
 
 For access from another machine set `mcp.address` to `0.0.0.0:8765` (only
 in trusted networks — the server then has file-write access; set `mcp.token`).

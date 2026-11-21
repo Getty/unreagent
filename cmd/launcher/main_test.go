@@ -521,7 +521,9 @@ func TestServeMCPFailureMarksMCPNotServingAndSaysSo(t *testing.T) {
 		if withAlert {
 			w = &alert
 		}
-		serveMCP(&http.Server{Handler: http.NotFoundHandler()}, brokenListener{}, &serving, log.log, w)
+		if !serveMCP(&http.Server{Handler: http.NotFoundHandler()}, brokenListener{}, &serving, log.log, w) {
+			t.Errorf("alert %v: serveMCP reports a close; want it to report that it stopped serving, which run() ends a waiting editor give-up for (k155)", withAlert)
+		}
 
 		if serving.Load() {
 			t.Errorf("alert %v: MCP still marked as serving after it stopped", withAlert)
@@ -552,7 +554,7 @@ func TestEditorGiveUpAfterMCPStoppedServing(t *testing.T) {
 	var serving atomic.Bool
 	serving.Store(true)
 	var log syncLog
-	onEditorExit := makeEditorExitHandler(sess, log.log, false, &serving, config.UnrealConfig{}, "")
+	onEditorExit := makeEditorExitHandler(sess, log.log, false, &serving, new(editorGiveUp), config.UnrealConfig{}, "")
 
 	serveMCP(&http.Server{Handler: http.NotFoundHandler()}, brokenListener{}, &serving, log.log, nil)
 	if ctx.Err() != nil || sess.result() != nil {
@@ -584,7 +586,8 @@ func TestServeMCPClosedIsNotAFailure(t *testing.T) {
 	var alert bytes.Buffer
 	srv := &http.Server{Handler: http.NotFoundHandler()}
 	served := make(chan struct{})
-	go func() { serveMCP(srv, ln, &serving, log.log, &alert); close(served) }()
+	var stopped bool // read after served is closed
+	go func() { stopped = serveMCP(srv, ln, &serving, log.log, &alert); close(served) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/")
 	if err != nil {
@@ -596,6 +599,9 @@ func TestServeMCPClosedIsNotAFailure(t *testing.T) {
 	case <-served:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serveMCP did not return after the server was closed")
+	}
+	if stopped {
+		t.Error("serveMCP reports a normal close as stopped serving; run() would end a waiting editor give-up on the launcher's own shutdown (k155)")
 	}
 	if got := log.String(); got != "" || alert.Len() != 0 {
 		t.Errorf("logged %q, alerted %q on a normal close; want nothing", got, alert.String())

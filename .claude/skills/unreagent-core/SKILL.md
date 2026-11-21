@@ -39,7 +39,7 @@ imports `mcp` is a design error, not a shortcut.
 
 Besides the logger it is built with (`supervisor.New(logger)`), the
 supervisor reaches back into `run()` only through the hooks on `ServiceSpec`.
-`PreStart(Start)` runs before every start (the editor's `editorPreStart`). `OnExit(Exit)` runs in its own goroutine when a desired
+`PreStart(Start)` runs before every start (the editor's: `editorGiveUp.started`, then `editorPreStart`). `OnExit(Exit)` runs in its own goroutine when a desired
 service ends or fails its start and is not restarted automatically.
 `OnStartRetry(Retry)` (k152) fires once per failed start that the policy
 retries — not for a start that is not retried (the one the policy gives up on,
@@ -156,7 +156,19 @@ was split by concern.
    A serve failure after a successful bind is not fatal (`serveMCP`): one loud
    ERROR line in the launcher log, also on stderr when that log is a file
    (window mode), MCP marked not serving, and launcher, editor and agent keep
-   running so the user can save; there is no automatic rebind.
+   running so the user can save; there is no automatic rebind. The one
+   exception (k155): no agent configured, and an editor that gave up by the
+   k69 rule while MCP served (its last run a failed start or a failure within
+   `supervisor.FastFailWindow`, no restart following) and was not started
+   again since. Nothing is left to retry it, so the session ends with exit 1,
+   as it does when MCP is not serving at the give-up. `editorGiveUp`
+   (`lifecycle.go`) remembers that give-up: `makeEditorExitHandler` records it
+   through `keepServing`, the editor's `PreStart` takes it back through
+   `started`, and `run()` calls `mcpStopped` when `serveMCP` reports that it
+   stopped on an error rather than being closed. One lock orders the two
+   events, which come on goroutines of their own, so whichever comes second
+   ends the session, exactly once, with `errEditorGaveUp`. With an agent
+   nothing is recorded, and a serve failure stays the ERROR line (k45).
 
 ## Build & verification gate
 

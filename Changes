@@ -101,9 +101,11 @@ Revision history for unreagent
     fixed cap; a clean exit 0, a run longer than 10 s or a manual start or
     restart resets the count, and an explicit maxRestarts keeps its bound.
   - The launcher exits 1 when the agent fails and is not restarted, so scripted
-    and CI runs see the failure; it also exits 1 with no agent and MCP off when
-    the editor's last run never got going (failed to start, or failed within
-    10 s). With MCP on it keeps serving and says so; a signal still exits 0.
+    and CI runs see the failure; with no agent it also exits 1 when the editor's
+    last run never got going (failed to start, or failed within 10 s) and MCP
+    is not serving: off, stopped serving first, or stopping later with no
+    editor start in between. While MCP serves it keeps serving and says so; a
+    signal still exits 0.
   - ue_start and ue_restart fail, naming the cause, when the editor is not
     running afterwards, and so do start and r in the launcher console; the
     agent exit prompt says "Agent did not start: <cause>". Running means

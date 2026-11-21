@@ -196,14 +196,19 @@ func (s *session) result() error {
 // so the session ends with exit 1 instead of idling until somebody presses
 // Ctrl-C — also when the failed start was typed into the launcher console;
 // that user can start the launcher again (see k69). mcpServing is read at the
-// editor's exit, not when the handler is built.
-func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpServing *atomic.Bool, u config.UnrealConfig, projectDir string) func(supervisor.Exit) {
+// editor's exit, not when the handler is built; a give-up MCP still serves is
+// left in giveUp, which ends the session should MCP stop serving before the
+// editor is started again (k155).
+func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpServing *atomic.Bool, giveUp *editorGiveUp, u config.UnrealConfig, projectDir string) func(supervisor.Exit) {
 	return func(e supervisor.Exit) {
 		if e.Success {
 			return
 		}
-		serving := mcpServing.Load()
-		ends := !agent && e.StartFailed && !serving
+		// The k69 give-up: with no agent, only MCP is left to retry an editor
+		// whose last run never got going.
+		gaveUp := !agent && e.StartFailed
+		serving := gaveUp && giveUp.keepServing(mcpServing)
+		ends := gaveUp && !serving
 		// dumps says where the failed runs' crash dumps are, and what empties
 		// that folder: a retry from this launcher does not (followsCrash), the
 		// first start of a new launcher run does with cleanOnRestart.
@@ -218,20 +223,77 @@ func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpSe
 			}
 			dumps += "."
 		}
-		if agent || !e.StartFailed {
+		if !gaveUp {
 			if dumps != "" {
 				logger("The editor failed and is not restarted." + dumps)
 			}
 			return
 		}
-		failed := fmt.Sprintf("failed to start, or failed within %s of starting", supervisor.FastFailWindow)
 		if serving {
-			logger("The editor " + failed + ", and is not restarted — the launcher keeps serving MCP: read the logs, fix the cause, retry with ue_start (Ctrl-C stops the launcher)." + dumps)
+			logger("The editor " + editorFailed + ", and is not restarted — the launcher keeps serving MCP: read the logs, fix the cause, retry with ue_start (Ctrl-C stops the launcher)." + dumps)
 			return
 		}
-		logger("The editor " + failed + ", and is not restarted; no agent is configured and MCP is not serving — stopping everything." + dumps)
-		sess.fail(fmt.Errorf("the editor %s, and with no agent and MCP not serving nothing can retry it (see the launcher log)", failed))
+		logger("The editor " + editorFailed + ", and is not restarted; no agent is configured and MCP is not serving — stopping everything." + dumps)
+		sess.fail(errEditorGaveUp)
 	}
+}
+
+// editorFailed is how the k69 give-up lines say that the editor's last run
+// never got going.
+var editorFailed = fmt.Sprintf("failed to start, or failed within %s of starting", supervisor.FastFailWindow)
+
+// errEditorGaveUp is run()'s error for the k69 give-up, in either order of
+// its two events (see editorGiveUp).
+var errEditorGaveUp = errors.New("the editor " + editorFailed + ", and with no agent and MCP not serving nothing can retry it (see the launcher log)")
+
+// editorGiveUp carries a k69 give-up that MCP still serves to the moment MCP
+// stops serving (k155). With no agent, the editor's give-up and MCP not
+// serving end the session with exit 1, whichever of the two comes second.
+// They come on goroutines of their own — the editor's OnExit and serveMCP's —
+// so one lock orders them, and exactly one of them ends the session. A start
+// of the editor takes the give-up back. One window is left open: a start
+// that reaches the editor's control loop after the exit and before the exit
+// handler takes the lock is taken back before the give-up is recorded, so a
+// later serve failure ends the session with that editor running. The zero
+// value is ready.
+type editorGiveUp struct {
+	mu      sync.Mutex
+	waiting bool // the editor gave up while MCP served, and was not started since
+}
+
+// keepServing is the editor's give-up (makeEditorExitHandler). It reports
+// whether MCP serves, and while it does, the give-up waits for mcpStopped.
+// serving is read under the lock: serveMCP clears it before mcpStopped takes
+// the lock, so of the two, the later one sees the other.
+func (g *editorGiveUp) keepServing(serving *atomic.Bool) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.waiting = serving.Load()
+	return g.waiting
+}
+
+// started takes a give-up back: the editor is starting again (its PreStart).
+func (g *editorGiveUp) started() {
+	g.mu.Lock()
+	g.waiting = false
+	g.mu.Unlock()
+}
+
+// mcpStopped is told that MCP stopped serving (serveMCP). After a give-up
+// that waits for it, nothing is left that could retry the editor, and it ends
+// sess with exit 1 as the k69 rule does with MCP off. Otherwise — an agent is
+// configured, or the editor has not given up — the serve failure stays
+// serveMCP's ERROR line (k45, k123).
+func (g *editorGiveUp) mcpStopped(sess *session, logger func(string)) {
+	g.mu.Lock()
+	waiting := g.waiting
+	g.waiting = false
+	g.mu.Unlock()
+	if !waiting {
+		return
+	}
+	logger("MCP stopped serving, and the editor has not been started again since it " + editorFailed + "; no agent is configured and MCP is not serving — stopping everything.")
+	sess.fail(errEditorGaveUp)
 }
 
 // makeAgentExitHandler builds the callback that fires when the agent ends and is

@@ -56,6 +56,15 @@ func TestLauncherRunProcess(t *testing.T) {
 			return acceptFails{ln}, nil
 		}
 	}
+	if path := os.Getenv(mcpBreakEnv); path != "" {
+		listen = func(network, addr string) (net.Listener, error) {
+			ln, err := net.Listen(network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return breaksOnFile{ln, path}, nil
+		}
+	}
 	if os.Getenv(clockStepEnv) != "" {
 		var ticks atomic.Int64
 		start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)
@@ -289,7 +298,7 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 		var log syncLog
 		var serving atomic.Bool
 		serving.Store(c.mcpServing)
-		makeEditorExitHandler(sess, log.log, false, &serving, config.UnrealConfig{}, "")(c.exit)
+		makeEditorExitHandler(sess, log.log, false, &serving, new(editorGiveUp), config.UnrealConfig{}, "")(c.exit)
 		if ended := ctx.Err() != nil; ended != c.wantErr {
 			t.Fatalf("%+v, mcp %v: session ended = %v, want %v", c.exit, c.mcpServing, ended, c.wantErr)
 		}
@@ -340,7 +349,7 @@ func TestEditorGiveUpLineSaysWhereTheDumpsAre(t *testing.T) {
 		var log syncLog
 		var serving atomic.Bool
 		serving.Store(c.mcpServing)
-		makeEditorExitHandler(newSession(ctx, cancel), log.log, c.agent, &serving, config.UnrealConfig{CleanOnRestart: c.clean}, c.projectDir)(c.exit)
+		makeEditorExitHandler(newSession(ctx, cancel), log.log, c.agent, &serving, new(editorGiveUp), config.UnrealConfig{CleanOnRestart: c.clean}, c.projectDir)(c.exit)
 		ended := ctx.Err() != nil
 		cancel()
 		got := strings.TrimSpace(log.String())
@@ -448,6 +457,162 @@ func TestRunEditorStartFailureWithMCPKeepsServing(t *testing.T) {
 	}
 	if !strings.Contains(l.stdout.String(), "Signal received") {
 		t.Fatalf("shutdown not reported as a signal:\n%s", l.stdout)
+	}
+}
+
+// mcpBreakEnv makes TestLauncherRunProcess serve MCP as usual until the file
+// it names exists; the next connection then breaks the port (breaksOnFile).
+const mcpBreakEnv = "UNREAGENT_TEST_MCP_BREAK_FILE"
+
+// breaksOnFile is a bound listener that a test breaks when it chooses to:
+// once the file at path exists, Accept closes the next connection and fails
+// with an error that is not temporary, so the MCP server stops serving.
+type breaksOnFile struct {
+	net.Listener
+	path string
+}
+
+func (l breaksOnFile) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if _, statErr := os.Stat(l.path); statErr == nil {
+		_ = c.Close()
+		return nil, errors.New("accept: injected failure")
+	}
+	return c, nil
+}
+
+// breakMCP stops the MCP server of a launcher that runs with mcpBreakEnv set
+// to trigger, and waits for its ERROR line.
+func breakMCP(t *testing.T, l *launcherRun, addr, trigger string) {
+	t.Helper()
+	if err := os.WriteFile(trigger, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("connect to the MCP port to break it: %v", err)
+	}
+	_ = c.Close()
+	l.waitLine(t, "ERROR MCP server on "+addr+" stopped serving")
+}
+
+// noAgentMCPYAML is a launcherYAML config without an agent, with the editor
+// at editor, no restart for it, and MCP on at addr.
+func noAgentMCPYAML(editor, addr string) string {
+	return withMCP(strings.Replace(launcherYAML(editor, "  enabled: false\n"),
+		"  killCrashReporter: false\n", "  killCrashReporter: false\n  restart: never\n", 1), addr)
+}
+
+// The k69 give-up line with MCP not serving, and the k155 line for MCP
+// stopping after the give-up; each names both reasons.
+const (
+	giveUpNotServing   = "no agent is configured and MCP is not serving — stopping everything"
+	stoppedAfterGiveUp = "MCP stopped serving, and the editor has not been started again since it failed to start"
+)
+
+// k155: without an agent, an editor give-up while MCP served left the
+// launcher waiting for a retry through MCP (k69). When MCP then stopped
+// serving, nothing checked again: the launcher idled with no editor, no agent
+// and no MCP until somebody pressed Ctrl-C. The serve failure is the second
+// event now, and it ends the session as the k69 rule does with MCP off: exit
+// 1, with a line naming both reasons.
+func TestRunEditorGiveUpThenServeFailureExitsNonZero(t *testing.T) {
+	dir := t.TempDir()
+	trigger := filepath.Join(dir, "break-mcp")
+	t.Setenv(mcpBreakEnv, trigger)
+	addr := freeLoopbackAddr(t)
+	l := startLauncherIn(t, dir, noAgentMCPYAML(filepath.Join(dir, "no-such-editor"), addr))
+	l.waitLine(t, "keeps serving MCP")
+
+	breakMCP(t, l, addr, trigger)
+	if code := l.exitCode(t); code != 1 {
+		t.Fatalf("exit code %d, want 1 once MCP stopped serving after the editor gave up:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+	out := l.stdout.String()
+	if !strings.Contains(out, stoppedAfterGiveUp) || !strings.Contains(out, giveUpNotServing) {
+		t.Errorf("no line names both reasons (%q, %q):\n%s", stoppedAfterGiveUp, giveUpNotServing, out)
+	}
+	if strings.Contains(out, "Signal received") {
+		t.Errorf("a session the launcher ended is logged as a signal:\n%s", out)
+	}
+	if !strings.Contains(l.stderr.String(), "editor") {
+		t.Errorf("stderr does not name the editor: %q", l.stderr.String())
+	}
+}
+
+// k155, the other order: MCP stops serving while the editor runs, which alone
+// ends nothing (k45, k123), and the editor gives up later. The give-up reads
+// MCP's state at the editor's exit, so it ends the session as with MCP off.
+func TestRunServeFailureThenEditorGiveUpExitsNonZero(t *testing.T) {
+	dir := t.TempDir()
+	trigger := filepath.Join(dir, "break-mcp")
+	t.Setenv(mcpBreakEnv, trigger)
+	addr := freeLoopbackAddr(t)
+	// Fails once the test says so: within the fast-fail window of its start.
+	editor := filepath.Join(dir, "editor.sh")
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\nwhile [ ! -e \"$0.fail\" ]; do sleep 0.05; done\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l := startLauncherIn(t, dir, noAgentMCPYAML(editor, addr))
+	l.waitLine(t, "[ue] started (pid")
+
+	breakMCP(t, l, addr, trigger)
+	if err := os.WriteFile(editor+".fail", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := l.exitCode(t); code != 1 {
+		t.Fatalf("exit code %d, want 1 when the editor gave up after MCP stopped serving:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+	out := l.stdout.String()
+	if !strings.Contains(out, "The editor "+editorFailed+", and is not restarted; "+giveUpNotServing) {
+		t.Errorf("no give-up line for MCP not serving:\n%s", out)
+	}
+	if strings.Contains(out, stoppedAfterGiveUp) {
+		t.Errorf("the serve failure ended the session while the editor ran:\n%s", out)
+	}
+}
+
+// k155: a start of the editor after its give-up takes the give-up back. MCP
+// stopping after that leaves a running editor, and the session goes on as for
+// any serve failure (k45, k123); a signal still ends it with exit 0.
+func TestRunServeFailureAfterTheEditorStartedAgainKeepsRunning(t *testing.T) {
+	dir := t.TempDir()
+	trigger := filepath.Join(dir, "break-mcp")
+	t.Setenv(mcpBreakEnv, trigger)
+	addr := freeLoopbackAddr(t)
+	// The first run fails at once, the second keeps running.
+	editor := filepath.Join(dir, "editor.sh")
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\nif [ ! -e \"$0.ran\" ]; then : > \"$0.ran\"; exit 1; fi\nexec sleep 20\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l := startLauncherIn(t, dir, noAgentMCPYAML(editor, addr))
+	l.waitLine(t, "keeps serving MCP")
+
+	resp, err := http.Post("http://"+addr+"/mcp", "application/json",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ue_start","arguments":{}}}`))
+	if err != nil {
+		t.Fatalf("ue_start: %v\n%s", err, l.stdout)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || strings.Contains(string(body), `"isError":true`) {
+		t.Fatalf("ue_start: HTTP %d %s\n%s", resp.StatusCode, body, l.stdout)
+	}
+
+	breakMCP(t, l, addr, trigger)
+	select {
+	case <-l.done:
+		t.Fatalf("the launcher ended after the serve failure, with the editor running:\n%s", l.stdout)
+	case <-time.After(time.Second):
+	}
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
 	}
 }
 

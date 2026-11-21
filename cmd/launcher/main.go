@@ -219,6 +219,10 @@ func run() error {
 	}
 	// Like onAgentExit below: set once the session exists.
 	var onEditorExit func(supervisor.Exit)
+	// The editor's give-up while MCP serves, for a later serve failure to end
+	// the session with (k155); every start of the editor takes it back.
+	var giveUp editorGiveUp
+	preStart := editorPreStart(cfg.Unreal, ueProjectDir, killCrashReporter, logger)
 	if err := sup.AddService(supervisor.ServiceSpec{
 		Name:         "ue",
 		Command:      cfg.Unreal.Editor,
@@ -227,7 +231,10 @@ func run() error {
 		Restart:      cfg.Unreal.Restart,
 		MaxRestarts:  cfg.Unreal.MaxRestarts,
 		RestartDelay: secs(cfg.Unreal.RestartDelaySeconds),
-		PreStart:     editorPreStart(cfg.Unreal, ueProjectDir, killCrashReporter, logger),
+		PreStart: func(st supervisor.Start) {
+			giveUp.started()
+			preStart(st)
+		},
 		OnExit: func(e supervisor.Exit) {
 			if onEditorExit != nil {
 				onEditorExit(e)
@@ -405,7 +412,11 @@ func run() error {
 			IdleTimeout:       120 * time.Second,
 		}
 		mcpServing.Store(true)
-		go serveMCP(httpSrv, mcpLn, &mcpServing, logger, alert)
+		go func() {
+			if serveMCP(httpSrv, mcpLn, &mcpServing, logger, alert) {
+				giveUp.mcpStopped(sess, logger)
+			}
+		}()
 		// The port is bound since listenMCP, so a client acting on this line
 		// connects (k141). The address names the interfaces, the URL is what
 		// clients got; they differ for a wildcard host (k57).
@@ -413,7 +424,7 @@ func run() error {
 	}
 
 	con := newConsole(os.Stdin, os.Stdout, logOut)
-	onEditorExit = makeEditorExitHandler(sess, logger, cfg.Agent.Enabled, &mcpServing, cfg.Unreal, ueProjectDir)
+	onEditorExit = makeEditorExitHandler(sess, logger, cfg.Agent.Enabled, &mcpServing, &giveUp, cfg.Unreal, ueProjectDir)
 	if cfg.Agent.Enabled {
 		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, con)
 	}
@@ -482,11 +493,13 @@ func listenMCP(addr string) (net.Listener, error) {
 // session goes on and nothing rebinds. Everything else keeps running with
 // what it holds, and the user decides when to restart, once the work in the
 // editor is saved. Only a port that cannot be bound at the start is fatal
-// (listenMCP).
-func serveMCP(srv *http.Server, ln net.Listener, serving *atomic.Bool, logger func(string), alert io.Writer) {
+// (listenMCP); and with no agent, an editor that gave up is left with nothing
+// to retry it, which the caller ends the session for (editorGiveUp, k155).
+// It reports whether it stopped serving on such an error, rather than closed.
+func serveMCP(srv *http.Server, ln net.Listener, serving *atomic.Bool, logger func(string), alert io.Writer) (stopped bool) {
 	err := srv.Serve(ln)
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
-		return
+		return false
 	}
 	serving.Store(false)
 	// "Everything else", not "the editor and the agent": there may be no agent.
@@ -495,6 +508,7 @@ func serveMCP(srv *http.Server, ln net.Listener, serving *atomic.Bool, logger fu
 	if alert != nil {
 		fmt.Fprintln(alert, "unreagent: "+line)
 	}
+	return true
 }
 
 // alertWarnings returns a logger that writes every line to logger and a
