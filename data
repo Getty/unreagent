@@ -1,0 +1,77 @@
+---
+claimed_at: 2026-11-21T02:54:34Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:57:13Z
+created: 2026-08-21T23:22:54Z
+depends_on:
+- 9
+id: 14
+priority: high
+started: 2026-11-21T02:18:04Z
+status: done
+tags:
+- skills
+- tests
+title: 'Tests: internal/skills parsing, Load, DescribeAll'
+updated: 2026-11-21T02:57:26Z
+---
+
+Go tests in the style of internal/supervisor/supervisor_test.go, stdlib testing only.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 8.
+Agent: unreagent-test-writer.
+
+Acceptance:
+- every embedded skill parses; name and description present and non-empty
+- malformed frontmatter makes Load() return an error rather than dropping the skill
+- DescribeAll output contains every skill name
+- sub-documents are discovered and attached to the right skill
+
+Depends on #9.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID. Depends on k9; could be folded into k9. Size S.
+
+Done with k9: internal/skills/skills_test.go (stdlib + fstest.MapFS): every embedded skill parses, 15 malformed cases + a stray file error out, absent lists nil, sub-documents attach to their skill, CRLF parses, DescribeAll pinned; TestEmbedHoldsOnlySkillDocuments / TestEmbedMissesNoSourceFile guard the embed set both ways. Red: setup failure, then a naive loader silently dropping 3 broken skills; six mutations each caught. DescribeAll = 1062 bytes for 4 skills (~6.1 KB projected at 23).
+
+**Review 2026-11-21 (unreagent-reviewer)**: same worktree, file internal/skills/skills_test.go. Verdict: CHANGES REQUESTED, one small fix.
+
+Same check as k9, all green. The Windows test binary compiles but was not run. The tests use only the stdlib and fstest.MapFS, and they cover all four acceptance points.
+
+Mutations, in a scratch copy:
+- 14 against the parser: 10 caught.
+- 10 against the embed pattern and tree: 7 caught.
+
+MUST FIX: skills_test.go:121/126. The valid companion skill 'good' sorts after 'bad'. A sequential loader has appended nothing yet when 'bad' fails, so the 'want none alongside the error' check can never fail. Changing skills.go:65 to 'return all, ...' passes every test. Give the companion skill a name that sorts first (e.g. 'a-good'). I checked that with that rename, all 15 cases catch the partial return.
+
+Nits:
+(a) An explicit 'toolkit_tools: []' -> empty, non-nil list is not pinned: normalising it to nil passes. Pin it, or drop the claim.
+(b) TestLoadRejectsStrayTopLevelFile and the 'missing name' case still pass with their dedicated checks removed, because the error still comes via 'no SKILL.md' or name != dir. The intent holds and only the messages are unpinned. Fine as it is.
+
+Embed guards:
+- TestEmbedHoldsOnlySkillDocuments catches a widened pattern ('*' embeds embed.go).
+- TestEmbedMissesNoSourceFile catches a narrowed pattern (*/SKILL.md plus a sub-doc), a .txt, a nested .md and a top-level README.md.
+- Neither catches names starting with '.' or '_' (k9 nit 1).
+- TestEmbedMissesNoSourceFile fails on untracked local junk (.DS_Store, vim .swp). That is a false positive outside CI: skip dot-names there if k9 nit 1 lands.
+
+The card named unreagent-test-writer. The skill-author wrote the tests inside its own OWNERS path, so this is not a scope breach.
+
+**Back to the skill-author (2026-11-21), review requested changes:** the valid companion in the malformed cases is named 'good', which sorts after 'bad', so 'no skills alongside the error' can never fail (returning the partial list still passes); rename it to sort first. Nit: explicit toolkit_tools: [] → empty list is claimed but untested.
+
+Review fixes done (2026-11-21): companion renamed to a-good, the partial-return mutation now fails 24 of 26 malformed cases (the .bad/_bad dirs sort before a-good, so nothing is loaded when they fail — no input can catch it there); explicit toolkit_tools: [] / unreal_classes: [] pinned as non-nil; TestEmbedMissesNoSourceFile skips dot-named clutter, a dot-named .md still fails through Load.
+
+**Re-review 2026-11-21 (unreagent-reviewer)**: same worktree, file internal/skills/skills_test.go after the fix round. Verdict: APPROVE WITH NITS (nothing blocking).
+
+The same check as k9 is green, and the tests still use only the stdlib and fstest.MapFS.
+
+Must-fix resolved. The companion is now 'a-good'. Re-running the first review's mutation (skills.go:69 'return all, ...') now fails 24 of the 26 malformed cases. The stray-file test uses 'z-stray.md', so the same mutation at :62 is caught as well.
+Explicit '[]' is pinned as non-nil: normalising it to nil now fails TestLoadParsesFrontmatter.
+
+Mutations, in a scratch copy:
+- 22 against the parser, covering the old ones plus one per fix: 21 caught.
+- 14 against the embed pattern and tree: all behave as intended. Each dot or underscore skill or sub-document fails Load, an empty sub-document fails, and the narrowed pattern, .txt, nested .md and top-level README.md are still caught. .DS_Store, vim .swp and dot directories are now ignored by TestEmbedMissesNoSourceFile.
+
+Nit (optional): skills_test.go:109 says .bad and _bad sort first 'by necessity'. That is not so: a companion such as '-good' sorts before both '.' and '_', passes checkName, and would pin the second return path. Today 'return all' at skills.go:65 survives (0/26 caught); I checked that a '-good' companion catches it in both cases. Rename the companion or reword the comment. In a real embed the partial result there is empty for any lowercase skill name, so the impact is nil.
+
+Committed 4b71fea together with k9, landed on main
