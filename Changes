@@ -198,6 +198,13 @@ Revision history for unreagent
     set_audio_properties requires) and ue-metasounds (build and edit MetaSound
     Source graphs, set input defaults, add graph inputs and outputs, and
     preview them with metasound; needs UE 5.7 or a later 5.x).
+  - New shipped skills ue-character (read and tune ACharacter actors in the
+    open level with character), ue-character-data (the toolkit's character
+    config DataAssets and stats DataTables with character_data) and
+    ue-game-framework (game mode classes, the player controller of a running
+    PIE session and DataTable rows with game_framework, including its 16
+    operation aliases). Written from the UE LLM Toolkit source, not yet
+    exercised against a running editor.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.

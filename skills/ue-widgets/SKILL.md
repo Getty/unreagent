@@ -261,4 +261,6 @@ category covers Slate UI in C++, not UMG.
   `blueprint_modify` to compile them and to wire bound events.
 - `ue-enhanced-input`: input actions and mapping contexts for the controls a
   widget reacts to.
+- `ue-game-framework`: `game_framework` `show_widget` puts a Widget Blueprint
+  on screen in a running PIE session, `remove_widget` takes it off.
 - `unreagent-iterate`: starting the editor and waiting for the plugin.

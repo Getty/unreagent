@@ -271,4 +271,6 @@ whether the key mapping works.
 - `ue-blueprints`: the `EnhancedInputAction` node that reacts to an action.
 - `ue-pie-testing`: injecting actions in Play In Editor, and the input monitor.
 - `ue-widgets`: widget events, for input handled by the UI.
+- `ue-game-framework`: the input mode of a running PIE session
+  (`set_input_mode`: game only, UI only, or both).
 - `unreagent-iterate`: starting the editor and waiting for the plugin.

@@ -65,7 +65,7 @@ without arguments once, then ask for the one category you need.
 | `assets` | asset references, synchronous and asynchronous loading, Asset Manager, Asset Registry | 8 KB |
 | `blueprint` | Blueprint graph classes, K2 nodes, pin types, creating and wiring nodes | 6 KB |
 | `animation` | Animation Blueprints, state machines, transition rules, blend spaces | 5 KB |
-| `character` | character classes, and the toolkit's `character` and `character_data` tools | 10 KB |
+| `character` | character classes, and the toolkit's `character` and `character_data` tools (skills `ue-character`, `ue-character-data`) | 10 KB |
 | `material` | material classes and parameters, and the toolkit's `material` tool | 10 KB |
 | `enhanced_input` | Enhanced Input classes, triggers, modifiers, key names | 8 KB |
 | `replication` | property replication, conditions, RPCs, network roles | 7 KB |
