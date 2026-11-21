@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-11-21T05:08:50Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:09:01Z
+created: 2026-08-24T23:44:34Z
+id: 80
+priority: low
+started: 2026-11-21T04:19:06Z
+status: done
+tags:
+- supervisor
+title: 'Restart hygiene: pkill -f CrashReportClient matches unrelated processes, unreagent.log
+  is truncated on every start'
+updated: 2026-11-21T05:09:01Z
+---
+
+main.go:1262: killCrashReporter on non-Windows runs pkill -f CrashReportClient (default on) before every editor (re)start; -f matches any command line containing the string, e.g. an editor open on CrashReportClient.cpp from the ue5_7 source in this workspace, and it runs in the ping demo on Linux too. Fix: Windows-only, or pkill -x. main.go:121: unreagent.log is truncated on every start, so after a crash and relaunch the previous session's log is gone; a create failure silently falls back to the console the agent is taking over. Fix: append or rotate; WARN on create failure.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, both items: pkill -f CrashReportClient on non-Windows; os.Create truncates unreagent.log and a create failure falls back silently. Size S.
+
+Decision 2026-11-21 (main agent, not the maintainer): keep the crash-reporter kill on Linux but match the CrashReportClient executable only, not every command line containing the string (mind the 15-char comm limit for pkill -x); unreagent.log keeps the previous session as unreagent.log.1 (one generation, renamed before the new log is created); a failure to create the log warns on stderr before the agent takes the console. Bundled with k72 and k77.
+
+Worker done (2026-11-21): off Windows pkill -f '^([^ ]*/)?CrashReportClient(Editor)?( |$)' (comment explains the 15-char -x limit and the anchors); tested against the test's own children only. Misses a reporter under a path with a space or a suffixed build — same exact-name scope as taskkill /IM. openLauncherLog keeps the previous log as unreagent.log.1 and warns on stderr before the agent takes the console. Windows rename-over-existing .1 unverified. Docs follow before review.
+
+Ready for review (2026-11-21, worktree-agent-ada6ed91c99688f4c): code + tests by the worker; README + unreagent.example.yaml by the doc-writer; .claude/skills unreagent-core/-mcp-tools/-windows by the skill-author (serviceAction signature, starts check, crashReporterKillers). Main-agent call: the PreStart(automatic) contract stays in the code comments, not in a skill.
+
+Review 2026-11-21 (unreagent-reviewer, worktree-agent-ada6ed91c99688f4c on 3ab0142, uncommitted): APPROVE. Files: cmd/launcher/lifecycle.go, lifecycle_test.go, main.go, README.md, unreagent.example.yaml, .claude/skills unreagent-windows/-core. Check: same green run as k72 (gofmt, vet linux+windows, test, race x3, make linux/windows, mod verify). pkill pattern '^([^ ]*/)?CrashReportClient(Editor)?( |$)' tested with grep -E on 17 realistic command lines. Matches: absolute, relative (../../../Engine/...), bare and ./ forms. No match: vim/code on CrashReportClient sources, the Programs/CrashReportClient directory, Build.sh or UBT with a CrashReportClient target, the CrashReportClientX prefix. Known misses, all off Windows: a path with a space and a suffixed build (-Linux-Debug); there is no macOS target. The test cannot hit foreign processes: pkill -P <test pid> is ANDed with the pattern (procps-ng 4.0.4), only direct children of the test binary qualify, and the test binary is not a subreaper. System-wide pgrep for both the old and the new pattern found nothing at review time. Mutations 12 of 13 killed: no ^, .*/ instead of [^ ]*/, no end anchor, no (Editor)?, no directory part, the old bare -f, pkill -x, no rename, warning on ENOENT, each warning dropped, main.go warning to stdout instead of stderr. The survivor (O_APPEND instead of Create) is equivalent on the success path. Findings, non-blocking: (1) lifecycle.go:36-39, when the rename fails, os.Create truncates unreagent.log anyway, so the previous session's log is lost after the 'could not keep' WARN. Failing input: unreagent.log='session 1' and a directory at unreagent.log.1. After openLauncherLog, unreagent.log is empty (probe). Fix: open with O_APPEND on rename failure, or a follow-up card. (2) README.md:549 says 'exactly one of those two', but those are the .exe names. Off Windows the pattern matches CrashReportClient and CrashReportClientEditor without .exe, and it misses a reporter started from a path with a space (the caveat is only in the code comment). UNVERIFIED on Windows (compiled only): Go 1.26 os.Rename is MoveFileEx with MOVEFILE_REPLACE_EXISTING, so replacing an existing .1 should work. The rename fails with a sharing violation when either file is held open without FILE_SHARE_DELETE, e.g. a second launcher still running (Go opens without it), and finding (1) then applies. ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND map to ErrNotExist, so a first run does not warn. The taskkill path was only refactored, compiled only.
+
+Committed as c0045e2 on main
