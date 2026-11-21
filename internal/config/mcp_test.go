@@ -62,13 +62,32 @@ func TestMCPAddressRefused(t *testing.T) {
 		{"127.0.0.1:+8765", "port must be a number from 1 to 65535"},
 		{"127.0.0.1:http", "port must be a number from 1 to 65535"},
 		{"127.0.0.1:87 65", "port must be a number from 1 to 65535"},
+		// k162: a zone would go into the client URL unescaped, and a Node
+		// client takes none at all; [::%eth0] was no wildcard either.
+		{"[fe80::1%eth0]:8765", "no IPv6 zone allowed"},
+		{"[::%eth0]:8765", "no IPv6 zone allowed"},
+		{"[fe80::1%]:8765", "no IPv6 zone allowed"},
+		// k162: brackets hold an IPv6 address and nothing else.
+		{"[127.0.0.1]:8765", "brackets hold an IPv6 address only"},
+		{"[localhost]:8765", "brackets hold an IPv6 address only"},
+		{"[]:8765", "brackets hold an IPv6 address only"},
+		// k162: any other host is a name of ASCII letters, digits, -, _ and .;
+		// user info, a path or a space reached the Hermes entry as written.
+		{"user@host:8765", "host must be an IP address or a name"},
+		{"a/b:8765", "host must be an IP address or a name"},
+		{" 127.0.0.1:8765", "host must be an IP address or a name"},
+		{"ue box:8765", "host must be an IP address or a name"},
+		{"bücher.example:8765", "host must be an IP address or a name"},
+		{"127.0.0.1%eth0:8765", "host must be an IP address or a name"},
 	} {
 		_, _, err := Load(writeConfigFiles(t, t.TempDir(), mcpAddressConfig(tc.address), ""))
 		if err == nil {
 			t.Errorf("mcp.address %q loaded; want a load error", tc.address)
 			continue
 		}
-		for _, want := range []string{fmt.Sprintf("mcp.address invalid: %q", tc.address), tc.cause, "host:port"} {
+		// k162: the hint shows the bracketed IPv6 form too, the one
+		// "::1:8765" is missing.
+		for _, want := range []string{fmt.Sprintf("mcp.address invalid: %q", tc.address), tc.cause, "want host:port, e.g. 127.0.0.1:8765 or [::1]:8765"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("mcp.address %q: error %q does not mention %q", tc.address, err, want)
 			}
@@ -78,11 +97,18 @@ func TestMCPAddressRefused(t *testing.T) {
 
 // k57: every host:port with a port from 1 to 65535 loads, the wildcard hosts
 // included — listening on every interface is the remote-access setting.
+// k162: the host is empty, an IP address (IPv6 in brackets) or a name of ASCII
+// letters, digits, -, _ (a Windows computer name) and ., in any case and with
+// a trailing dot.
 func TestMCPAddressAccepted(t *testing.T) {
 	t.Setenv("UE_ROOT", "/ue")
 	for _, address := range []string{
 		":8765", "0.0.0.0:8765", "[::]:8765", "127.0.0.1:1", "localhost:65535",
 		"[::1]:8765", "192.168.1.20:9000",
+		"127.0.0.1:8765", "localhost:8765", "ue-box.lan:8765", "UE-Box.LAN.:8765",
+		"my_pc:8765",
+		"[2001:db8::5]:8765", "[0:0:0:0:0:0:0:0]:8765", "[::ffff:0.0.0.0]:8765",
+		"[::ffff:127.0.0.1]:8765",
 	} {
 		c, _, err := Load(writeConfigFiles(t, t.TempDir(), mcpAddressConfig(address), ""))
 		if err != nil {
@@ -147,8 +173,15 @@ func TestMCPAllowedOriginsAccepted(t *testing.T) {
 		"moz-extension://3f2c8a1e-1111-2222-3333-444455556666",
 		"vscode-webview://1abc2def",
 		"CHROME-EXTENSION://Abcdefghijklmnop",
-		// An extension's host is opaque to a browser: no IPv4 reading.
+		// To the URL Standard an extension's host is opaque: no IPv4 reading.
+		// Chromium parses its own extension scheme like http, but no extension
+		// id is numeric.
 		"moz-extension://2130706433",
+		// k166: a last label of 0x and a non-hex digit is no number to a
+		// browser, so the host is a name; so is an empty last label, left
+		// after the one trailing dot a browser drops.
+		"http://ide.example.0xg",
+		"http://ide.example..",
 	}
 	c, _, err := Load(writeConfigFiles(t, t.TempDir(), allowedOriginsConfig(origins...), ""))
 	if err != nil {
@@ -220,6 +253,24 @@ func TestMCPAllowedOriginsRefused(t *testing.T) {
 		{"http://1.2.3.4.5", "numeric host but no IPv4 address a browser accepts"},
 		{"http://08.1.1.1", "numeric host but no IPv4 address a browser accepts"},
 		{"http://ide.example.123", "numeric host but no IPv4 address a browser accepts"},
+		// k166: numeric or not goes by the characters, as a browser decides
+		// it; a hex number too large to parse still makes the host an
+		// address, one the browser refuses.
+		{"http://a.0xffffffffffffffffffff", "numeric host but no IPv4 address a browser accepts"},
+		{"http://0xffffffffffffffffffff", "numeric host but no IPv4 address a browser accepts"},
+		{"http://ide.example.0X1", "numeric host but no IPv4 address a browser accepts"},
+		{"http://0x7F000001", "non-canonical IPv4 host, write it as 127.0.0.1, the form a browser sends"},
+		{"http://a.0xFF", "numeric host but no IPv4 address a browser accepts"},
+		// k166: the URL Standard's forbidden host code points that url.Parse
+		// lets through, for a web origin and an extension's alike; a web
+		// host, a domain, takes no % either (a %25 url.Parse decoded).
+		{"http://a<b.example", `no "<" allowed in a host, a browser refuses the URL`},
+		{"https://a>b.example", `no ">" allowed in a host, a browser refuses the URL`},
+		{"http://a]b.example", `no "]" allowed in a host, a browser refuses the URL`},
+		{"https://a%25b.example", `no "%" allowed in a host, a browser refuses the URL`},
+		{"chrome-extension://a<b", `no "<" allowed in a host, a browser refuses the URL`},
+		{"chrome-extension://a>b", `no ">" allowed in a host, a browser refuses the URL`},
+		{"moz-extension://a]b", `no "]" allowed in a host, a browser refuses the URL`},
 		{"http://[0:0:0:0:0:0:0:1]:5173", "non-canonical IPv6 host, write it as [::1], the form a browser sends"},
 		{"http://[2001:0db8::1]", "non-canonical IPv6 host, write it as [2001:db8::1], the form a browser sends"},
 		{"http://[::ffff:127.0.0.1]", "non-canonical IPv6 host, write it as [::ffff:7f00:1], the form a browser sends"},

@@ -162,8 +162,10 @@ files:
 
 mcp:
   enabled: true
-  # Default 127.0.0.1:8765. host:port with a port 1-65535 (anything else is a
-  # load error). An empty or wildcard host (:8765, 0.0.0.0:8765) listens on
+  # Default 127.0.0.1:8765. host:port with a port 1-65535 and a host that is
+  # empty, an IP address (IPv6 in brackets, no zone such as %eth0) or a name
+  # of ASCII letters, digits, "-", "_" and "."; anything else is a load
+  # error. An empty or wildcard host (:8765, 0.0.0.0:8765) listens on
   # every interface; the agent, mcp.writeConfig and hermes-setup then get
   # http://127.0.0.1:<port>/mcp. If it cannot be bound (port taken, e.g. by a
   # second unreagent), the launcher exits 1 before writing any file; a
@@ -187,8 +189,10 @@ mcp:
   # error naming the index and value, checked while mcp.enabled is on): path
   # (not even "/"), query, fragment, user info, wildcards, an explicit default
   # port (https://h:443), leading zeros in the port, a non-ASCII host (use
-  # punycode), "null", file/ftp/ws/wss. A browser extension is accepted as
-  # exactly scheme://host, no port or path: chrome-extension://<id>,
+  # punycode), a host character the URL Standard forbids (< > ^ | and the
+  # like) or a "%" in the host, "null", file/ftp/ws/wss. A browser extension
+  # is accepted as exactly scheme://host, no port, path or forbidden host
+  # character: chrome-extension://<id>,
   # moz-extension://<uuid>, vscode-webview://<id>.
   # IP hosts must be in the form a browser sends, or they never match:
   # dotted-quad IPv4 without leading zeros (127.1, 0x7f.0.0.1 and

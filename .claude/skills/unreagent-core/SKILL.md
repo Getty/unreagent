@@ -138,8 +138,10 @@ was split by concern.
    last 20 lines. Past config load, three deliberate exceptions. The first,
    the MCP bind:
    `run()` binds `mcp.address` (`listenMCP`) right after config load (which
-   already refuses an address that is not host:port with a port 1–65535), and a
-   bind failure ends the launcher with exit 1 before it writes any file —
+   already refuses an address that is not host:port with a port 1–65535 and a
+   host the client URL can carry — `validMCPAddress`, skill
+   `unreagent-config`), and a bind failure ends the launcher with exit 1
+   before it writes any file —
    keeping going there *is* the silent failure: an agent without the MCP server
    loses its tools and permission prompts, or talks to whoever holds the port.
    The second, the skill set: `setupSkills` ends the launcher with exit 1 when

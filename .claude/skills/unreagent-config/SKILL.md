@@ -103,23 +103,46 @@ placeholder system exists.
    is not a plain YAML key (`validHermesServerName`: a character allowlist
    starting with a letter, which already rules out every YAML number and
    date, then anything YAML would read as a boolean or null; an empty name is
-   already `unreagent` from step 4), an `mcp.address` that is not host:port
-   or whose port is not a number from 1 to 65535 (`validMCPAddress`:
-   `net.Listen` would take port 0 or a service name, but the client URL
-   names the port as written; an empty address is already `127.0.0.1:8765`
-   from step 4), an `mcp.allowedOrigins` entry that is no Origin header a
-   browser sends (`validOrigin`: the server compares each entry with the
-   whole header, case-insensitively and without wildcards, so only that
-   form can match — http and https as `scheme://host[:port]` with a port
-   from 1 to 65535, no leading zeros and no default `:80`/`:443`, any other
-   scheme with a host (a browser extension's) as exactly `scheme://host`,
-   and an IP host as a browser writes it (`canonicalIP`: an http/https IPv4
-   as a dotted quad, IPv6 compressed, IPv4-mapped in hex, no zone); an
-   empty entry, a `*`, `null`, a missing scheme or host,
-   `file`/`ftp`/`ws`/`wss`, user info, a path (even a trailing `/`), a
-   query or fragment and a non-ASCII host (write punycode) are refused too;
-   the list has no default, empty or absent keeps the server's built-in
-   loopback origins).
+   already `unreagent` from step 4), an `mcp.address` the listener or the
+   client URL cannot take (`validMCPAddress`) and an `mcp.allowedOrigins`
+   entry that is no Origin header a browser sends (`validOrigin`):
+   - `validMCPAddress` wants host:port with a port from 1 to 65535:
+     `net.Listen` would take port 0 or a service name, but the client URL
+     names the port as written. The host reaches that URL as written too (a
+     wildcard aside, below), so it is empty (every interface), an IPv6
+     address in brackets, or a name of ASCII letters, digits, `-`, `_` and
+     `.`, which covers an IPv4 address. Brackets hold IPv6 only —
+     `[127.0.0.1]`, `[localhost]` and `[]` are refused — and no zone:
+     `[fe80::1%eth0]` would need `%25` in the URL, and a Node client takes
+     none. User info, a path or a space (`user@host`, `a/b`) would fail the
+     bind, but `hermes-setup` writes the URL with the server off. Every
+     error ends with the hint
+     `want host:port, e.g. 127.0.0.1:8765 or [::1]:8765`. An empty address
+     is already `127.0.0.1:8765` from step 4.
+   - `validOrigin`: the server compares each entry with the whole header,
+     case-insensitively and without wildcards, so only that form can match —
+     http and https as `scheme://host[:port]` with a port from 1 to 65535,
+     no leading zeros and no default `:80`/`:443`, any other scheme with a
+     host (a browser extension's) as exactly `scheme://host`, and an IP host
+     as a browser writes it (`canonicalIP`: an http/https IPv4 as a dotted
+     quad, IPv6 compressed, IPv4-mapped in hex, no zone). Whether an
+     http/https host is an IPv4 address goes by its characters, as in the
+     URL Standard (`browserIPv4`): a last label of decimal digits, or of
+     `0x` and nothing but hex digits, makes it one, so
+     `http://a.0xffffffffffffffffffff` is refused as a numeric host no
+     browser accepts although the number is too large to parse, while
+     `http://ide.example.0xg` is a name. A host outside brackets that holds
+     one of the URL Standard's forbidden host code points
+     (`forbiddenHostChars`; `url.Parse` lets `<`, `>` and `]` through) is
+     refused for http(s) and extension schemes alike, and an http(s) host,
+     a domain, takes no `%` either (`https://a%25b.example`); an
+     extension's opaque host keeps it, and a bracketed host is left to
+     `canonicalIP`. Refused too: an empty entry, a `*`, `null`, a missing
+     scheme or host, `file`/`ftp`/`ws`/`wss`, user info, a path (even a
+     trailing `/`), a query or fragment and a non-ASCII host (write
+     punycode). The list has no default; empty or absent keeps the server's
+     built-in loopback origins.
+
    The `agent.*` checks run only
    when `agent.enabled`, except serverName, which runs on
    `agent.hermes.enabled` alone — the only flag `hermes-setup` checks; the

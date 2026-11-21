@@ -400,7 +400,7 @@ as after an exit; `/M` only with an explicit `maxRestarts`).
 |---|---|
 | `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup`, which prints the usage and starts nothing |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
-| `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 (checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
+| `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 and a host that is empty, an IP address or a plain name (see `mcp` in the configuration quick reference; checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
 | `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
 
@@ -648,7 +648,7 @@ you which of the remaining causes applies.
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config <file>` (a private temp file, see Bearer auth) (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`; the logged `Agent command:` line shows the launcher's own `--mcp-config` file path, any other `--mcp-config` value as `<redacted>` and the token blanked in any other argument, while the agent itself gets the real arguments); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules; enforced only for a headless Claude Code agent with `claudeIntegration` (`-p`/`--print` with a task); for an interactive agent or with `claudeIntegration: false` the launcher logs a startup `WARN` and the policy is not applied (exceptions, and the open `agent.window: false` case: see Permission layer) — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders; a path rule for a file tool must be absolute, see Permission layer |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535, anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535 and a host that is empty, an IP address (IPv6 in brackets, without a zone such as `%eth0`) or a name of ASCII letters, digits, `-`, `_` and `.`; anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
 | `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
@@ -1352,14 +1352,17 @@ mcp:
   (`http://localhost:5173` above). Origins not on the list get `403`.
 - **Entry form.** Each entry is an origin exactly as the browser sends it:
   `scheme://host[:port]` with `http` or `https`. Refused: a path (not even
-  `/`), a query, a fragment, user info and wildcards. Leave out the default
-  port (`https://h`, not `https://h:443`) and leading zeros in a port, and
-  write an international host as punycode (`https://xn--...`). Matching is
+  `/`), a query, a fragment, user info, wildcards, a character the URL
+  Standard forbids in a host (`<`, `>`, `^`, `|`) and a `%` in the host
+  (`%25` included). Leave out the default port (`https://h`, not
+  `https://h:443`) and leading zeros in a port, and write an international
+  host as punycode (`https://xn--...`). Matching is
   exact on the whole string and ignores case. No placeholders are
   substituted.
 - **Browser extensions.** Any other scheme with a host is accepted as exactly
-  `scheme://host`, with no port, user info, path, query, fragment or
-  wildcard: `chrome-extension://<id>`, `moz-extension://<uuid>`,
+  `scheme://host`, with no port, user info, path, query, fragment, wildcard
+  or character the URL Standard forbids in a host (`<`, `>`, `^`, `|`):
+  `chrome-extension://<id>`, `moz-extension://<uuid>`,
   `vscode-webview://<id>`. Still refused, each with its own cause: `null`
   (every sandboxed frame sends it), a missing scheme, and `file`, `ftp`, `ws`
   and `wss`, which a browser never sends as an Origin.
@@ -1479,7 +1482,7 @@ operating system's own text: on Linux a taken port reads
 Stop the other program (often a second unreagent), or set `mcp.address` to a
 free `host:port` (for this machine only, in `unreagent.local.yaml`).
 An `mcp.address` that is not `host:port` never gets that far:
-`Error: mcp.address invalid: "127.0.0.1" (missing port in address; want host:port, e.g. 127.0.0.1:8765)`.
+`Error: mcp.address invalid: "127.0.0.1" (missing port in address; want host:port, e.g. 127.0.0.1:8765 or [::1]:8765)`.
 
 If the server stops serving after a successful bind, the launcher does not
 exit: it logs one `ERROR` line (in window mode also on stderr) saying that the

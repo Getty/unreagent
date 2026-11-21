@@ -136,7 +136,6 @@ agent:
   hermes: {configPath: "${PROJECT_DIR}/hermes.yaml", serverName: "${PROJECT_NAME}"}
 mcp:
   enabled: true
-  address: "${PROJECT_NAME}:1"
   token: "${PROJECT_NAME}"
 permissions:
   enabled: true
@@ -167,7 +166,6 @@ commands:
 		// Deliberately literal.
 		{"agent.env key", c.Agent.Env["${PROJECT_NAME}"], "key"},
 		{"agent.hermes.serverName", c.Agent.Hermes.ServerName, "${PROJECT_NAME}"},
-		{"mcp.address", c.MCP.Address, "${PROJECT_NAME}:1"},
 		{"mcp.token", c.MCP.Token, "${PROJECT_NAME}"},
 		{"commands.hello.description", c.Commands["hello"].Description, "builds ${PROJECT_NAME}"},
 	} {
@@ -187,6 +185,12 @@ commands:
 	if d := c.Permissions.Decide("Bash", map[string]any{"command": "rm -rf " + pd + "/Saved"}); d.Allow {
 		t.Errorf("deny rule with ${PROJECT_DIR} did not block: %s", d.Message)
 	}
+
+	// mcp.address stays literal too. A placeholder there is no host since
+	// k162, so it is refused as written; substituted, it would load as
+	// "Game:1".
+	_, _, err = Load(writeConfigFiles(t, dir, "mcp: {enabled: true, address: \"${PROJECT_NAME}:1\"}\n", ""))
+	errContains(t, err, `mcp.address invalid: "${PROJECT_NAME}:1"`)
 }
 
 // k43: a placeholder that resolved to "" in a field the launcher will use is a

@@ -64,8 +64,10 @@ Revision history for unreagent
     bound address and that URL. Re-running hermes-setup rewrites an entry an
     earlier release wrote with the wildcard.
   - An mcp.address that is not host:port with a port from 1 to 65535 (no
-    port, port 0, a service name) is a load error naming the value, checked
-    when mcp.enabled or agent.hermes.enabled is on.
+    port, port 0, a service name), or whose host is not empty, an IP
+    address (IPv6 in brackets, without a zone such as %eth0) or a name of
+    ASCII letters, digits, "-", "_" and ".", is a load error naming the
+    value, checked when mcp.enabled or agent.hermes.enabled is on.
   - -files with an unresolved files.root is refused, and the file-tools
     startup line only appears when the MCP server is enabled.
   - The approve permission tool denies a request it cannot read (no tool
@@ -303,7 +305,9 @@ Revision history for unreagent
     port, a punycode host, an IP host in its canonical form such as
     127.0.0.1 or [::1]), or a browser extension as exactly scheme://host
     (chrome-extension://<id>, moz-extension://<uuid>). null, wildcards,
-    paths and the schemes file, ftp, ws and wss are refused.
+    paths, the schemes file, ftp, ws and wss, a host character the URL
+    Standard forbids (such as < or >) and a numeric host that is no IPv4
+    address, however long its last label, are refused.
   - With permissions.enabled, the launcher logs a WARN at startup (also on
     stderr when its log is a file) when the policy cannot take effect, and
     starts anyway. An interactive agent, the window default, gets no

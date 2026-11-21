@@ -797,21 +797,49 @@ func validHermesServerName(name string) error {
 	return nil
 }
 
-// validMCPAddress refuses an mcp.address that is not host:port, or whose port
-// is not a number from 1 to 65535. net.Listen would take port 0 or a service
-// name ("http"), but the client URL names the port as written: port 0 binds a
-// random one no client is told, and a name is no URL port.
+// mcpHostName is what an mcp.address host outside brackets may consist of:
+// ASCII letters, digits, "-", "_" and "." — an IPv4 address or a host name.
+// The "_" is for Windows computer names, which resolvers take; the URL
+// Standard does not forbid it in a host. Empty is the wildcard.
+var mcpHostName = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
+
+// validMCPAddress refuses an mcp.address that is not host:port, whose port
+// is not a number from 1 to 65535, or whose host is no host. net.Listen would
+// take port 0 or a service name ("http"), but the client URL names the port
+// as written: port 0 binds a random one no client is told, and a name is no
+// URL port. The host goes into the client URL as written too, so it is empty
+// (every interface), an IPv6 address in brackets without a zone, or
+// mcpHostName. A zone ([fe80::1%eth0]) would need escaping as %25 there and a
+// Node client takes none at all; user info, a path or a space ("user@host",
+// "a/b") fails the bind, but hermes-setup writes the client URL with the MCP
+// server off.
 func validMCPAddress(address string) error {
-	_, port, err := net.SplitHostPort(address)
+	const want = "want host:port, e.g. 127.0.0.1:8765 or [::1]:8765"
+	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		var ae *net.AddrError
 		if errors.As(err, &ae) {
 			err = errors.New(ae.Err)
 		}
-		return fmt.Errorf("mcp.address invalid: %q (%v; want host:port, e.g. 127.0.0.1:8765)", address, err)
+		return fmt.Errorf("mcp.address invalid: %q (%v; %s)", address, err, want)
 	}
 	if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
-		return fmt.Errorf("mcp.address invalid: %q (port must be a number from 1 to 65535; want host:port, e.g. 127.0.0.1:8765)", address)
+		return fmt.Errorf("mcp.address invalid: %q (port must be a number from 1 to 65535; %s)", address, want)
+	}
+	var cause string
+	if strings.HasPrefix(address, "[") {
+		addr, err := netip.ParseAddr(host)
+		switch {
+		case strings.Contains(host, "%"):
+			cause = "no IPv6 zone allowed, a client URL takes none"
+		case err != nil || !addr.Is6():
+			cause = "brackets hold an IPv6 address only"
+		}
+	} else if !mcpHostName.MatchString(host) {
+		cause = `host must be an IP address or a name of ASCII letters, digits, "-", "_" and "."`
+	}
+	if cause != "" {
+		return fmt.Errorf("mcp.address invalid: %q (%s; %s)", address, cause, want)
 	}
 	return nil
 }
@@ -821,7 +849,8 @@ func validMCPAddress(address string) error {
 // string (case-insensitively, nothing else), so such an entry would never
 // match. A web page's origin is scheme://host[:port] with http or https:
 // nothing after the host and port, no user info, the host in ASCII (an
-// internationalized name as punycode, xn--…), an IP address in its one
+// internationalized name as punycode, xn--…) and without a code point the URL
+// Standard forbids in a host (forbiddenHostChars), an IP address in its one
 // canonical form (canonicalIP), the port as a plain number and left out when
 // it is the scheme's default — https://example.com, never
 // https://example.com:443. A browser extension's page sends its own scheme and
@@ -882,8 +911,25 @@ func validOrigin(origin string) error {
 			return errors.New("non-ASCII host, write it as punycode (xn--…), the form a browser sends")
 		}
 	}
+	if !strings.HasPrefix(u.Host, "[") {
+		forbidden := forbiddenHostChars
+		if web {
+			forbidden += "%"
+		}
+		if i := strings.IndexAny(u.Hostname(), forbidden); i >= 0 {
+			return fmt.Errorf("no %q allowed in a host, a browser refuses the URL", u.Hostname()[i:i+1])
+		}
+	}
 	return canonicalIP(u.Hostname(), web)
 }
+
+// forbiddenHostChars are the URL Standard's forbidden host code points: a
+// browser refuses a URL whose host holds one. url.Parse refuses most of them
+// itself or reads them as a delimiter, but lets "<", ">" and "]" into a host.
+// An http or https host is a domain, which takes no "%" either; validOrigin
+// adds it there, the % of a %25 that url.Parse decoded. A bracketed host is
+// an IPv6 address, which canonicalIP checks.
+const forbiddenHostChars = "\x00\t\n\r #/:<>?@[\\]^|"
 
 // canonicalIP refuses an IP host written in any form but the one a browser
 // sends. A bracketed host (url.Parse has checked it is an IPv6 address) goes
@@ -933,8 +979,11 @@ func canonicalIP(host string, web bool) error {
 
 // browserIPv4 reads host as a browser reads the host of an http or https URL
 // (the WHATWG URL Standard's IPv4 parser). A host whose last label, after one
-// trailing dot, is a decimal number or a 0x hex number is an IPv4 address
-// (isIP); any other host is a name. Such an address has one to four
+// trailing dot, is all decimal digits or 0x and nothing but hex digits is an
+// IPv4 address (isIP); any other host is a name. That goes by the characters,
+// as in the URL Standard, not by what ipv4Number can parse: a hex number too
+// large for it (http://a.0xffffffffffffffffffff) still makes the host an
+// address, one the browser refuses. Such an address has one to four
 // dot-separated parts, each decimal, octal with a leading 0 or hex with 0x;
 // each part but the last is one byte, the last fills the remaining bytes. An
 // address that breaks these rules, a URL the browser refuses, comes back
@@ -944,8 +993,13 @@ func browserIPv4(host string) (addr netip.Addr, isIP, octal bool) {
 	if len(parts) > 1 && parts[len(parts)-1] == "" {
 		parts = parts[:len(parts)-1]
 	}
-	last := parts[len(parts)-1]
-	if _, _, err := ipv4Number(last); last == "" || (strings.Trim(last, "0123456789") != "" && err != nil) {
+	last, digits := parts[len(parts)-1], "0123456789"
+	if len(last) >= 2 && strings.EqualFold(last[:2], "0x") {
+		last, digits = last[2:], "0123456789abcdefABCDEF"
+	} else if last == "" {
+		return addr, false, false
+	}
+	if strings.Trim(last, digits) != "" {
 		return addr, false, false
 	}
 	if len(parts) > 4 {
