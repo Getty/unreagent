@@ -137,6 +137,9 @@ files:
 
 mcp:
   enabled: true
+  # Default 127.0.0.1:8765. If it cannot be bound (port taken, e.g. by a second
+  # unreagent), the launcher exits 1 before writing any file; a per-machine
+  # port belongs in unreagent.local.yaml.
   address: 127.0.0.1:8765
   # Optional bearer token: when set, the MCP server requires an
   # "Authorization: Bearer <token>" header on every request. Default empty

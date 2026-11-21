@@ -192,6 +192,19 @@ Revision history for unreagent
   - logs says when its 500-line buffer has dropped lines a request asks for:
     the reply starts with "[... N lines omitted; the log keeps only the last
     500]".
+  - A taken MCP port (another unreagent or another program on mcp.address),
+    or an mcp.address that is not a host:port of this machine, ends the
+    launcher with exit 1 and an error naming the address, the cause and the
+    fix, before it writes any file or starts the editor, the bridges or the
+    agent. It used to be a log line while the launcher ran on and its agent
+    talked to whatever held the port.
+  - An MCP server that stops serving after the bind logs one ERROR line, in
+    window mode also on stderr, saying that the agent's unreagent tools no
+    longer work; everything else keeps running (the editor, and the agent if
+    one is configured) so you can save, then restart unreagent. There is no
+    automatic rebind.
+  - "MCP server listening on ..." is logged only once the port is bound, so a
+    client that connects on that line no longer gets "connection refused".
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

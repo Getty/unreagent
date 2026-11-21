@@ -14,6 +14,10 @@ and the MCP server on Windows in 30 seconds.
 > installed CLI. The demo deliberately leaves the agent out. How to enable it
 > is below.
 
+If port 8765 is already taken (for example by a second instance), the launcher
+exits 1 with `Error: MCP server cannot listen on 127.0.0.1:8765: ...`; stop the
+other program first.
+
 ## Getting started
 
 1. Place `unreagent.exe` (from the [release](https://github.com/Getty/unreagent/releases))

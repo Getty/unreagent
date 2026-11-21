@@ -43,7 +43,7 @@ imports `mcp` is a design error, not a shortcut.
 
 | File | What it holds |
 |---|---|
-| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, service and command registration, MCP server start, shutdown — plus small helpers (`extractSubcommand`, `hasArg`, …) |
+| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, MCP bind (`listenMCP`), service and command registration, MCP serving (`serveMCP`), shutdown — plus small helpers (`extractSubcommand`, `hasArg`, …) |
 | `tools.go` | `registerTools` (every MCP tool except the file tools), `serviceAction` |
 | `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
@@ -100,7 +100,15 @@ was split by concern.
    failed precondition is logged with the concrete cause and the check continues.
    Silent failure is the one unacceptable outcome — see the bridge smoke tests in
    `prepareMCPBridges` / `smokeTestMCP` for the house pattern: check, log loudly,
-   name the usual suspects, keep going.
+   name the usual suspects, keep going. One deliberate exception, the MCP bind:
+   `run()` binds `mcp.address` (`listenMCP`) right after config load, and a
+   bind failure ends the launcher with exit 1 before it writes any file —
+   keeping going there *is* the silent failure: an agent without the MCP server
+   loses its tools and permission prompts, or talks to whoever holds the port.
+   A serve failure after a successful bind is not fatal (`serveMCP`): one loud
+   ERROR line in the launcher log, also on stderr when that log is a file
+   (window mode), MCP marked not serving, and launcher, editor and agent keep
+   running so the user can save; there is no automatic rebind.
 
 ## Build & verification gate
 

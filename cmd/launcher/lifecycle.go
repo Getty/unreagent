@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/conflict-industries/unreagent/internal/config"
@@ -129,23 +130,24 @@ func (s *session) result() error {
 // cannot be executed, or failed within the fast-fail window of its start); one
 // that ran and then ended is left to its restart policy, as before. Design
 // choice for k69: with MCP serving, an external agent can still read the logs
-// and retry ue_start, so the launcher keeps running and says so. With MCP off
-// and no agent, nothing can retry on the user's behalf, so the session ends
-// with exit 1 instead of idling until somebody presses Ctrl-C — also when the
-// failed start was typed into the launcher console; that user can start the
-// launcher again (see k69).
-func makeEditorExitHandler(sess *session, logger func(string), mcpServing bool) func(supervisor.Exit) {
+// and retry ue_start, so the launcher keeps running and says so. With MCP not
+// serving (off, or stopped serving since: see serveMCP) and no agent, nothing
+// can retry on the user's behalf, so the session ends with exit 1 instead of
+// idling until somebody presses Ctrl-C — also when the failed start was typed
+// into the launcher console; that user can start the launcher again (see k69).
+// mcpServing is read at the editor's exit, not when the handler is built.
+func makeEditorExitHandler(sess *session, logger func(string), mcpServing *atomic.Bool) func(supervisor.Exit) {
 	return func(e supervisor.Exit) {
 		if !e.StartFailed {
 			return
 		}
 		failed := fmt.Sprintf("failed to start, or failed within %s of starting", supervisor.FastFailWindow)
-		if mcpServing {
+		if mcpServing.Load() {
 			logger("The editor " + failed + ", and is not restarted — the launcher keeps serving MCP: read the logs, fix the cause, retry with ue_start (Ctrl-C stops the launcher).")
 			return
 		}
-		logger("The editor " + failed + ", and is not restarted; no agent is configured and MCP is off — stopping everything.")
-		sess.fail(fmt.Errorf("the editor %s, and with no agent and MCP off nothing can retry it (see the launcher log)", failed))
+		logger("The editor " + failed + ", and is not restarted; no agent is configured and MCP is not serving — stopping everything.")
+		sess.fail(fmt.Errorf("the editor %s, and with no agent and MCP not serving nothing can retry it (see the launcher log)", failed))
 	}
 }
 

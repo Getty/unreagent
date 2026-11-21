@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -43,6 +44,15 @@ func TestLauncherRunProcess(t *testing.T) {
 	}
 	if os.Getenv(loadFailEnv) != "" {
 		loadEmbeddedSkills = func() ([]skills.Skill, error) { return nil, errors.New("skills: injected load failure") }
+	}
+	if os.Getenv(acceptFailEnv) != "" {
+		listen = func(network, addr string) (net.Listener, error) {
+			ln, err := net.Listen(network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return acceptFails{ln}, nil
+		}
 	}
 	os.Args = []string{os.Args[0], "-config", path}
 	if extra := os.Getenv(runArgsEnv); extra != "" {
@@ -248,7 +258,9 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		sess := newSession(ctx, cancel)
 		var log syncLog
-		makeEditorExitHandler(sess, log.log, c.mcpServing)(c.exit)
+		var serving atomic.Bool
+		serving.Store(c.mcpServing)
+		makeEditorExitHandler(sess, log.log, &serving)(c.exit)
 		if ended := ctx.Err() != nil; ended != c.wantErr {
 			t.Fatalf("%+v, mcp %v: session ended = %v, want %v", c.exit, c.mcpServing, ended, c.wantErr)
 		}

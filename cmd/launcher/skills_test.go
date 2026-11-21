@@ -16,7 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/mcp"
@@ -830,23 +829,15 @@ func TestRunRegistersTheSkillsToolWithTheLoadedSkills(t *testing.T) {
 	yaml := strings.Replace(launcherYAML("sleep", "  enabled: false\n"),
 		"mcp:\n  enabled: false\n", "mcp:\n  enabled: true\n  address: "+addr+"\n", 1)
 	l := startLauncher(t, yaml)
-	l.waitLine(t, "MCP server")
+	l.waitLine(t, "MCP server listening on")
 
 	shipped := shippedSkills(t)[0]
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"skills","arguments":{"name":"` + shipped.Name + `"}}}`
-	// The launcher logs "MCP server listening" before the port is bound, so
-	// retry until it answers; the last error is the failure.
-	var resp *http.Response
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		resp, err = http.Post("http://"+addr+"/mcp", "application/json", strings.NewReader(body))
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("MCP server never answered on %s within 10s: %v\n%s", addr, err, l.stdout)
-		}
-		time.Sleep(20 * time.Millisecond)
+	// No retry: the launcher logs "MCP server listening" only once the port
+	// is bound (k141).
+	resp, err := http.Post("http://"+addr+"/mcp", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("MCP server on %s does not answer right after the listening line: %v\n%s", addr, err, l.stdout)
 	}
 	var out struct {
 		Result struct {

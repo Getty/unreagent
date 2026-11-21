@@ -327,7 +327,8 @@ exact bound and the fast-fail rule does not apply then. It covers both
 |---|---|
 | `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0 |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
-| `1` | no agent configured **and MCP off**, and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
+| `1` | the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
+| `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
 
 An agent that fails and **is** restarted produces no exit code until it stops
 failing or gives up. With the default `restart: on-failure`, a headless agent
@@ -540,7 +541,7 @@ runs no check on HTTP entries, `unreagent.log` will not say which.
 | `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
 | `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
@@ -1052,6 +1053,20 @@ unreagent.exe -no-agent -files          # UE + MCP + file tools, no embedded age
 # in your Claude Code session:
 claude --mcp-config '{"mcpServers":{"unreagent":{"type":"http","url":"http://127.0.0.1:8765/mcp"}}}'
 ```
+
+If the address cannot be bound the launcher exits 1 before it writes any file.
+The error starts with `Error: MCP server cannot listen on 127.0.0.1:8765:` and
+goes on with the system's reason and what to do about it. The reason is the
+operating system's own text: on Linux a taken port reads
+`address already in use`, while Windows words it in the system language.
+Stop the other program (often a second unreagent), or set `mcp.address` to a
+free `host:port` (for this machine only, in `unreagent.local.yaml`).
+
+If the server stops serving after a successful bind, the launcher does not
+exit: it logs one `ERROR` line (in window mode also on stderr) saying that the
+agent's unreagent tools and permission prompts no longer work, and keeps
+everything else running: the editor, and the agent if one is configured. Save
+your work in the editor, then restart unreagent; there is no automatic rebind.
 
 For access from another machine set `mcp.address` to `0.0.0.0:8765` (only
 in trusted networks — the server then has file-write access).
