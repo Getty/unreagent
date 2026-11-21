@@ -276,7 +276,7 @@ func run() error {
 				fmt.Fprintln(alert, "unreagent: "+line)
 			}
 		}
-		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(agentArgs, " "))
+		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(redactAgentArgs(agentArgs, cfg.MCP.Token), " "))
 		if err := sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
 			Command:      cfg.Agent.Command,
@@ -308,7 +308,7 @@ func run() error {
 		if base == "" {
 			base = "."
 		}
-		writeMCPConfigs(cfg.MCP.WriteConfig, mcpServers, base, logger)
+		writeMCPConfigs(cfg.MCP.WriteConfig, mcpServers, base, ueProjectDir, cfg.MCP.Token != "", logger, alert)
 	}
 
 	// --- one-off commands ---

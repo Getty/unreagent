@@ -1,9 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
 
 	"github.com/conflict-industries/unreagent/internal/config"
 )
@@ -28,8 +36,13 @@ func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
 	return servers
 }
 
-// writeMCPConfigs writes the MCP config to the configured file targets.
-func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{}, baseDir string, logger func(string)) {
+// writeMCPConfigs writes the MCP config to the configured file targets, each
+// private to its owner (writePrivateFile): it holds the bearer token and the
+// extra servers' env values. With tokenSet, a target inside projectDir that
+// git does not ignore gets a WARN (unignoredTokenFile). The WARN also goes to
+// alert unless alert is nil, as run() passes it: stderr in window mode, where
+// the log is a file and the console the agent's.
+func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{}, baseDir, projectDir string, tokenSet bool, logger func(string), alert io.Writer) {
 	for _, out := range outputs {
 		path := out.Path
 		if !filepath.IsAbs(path) {
@@ -47,7 +60,11 @@ func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{},
 			logger("WARN MCP config (" + path + "): " + err.Error())
 			continue
 		}
-		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+		was, err := writePrivateFile(path, append(b, '\n'))
+		if was != 0 {
+			logger(fmt.Sprintf("MCP config %s: mode %04o tightened to 0600 — it can hold the bearer token and the extra servers' env values", path, was))
+		}
+		if err != nil {
 			logger("WARN MCP config (" + path + "): " + err.Error())
 			continue
 		}
@@ -56,7 +73,119 @@ func writeMCPConfigs(outputs []config.MCPOutput, servers map[string]interface{},
 			format = "mcp_json"
 		}
 		logger("MCP config written: " + path + " (" + format + ")")
+		if unignoredTokenFile(path, projectDir, tokenSet) {
+			line := "WARN MCP config " + path + " holds the bearer token (mcp.token), and git does not ignore it — add it to .gitignore (and git rm --cached it if git already tracks it), or the token can end up in a commit"
+			logger(line)
+			if alert != nil {
+				fmt.Fprintln(alert, "unreagent: "+line)
+			}
+		}
 	}
+}
+
+// writePrivateFile writes data to path, readable and writable by its owner
+// only. A new file is created 0600. os.WriteFile would keep an existing
+// file's mode, so one open to group or others is tightened to 0600 before
+// data goes in, and was is the mode it had (0: nothing tightened); if the
+// chmod fails, the file is left as it was. Not on Windows, where Chmod sets
+// only the read-only attribute and the mode a Stat reports is not the file's
+// ACL: there the file is written as it is.
+func writePrivateFile(path string, data []byte) (was os.FileMode, err error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}()
+	if runtime.GOOS != "windows" {
+		fi, err := f.Stat()
+		if err != nil {
+			return 0, err
+		}
+		if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+			if err := f.Chmod(0o600); err != nil {
+				return 0, fmt.Errorf("mode %04o is open to others and cannot be tightened to 0600, so the file is not written: %w", perm, err)
+			}
+			was = perm
+		}
+	}
+	// Truncated only now: a file that cannot be made private keeps its content.
+	if err := f.Truncate(0); err != nil {
+		return was, err
+	}
+	_, err = f.Write(data)
+	return was, err
+}
+
+// redactedValue stands in a log line for a value the line must not show.
+const redactedValue = "<redacted>"
+
+// redactAgentArgs returns args as the "Agent command:" log line shows them
+// (k44). The --mcp-config value, the next argument or what follows
+// "--mcp-config=", is replaced whole, whether the launcher or agent.args put
+// it there: it holds the bearer token and the extra servers' env values and
+// headers, and in window mode the log is unreagent.log in the project
+// directory. A token is replaced in every other argument too. The extra
+// servers' env values reach the agent's arguments only inside --mcp-config;
+// replaced elsewhere, a value such as "1" or "true" would garble the whole
+// line. args itself is left alone: the agent is started with it.
+func redactAgentArgs(args []string, token string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		switch {
+		case i > 0 && args[i-1] == "--mcp-config":
+			a = redactedValue
+		case strings.HasPrefix(a, "--mcp-config="):
+			a = "--mcp-config=" + redactedValue
+		case token != "":
+			a = strings.ReplaceAll(a, token, redactedValue)
+		}
+		out[i] = a
+	}
+	return out
+}
+
+// gitCheckIgnoreTimeout bounds the git call of unignoredTokenFile; a var so
+// tests can shorten it.
+var gitCheckIgnoreTimeout = 5 * time.Second
+
+// unignoredTokenFile reports whether path, an MCP config just written, holds
+// the bearer token where a commit can take it along: tokenSet, path inside
+// projectDir (relToRoot), and `git check-ignore -q <path>`, run in path's
+// directory, exits 1, which says git does not ignore the file (a file git
+// already tracks exits 1 too, whatever .gitignore says). The warning it
+// drives speaks only when it is sure (main agent's decision for k44), so
+// every other outcome is false: no token, no project directory, a path
+// outside it, git not on PATH, exit 0 (ignored), exit 128 (no work tree, or
+// another error) and a git that does not answer within
+// gitCheckIgnoreTimeout. Like taskkill and reg query, git is a short helper
+// run without a job object; its output goes nowhere.
+func unignoredTokenFile(path, projectDir string, tokenSet bool) bool {
+	if !tokenSet || projectDir == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path) // git runs in path's directory
+	if err != nil {
+		return false
+	}
+	if _, inside := relToRoot(projectDir, abs); !inside {
+		return false
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitCheckIgnoreTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, git, "check-ignore", "-q", abs)
+	cmd.Dir = filepath.Dir(abs)
+	err = cmd.Run()
+	// The timeout is ruled out first: on Windows a killed process exits 1 too.
+	var exit *exec.ExitError
+	return ctx.Err() == nil && errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // toVSCode converts the mcpServers map into the VS Code format (stdio servers

@@ -48,7 +48,7 @@ imports `mcp` is a design error, not a shortcut.
 | `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
-| `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` |
+| `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` (each target 0600 via `writePrivateFile`, Unix only; `unignoredTokenFile` warns when git does not ignore one holding the token), `redactAgentArgs` for the logged agent command |
 | `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt), the stdin console loop, the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
 | `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills` (`installSkillDir`, `sweepSkillDirs`), the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
@@ -83,7 +83,8 @@ was split by concern.
 3. **Job Objects are load-bearing.** On Windows every service, every one-shot
    command and the bridge smoke test is attached to a Job Object with
    `KILL_ON_JOB_CLOSE` (`internal/supervisor/job_windows.go`); only the
-   short-lived `taskkill` and `reg query` helpers run without one. Off Windows
+   short-lived `taskkill`, `reg query` and `git check-ignore`
+   (`unignoredTokenFile`) helpers run without one. Off Windows
    the job is a no-op (`job_other.go`), the supervisor kills only the direct
    child, and the crash-reporter kill runs `pkill` instead of `taskkill`. This is
    what makes "no zombie ShaderCompileWorker" an OS guarantee rather than a hope.

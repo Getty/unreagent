@@ -97,6 +97,19 @@ project directory; the overlay replaces the list as a whole) or the flag
 entry's url is the address clients connect to, so a wildcard `mcp.address`
 host is written as `127.0.0.1` (`[::1]` for `::`).
 
+The written file holds the bearer token when `mcp.token` is set, so it is
+created with mode `0600`. An existing file that is open to group or others is
+tightened to `0600` before the content goes in, and the log names the old mode;
+if that `chmod` fails, the old file is left untouched and a `WARN` is logged.
+This is Unix only: on Windows the mode is not handled. With `mcp.token` set, a
+written file that sits inside the project directory and that git does not
+ignore (`git check-ignore` exits 1) gets a `WARN` in the log (in window mode
+also on stderr), since a commit would take the token along: add the file to
+`.gitignore`, and if git already tracks it, `git rm --cached` it as well. No
+warning when git is missing, no project is known (`unreal.project` unset and no
+`.uproject` found), the project is not a git work tree, the path is outside the
+project, or git does not answer within 5 seconds.
+
 ## Building
 
 Requirement: Go (>= 1.26). Dependencies are vendored (`vendor/`); builds run
@@ -310,12 +323,20 @@ Recommended `.gitignore` entry in the UE project:
 unreagent.exe
 unreagent.local.yaml
 unreagent.local.yaml.tmp-*
+unreagent.log*
 ```
 
-The last line covers a leftover of `unreagent hermes-setup`: it saves the
+The `unreagent.local.yaml.tmp-*` line covers a leftover of `unreagent hermes-setup`: it saves the
 bearer token through a temp file, and a kill mid-write can leave
 `unreagent.local.yaml.tmp-<digits>` behind with the token in it. Delete such
 a file or keep it out of git.
+
+`unreagent.log*` is there because in window mode the launcher log sits in the
+project directory, and the log of releases up to 0.0.9 can carry the bearer
+token in plain text (the full agent command, `--mcp-config` included).
+`unreagent.log.1` is the previous run's log, so after an upgrade it can still
+hold that older line; the trailing `*` covers both. Later releases log the agent
+command with `--mcp-config <redacted>`.
 
 ### When the agent ends (`/quit` or crash)
 
@@ -598,7 +619,7 @@ you which of the remaining causes applies.
 
 | Section | Purpose |
 |---|---|
-| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`; the logged `Agent command:` line shows `--mcp-config <redacted>` and the token blanked in any other argument, while the agent itself gets the real arguments); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules; enforced only for a headless Claude Code agent with `claudeIntegration` (`-p`/`--print` with a task); for an interactive agent or with `claudeIntegration: false` the launcher logs a startup `WARN` and the policy is not applied (exceptions, and the open `agent.window: false` case: see Permission layer) — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535, anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
@@ -1029,6 +1050,11 @@ backup. Copy it back, then run `hermes-setup` again — it now merges.
 The MCP server enforces `Authorization: Bearer <token>` whenever
 `mcp.token` is set — including for the embedded Claude Code agent, which
 gets the matching `headers:` block in its `--mcp-config` automatically.
+The logged `Agent command:` line shows `--mcp-config <redacted>` and blanks
+the token in any other argument, so the token does not reach `unreagent.log`;
+the agent itself still gets the real arguments. Config files written for
+external clients (`mcp.writeConfig`, `-write-mcp-config`) carry the token and
+are created `0600`; see the `mcp.writeConfig` paragraph near the top.
 The token check uses `crypto/subtle.ConstantTimeCompare`; the empty-token
 default (the historic behaviour) keeps the server open on 127.0.0.1.
 
@@ -1271,7 +1297,7 @@ gone once the list is set), or a different extension id. Uppercase is fine.
 | `-no-agent` | **do not** start the agent — only UE + MCP server. An external agent (your own Claude Code session) then connects to the MCP server. |
 | `-files` | enable the file tools (`read_file` / `write_file` / `list_dir` / `edit_file`) even if off in the config. Refused with a warning (file tools stay off) when `files.root` contains a placeholder that did not resolve — set `unreal.project` or an explicit `files.root`. |
 | `-no-skills-mcp` | deliver the skills as files in `skills.dir` instead of through the `skills` MCP tool (`skills.mcp: false`, `skills.materialize: true`). It is applied after both YAML files are loaded, so it wins over `unreagent.yaml` and `unreagent.local.yaml`; with `skills.enabled: false` it has no effect and says so in the log. See [Skills](#skills). |
-| `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). |
+| `-write-mcp-config <path>` | additionally write the assembled MCP config as `.mcp.json` to `<path>` (for external clients). Created `0600` (an existing file open to group or others is tightened first; Unix only), since it holds `mcp.token` when set; with `mcp.token` set, a target inside the project that git does not ignore gets a `WARN` (in the log; in window mode also on stderr). |
 
 ## Sub-commands
 
@@ -1303,7 +1329,9 @@ subprocess it won't start. Hence three ways:
    session's log is kept as `unreagent.log.1`, one generation, replaced on
    each start) so the agent has the window to itself. If the old log cannot
    be moved aside, a warning says so and the new session is appended to
-   `unreagent.log`. The launcher console's replies (see
+   `unreagent.log`. The `Agent command:` line in that log shows
+   `--mcp-config <redacted>`, and the token is blanked in any other argument;
+   the agent still gets the real arguments. The launcher console's replies (see
    [Manual control](#manual-control-stdin)) show on the console as well as in
    the log. If the log cannot be created, the launcher prints a
    warning to stderr and its logs go to the console instead. Disable with `window: false`; off in `-p` mode.

@@ -259,10 +259,10 @@ func markInstalled(name, modules string, logger func(string)) {
 // reports whether the bridge answered.
 //
 // The bridge runs in a job object, as every service and one-shot command
-// does (only the short-lived taskkill/pkill and reg query helpers run
-// without one), so ending the trial — answer, timeout or parent cancelled —
-// ends what the bridge started as well, and a launcher crash leaves nothing
-// behind.
+// does (only the short-lived taskkill/pkill, reg query and git check-ignore
+// (unignoredTokenFile) helpers run without one), so ending the trial —
+// answer, timeout or parent cancelled — ends what the bridge started as
+// well, and a launcher crash leaves nothing behind.
 func smokeTestMCP(parent context.Context, name, command string, args, env []string, dir string, logger func(string)) bool {
 	if parent.Err() != nil {
 		return false

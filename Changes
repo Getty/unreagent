@@ -301,6 +301,15 @@ Revision history for unreagent
     still being carried out says so, points to status and is not to be
     repeated; an editor busy with its pre-start step is named as busy, not as
     not responding.
+  - mcp.writeConfig and -write-mcp-config files are written 0600; an existing
+    file open to group or others is tightened first, and the log names its old
+    mode (Unix only). With mcp.token set, a file inside the project that git
+    does not ignore gets a WARN, in window mode also on stderr: add it to
+    .gitignore, and git rm --cached it if git already tracks it.
+  - The logged agent command shows --mcp-config <redacted> and blanks the
+    token in any other argument, so unreagent.log no longer holds the token or
+    the extra servers' env values. The recommended .gitignore lists
+    unreagent.log*: a log of 0.0.9 or earlier can hold the token.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
