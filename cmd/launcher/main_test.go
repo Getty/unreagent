@@ -228,12 +228,7 @@ func TestRunHandsOutALoopbackURLForAWildcardMCPAddress(t *testing.T) {
 	}
 	want := "http://127.0.0.1:" + port + "/mcp"
 	dir := t.TempDir()
-	agent := filepath.Join(dir, "agent.sh")
-	// Each argument on a line of its own, which the launcher logs as
-	// "[agent] arg: …".
-	if err := os.WriteFile(agent, []byte("#!/bin/sh\nfor a; do printf 'arg: %s\\n' \"$a\"; done\nexec sleep 20\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	agent := recordingAgent(t, dir)
 	l := startLauncherIn(t, dir, `unreal:
   editor: sleep
   args: ["20"]
@@ -256,7 +251,9 @@ agent:
   claudeIntegration: true
   startDelaySeconds: 1
 `)
-	l.waitLine(t, "[agent] arg: {")
+	// The file is removed once the launcher ends (k181).
+	agentConfig := mustReadFile(t, mcpConfigArg(t, recordedArgs(t, agent)))
+	l.waitLine(t, "MCP server listening on ")
 	out := l.stdout.String()
 
 	type mcpServers struct {
@@ -271,8 +268,7 @@ agent:
 		}
 		return v.MCPServers[config.MCPServerName].URL
 	}
-	arg, _ := afterMarker(out, "[agent] arg: {")
-	if got := urlOf("--mcp-config", "{"+arg); got != want {
+	if got := urlOf("--mcp-config", agentConfig); got != want {
 		t.Errorf("--mcp-config hands the agent %q; want %q", got, want)
 	}
 	if got := urlOf(".mcp.json", mustReadFile(t, filepath.Join(dir, ".mcp.json"))); got != want {
@@ -627,6 +623,10 @@ func TestPermissionsInertReason(t *testing.T) {
 		noClaude    = "agent.claudeIntegration is false"
 		claudeFix   = "set agent.claudeIntegration: true"
 		askWindow   = "asks in its window"
+		otherTool   = `names "mcp__other__ask", not mcp__unreagent__approve`
+		setApprove  = "set it to mcp__unreagent__approve"
+		noSecond    = "The launcher passes no --permission-prompt-tool of its own next to it."
+		orRemove    = "or remove it from agent.args"
 	)
 	modes := []string{config.ModeAllowAll, config.ModeAllowlist, config.ModeDenyAll}
 	type row struct {
@@ -658,7 +658,25 @@ func TestPermissionsInertReason(t *testing.T) {
 			want: []string{noClaude, claudeFix, headlessFix}, absent: []string{skipFlag, windowMode}},
 		{name: "no claudeIntegration, interactive, prompt tool wired by hand as -flag=value", enabled: true, mode: config.ModeAllowlist, agent: true,
 			args: []string{"--permission-prompt-tool=mcp__unreagent__approve"}, interactive: true,
-			want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, skipFlag}},
+			want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, skipFlag, setApprove}},
+		// k172: the launcher passes no prompt tool of its own next to a
+		// hand-wired one, so one naming another tool leaves the policy
+		// unconsulted, with claudeIntegration or without.
+		{name: "headless, another prompt tool wired by hand", enabled: true, mode: config.ModeAllowlist, agent: true, claude: true,
+			args: append(slices.Clone(headless), "--permission-prompt-tool", "mcp__other__ask"),
+			want: []string{otherTool, setApprove, noSecond, orRemove}, absent: []string{windowMode, headlessFix, noClaude, skipFlag}},
+		{name: "headless, another prompt tool wired by hand as -flag=value", enabled: true, mode: config.ModeAllowAll, agent: true, claude: true,
+			args: append(slices.Clone(headless), "--permission-prompt-tool=mcp__other__ask"),
+			want: []string{otherTool, setApprove, noSecond, orRemove}, absent: []string{windowMode, headlessFix, skipFlag}},
+		{name: "no claudeIntegration, headless, another prompt tool wired by hand", enabled: true, mode: config.ModeDenyAll, agent: true,
+			args: append(slices.Clone(headless), "--permission-prompt-tool", "mcp__other__ask"),
+			want: []string{otherTool, setApprove}, absent: []string{windowMode, headlessFix, noClaude, noSecond, orRemove}},
+		{name: "headless, approve and another tool wired by hand", enabled: true, mode: config.ModeAllowlist, agent: true, claude: true,
+			args: append(slices.Clone(headless), "--permission-prompt-tool", "mcp__unreagent__approve", "--permission-prompt-tool=mcp__other__ask"),
+			want: []string{otherTool, setApprove}, absent: []string{windowMode, headlessFix}},
+		{name: "interactive, another prompt tool wired by hand", enabled: true, mode: config.ModeAllowlist, agent: true, claude: true,
+			args: []string{"--permission-prompt-tool", "mcp__other__ask"}, interactive: true,
+			want: []string{windowMode, wiredOff, headlessFix, setApprove}, absent: []string{launcherOff, noClaude}},
 	}
 	for _, mode := range modes {
 		rows = append(rows, row{name: "headless -p, " + mode, enabled: true, mode: mode, agent: true, claude: true, args: headless},
@@ -671,7 +689,7 @@ func TestPermissionsInertReason(t *testing.T) {
 		// longer claims Claude Code asks as usual.
 		wired := row{name: "interactive, prompt tool wired by hand, " + mode, enabled: true, mode: mode, agent: true, claude: true,
 			args: handWired, interactive: true,
-			want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, askWindow}}
+			want: []string{windowMode, wiredOff, headlessFix}, absent: []string{noClaude, claudeFix, launcherOff, askWindow, setApprove}}
 		if mode == config.ModeAllowAll {
 			interactive.want = append(interactive.want, skipFlag, "including one a deny rule names")
 			wired.want = append(wired.want, "The launcher also passes --dangerously-skip-permissions (mode allow_all).")
@@ -796,6 +814,89 @@ func TestRunWarnsWhenThePermissionsPolicyIsInert(t *testing.T) {
 			}
 			if !tc.window && alerts != 0 {
 				t.Errorf("stderr repeats the warning that the log on stdout already shows:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// k172: with claudeIntegration, a headless agent whose agent.args wires
+// --permission-prompt-tool by hand got the launcher's own as well: the flag
+// twice, and which one Claude Code takes is unverified. The launcher now
+// adds none next to a hand-wired one, in either form, so the agent gets the
+// flag once. One naming mcp__unreagent__approve gets an INFO line that it is
+// set already, one naming another tool the WARN that the policy is not
+// enforced; with none wired by hand, the launcher passes its own, silently.
+func TestRunPassesNoSecondPermissionPromptTool(t *testing.T) {
+	const (
+		approve = "mcp__unreagent__approve"
+		info    = "Agent: --permission-prompt-tool " + approve + " is set in agent.args already"
+		warn    = "WARN permissions are not enforced: "
+	)
+	for _, tc := range []struct {
+		name  string
+		wired []string // agent.args after "-p", "task"
+		want  []string // the agent's --permission-prompt-tool arguments
+		info  bool
+		warn  string // in the WARN line; "" = no warning
+	}{
+		{name: "none by hand", want: []string{"--permission-prompt-tool", approve}},
+		{name: "approve by hand", wired: []string{"--permission-prompt-tool", approve},
+			want: []string{"--permission-prompt-tool", approve}, info: true},
+		{name: "approve by hand as -flag=value", wired: []string{"--permission-prompt-tool=" + approve},
+			want: []string{"--permission-prompt-tool=" + approve}, info: true},
+		{name: "another tool by hand", wired: []string{"--permission-prompt-tool", "mcp__other__ask"},
+			want: []string{"--permission-prompt-tool", "mcp__other__ask"}, warn: `names "mcp__other__ask"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			agent := recordingAgent(t, dir)
+			args := `"-p", "task"`
+			for _, a := range tc.wired {
+				args += fmt.Sprintf(", %q", a)
+			}
+			yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n  args: ["+args+"]\n  claudeIntegration: true\n  startDelaySeconds: 1\n"), freeLoopbackAddr(t))
+			yaml = strings.Replace(yaml, "permissions:\n  enabled: false\n",
+				"permissions:\n  enabled: true\n  mode: allow_all\n  deny: [\"Bash(rm -rf *)\"]\n", 1)
+			l := startLauncherIn(t, dir, yaml)
+
+			var got []string
+			recorded := recordedArgs(t, agent)
+			for i, a := range recorded {
+				switch {
+				case a == "--permission-prompt-tool" && i+1 < len(recorded):
+					got = append(got, a, recorded[i+1])
+				case a == "--permission-prompt-tool" || strings.HasPrefix(a, "--permission-prompt-tool="):
+					got = append(got, a)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("the agent's prompt-tool arguments are %q; want %q\nall: %q", got, tc.want, recorded)
+			}
+			if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("SIGTERM: %v", err)
+			}
+			if code := l.exitCode(t); code != 0 {
+				t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			log := l.stdout.String()
+			wantInfo := 0
+			if tc.info {
+				wantInfo = 1
+			}
+			if got := strings.Count(log, info); got != wantInfo {
+				t.Errorf("the log has %q %d times; want %d:\n%s", info, got, wantInfo, log)
+			}
+			var line string
+			for _, ln := range strings.Split(log, "\n") {
+				if strings.Contains(ln, warn) {
+					line = ln
+				}
+			}
+			if tc.warn == "" && line != "" {
+				t.Errorf("warned although the policy takes effect: %s", line)
+			}
+			if tc.warn != "" && !strings.Contains(line, tc.warn) {
+				t.Errorf("the log has no warning saying %q:\n%s", tc.warn, log)
 			}
 		})
 	}

@@ -112,34 +112,48 @@ func testServers() map[string]interface{} {
 // the bearer token and every extra server's env values, into unreagent.log.
 // redactAgentArgs gives the line its arguments: the --mcp-config value,
 // whatever it holds, and the token anywhere else are replaced; everything
-// else stays as the agent gets it.
+// else stays as the agent gets it. k181: the launcher's own config file
+// (own), whose path is no secret, is shown as it is; any other --mcp-config
+// value, a hand-wired path too, still goes.
 func TestRedactAgentArgs(t *testing.T) {
-	const tok = "s3cr3t-token"
+	const (
+		tok = "s3cr3t-token"
+		own = "/tmp/unreagent-123/mcp-config.json"
+	)
 	launcherJSON := `{"mcpServers":{"unreagent":{"headers":{"Authorization":"Bearer ` + tok + `"}},"bridge":{"env":{"KEY":"v"}}}}`
 	for _, tc := range []struct {
 		name  string
 		args  []string
 		token string
+		own   string
 		want  []string
 	}{
-		{"the launcher's --mcp-config", []string{"--model", "opus", "--mcp-config", launcherJSON, "--strict-mcp-config"}, tok,
+		{"an inline --mcp-config", []string{"--model", "opus", "--mcp-config", launcherJSON, "--strict-mcp-config"}, tok, "",
 			[]string{"--model", "opus", "--mcp-config", "<redacted>", "--strict-mcp-config"}},
-		{"without a token, the value still goes", []string{"--mcp-config", `{"mcpServers":{"b":{"env":{"KEY":"v"}}}}`}, "",
+		{"without a token, the value still goes", []string{"--mcp-config", `{"mcpServers":{"b":{"env":{"KEY":"v"}}}}`}, "", "",
 			[]string{"--mcp-config", "<redacted>"}},
-		{"the = form", []string{"--mcp-config=" + launcherJSON}, tok,
+		{"the = form", []string{"--mcp-config=" + launcherJSON}, tok, "",
 			[]string{"--mcp-config=<redacted>"}},
-		{"a hand-wired one before the launcher's", []string{"--mcp-config", "--mcp-config", launcherJSON}, tok,
+		{"a hand-wired one before another", []string{"--mcp-config", "--mcp-config", launcherJSON}, tok, "",
 			[]string{"--mcp-config", "<redacted>", "<redacted>"}},
-		{"the token in another argument", []string{"--settings", `{"env":{"T":"` + tok + `"}}`}, tok,
+		{"the token in another argument", []string{"--settings", `{"env":{"T":"` + tok + `"}}`}, tok, "",
 			[]string{"--settings", `{"env":{"T":"<redacted>"}}`}},
-		{"no token: nothing else changes", []string{"-p", "task", "--permission-prompt-tool", "mcp__unreagent__approve"}, "",
+		{"no token: nothing else changes", []string{"-p", "task", "--permission-prompt-tool", "mcp__unreagent__approve"}, "", "",
 			[]string{"-p", "task", "--permission-prompt-tool", "mcp__unreagent__approve"}},
-		{"a trailing --mcp-config has no value", []string{"-p", "--mcp-config"}, tok,
+		{"a trailing --mcp-config has no value", []string{"-p", "--mcp-config"}, tok, "",
 			[]string{"-p", "--mcp-config"}},
+		{"the launcher's own config file is shown", []string{"-p", "task", "--mcp-config", own, "--strict-mcp-config"}, tok, own,
+			[]string{"-p", "task", "--mcp-config", own, "--strict-mcp-config"}},
+		{"a hand-wired config next to the launcher's own", []string{"--mcp-config", "/home/u/servers.json", "--mcp-config", own}, tok, own,
+			[]string{"--mcp-config", "<redacted>", "--mcp-config", own}},
+		{"inline JSON next to the launcher's own", []string{"--mcp-config", launcherJSON, "--mcp-config", own}, tok, own,
+			[]string{"--mcp-config", "<redacted>", "--mcp-config", own}},
+		{"the own path in the = form still goes", []string{"--mcp-config=" + own}, tok, own,
+			[]string{"--mcp-config=<redacted>"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := slices.Clone(tc.args)
-			got := redactAgentArgs(in, tc.token)
+			got := redactAgentArgs(in, tc.token, tc.own)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("redactAgentArgs(%q)\n got %q\nwant %q", tc.args, got, tc.want)
 			}
@@ -337,28 +351,26 @@ func TestWriteMCPConfigsWarnsAboutAnUnignoredTokenFile(t *testing.T) {
 // k44 through run(), in window mode, where the launcher log is
 // unreagent.log in the project directory: neither the bearer token nor an
 // extra server's env value lands in it, nor on the console. The agent still
-// gets both in its --mcp-config; only the log line is redacted.
+// gets both, in the file its --mcp-config names (k181); the log line shows
+// that file's path.
 func TestRunKeepsTheMCPSecretsOutOfTheLauncherLog(t *testing.T) {
 	const (
 		token  = "tok-k44-0123456789abcdef"
 		secret = "env-k44-secret-value"
 	)
 	dir := t.TempDir()
-	agent := filepath.Join(dir, "agent.sh") // records its arguments, then keeps running
-	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nexec sleep 20\n"), 0o755); err != nil {
-		t.Fatalf("write agent: %v", err)
-	}
+	agent := recordingAgent(t, dir)
 	yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n  window: true\n  claudeIntegration: true\n  startDelaySeconds: 1\n"), freeLoopbackAddr(t))
 	// The bridge's command does not exist: it is skipped with a WARN, and its
-	// env value reaches nothing but the agent's --mcp-config.
+	// env value reaches nothing but the agent's MCP config.
 	yaml = strings.Replace(yaml, "mcp:\n  enabled: true\n",
 		"mcp:\n  enabled: true\n  token: \""+token+"\"\n  extraServers:\n    bridge:\n      command: unreagent-k44-no-such-bridge\n      env:\n        API_KEY: \""+secret+"\"\n", 1)
 	l := startLauncherIn(t, dir, yaml)
 
 	logPath := filepath.Join(dir, "unreagent.log")
 	waitFileLine(t, logPath, "MCP server listening on ")
-	argsPath := agent + ".args"
-	waitFileLine(t, argsPath, "mcpServers") // the agent started and got its --mcp-config
+	path := mcpConfigArg(t, recordedArgs(t, agent))
+	got := mustReadFile(t, path) // removed once the launcher ends
 	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("SIGTERM: %v", err)
 	}
@@ -367,8 +379,8 @@ func TestRunKeepsTheMCPSecretsOutOfTheLauncherLog(t *testing.T) {
 	}
 
 	log := mustReadFile(t, logPath)
-	if !strings.Contains(log, "Agent command: "+agent+" --mcp-config <redacted>") {
-		t.Errorf("the agent command line does not show the --mcp-config value redacted:\n%s", log)
+	if !strings.Contains(log, "Agent command: "+agent+" --mcp-config "+path+"\n") {
+		t.Errorf("the agent command line does not show the launcher's config file %s:\n%s", path, log)
 	}
 	for name, out := range map[string]string{"unreagent.log": log, "stdout": l.stdout.String(), "stderr": l.stderr.String()} {
 		for _, s := range []string{token, secret} {
@@ -377,9 +389,205 @@ func TestRunKeepsTheMCPSecretsOutOfTheLauncherLog(t *testing.T) {
 			}
 		}
 	}
-	got := mustReadFile(t, argsPath)
 	if !strings.Contains(got, "Bearer "+token) || !strings.Contains(got, secret) {
-		t.Errorf("the agent's --mcp-config lost the token or the env value:\n%s", got)
+		t.Errorf("the agent's MCP config lost the token or the env value:\n%s", got)
+	}
+}
+
+// recordingAgentScript is an agent stand-in that records its arguments, one
+// per line, in <script>.args and then keeps running. The file is renamed
+// into place, so whoever finds it finds it whole.
+const recordingAgentScript = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args.tmp\" && mv \"$0.args.tmp\" \"$0.args\"\nexec sleep 20\n"
+
+// recordingAgent writes recordingAgentScript into dir and returns its path.
+func recordingAgent(t *testing.T, dir string) string {
+	t.Helper()
+	agent := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(agent, []byte(recordingAgentScript), 0o755); err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+	return agent
+}
+
+// recordedArgs waits for the arguments recordingAgent's agent was started
+// with, and returns them.
+func recordedArgs(t *testing.T, agent string) []string {
+	t.Helper()
+	waitForFile(t, agent+".args", 15*time.Second)
+	return strings.Split(strings.TrimSuffix(mustReadFile(t, agent+".args"), "\n"), "\n")
+}
+
+// mcpConfigArg returns the value that follows the one --mcp-config in args.
+func mcpConfigArg(t *testing.T, args []string) string {
+	t.Helper()
+	i := slices.Index(args, "--mcp-config")
+	if i < 0 || i+1 == len(args) || slices.Contains(args[i+1:], "--mcp-config") {
+		t.Fatalf("want one --mcp-config with a value in the agent's arguments: %q", args)
+	}
+	return args[i+1]
+}
+
+// k181: the agent's command line carried the whole MCP config inline, and
+// with it the bearer token and the extra servers' env values, which any
+// local user reads through /proc/<pid>/cmdline or ps. Now run() writes it to
+// mcp-config.json, 0600, in a directory of its own, 0700, in the temp
+// directory, passes the agent that file's path and logs the path, and
+// removes the directory when it returns. No argument the agent gets holds
+// the config, the token or an env value. The file holds the servers, and
+// the Authorization header when mcp.token is set.
+func TestRunHandsTheAgentItsMCPConfigAsAPrivateFile(t *testing.T) {
+	const secret = "env-k181-secret-value"
+	for _, tc := range []struct{ name, token string }{
+		{"token set", "tok-k181-0123456789abcdef"},
+		{"no token", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tmp := filepath.Join(t.TempDir(), "tmp") // the launcher's temp directory
+			if err := os.Mkdir(tmp, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TMPDIR", tmp)
+			agent := recordingAgent(t, dir)
+			addr := freeLoopbackAddr(t)
+			yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n  window: false\n  claudeIntegration: true\n  startDelaySeconds: 1\n"), addr)
+			mcp := "mcp:\n  enabled: true\n  extraServers:\n    bridge:\n      command: unreagent-k181-no-such-bridge\n      env:\n        API_KEY: \"" + secret + "\"\n"
+			if tc.token != "" {
+				mcp += "  token: \"" + tc.token + "\"\n"
+			}
+			yaml = strings.Replace(yaml, "mcp:\n  enabled: true\n", mcp, 1)
+			l := startLauncherIn(t, dir, yaml)
+
+			args := recordedArgs(t, agent)
+			path := mcpConfigArg(t, args)
+			for _, a := range args {
+				for _, s := range []string{"mcpServers", "{", secret, tc.token} {
+					if s != "" && strings.Contains(a, s) {
+						t.Errorf("the agent's argument %q holds %q", a, s)
+					}
+				}
+			}
+			if filepath.Base(path) != "mcp-config.json" || filepath.Dir(filepath.Dir(path)) != tmp ||
+				!strings.HasPrefix(filepath.Base(filepath.Dir(path)), "unreagent-") {
+				t.Errorf("--mcp-config %s; want %s", path, filepath.Join(tmp, "unreagent-*", "mcp-config.json"))
+			}
+			for p, want := range map[string]os.FileMode{filepath.Dir(path): 0o700, path: 0o600} {
+				fi, err := os.Stat(p)
+				if err != nil {
+					t.Fatalf("stat %s: %v\n%s", p, err, l.stdout)
+				}
+				if got := fi.Mode().Perm(); got != want {
+					t.Errorf("%s has mode %04o, want %04o", p, got, want)
+				}
+			}
+			var doc struct {
+				MCPServers map[string]struct {
+					URL     string            `json:"url"`
+					Headers map[string]string `json:"headers"`
+					Env     map[string]string `json:"env"`
+				} `json:"mcpServers"`
+			}
+			content := mustReadFile(t, path)
+			if err := json.Unmarshal([]byte(content), &doc); err != nil {
+				t.Fatalf("%s is not an MCP config: %v\n%s", path, err, content)
+			}
+			own := doc.MCPServers[config.MCPServerName]
+			if own.URL != "http://"+addr+"/mcp" || doc.MCPServers["bridge"].Env["API_KEY"] != secret {
+				t.Errorf("%s does not hold the launcher's server at http://%s/mcp and the bridge with its env:\n%s", path, addr, content)
+			}
+			wantAuth := ""
+			if tc.token != "" {
+				wantAuth = "Bearer " + tc.token
+			}
+			if got := own.Headers["Authorization"]; got != wantAuth {
+				t.Errorf("Authorization header %q, want %q:\n%s", got, wantAuth, content)
+			}
+
+			if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("SIGTERM: %v", err)
+			}
+			if code := l.exitCode(t); code != 0 {
+				t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			if !strings.Contains(l.stdout.String(), "Agent command: "+agent+" --mcp-config "+path+"\n") {
+				t.Errorf("the agent command line does not show the launcher's config file %s:\n%s", path, l.stdout)
+			}
+			if left, err := os.ReadDir(tmp); err != nil || len(left) != 0 {
+				t.Errorf("after the launcher ended, its temp directory holds %v (%v); want the config's directory removed", left, err)
+			}
+		})
+	}
+}
+
+// k181: a config directory the launcher cannot remove when it ends, the
+// token file still in it, is a WARN naming the directory, in unreagent.log
+// and, in window mode, once on stderr.
+func TestRunWarnsWhenTheAgentMCPConfigCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes the file whatever the directory's mode")
+	}
+	dir := t.TempDir()
+	tmp := filepath.Join(t.TempDir(), "tmp")
+	if err := os.Mkdir(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmp)
+	agent := recordingAgent(t, dir)
+	yaml := withMCP(launcherYAML("sleep", "  enabled: true\n  command: "+agent+"\n  window: true\n  claudeIntegration: true\n  startDelaySeconds: 1\n"), freeLoopbackAddr(t))
+	l := startLauncherIn(t, dir, yaml)
+	path := mcpConfigArg(t, recordedArgs(t, agent))
+	cfgDir := filepath.Dir(path)
+	if err := os.Chmod(cfgDir, 0o500); err != nil { // the file in it can no longer be removed
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o700) }) // for t.TempDir's removal
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the config file is gone (%v), so the read-only directory did not block its removal", err)
+	}
+	want := "WARN cannot remove " + cfgDir + ", the agent's MCP config: "
+	log := mustReadFile(t, filepath.Join(dir, "unreagent.log"))
+	if !strings.Contains(log, want) || !strings.Contains(log, "delete it by hand") {
+		t.Errorf("unreagent.log has no %q:\n%s", want, log)
+	}
+	if got := strings.Count(l.stderr.String(), "unreagent: "+want); got != 1 {
+		t.Errorf("stderr has the WARN %d times, want once:\n%s", got, l.stderr.String())
+	}
+}
+
+// k181: there is no fallback to the inline JSON, which would put the token
+// back on the agent's command line. A temp directory the launcher cannot
+// create its directory in is a startup error, exit 1, naming the path and
+// the cause, and neither the editor nor the agent is started.
+func TestRunExitsWhenTheAgentMCPConfigCannotBeWritten(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "no-such-tmp")
+	t.Setenv("TMPDIR", missing)
+	script := filepath.Join(dir, "proc.sh") // editor and agent
+	if err := os.WriteFile(script, []byte(markerScript), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	yaml := withMCP(launcherYAML(script, "  enabled: true\n  command: "+script+"\n  window: false\n  claudeIntegration: true\n  startDelaySeconds: 1\n"), freeLoopbackAddr(t))
+	l := startLauncherIn(t, dir, yaml)
+	if code := l.exitCode(t); code != 1 {
+		t.Fatalf("exit code %d, want 1:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+	stderr := l.stderr.String()
+	for _, want := range []string{"Error: ", missing, "no such file or directory"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not say %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(l.stdout.String(), "Agent command: ") {
+		t.Errorf("the agent was set up all the same:\n%s", l.stdout)
+	}
+	if _, err := os.Stat(script + ".ran"); err == nil {
+		t.Errorf("the editor or the agent was started:\n%s", l.stdout)
 	}
 }
 

@@ -318,9 +318,10 @@ Revision history for unreagent
     mode (Unix only). With mcp.token set, a file inside the project that git
     does not ignore gets a WARN, in window mode also on stderr: add it to
     .gitignore, and git rm --cached it if git already tracks it.
-  - The logged agent command shows --mcp-config <redacted> and blanks the
-    token in any other argument, so unreagent.log no longer holds the token or
-    the extra servers' env values. The recommended .gitignore lists
+  - The logged agent command shows the launcher's own --mcp-config file path,
+    any other --mcp-config value as <redacted>, and blanks the token in any
+    other argument, so unreagent.log no longer holds the token or the extra
+    servers' env values. The recommended .gitignore lists
     unreagent.log*: a log of 0.0.9 or earlier can hold the token.
   - In allowlist mode a Bash command that writes a file through a
     redirection is allowed only by a rule that spells the redirection out
@@ -351,6 +352,19 @@ Revision history for unreagent
     step (crash-reporter kill, crash cleanup) holds its control loop:
     "busy": "pre-start" next to "unresponsive": true, so a slow pre-start no
     longer looks like a hung loop. The launcher console's status shows it too.
+  - The embedded agent no longer gets its MCP config as inline JSON on its
+    command line, so other local users can no longer read mcp.token or the
+    extra servers' env values through ps or /proc. The launcher writes it to
+    mcp-config.json in a private unreagent-* directory in the temp directory
+    (0700/0600 on Unix, the per-user %TMP% on Windows), passes the path, keeps
+    the file for the whole run and removes it at exit. A temp directory it
+    cannot write to ends the launcher at startup with exit 1. A launcher that
+    is killed hard leaves the directory behind.
+  - With claudeIntegration, a headless agent whose agent.args already holds
+    --permission-prompt-tool no longer gets the launcher's own as well. A flag
+    naming mcp__unreagent__approve gets a log line saying so; one naming
+    another tool gets the "permissions are not enforced" WARN, also with
+    claudeIntegration: false.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

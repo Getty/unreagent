@@ -120,22 +120,76 @@ func writePrivateFile(path string, data []byte) (was os.FileMode, err error) {
 	return was, err
 }
 
+// agentMCPConfigName is the name of the file writeAgentMCPConfig writes.
+const agentMCPConfigName = "mcp-config.json"
+
+// writeAgentMCPConfig writes servers as {"mcpServers": …} to
+// mcp-config.json in a directory of its own in the temp directory and
+// returns the file's path, for the agent's --mcp-config (k181). The config
+// holds the bearer token and the extra servers' env values, so it goes into
+// a file and never inline onto the agent's command line, which every local
+// user can read (/proc/<pid>/cmdline, ps). os.MkdirTemp creates the
+// directory 0700 and writePrivateFile the file 0600; on Windows the mode
+// bits do not apply, and the per-user %TEMP% keeps them private. The caller
+// removes the directory (removeAgentMCPConfig); after an error nothing is
+// left behind. The error is meant to end the launcher: falling back to the
+// inline JSON would put the token back on the command line.
+func writeAgentMCPConfig(servers map[string]interface{}) (string, error) {
+	dir, err := os.MkdirTemp("", "unreagent-")
+	if err != nil {
+		return "", agentMCPConfigError(err)
+	}
+	path := filepath.Join(dir, agentMCPConfigName)
+	b, _ := json.MarshalIndent(map[string]interface{}{"mcpServers": servers}, "", "  ")
+	if _, err := writePrivateFile(path, append(b, '\n')); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", agentMCPConfigError(err)
+	}
+	return path, nil
+}
+
+// agentMCPConfigError is writeAgentMCPConfig's error for err, which names
+// the path.
+func agentMCPConfigError(err error) error {
+	return fmt.Errorf("cannot write the agent's MCP config: %w — the launcher hands it to the agent as a private file in the temp directory, never inline on its command line, where other local users could read mcp.token; make %s writable, or set TMPDIR (TMP on Windows) to a directory that is", err, os.TempDir())
+}
+
+// removeAgentMCPConfig removes the directory writeAgentMCPConfig made for
+// path, the file with it. A failure is a WARN naming the directory, to
+// logger and, unless alert is nil, to alert: what is left behind can hold
+// the token.
+func removeAgentMCPConfig(path string, logger func(string), alert io.Writer) {
+	dir := filepath.Dir(path)
+	if err := os.RemoveAll(dir); err != nil {
+		line := "WARN cannot remove " + dir + ", the agent's MCP config: " + err.Error() + " — what is left there can hold mcp.token and the extra servers' env values; delete it by hand"
+		logger(line)
+		if alert != nil {
+			fmt.Fprintln(alert, "unreagent: "+line)
+		}
+	}
+}
+
 // redactedValue stands in a log line for a value the line must not show.
 const redactedValue = "<redacted>"
 
 // redactAgentArgs returns args as the "Agent command:" log line shows them
-// (k44). The --mcp-config value, the next argument or what follows
-// "--mcp-config=", is replaced whole, whether the launcher or agent.args put
-// it there: it holds the bearer token and the extra servers' env values and
-// headers, and in window mode the log is unreagent.log in the project
-// directory. A token is replaced in every other argument too. The extra
-// servers' env values reach the agent's arguments only inside --mcp-config;
-// replaced elsewhere, a value such as "1" or "true" would garble the whole
-// line. args itself is left alone: the agent is started with it.
-func redactAgentArgs(args []string, token string) []string {
+// (k44). A --mcp-config value, the next argument or what follows
+// "--mcp-config=", is replaced whole: inline it holds the bearer token and
+// the extra servers' env values and headers, and in window mode the log is
+// unreagent.log in the project directory. The one exception is own, the
+// launcher's config file (writeAgentMCPConfig) after its --mcp-config, whose
+// path is no secret and helps debugging (k181); a value agent.args puts
+// there by hand, a path too, is replaced. A token is replaced in every other
+// argument too. The extra servers' env values reach the agent's arguments
+// only inside --mcp-config; replaced elsewhere, a value such as "1" or
+// "true" would garble the whole line. args itself is left alone: the agent
+// is started with it.
+func redactAgentArgs(args []string, token, own string) []string {
 	out := make([]string, len(args))
 	for i, a := range args {
 		switch {
+		case own != "" && a == own && i > 0 && args[i-1] == "--mcp-config":
+			// The launcher's own config file: shown as it is.
 		case i > 0 && args[i-1] == "--mcp-config":
 			a = redactedValue
 		case strings.HasPrefix(a, "--mcp-config="):

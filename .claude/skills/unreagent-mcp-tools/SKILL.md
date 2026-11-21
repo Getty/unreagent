@@ -163,8 +163,10 @@ calls `RunCommand` and is not part of k75.
 compared with `crypto/subtle.ConstantTimeCompare`. Empty token = open, which is
 the historic behavior and safe only because the default bind is `127.0.0.1`.
 When `mcp.token` is set, the token must also reach the embedded agent — the
-`headers:` block written into `--mcp-config` by `buildMCPServers`. Change one,
-change both, or the launcher's own agent locks itself out.
+`headers:` block `buildMCPServers` adds, which `writeAgentMCPConfig` writes
+into the agent's private `mcp-config.json`; `--mcp-config` carries only that
+file's path (k181). Change one, change both, or the launcher's own agent locks
+itself out.
 
 ## Verifying by hand
 

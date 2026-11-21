@@ -48,7 +48,7 @@ imports `mcp` is a design error, not a shortcut.
 | `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
-| `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` (each target 0600 via `writePrivateFile`, Unix only; `unignoredTokenFile` warns when git does not ignore one holding the token), `redactAgentArgs` for the logged agent command |
+| `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` (each target 0600 via `writePrivateFile`, Unix only; `unignoredTokenFile` warns when git does not ignore one holding the token), `writeAgentMCPConfig` / `removeAgentMCPConfig` (the embedded agent's `--mcp-config` file, k181: `mcp-config.json` in an `os.MkdirTemp` directory, 0600 in 0700 on Unix, the per-user `%TEMP%` on Windows; never inline JSON on its command line, which every local user can read), `redactAgentArgs` for the logged agent command (it shows the launcher's own config path, and replaces every other `--mcp-config` value, a hand-wired path too) |
 | `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt), the stdin console loop, the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
 | `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills` (`installSkillDir`, `sweepSkillDirs`), the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers |
@@ -111,19 +111,31 @@ was split by concern.
    looks: in window mode the log is a file and the console the agent's, so a
    line the user must see also goes to `alert` — stderr then, nil otherwise.
    One-line WARNs before the agent starts write to `alert` directly: the inert
-   permissions in `run()`, k44's token file in `writeMCPConfigs`.
+   permissions in `run()`, k44's token file in `writeMCPConfigs`; so does
+   `removeAgentMCPConfig` at exit, for an agent config directory it could not
+   remove.
    `alertWarnings(logger, alert, logPath)` (`main.go`) wraps a logger for
    warnings that can come while the agent's terminal UI owns the console: the
    log gets every line in full, `alert` only a WARN's first line, plus
    " (the rest is in <logPath>)" when it has more. `run()` hands it to bridge
    preparation and to `prepareRuntimes`, which it starts with `go` and which
    warns on a failed `uv sync` / `npm install` with the cause and the output's
-   last 20 lines. One deliberate exception, the MCP bind:
+   last 20 lines. Past config load, three deliberate exceptions. The first,
+   the MCP bind:
    `run()` binds `mcp.address` (`listenMCP`) right after config load (which
    already refuses an address that is not host:port with a port 1–65535), and a
    bind failure ends the launcher with exit 1 before it writes any file —
    keeping going there *is* the silent failure: an agent without the MCP server
    loses its tools and permission prompts, or talks to whoever holds the port.
+   The second, the skill set: `setupSkills` ends the launcher with exit 1 when
+   the embedded set does not load or `checkSkillDirs` rejects it — a broken
+   build, whose skills must not vanish silently; `skills.enabled: false` starts
+   without them, and a failed write into `skills.dir` only warns.
+   The third, the agent's MCP config (k181): `run()` writes it with
+   `writeAgentMCPConfig` before any service starts, and a failure ends the
+   launcher with exit 1 — falling back to inline JSON would put `mcp.token`
+   back on the agent's command line. The file lives for the whole run, so a
+   restarted agent reuses it, and `run()` defers its removal.
    A serve failure after a successful bind is not fatal (`serveMCP`): one loud
    ERROR line in the launcher log, also on stderr when that log is a file
    (window mode), MCP marked not serving, and launcher, editor and agent keep

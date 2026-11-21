@@ -43,10 +43,12 @@
 agent:
   enabled: true
   command: claude                # default: claude
-  # Automatically appends --mcp-config to the claude invocation — no manual
-  # setup needed. With permissions.enabled it also appends --permission-prompt-tool,
+  # Automatically appends --mcp-config <file> to the claude invocation — no manual
+  # setup needed. The file is a private temp file (mcp-config.json in an
+  # unreagent-* directory under TMPDIR / %TMP%), removed when the launcher exits.
+  # With permissions.enabled it also appends --permission-prompt-tool,
   # but only to a headless agent (not window: true; with window unset, -p/--print
-  # in args); see "permissions" below.
+  # in args), and not when agent.args already holds one; see "permissions" below.
   claudeIntegration: true
   # Interactive in the foreground (agent inherits the console = real TTY) is the DEFAULT.
   # UE runs in the background, launcher logs -> unreagent.log (previous session kept as unreagent.log.1;

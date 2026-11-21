@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -247,9 +246,17 @@ func run() error {
 			}
 		}
 
+		var ownMCPConfig string // shown in the "Agent command:" line
 		if cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration {
-			b, _ := json.Marshal(map[string]interface{}{"mcpServers": mcpServers})
-			agentArgs = append(agentArgs, "--mcp-config", string(b))
+			// A file, not the inline JSON (k181): the agent's command line is
+			// readable to every local user.
+			ownMCPConfig, err = writeAgentMCPConfig(mcpServers)
+			if err != nil {
+				return err
+			}
+			// For the whole run, so that a restarted agent finds it too.
+			defer removeAgentMCPConfig(ownMCPConfig, logger, alert)
+			agentArgs = append(agentArgs, "--mcp-config", ownMCPConfig)
 			if cfg.MCP.Strict {
 				agentArgs = append(agentArgs, "--strict-mcp-config")
 			}
@@ -262,8 +269,12 @@ func run() error {
 					if cfg.Permissions.Mode == config.ModeAllowAll {
 						agentArgs = append(agentArgs, "--dangerously-skip-permissions")
 					}
-				} else {
-					agentArgs = append(agentArgs, "--permission-prompt-tool", "mcp__"+config.MCPServerName+"__approve")
+				} else if tools := promptToolsIn(cfg.Agent.Args); len(tools) == 0 {
+					agentArgs = append(agentArgs, "--permission-prompt-tool", approveTool)
+				} else if !slices.ContainsFunc(tools, isNotApprove) {
+					// No second one next to the hand-wired flag (k172); another
+					// tool there is permissionsInertReason's to warn about.
+					logger("Agent: --permission-prompt-tool " + approveTool + " is set in agent.args already; the launcher does not pass it a second time")
 				}
 			}
 			logger(fmt.Sprintf("Agent: Claude integration active (%d MCP server(s)%s)",
@@ -277,7 +288,7 @@ func run() error {
 				fmt.Fprintln(alert, "unreagent: "+line)
 			}
 		}
-		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(redactAgentArgs(agentArgs, cfg.MCP.Token), " "))
+		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(redactAgentArgs(agentArgs, cfg.MCP.Token, ownMCPConfig), " "))
 		if err := sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
 			Command:      cfg.Agent.Command,
@@ -497,37 +508,80 @@ func hasPromptArg(args []string) bool {
 	return hasArg(args, "-p") || hasArg(args, "--print")
 }
 
+// approveTool is the launcher's permission prompt tool, as
+// --permission-prompt-tool names it.
+const approveTool = "mcp__" + config.MCPServerName + "__approve"
+
+func isNotApprove(tool string) bool { return tool != approveTool }
+
+// promptToolsIn returns the tool each --permission-prompt-tool in args
+// names, in either form ("--permission-prompt-tool X" and
+// "--permission-prompt-tool=X"); "" for one with nothing after it.
+func promptToolsIn(args []string) []string {
+	var tools []string
+	for i, a := range args {
+		if a == "--permission-prompt-tool" {
+			tool := ""
+			if i+1 < len(args) {
+				tool = args[i+1]
+			}
+			tools = append(tools, tool)
+		} else if tool, ok := strings.CutPrefix(a, "--permission-prompt-tool="); ok {
+			tools = append(tools, tool)
+		}
+	}
+	return tools
+}
+
 // permissionsInertReason is the warning, without its WARN prefix, for a
 // permissions policy that cannot take effect on the agent this launcher
 // starts; "" when it can, or when there is no policy or no such agent. The
-// policy reaches the agent only through --permission-prompt-tool, which the
-// agent-start block in run() passes with claudeIntegration and only to an
-// agent that is not interactive: keep the two in step. An external agent
-// (agent disabled, -no-agent) can call approve through its own flag, and so
-// can a headless agent whose args carry the flag by hand. An interactive
-// agent always warns, whether claudeIntegration is set and whether the flag
-// is wired by hand: the flag is a headless feature, and the warning's fix is
-// to run headless. Maintainer's decision for k38 and k46: warn and start
-// anyway, do not refuse.
+// policy reaches the agent only through --permission-prompt-tool naming
+// approveTool, which the agent-start block in run() passes with
+// claudeIntegration, only to an agent that is not interactive and only
+// when agent.args wires no --permission-prompt-tool by hand (k172): keep
+// the two in step. An external agent (agent disabled, -no-agent) can call
+// approve through its own flag, and so can a headless agent whose args
+// carry the flag by hand, naming approveTool. A hand-wired flag that names
+// another tool, even next to one naming approveTool, warns: which one
+// Claude Code takes is unverified. An interactive agent always warns,
+// whether claudeIntegration is set and whether the flag is wired by hand:
+// the flag is a headless feature, and the warning's fix is to run headless.
+// Maintainer's decision for k38 and k46: warn and start anyway, do not
+// refuse.
 //
 // claudeIntegration: false with an interactive agent and no hand-wired flag
 // is one warning, not two: the launcher then passes no permission flag at
 // all, so the interactive text's "passed instead" would be wrong, and the
-// fix needs both steps. With a hand-wired flag the cause is the window
-// alone, so that text names the flag and asks only for headless.
+// fix needs both steps. With a hand-wired flag the cause is the window, so
+// that text names the flag and asks for headless, and to set the flag to
+// approveTool when it names another tool.
 func permissionsInertReason(cfg *config.Config, agentInteractive bool) string {
 	if !cfg.Permissions.Enabled || !cfg.Agent.Enabled {
 		return ""
 	}
-	handWired := slices.ContainsFunc(cfg.Agent.Args, func(a string) bool {
-		return a == "--permission-prompt-tool" || strings.HasPrefix(a, "--permission-prompt-tool=")
-	})
-	if !agentInteractive && (cfg.Agent.ClaudeIntegration || handWired) {
+	tools := promptToolsIn(cfg.Agent.Args)
+	handWired := len(tools) > 0
+	other := slices.IndexFunc(tools, isNotApprove) // a hand-wired tool that is not approve, or -1
+	if !agentInteractive && (cfg.Agent.ClaudeIntegration || handWired) && other < 0 {
 		return ""
 	}
 	const notEnforced = "permissions are not enforced: "
 	policy := "permissions.mode (" + cfg.Permissions.Mode + "), allow and deny are never consulted"
 	headless := `run the agent headless: put "-p" (or "--print") and its task in agent.args, and leave agent.window unset or false`
+	var names string
+	if other >= 0 {
+		names = fmt.Sprintf("names %q, not %s", tools[other], approveTool)
+	}
+	if !agentInteractive && other >= 0 {
+		reason := notEnforced + "the --permission-prompt-tool wired into agent.args by hand " + names + ", so " + policy + "."
+		fix := " To enforce the policy, set it to " + approveTool
+		if cfg.Agent.ClaudeIntegration {
+			reason += " The launcher passes no --permission-prompt-tool of its own next to it."
+			fix += ", or remove it from agent.args: with agent.claudeIntegration the launcher passes its own"
+		}
+		return reason + fix + "."
+	}
 	if !cfg.Agent.ClaudeIntegration && !handWired {
 		fix := "set agent.claudeIntegration: true (Claude Code only)"
 		if agentInteractive {
@@ -542,6 +596,9 @@ func permissionsInertReason(cfg *config.Config, agentInteractive bool) string {
 		also := ""
 		if cfg.Agent.ClaudeIntegration && cfg.Permissions.Mode == config.ModeAllowAll {
 			also = " The launcher also passes --dangerously-skip-permissions (mode allow_all)."
+		}
+		if other >= 0 {
+			fix += " That flag " + names + ", so set it to " + approveTool + " as well."
 		}
 		return notEnforced + window + "the --permission-prompt-tool wired into agent.args by hand takes effect only for a headless agent, so " +
 			policy + "." + also + fix
