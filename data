@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-11-21T01:19:46Z
+created: 2026-08-22T04:37:23Z
+id: 41
+priority: medium
+started: 2026-11-21T00:36:25Z
+status: done
+tags:
+- config
+- bug
+title: A placeholder in unreal.project silently discards the setting
+updated: 2026-11-21T01:20:08Z
+---
+
+config.go:522: resolveProject skips the explicit branch when the value contains a placeholder, falls through to globbing next to the config file, and Load at :260 then overwrites Unreal.Project with that possibly empty result. Verified: unreal.project set to a PROJECT_DIR-prefixed path with the uproject in a subdirectory yields an empty project, an editor path starting at /Engine, compile args carrying an empty -Project= and an empty files.root. Load succeeds.
+Acceptance: PROJECT_DIR and PROJECT_NAME, which do not depend on unreal.project, are substituted before resolveProject runs -- or a placeholder in that field is a load-time error.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: resolveProject globs next to the config for a value containing ${, and Load assigns c.Unreal.Project before substitute. internal/config only; Linux test possible. Merge with k42 and the config half of k43 (same lines in Load/substitute/validate). Size S.
+
+Worker done, worktree branch worktree-agent-a34fb3202df96dbbc (.claude/worktrees/agent-a34fb3202df96dbbc), uncommitted, based on c013f77; tests in internal/config/load_test.go, red captured before the fix. Choice: a placeholder in unreal.project is a load-time error (substituting first would be circular: the PROJECT placeholders and ENGINE auto-detection derive from this field). A path relative to the config dir covers the subdirectory case. resolveProject in internal/config/config.go.
+
+2026-11-21 01:04 Review (unreagent-reviewer), same tree: APPROVE for the k41 part. It can land only together with the k42/k43 fixes, since they share the same files. resolveProject (internal/config/config.go:634-662) rejects any ${ in unreal.project with a clear error, and an explicit relative path resolves against the config dir. TestProjectPlaceholderIsRejected fails on HEAD code ('Load succeeded'); TestExplicitRelativeProjectResolves is the control. No documented config (README, unreagent.example.yaml, example/) put a placeholder in unreal.project. Check run as on k42, all green.
+
+2026-11-21 01:17 Re-review (unreagent-reviewer), same tree after the k42/k43 fixes: APPROVE. The k41 part is unchanged and still correct, the tests are still green, and the check run as on k42 is all green. The tree is ready for the release-manager to commit. The branch diff applies cleanly onto main 077439a, and tests pass on the simulated rebase.
+
+Committed as 2e72af4 on main (one commit with k41, k42, k43, k47)
