@@ -81,8 +81,9 @@ already there, which is kept and left to the smoke test)? does the bridge
 answer a real `initialize` handshake
 (smoke test)? And once the in-editor server (`UNREAL_MCP_URL`) is reachable,
 that's logged too — or a warning with the usual suspects if it isn't. These
-checks run only for stdio entries (those with a `command`); an HTTP entry such
-as Unreal MCP is passed through unchecked.
+checks run only for stdio entries (those with a `command`). An HTTP / SSE
+entry such as Unreal MCP gets only a reachability watch, see
+[Option A: Unreal MCP](#option-a-unreal-mcp-ue-58-built-in-experimental) below.
 
 The same config can additionally be written to a file for **external clients**
 (your own Claude session, Cursor, VS Code). Via `mcp.writeConfig` (a list of
@@ -452,10 +453,24 @@ No Node bridge, no Visual Studio build, no plugin download.
 
 Things to know:
 
-- **No bridge checks.** The launcher's startup checks (binary, `node_modules`,
-  `initialize` smoke test, reachability log) run only for stdio entries with a
-  `command`. An HTTP entry gets none, and nothing in `unreagent.log` tells you
-  whether the server is up.
+- **Reachability watch only.** The launcher's startup checks (binary,
+  `node_modules`, `initialize` smoke test) run only for stdio entries with a
+  `command`. An HTTP / SSE entry is instead watched for reachability, like
+  the in-editor `UNREAL_MCP_URL`: once bridge preparation is done, the
+  launcher tries a TCP connect to the URL's host and port for 5 minutes and
+  logs one line, either
+  `MCP server 'unreal-mcp': http://127.0.0.1:8010/mcp is reachable.` or, if
+  nothing answered, a warning that names the URL (`... not reachable after
+  5m0s — is the server running, and does the url match its port and path?
+  The agent may have marked the server failed; once it answers, /mcp in
+  Claude Code reconnects it.`). The limits: it is a connect only, no HTTP
+  request and no MCP session, so "reachable" does not prove the server
+  speaks MCP; an `https` URL without a port probes 443; the agent still
+  starts at once and is never held back; and the watch ends with the
+  launcher. The log shows only scheme, host and path — user info and query
+  string are never logged, and headers are never read. A URL without a host
+  gets the warning `WARN MCP server '<name>': url is not a URL with a host —
+  its reachability is not checked.`
 - **Start order.** Epic's docs say to start the agent after the editor's
   server is up; unreagent starts editor and agent together. If Claude Code
   reports the `unreal-mcp` server as failed, wait until the editor has
@@ -567,7 +582,12 @@ yet when the agent started (reconnect with `/mcp`), the "Unreal MCP" /
 "All Toolsets" plugins are not enabled, or the port or path in the
 `extraServers` URL does not match Editor Preferences -> Agentic Workflows ->
 Model Context Protocol (or `-ModelContextProtocolPort`). Since the launcher
-runs no check on HTTP entries, `unreagent.log` will not say which.
+only watches HTTP entries for reachability (a TCP connect, not an MCP
+check), `unreagent.log` tells you whether the port answered at all: a
+`... is reachable.` line means the editor's server was up (reconnect with
+`/mcp`), the `not reachable after 5m0s` warning means it never answered
+within 5 minutes, so check the plugins, port and path first. It cannot tell
+you which of the remaining causes applies.
 
 ## Configuration (quick reference)
 

@@ -237,6 +237,13 @@ Revision history for unreagent
     command line, a file dropped onto the .exe included, is a usage error
     (exit 2) that names it and the sub-commands, instead of a launch that
     ignored it.
+  - An HTTP / SSE entry in mcp.extraServers (such as Unreal MCP) is now
+    watched for reachability like UNREAL_MCP_URL: the launcher logs once its
+    host and port accept a TCP connection, or warns after 5 minutes with the
+    /mcp reconnect hint; the agent still starts at once. These lines, the
+    UNREAL_MCP_URL ones included, show only scheme, host and path, never user
+    info or query; an https URL without a port is probed on 443 instead of
+    80, and the watch ends silently on shutdown.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

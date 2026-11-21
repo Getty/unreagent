@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -741,5 +745,187 @@ echo '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake","version":"0
 	}
 	if !strings.Contains(log.String(), "smoke test OK") {
 		t.Fatalf("expected 'smoke test OK', got:\n%s", log.String())
+	}
+}
+
+// shortenEndpointWait sets waitForEndpoint's window and pause for one test.
+// waitForEndpoint reads both before it logs anything, so a test that has seen
+// a watcher's line may restore them.
+func shortenEndpointWait(t *testing.T, window, pause time.Duration) {
+	t.Helper()
+	oldWindow, oldPause := endpointWaitWindow, endpointPollInterval
+	endpointWaitWindow, endpointPollInterval = window, pause
+	t.Cleanup(func() { endpointWaitWindow, endpointPollInterval = oldWindow, oldPause })
+}
+
+// waitForLine waits until the log holds a line containing want.
+func waitForLine(t *testing.T, log *syncLog, want string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if strings.Contains(log.String(), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no line containing %q within %s:\n%s", want, within, log.String())
+}
+
+// prepared runs prepareMCPBridges to its return; the watchers it starts run on
+// until ctx ends.
+func prepared(t *testing.T, ctx context.Context, cfg *config.Config, log *syncLog) {
+	t.Helper()
+	select {
+	case <-runBridges(ctx, cfg, t.TempDir(), log):
+	case <-time.After(15 * time.Second):
+		t.Fatalf("bridge preparation still running 15s in:\n%s", log.String())
+	}
+}
+
+// k87: an http/sse entry (no command) was passed through without a look at
+// its url, so nothing in the log said whether the server was up. Once the url
+// answers, that is logged — once, with scheme, host and path only: the user
+// info, query and headers of the entry can carry a token. The probe is a bare
+// connect, so the server sees no request.
+func TestPrepareMCPBridgesReportsRemoteAnswer(t *testing.T) {
+	shortenEndpointWait(t, time.Minute, 10*time.Millisecond)
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	cfg := bridgeConfig("unreal-mcp", map[string]interface{}{
+		"type":    "http",
+		"url":     "http://user:hunter2@" + host + "/mcp?key=s3cret",
+		"headers": map[string]interface{}{"Authorization": "Bearer t0ken"},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log syncLog
+	prepared(t, ctx, cfg, &log)
+	want := "MCP server 'unreal-mcp': " + srv.URL + "/mcp is reachable."
+	waitForLine(t, &log, want, 5*time.Second)
+	// Ten pauses: a watcher that went on polling would have logged again.
+	time.Sleep(100 * time.Millisecond)
+
+	out := log.String()
+	if n := strings.Count(out, "is reachable"); n != 1 {
+		t.Fatalf("the answer must be logged once, got %d times:\n%s", n, out)
+	}
+	for _, secret := range []string{"hunter2", "s3cret", "t0ken"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("the log carries %q from the entry:\n%s", secret, out)
+		}
+	}
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("the probe sent %d HTTP request(s); it must only connect", n)
+	}
+}
+
+// k87: a url that never answers gets one warning once the window is over,
+// naming the entry and its url and saying how to get the agent to connect.
+func TestPrepareMCPBridgesWarnsRemoteNeverAnswers(t *testing.T) {
+	shortenEndpointWait(t, 300*time.Millisecond, 20*time.Millisecond)
+	u := "http://" + freeLoopbackAddr(t) + "/mcp"
+	cfg := bridgeConfig("unreal-mcp", map[string]interface{}{"type": "http", "url": u})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log syncLog
+	prepared(t, ctx, cfg, &log)
+	waitForLine(t, &log, "not reachable after 300ms", 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	out := log.String()
+	want := "WARN MCP server 'unreal-mcp': " + u + " not reachable after 300ms — "
+	if strings.Contains(out, "\n") || !strings.HasPrefix(out, want) {
+		t.Fatalf("want exactly one line starting %q, got:\n%s", want, out)
+	}
+	for _, hint := range []string{"may have marked the server failed", "/mcp in Claude Code reconnects it"} {
+		if !strings.Contains(out, hint) {
+			t.Fatalf("the warning lacks %q:\n%s", hint, out)
+		}
+	}
+}
+
+// k87: the watcher ends with the launcher's context, mid-window and without a
+// warning — the user stopped the launcher, the server did nothing wrong.
+func TestWaitForEndpointEndsWithContext(t *testing.T) {
+	u := "http://" + freeLoopbackAddr(t) + "/mcp"
+	ctx, cancel := context.WithCancel(context.Background())
+	var log syncLog
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		waitForEndpoint(ctx, "unreal-mcp", remoteEndpoint, u, log.log)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("watcher still running 2s after the cancel (window %s):\n%s", endpointWaitWindow, log.String())
+	}
+	if out := log.String(); out != "" {
+		t.Fatalf("a cancel must end the watcher silently, got:\n%s", out)
+	}
+}
+
+// k87: the watch is for entries without a command. A stdio bridge next to an
+// http entry still gets its smoke test, and no url watch of its own.
+func TestPrepareMCPBridgesStdioEntryUnchanged(t *testing.T) {
+	s := newScripts(t)
+	shortenEndpointWait(t, 300*time.Millisecond, 20*time.Millisecond)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	bridge := filepath.Join(t.TempDir(), "bridge.sh")
+	s.write(bridge, initAnswer)
+	cfg := bridgeConfig("toolkit", map[string]interface{}{"command": bridge})
+	cfg.MCP.ExtraServers["unreal-mcp"] = map[string]interface{}{"type": "http", "url": srv.URL + "/mcp"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log syncLog
+	prepared(t, ctx, cfg, &log)
+	waitForLine(t, &log, "MCP server 'unreal-mcp': "+srv.URL+"/mcp is reachable.", 5*time.Second)
+	// Past the window: a watcher on the stdio entry would have warned by now.
+	time.Sleep(400 * time.Millisecond)
+
+	var toolkit []string
+	for _, line := range strings.Split(log.String(), "\n") {
+		if strings.Contains(line, "'toolkit'") {
+			toolkit = append(toolkit, line)
+		}
+	}
+	want := "MCP server 'toolkit': smoke test OK — bridge answers initialize."
+	if len(toolkit) != 1 || toolkit[0] != want {
+		t.Fatalf("the stdio entry must log only %q, got:\n%s", want, log.String())
+	}
+}
+
+// k87: a url without a port was probed on :80 whatever its scheme, so an
+// https entry was watched on the wrong port. The scheme's default applies now,
+// and an IPv6 host keeps its brackets. The urls are parsed as waitForEndpoint
+// parses them; url.Parse lowercases the scheme, so the uppercase row pins
+// what a user writes, not the EqualFold in dialAddr.
+func TestDialAddr(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"http://127.0.0.1/mcp", "127.0.0.1:80"},
+		{"https://mcp.example.com/mcp", "mcp.example.com:443"},
+		{"http://127.0.0.1:8000/mcp", "127.0.0.1:8000"},
+		{"https://mcp.example.com:8443/mcp", "mcp.example.com:8443"},
+		{"http://[::1]:8000/mcp", "[::1]:8000"},
+		{"https://[::1]/mcp", "[::1]:443"},
+		{"HTTPS://mcp.example.com/mcp", "mcp.example.com:443"},
+	} {
+		u, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.raw, err)
+		}
+		if got := dialAddr(u); got != tc.want {
+			t.Errorf("dialAddr(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
 	}
 }

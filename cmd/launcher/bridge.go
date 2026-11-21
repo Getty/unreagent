@@ -61,16 +61,23 @@ type bridgeModules struct {
 //  4. UNREAL_MCP_URL: report asynchronously as soon as the in-editor server is
 //     reachable — or warn if it is not.
 //
+// An http/sse entry (no command) starts no process, so only the last check
+// applies to it: once every bridge is prepared, its url is watched the same
+// way, asynchronously — the agent is not held back for it (k87).
+//
 // ctx is the launcher's signal context: once it is cancelled, the install or
-// smoke test in progress is stopped and the remaining bridges are skipped.
+// smoke test in progress is stopped, the remaining bridges are skipped and no
+// watcher starts; the watchers already running end with it.
 func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
+	var remote []string // names of the http/sse entries
 	for name, def := range cfg.MCP.ExtraServers {
 		if ctx.Err() != nil {
 			return // shutting down — no further bridge to check
 		}
 		command, _ := def["command"].(string)
 		if command == "" {
-			continue // http/sse server — starts no process, nothing to check
+			remote = append(remote, name)
+			continue
 		}
 		var args []string
 		if raw, ok := def["args"].([]interface{}); ok {
@@ -109,8 +116,17 @@ func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		settleModules(ctx, name, modules, passed, logger)
 
 		if u := envMap["UNREAL_MCP_URL"]; u != "" && ctx.Err() == nil {
-			go waitForEndpoint(name, u, logger)
+			go waitForEndpoint(ctx, name, editorEndpoint, u, logger)
 		}
+	}
+	// After the loop, so an npm install of another bridge does not use up the
+	// window before the editor has even been started.
+	if ctx.Err() != nil {
+		return
+	}
+	for _, name := range remote {
+		u, _ := cfg.MCP.ExtraServers[name]["url"].(string)
+		go waitForEndpoint(ctx, name, remoteEndpoint, u, logger)
 	}
 }
 
@@ -365,28 +381,85 @@ func jsErrorLine(line string) bool {
 	return strings.HasSuffix(name, "Error") && !strings.ContainsAny(name, " \t")
 }
 
-// waitForEndpoint reports as soon as the in-editor HTTP server (UNREAL_MCP_URL)
-// is reachable — the editor needs time to start up. If no connection is made
-// within 5 minutes, there is a clear warning naming the usual suspects.
-func waitForEndpoint(name, rawURL string, logger func(string)) {
+// endpointWaitWindow is how long waitForEndpoint keeps trying a URL before it
+// warns; endpointPollInterval is the pause between two tries. Vars so tests
+// can shorten them.
+var (
+	endpointWaitWindow   = 5 * time.Minute
+	endpointPollInterval = 5 * time.Second
+)
+
+// endpoint is the kind of URL waitForEndpoint watches, with the words its log
+// lines use for it.
+type endpoint struct {
+	field string // config key the URL is under, named when it does not parse
+	what  string // how the lines name the server ahead of its URL ("" = the URL alone)
+	hint  string // what the give-up warning suggests
+}
+
+var (
+	// editorEndpoint is a stdio bridge's UNREAL_MCP_URL: the in-editor server
+	// the bridge talks to.
+	editorEndpoint = endpoint{
+		field: "UNREAL_MCP_URL",
+		what:  "in-editor server ",
+		hint:  "is the editor running with the plugin? Firewall? Is the server listening on localhost only?",
+	}
+	// remoteEndpoint is the url of an http/sse entry, which the agent connects
+	// to itself — at its own start, possibly before the server is up.
+	remoteEndpoint = endpoint{
+		field: "url",
+		hint:  "is the server running, and does the url match its port and path? The agent may have marked the server failed; once it answers, /mcp in Claude Code reconnects it.",
+	}
+)
+
+// dialAddr is the host:port waitForEndpoint connects to for u: the URL's own
+// port, or else the scheme's default — 443 for https, 80 for anything else.
+func dialAddr(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+// waitForEndpoint reports once as soon as rawURL accepts a TCP connection — the
+// editor needs time to start up, and so does a server in it. The probe is a
+// bare connect: no request, no MCP session, nothing for the server to act on.
+// If no connection is made within endpointWaitWindow, there is one warning
+// naming the usual suspects. It returns silently once ctx ends.
+//
+// The lines show scheme, host and path only: user info and query can carry a
+// token, and headers are never read here.
+func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL string, logger func(string)) {
+	window, pause := endpointWaitWindow, endpointPollInterval
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
-		logger("WARN MCP server '" + name + "': UNREAL_MCP_URL not parseable: " + rawURL)
+		logger("WARN MCP server '" + name + "': " + ep.field + " is not a URL with a host — its reachability is not checked.")
 		return
 	}
-	addr := u.Host
-	if u.Port() == "" {
-		addr += ":80"
-	}
-	deadline := time.Now().Add(5 * time.Minute)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
-		if err == nil {
+	addr := dialAddr(u)
+	shown := ep.what + (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+
+	wctx, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	for {
+		if conn, err := dialer.DialContext(wctx, "tcp", addr); err == nil {
 			_ = conn.Close()
-			logger("MCP server '" + name + "': in-editor server " + rawURL + " is reachable.")
+			logger("MCP server '" + name + "': " + shown + " is reachable.")
 			return
 		}
-		time.Sleep(5 * time.Second)
+		select {
+		case <-time.After(pause):
+		case <-wctx.Done():
+			if ctx.Err() == nil { // the window ran out, not the launcher
+				logger(fmt.Sprintf("WARN MCP server '%s': %s not reachable after %s — %s", name, shown, window, ep.hint))
+			}
+			return
+		}
 	}
-	logger("WARN MCP server '" + name + "': in-editor server " + rawURL + " not reachable after 5 minutes — is the editor running with the plugin? Firewall? Is the server listening on localhost only?")
 }

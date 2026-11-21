@@ -179,9 +179,13 @@ mcp:
   #   # Unreal MCP, built into UE 5.8+ (experimental; enable the "Unreal MCP" and
   #   # "All Toolsets" plugins). Plain HTTP, no Node bridge. Default port 8000 —
   #   # if you change it (Editor Preferences, or -ModelContextProtocolPort in
-  #   # unreal.args), change the URL too. HTTP entries get NO launcher checks
-  #   # (those run only for stdio entries); if Claude Code reports the server
-  #   # as failed because the editor was not up yet, reconnect with /mcp.
+  #   # unreal.args), change the URL too. HTTP / SSE entries get no smoke
+  #   # test, only a reachability watch: after bridge preparation the launcher
+  #   # tries a TCP connect to the URL's host and port for 5 minutes and logs
+  #   # "is reachable" or a warning (connect only, no MCP session; the agent
+  #   # still starts at once; scheme, host and path are logged, never user
+  #   # info or query). If Claude Code reports the server as failed because
+  #   # the editor was not up yet, reconnect with /mcp.
   #   # Can run next to the Toolkit above.
   #   unreal-mcp:
   #     type: http
