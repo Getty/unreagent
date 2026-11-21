@@ -30,7 +30,7 @@ func TestOnExitFiresOnNaturalExit(t *testing.T) {
 		Command:   "true", // exits immediately with exit 0
 		Autostart: true,
 		Restart:   "on-failure", // exit 0 -> no restart
-		OnExit:    func(success bool) { fired <- success },
+		OnExit:    func(e Exit) { fired <- e.Success },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -61,7 +61,7 @@ func TestOnExitNotFiredOnManualStop(t *testing.T) {
 		Args:      []string{"60"},
 		Autostart: true,
 		Restart:   "never",
-		OnExit:    func(success bool) { fired <- success },
+		OnExit:    func(e Exit) { fired <- e.Success },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -94,7 +94,7 @@ func TestOnExitFiresWhenStartFails(t *testing.T) {
 		Command:   filepath.Join(t.TempDir(), "does-not-exist"),
 		Autostart: true,
 		Restart:   "never",
-		OnExit:    func(success bool) { fired <- success },
+		OnExit:    func(e Exit) { fired <- e.Success },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -131,7 +131,7 @@ func TestOnExitFiresAfterStartRetriesExhausted(t *testing.T) {
 		Autostart:   true,
 		Restart:     "on-failure",
 		MaxRestarts: 1,
-		OnExit:      func(success bool) { fired <- success },
+		OnExit:      func(e Exit) { fired <- e.Success },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

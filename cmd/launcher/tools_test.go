@@ -219,7 +219,7 @@ func TestLogsLinesLimitsOutput(t *testing.T) {
 		Restart:   "never",
 		// OnExit fires only after the exit path has drained the output into
 		// the log buffer, so the buffer is complete once it has fired.
-		OnExit: func(bool) { close(exited) },
+		OnExit: func(supervisor.Exit) { close(exited) },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup

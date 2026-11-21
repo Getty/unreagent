@@ -56,6 +56,14 @@ agent:
   #   shutdown: always stop the whole stack (UE + MCP + launcher) immediately
   #   leave: keep everything running (warning only) — manual Ctrl-C needed
   # onExit: ask
+  # Restart policy: never | on-failure (default) | always. maxRestarts: 0 (the
+  # default) = no fixed bound, but a fast-fail rule applies: an agent that FAILS
+  # 3 times in a row, each within 10s of its start, is not restarted again (one
+  # log line says so). A failure is a non-zero exit or a failed start; a clean
+  # exit 0, a run longer than 10s, or a manual start/restart resets the count.
+  # An explicit maxRestarts > 0 keeps exactly that bound and the rule is off.
+  # restart: on-failure
+  # maxRestarts: 0             # default 0
   # Seconds to wait before the agent is first started, and between restarts.
   # 0 or unset = the default; below 0 is a load error (the floor of 1 keeps a
   # crashing agent from restarting in a tight loop).
@@ -185,8 +193,14 @@ mcp:
 #   # is always prepended) — give the full list. A list in local.yaml replaces it
 #   # too. Unset or "args: ~" = the default; "args: []" = no extra arguments.
 #   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
+#   # Restart policy: never | on-failure (default) | always. With maxRestarts: 0
+#   # (the default) a fast-fail rule applies: an editor that FAILS (non-zero
+#   # exit or failed start) 3 times in a row, each within 10s of its start, is
+#   # not restarted again; one log line says so. A clean exit 0, a run longer
+#   # than 10s, or a manual ue_start/restart resets the count. An explicit
+#   # maxRestarts > 0 keeps exactly that bound and the rule is off.
 #   restart: on-failure
-#   maxRestarts: 5
+#   maxRestarts: 0            # default 0 (5 = give up after 5 restarts)
 #   restartDelaySeconds: 3    # default 3 (0 = default); below 0 is a load error
 #   unattended: true          # -unattended: no crash dialog + no recovery prompt (default on)
 #   killCrashReporter: true   # kill a hanging CrashReportClientEditor.exe (default on)

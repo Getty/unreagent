@@ -293,9 +293,45 @@ Agent ended.
 > _   (30s -> shut down everything)
 ```
 
-Without a TTY (headless `-p`), it shuts down cleanly instead. Alternatives:
+`r` (and `start agent`) from the launcher console hands the terminal back to
+the agent, see [Manual control](#manual-control-stdin). Without a TTY
+(headless `-p`), it shuts down cleanly instead. Alternatives:
 `onExit: shutdown` (always shut everything down immediately) or `onExit: leave`
 (everything keeps running, warning only — manual Ctrl-C required).
+
+### Restart policy and the fast-fail give-up
+
+`unreal.restart` and `agent.restart` take `never`, `on-failure` (default) or
+`always`. With `maxRestarts: 0` (the default) there is no fixed bound, but a
+service that **fails** 3 times in a row, each within 10 s of its start, is no
+longer restarted; the launcher logs one line saying it gave up. A failure is a
+non-zero exit or a failed start. A clean exit 0 resets the count (so
+`restart: always` with a quick job keeps restarting), as does a run longer
+than 10 s or a manual start / restart. An explicit `maxRestarts` keeps its
+exact bound and the fast-fail rule does not apply then. It covers both
+`unreal` and `agent`; there is no extra config field.
+
+### Exit codes (CI / headless)
+
+| Exit | When |
+|---|---|
+| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0 |
+| `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
+| `1` | no agent configured **and MCP off**, and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
+
+An agent that fails and **is** restarted produces no exit code until it stops
+failing or gives up. With the default `restart: on-failure`, a headless agent
+that fails after more than 10 s is restarted and re-runs its prompt, so
+**for one-shot `-p` / CI runs set `agent.restart: never`**; the exit code then
+reflects that single run.
+
+The first reason to end the session wins: a Ctrl-C that also kills the agent
+normally gives 0, but in a narrow race the agent's own failure can win and
+give 1. How Ctrl-C reaches a foreground agent on Windows is unverified. An
+error line on stderr names the reason. With MCP on
+(including `-no-agent` and `manualStart` setups) an editor give-up does not end
+the launcher: it logs the failure and keeps serving MCP, so an external agent
+can read the logs and retry `ue_start`.
 
 ## In-editor MCP: Unreal MCP or UE LLM Toolkit (Windows)
 
@@ -480,11 +516,11 @@ runs no check on HTTP entries, `unreagent.log` will not say which.
 
 | Section | Purpose |
 |---|---|
-| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config` (+ permission tool); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and fast-fail give-up as `unreal`); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
 | `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, a loopback `Origin` — see MCP server hardening below; `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
-| `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`never` / `on-failure` / `always`), `restartDelaySeconds` (0 = default 3; negative is a load error) |
+| `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded but fast-fail give-up applies, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
 | `engineRoot` | *usually only in local.yaml* — engine path override; relative is resolved against the working directory |
 
@@ -844,6 +880,12 @@ in trusted networks — the server then has file-write access).
 
 `status` · `r [name]` (restart) · `start <name>` · `stop <name>` ·
 `c <name>` (run command) · `q` (quit)
+
+In the launcher console opened with `k` in window mode, `start agent`,
+`r agent`, `restart agent` and a plain `r` hand the terminal back to the agent
+instead of reading stdin alongside it; a plain `r` restarts the other services
+first. The agent's next exit shows the exit prompt again. (Console handover is
+unverified on Windows.)
 
 ## Manual MCP test
 

@@ -33,7 +33,7 @@ type ServiceSpec struct {
 	Autostart    bool
 	StartDelay   time.Duration
 	Restart      string // never | on-failure | always
-	MaxRestarts  int    // 0 = unlimited
+	MaxRestarts  int    // 0 = unlimited — but one that keeps failing at its start is given up on (giveUp in runService)
 	RestartDelay time.Duration
 	// PreStart is called before every (re)start of the process (e.g. to kill the
 	// crash reporter or to clean up recovery files).
@@ -44,10 +44,23 @@ type ServiceSpec struct {
 	// should refrain from using stdin itself (command loop).
 	Foreground bool
 	// OnExit fires when the process ends and is NOT restarted automatically
-	// (policy or MaxRestarts exhausted) but was still "desired" — i.e. an
-	// unexpected end, not a manual stop. success = exit 0. It is called in its own
-	// goroutine, so it may block / control the supervisor.
-	OnExit func(success bool)
+	// (policy, MaxRestarts exhausted, a start that cannot be retried, or the
+	// fast-fail give-up) but was still "desired" — i.e. an unexpected end, not
+	// a manual stop. It is called in its own goroutine, so it may block /
+	// control the supervisor.
+	OnExit func(Exit)
+}
+
+// Exit tells ServiceSpec.OnExit how the service ended.
+type Exit struct {
+	// Success is true for exit 0.
+	Success bool
+	// StartFailed is true when the last run never got going: it could not be
+	// started, or it failed within FastFailWindow of its start.
+	// Design choice for k70: it describes the last run only, so restart:
+	// never, a used-up maxRestarts and the fast-fail give-up report a quick
+	// failure alike, however many runs came before (see k70).
+	StartFailed bool
 }
 
 // CommandSpec describes a one-off command.
@@ -80,17 +93,27 @@ type CommandResult struct {
 // loop before the service counts as unresponsive.
 const defaultCtrlTimeout = 10 * time.Second
 
+// FastFailWindow and fastFailLimit define a service that keeps failing right
+// after it starts: fastFailLimit failed runs in a row (non-zero exit or failed
+// start), each ending within FastFailWindow of its start. FastFailWindow is
+// exported so the launcher's messages can name it.
+const (
+	FastFailWindow = 10 * time.Second
+	fastFailLimit  = 3
+)
+
 // Supervisor holds all services and commands.
 type Supervisor struct {
 	log Logger
-	// ctrlTimeout and drainTimeout are fields so tests can shorten them; New
-	// sets the defaults.
-	ctrlTimeout  time.Duration
-	drainTimeout time.Duration
-	mu           sync.Mutex
-	services     map[string]*service
-	order        []string
-	commands     map[string]CommandSpec
+	// ctrlTimeout, drainTimeout and fastFailWindow are fields so tests can
+	// shorten them; New sets the defaults.
+	ctrlTimeout    time.Duration
+	drainTimeout   time.Duration
+	fastFailWindow time.Duration
+	mu             sync.Mutex
+	services       map[string]*service
+	order          []string
+	commands       map[string]CommandSpec
 }
 
 // New creates a supervisor with the given log sink.
@@ -99,11 +122,12 @@ func New(log Logger) *Supervisor {
 		log = func(string) {}
 	}
 	return &Supervisor{
-		log:          log,
-		ctrlTimeout:  defaultCtrlTimeout,
-		drainTimeout: streamDrainTimeout,
-		services:     map[string]*service{},
-		commands:     map[string]CommandSpec{},
+		log:            log,
+		ctrlTimeout:    defaultCtrlTimeout,
+		drainTimeout:   streamDrainTimeout,
+		fastFailWindow: FastFailWindow,
+		services:       map[string]*service{},
+		commands:       map[string]CommandSpec{},
 	}
 }
 
@@ -382,7 +406,39 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		restarts int
 		backoff  <-chan time.Time
 		desired  = spec.Autostart
+		// startedAt is when the running process started; quickFails counts
+		// the failed runs in a row that ended within fastFailWindow of their
+		// start.
+		startedAt  time.Time
+		quickFails int
 	)
+
+	// countRun is told whether the run that just ended failed early: a failed
+	// start, or a non-zero exit within fastFailWindow of its start. Only such
+	// runs count; a clean exit or a run that outlasts the window resets the
+	// count — under restart: always a job that finishes quickly with exit 0 is
+	// what was asked for.
+	countRun := func(failedEarly bool) {
+		if failedEarly {
+			quickFails++
+		} else {
+			quickFails = 0
+		}
+	}
+	// giveUp is asked when the policy would restart the service. It reports
+	// (and logs) a service that keeps failing right after its start, which is
+	// restarted no more. The rule only bounds the unlimited default
+	// (MaxRestarts 0): a configured maxRestarts keeps its exact meaning, and a
+	// long-lived service is still restarted without bound. Design choice for
+	// k70: fastFailLimit failures in a row, each within the window, and only
+	// failures count (see k70).
+	giveUp := func() bool {
+		if spec.MaxRestarts > 0 || quickFails < fastFailLimit {
+			return false
+		}
+		s.logf("[%s] failed %d times in a row, each within %s of its start — giving up (no automatic restart)", spec.Name, quickFails, s.fastFailWindow)
+		return true
+	}
 
 	// releaseStreams flushes what the finished process left in its pipes into
 	// the log buffer before the exit is reported, then drops the read ends.
@@ -423,7 +479,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			if spec.OnExit != nil {
 				// Own goroutine, same reason as in the exit branch below: the
 				// handler may block and steer us via svc.ctrl.
-				go spec.OnExit(false)
+				go spec.OnExit(Exit{StartFailed: true})
 			}
 		}
 		c := exec.Command(spec.Command, spec.Args...)
@@ -460,7 +516,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				desired = false
 				return
 			}
-			if desired && shouldRestart(spec, restarts, false) {
+			// No process to time: a failed start is the earliest failure there is.
+			countRun(true)
+			if desired && shouldRestart(spec, restarts, false) && !giveUp() {
 				restarts++
 				backoff = time.After(spec.RestartDelay)
 				return
@@ -468,6 +526,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			startFailed()
 			return
 		}
+		startedAt = time.Now()
 		j, jerr := NewJob()
 		if jerr != nil {
 			s.logf("[%s] WARN job object could not be created: %v — the process runs unsupervised (a launcher crash leaves it behind)", spec.Name, jerr)
@@ -517,6 +576,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			}
 
 		case err := <-waitChOrNil(waitCh):
+			// Timed before the drain, which may wait for a grandchild.
+			failedEarly := err != nil && time.Since(startedAt) < s.fastFailWindow
+			countRun(failedEarly)
 			if job != nil {
 				job.Close()
 			}
@@ -526,17 +588,21 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			cmd, job, waitCh = nil, nil, nil
 			success := err == nil
 			s.logf("[%s] exited (%s)", spec.Name, describeExit(err))
-			if desired && shouldRestart(spec, restarts, success) {
+			restart := desired && shouldRestart(spec, restarts, success)
+			gaveUp := restart && giveUp()
+			if restart && !gaveUp {
 				restarts++
 				s.logf("[%s] restart %d%s in %s", spec.Name, restarts, maxStr(spec), spec.RestartDelay)
 				backoff = time.After(spec.RestartDelay)
 			} else if desired {
-				s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
+				if !gaveUp { // the give-up has logged its own line
+					s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
+				}
 				if spec.OnExit != nil {
 					// Own goroutine: the handler may block (TTY prompt) and steer us
 					// via svc.ctrl (start/restart) — doing it synchronously would
 					// deadlock, because we are exactly that loop.
-					go spec.OnExit(success)
+					go spec.OnExit(Exit{Success: success, StartFailed: failedEarly})
 				}
 			}
 
@@ -544,7 +610,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			switch msg.kind {
 			case ctrlStart:
 				desired = true
-				restarts = 0
+				restarts, quickFails = 0, 0
 				backoff = nil
 				if cmd == nil {
 					start()
@@ -556,7 +622,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				s.logf("[%s] stopped (manual)", spec.Name)
 			case ctrlRestart:
 				desired = true
-				restarts = 0
+				restarts, quickFails = 0, 0
 				backoff = nil
 				stop()
 				start()

@@ -4,6 +4,12 @@ This `unreagent.yaml` starts **without Unreal Engine and without an agent**. It
 uses `ping` as a long-running placeholder "editor" so you can test the launcher
 and the MCP server on Windows in 30 seconds.
 
+> **Windows only.** The demo runs `ping` with Windows arguments. On Linux
+> `ping` rejects them, so the launcher gives up on the "editor" after 3 quick
+> failures (see the fast-fail rule in the main [README](../README.md)) instead
+> of restarting it forever. Because the demo has MCP on, the launcher then
+> keeps serving MCP until you press Ctrl-C.
+
 > The "LLM thing" (Claude Code) is **not** included — it's a separately
 > installed CLI. The demo deliberately leaves the agent out. How to enable it
 > is below.

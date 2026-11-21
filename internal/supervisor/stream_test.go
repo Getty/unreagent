@@ -95,6 +95,9 @@ func TestSupervisorHelperProcess(t *testing.T) {
 		fmt.Fprintln(out, helperTailMarker)
 	case "linger":
 		time.Sleep(helperLinger)
+	case "runs":
+		// A service whose runs fail fast or slow by a pattern (see helperRuns).
+		helperRuns(out)
 	case "hang":
 		// A command that never finishes on its own — npm against a stalled
 		// registry. What it wrote before it got stuck must survive the kill.
@@ -121,7 +124,7 @@ func runHelper(t *testing.T, mode string, perLine time.Duration) []string {
 	exited := make(chan struct{})
 	sup := New(func(string) { time.Sleep(perLine) })
 	spec := helperSpec(t, "x", mode)
-	spec.OnExit = func(bool) { close(exited) }
+	spec.OnExit = func(Exit) { close(exited) }
 	sup.AddService(spec)
 
 	ctx, cancel := context.WithCancel(context.Background())

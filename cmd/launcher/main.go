@@ -168,6 +168,8 @@ func run() error {
 			cleanRecovery(ueProjectDir, logger)
 		}
 	}
+	// Like onAgentExit below: set once the session exists.
+	var onEditorExit func(supervisor.Exit)
 	sup.AddService(supervisor.ServiceSpec{
 		Name:         "ue",
 		Command:      cfg.Unreal.Editor,
@@ -177,6 +179,11 @@ func run() error {
 		MaxRestarts:  cfg.Unreal.MaxRestarts,
 		RestartDelay: secs(cfg.Unreal.RestartDelaySeconds),
 		PreStart:     uePreStart,
+		OnExit: func(e supervisor.Exit) {
+			if onEditorExit != nil {
+				onEditorExit(e)
+			}
+		},
 	})
 
 	// --- agent service ---
@@ -241,9 +248,9 @@ func run() error {
 			MaxRestarts:  cfg.Agent.MaxRestarts,
 			RestartDelay: secs(cfg.Agent.RestartDelaySeconds),
 			Foreground:   agentInteractive,
-			OnExit: func(success bool) {
+			OnExit: func(e supervisor.Exit) {
 				if onAgentExit != nil {
-					onAgentExit(success)
+					onAgentExit(e.Success)
 				}
 			},
 		})
@@ -306,9 +313,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	sess := newSession(ctx, stop)
 
 	if cfg.Agent.Enabled {
-		onAgentExit = makeAgentExitHandler(ctx, stop, sup, cfg, logger, agentInteractive)
+		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, console{os.Stdin, os.Stdout})
+	} else {
+		onEditorExit = makeEditorExitHandler(sess, logger, cfg.MCP.Enabled)
 	}
 
 	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
@@ -323,7 +333,7 @@ func run() error {
 		prepareRuntimes(sup, cfg, agentWorkdir, logger)
 		// In interactive mode stdin belongs to the agent — no command loop of our own.
 		if !agentInteractive {
-			go commandLoop(ctx, stop, sup, logger)
+			go commandLoop(ctx, os.Stdin, sess.end, sup, logger, "")
 		}
 	}
 
@@ -335,9 +345,12 @@ func run() error {
 	}
 	// Decided after the select, not by it: with nothing started, done is
 	// ready as early as the cancelled ctx and the select would pick at random.
-	if ctx.Err() != nil {
+	switch {
+	case sess.endedByLauncher():
+		logger("Stopping all processes …")
+	case ctx.Err() != nil:
 		logger("Signal received — stopping all processes …")
-	} else {
+	default:
 		logger("All services stopped.")
 	}
 	stop()
@@ -346,7 +359,7 @@ func run() error {
 		_ = httpSrv.Close()
 	}
 	logger("Bye.")
-	return nil
+	return sess.result()
 }
 
 // --- helper functions ---
