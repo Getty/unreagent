@@ -1,0 +1,77 @@
+---
+claimed_at: 2026-11-21T18:17:25Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:17:37Z
+created: 2026-11-21T00:52:46Z
+depends_on:
+- 32
+- 43
+- 72
+- 74
+- 75
+- 77
+- 78
+id: 100
+priority: low
+started: 2026-11-21T17:54:15Z
+status: done
+tags:
+- skills
+title: Refresh unreagent-iterate and unreagent-build after the gap fixes land
+updated: 2026-11-21T18:17:37Z
+---
+
+k13 wrote skills/unreagent-iterate and skills/unreagent-build against current behaviour, including known gaps: run_command can return late when a leftover process holds its output (k32); an error path starting with /Engine/ means the engine root was not found (k43); a failed start is reported as success (k72); output is cut without a marker (k74); no timeout or cancellation (k75); cleanOnRestart deletes crash dumps on the automatic restart (k77); a numeric string for lines is ignored and logs is empty for the foreground agent (k78). Update each paragraph when its card lands. Lane: unreagent-skill-author. Size S.
+
+
+**Note 2026-11-21** (k13 review nit): skills/unreagent-build/SKILL.md:31-32 describes the <ProjectName>Editor target as building the project's own C++ modules under Source/; in a project with its own code that target also builds the enabled code plugins under Plugins/, so no extra command is needed there. UE-side point, fix with the next refresh.
+
+**k78/k98 (2026-11-21):** the two passages in skills/unreagent-iterate that k78/k98 make wrong (string lines ignored → 50; run_command suggests compile then ue_restart) are being fixed in the k78/k98 commit itself, not here.
+
+**From the k108 review (2026-11-21):** skills/unreagent-files/SKILL.md:183-186 still says 'compile … and usually ue_restart'; after k108 the tool texts say a C++ change needs ue_restart (live coding is not supported). Skill-author lane.
+
+**Decision 2026-11-21 (main agent):** k100 runs now, without waiting for k75. Every dependency but k75 is done. The skill-author refreshes the k32, k43, k72, k74, k77 and k78 paragraphs plus the k13 and k108 nits now. The paragraph on run_command having no timeout or cancellation stays as it is, since it is still true, and goes onto k75's card as a follow-up for the skill-author. k100 closes with this refresh.
+
+2026-11-21 18:03 Skill-author done (worktree-agent-a3e41613f15dd7113 on e14ad0e, uncommitted; only skills/ touched, no .go).
+
+Changed:
+- k43, skills/unreagent-build/SKILL.md:24-25: "every launcher has two commands" -> "the launcher has two built-in commands".
+- k43, build:44-50 (new paragraph): both need the engine root and the .uproject; when the launcher did not find one of them at start it leaves both out (not in status or the run_command description, `Error: unknown command "compile"`, log `WARN built-in command compile not offered: it needs the engine and the .uproject (see above)`); the user sets UE_ROOT/engineRoot or unreal.project and restarts the launcher. Source: config.go substitute (builtins skipped), main.go:103-105.
+- k43, build:117: dropped "a path that begins with /Engine/ means the engine root was not found" (an unresolved ${ENGINE} is now a load error or a skipped built-in, never a /Engine/ path). Now: the engine root in use (the log's `Engine:` line) holds no engine, or a command the user defined names a wrong path.
+- k43, build:248 (new failure row): `Error: unknown command "compile"` with neither built-in in status.
+- k43, skills/unreagent-iterate/SKILL.md:106: "engine root not found" -> "an engine root from UE_ROOT or engineRoot that holds no editor" (with no engine and the default unreal.editor the launcher now stops at load).
+- k13 nit, build:32-35: <ProjectName>Editor also builds the enabled code plugins under Plugins/, so such a project needs no other command for them; the rest of the bullet is only reflowed.
+- k108 nit, skills/unreagent-files/SKILL.md:328-335: a C++ change is ue_stop, compile, ue_start, as the run_command and ue_restart descriptions say; stop first because UnrealBuildTool refuses to build while Live Coding is active; a config change needs ue_restart, and a newly enabled C++ plugin needs the C++ steps.
+
+Verified against main and left unchanged: k32 build:205-209 (returns when the command exits, job closed, 2 s drain; matches runOnce. k32 landed before k13, so the text already followed it). k72 iterate:32-34, 99-116, 329-330, 397-398 (serviceAction starts flag, lastError). k74 build:76-78, 111-160 and iterate:256-261, 409 (markers). k77 iterate:209-241 (followsCrash, cleanRecovery). k78 iterate:249-254 (getInt numeric strings), 286-288 and 407 (foreground agent: still true, and the description now says so). The k177 and k189 passages are untouched. k75: "no timeout, no cancellation" (build:63-64, 191-195, 256) is left as it was. I did not write on k75, which is not my card.
+
+Deviation from the brief: for k108 it said "a C++ change needs ue_restart; live coding is not supported". The tool texts actually say ue_stop before compile and ue_start after, and give ue_restart only for modules built while the editor kept running. I followed the tool texts. I did not write "Live Coding is not supported": the UE LLM Toolkit's execute_script runs cpp through Live Coding (MCPTool_ExecuteScript.h:50), so that claim would be false in a toolkit project.
+
+Check: `go test -count=1 -timeout 180s ./internal/skills ./cmd/launcher -run 'Skill|Registry'` ok (both packages). `go test -count=1 -timeout 600s ./...` ok (cmd/launcher, internal/config, internal/mcp, internal/skills, internal/supervisor). With -v, TestToolkitToolsExistInToolkit and TestEmbedMissesNoSourceFile ran and passed; neither was skipped.
+
+Subject (68 chars): Match the build, iterate and files skills to the landed fixes (k100)
+
+Changes: v0.0.9 shipped only skills/unreagent-files and skills/unreagent-runtimes. No entry for unreagent-iterate or unreagent-build. unreagent-files shipped and its guidance changed, so proposed:
+  - The unreagent-files skill gives the same C++ loop as the tool
+    descriptions: stop the editor, compile, then start it, since
+    UnrealBuildTool refuses to build while Live Coding is active.
+
+Also found: Changes under {{$NEXT}} has no "new shipped skills unreagent-iterate and unreagent-build" line, although neither shipped in v0.0.9. That call is for the main agent or the release-manager.
+
+**Review 2026-11-21 (unreagent-reviewer): changes needed, one small fix.** Files: skills/unreagent-build/SKILL.md, skills/unreagent-iterate/SKILL.md, skills/unreagent-files/SKILL.md (worktree on e14ad0e, uncommitted, all three skill-author per OWNERS, no .go). Check run myself, green twice: `test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 -timeout 600s ./... && make windows` in the worktree, and again on main dc53cfe (main moved past 7dff112: k159 landed) with the diff applied in a scratch copy. TestToolkitToolsExistInToolkit and TestEmbedMissesNoSourceFile ran and passed both times, neither skipped. `git apply --check` onto main dc53cfe: clean.
+
+1. **Fix (build:117, and build:249 which the card left alone):** the signature `Error: start failed: exec: …` is not what a missing Build.bat gives. supervisor.go:471 wraps cmd.Start(). For an absolute path whose extension is in PATHEXT (.bat, .exe), Go 1.26 os/exec lookExtensions (lp_windows.go:85-91) returns the path without checking it, so the error comes from os.StartProcess as `fork/exec <path>: …`. A Linux probe gives `start failed: fork/exec /nonexistent/Engine/Build/BatchFiles/Build.bat: no such file or directory`. `exec: "…"` only shows for a bare name missing from PATH, as in the runtimes skill's `exec: "uv"` row, or for a path with no extension. The Windows wording comes from reading the Go source, unverified on Windows. This was already wrong in k13, but row 117 is the passage this card rewrote, and it now explains a signature an agent will not see. Fix: `Error: start failed: …` (or `fork/exec …`) in both rows. If you would rather keep k100 to its gap list, this becomes a follow-up card and k100 is ready otherwise.
+2. **Nit (files:328):** "A C++ change takes effect only in a new editor process" overstates it, by the same fact the skill-author used to refuse "Live Coding is not supported": the toolkit's execute_script cpp starts a Live Coding compile in the running editor (MCPTool_ExecuteScript.h:50; ue-python:188). Suggest "Through unreagent's tools, a C++ change takes effect in a new editor process: …". Not blocking.
+
+Verified against main: k43 WARN text is word for word main.go:104. `Error: unknown command "compile"` = supervisor.go:420 + helpers.go:62. Built-ins whose placeholders are unresolved are dropped (config.go:609-613). compile and package both need the engine and the project, so they drop together (load_test.go:250). The supervisor's list is built from cfg.Commands (main.go:358), so the dropped commands are in neither status nor the run_command description. No engine with the default unreal.editor fails at load (config.go:566, load_test.go:201, main.go:82-85). iterate:106 is exact: auto-detection only picks roots that hold an editor (engine.go:73). k13 nit: correct on the UE side. k108: matches tools.go:54 and :108. The refusal of "Live Coding is not supported" is right: the tool texts say UBT refuses to build while Live Coding is active, not that Live Coding is unsupported, and the toolkit uses it. Spot-checked the left-alone k78 (getInt, helpers.go:372-402), k74 (48 KiB, 10 KB, 4 KiB head, helpers.go:76-104) and k32 (job closed before the 2 s drain, supervisor.go:496-501, :913) passages: all current. k75 passages build:73-74, 191-195, 257 are untouched and still true: ToolHandler has no ctx (mcp.go:50), RunCommand uses context.Background(), WriteTimeout is 4h (main.go:404). The follow-up is on k75.
+
+Changes: v0.0.9 shipped only unreagent-files and unreagent-runtimes. The proposed unreagent-files line is accurate: v0.0.9 files:183-186 said "compile … and usually ue_restart". It repeats the existing {{$NEXT}} entry at Changes:74-81 (run_command/ue_restart compile advice), though; folding it in there as "…, and so does the unreagent-files skill" would read better. Release-manager's call. Still open, as the skill-author flagged: {{$NEXT}} has no "New shipped skills unreagent-build and unreagent-iterate" line. Subject: 68 chars, OK.
+
+2026-11-21 18:15 Skill-author, review fix and nit done (same worktree, uncommitted, only skills/ touched).
+1. Fix, skills/unreagent-build/SKILL.md:117: the row is now `Error: start failed: …`. A program missing at its path, such as Build.bat, reads `start failed: fork/exec <path>: …` (wrong engine root, or a wrong path in a user command). A bare name not on PATH reads `start failed: exec: "<name>": …`. At build:249 the row is now `Error: start failed: fork/exec …/Engine/…: …`. The Windows form is read from the Go source, not seen on Windows: lp_windows.go lookExtensions passes an absolute path with a PATHEXT extension through, and os/exec_posix.go (built for windows too) wraps the StartProcess failure as PathError Op "fork/exec". The skill quotes no Windows error text after the path. Linux probe (scratch, exec.Command(p).Start()): `fork/exec /nonexistent/Engine/Build/BatchFiles/Build.bat: no such file or directory` and `exec: "no-such-program-xyz": executable file not found in $PATH`. skills/unreagent-runtimes/SKILL.md:302 already quotes the bare-name form and is unchanged.
+2. Nit, skills/unreagent-files/SKILL.md:328-331: now "Through unreagent's tools, a C++ change takes effect in a new editor process: …". The paragraph is reflowed to 80 columns; no other wording changed.
+Check: go test -count=1 -timeout 180s ./internal/skills ok.
+Changes: noted that the release-manager folds the files line into the {{$NEXT}} entry at Changes:74-81 instead of adding a new one.
+
+Main agent checked the fix round (build SKILL 117/249 fork/exec + exec bare-name; files SKILL 328 scoped to unreagent's tools); text-only, stands in for a second review round. Committed 4e116ab on main; full check green (gofmt, vet linux+windows, tests incl. TestToolkitToolsExistInToolkit run, make linux/windows).
