@@ -1,0 +1,38 @@
+---
+claimed_at: 2026-11-21T23:49:58Z
+claimed_by: unreagent-doc-writer
+class: standard
+completed: 2026-11-21T23:49:38Z
+created: 2026-11-21T21:49:28Z
+depends_on:
+- 193
+- 194
+- 195
+id: 196
+priority: low
+started: 2026-11-21T23:38:39Z
+status: done
+tags:
+- skills
+- docs
+title: 'Spec section 7: move Class C into scope once its skills land'
+updated: 2026-11-21T23:49:58Z
+---
+
+Lane: unreagent-doc-writer (OWNERS: docs/). Depends on k193, k194, k195.
+
+docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (:334-402) still lists Class C under "Deferred" with an open-decision box (:391-402) and counts "23 skills" (:380). k5 records the decision; after the three Class C cards the shipped set is 30.
+
+Acceptance:
+- the Class C tools appear in an in-scope table, skill -> toolkit tools, with the names that actually landed under skills/ (read the directory, do not copy this card)
+- the open-decision box is replaced by one line naming the decision (k5, 2026-11-21); Class B stays deferred, unchanged
+- the skill count matches ls skills/
+- no other document claims a count or a class list that is now wrong: grep README.md and docs/ for the old numbers and say what was found (planning found no skill names or counts in README.md)
+
+Verification: prose only, no build step; compare the tables against skills/*/SKILL.md frontmatter (grep '^toolkit_tools').
+
+Doc-writer finished and unreagent-reviewer 2026-11-21: verdict READY. Spec section 7: Class C moved into 'In scope now' with its table (seven rows match the toolkit_tools frontmatter), count 30 skills (19 A, 7 C, 4 D), open-decision block replaced by one line naming k5; header line 4 and section 9 adjusted. Main agent: .claude/agents/unreagent-skill-author.md no longer calls Class C open. Check: gofmt, go vet, go test ./..., make windows green (docs only). Open follow-up inside this card before the commit: .claude/skills/unreagent-skill-authoring/SKILL.md:167 and :190-192 still name only Class A and D as in scope (unreagent-skill-author).
+
+Follow-up done and reviewed READY (2026-11-21): .claude/skills/unreagent-skill-authoring/SKILL.md :167 and :190-192 name Class C as in scope since k5; spec, agent file and skill agree.
+
+2026-11-21 23:49 Committed as 4e90c8d.
