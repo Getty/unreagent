@@ -1,15 +1,31 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/conflict-industries/unreagent/internal/mcp"
 )
 
+// warnIfMissing warns when path names nothing that could be started. A bare
+// name is looked up on PATH, by the rule exec.Command applies when the
+// service starts; anything else must exist as given.
 func warnIfMissing(logger func(string), label, path string) {
+	if filepath.Base(path) == path {
+		found, err := exec.LookPath(path)
+		switch {
+		case errors.Is(err, exec.ErrDot):
+			logger(fmt.Sprintf("WARN %s: %s is found only relative to the current directory (%s), which exec refuses — give its full path", label, path, found))
+		case err != nil:
+			logger(fmt.Sprintf("WARN %s: %s not found on PATH", label, path))
+		}
+		return
+	}
 	if !fileExists(path) {
 		logger(fmt.Sprintf("WARN %s: path not found: %s", label, path))
 	}
