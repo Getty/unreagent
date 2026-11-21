@@ -1,0 +1,48 @@
+---
+class: standard
+completed: 2026-11-21T02:12:39Z
+created: 2026-11-21T00:50:16Z
+depends_on:
+- 39
+id: 97
+priority: low
+started: 2026-11-21T01:43:14Z
+status: done
+tags:
+- docs
+- hermes
+title: 'README: hermes-setup section after the k39 fix'
+updated: 2026-11-21T02:13:05Z
+---
+
+After k39: document that hermes-setup refuses an mcp_servers that is not a string-keyed mapping, that comments/key order are not preserved (until the follow-up card lands), and the recovery path for users of 0.0.9 and earlier whose config was wiped: the original is in config.yaml.bak, which hermes-setup never overwrites. Lane: unreagent-doc-writer. Size S.
+
+
+**Note 2026-11-21** (k43 review): after k43, hermes-setup fails at load when no engine is found (config.Load requires the editor path), although it uses no editor fields. Document it or relax it.
+
+**Doc part done (doc-writer, 2026-11-21), uncommitted in the main tree.** README hermes-setup section rewritten against hermes.go at HEAD: load step needs an engine (k43); merge first, then byte-exact O_EXCL copy to <path>.bak that is never overwritten (no backup for a missing/empty file); comments and key order not preserved (writeYAMLAtomic marshals a map); a non-mapping mcp_servers is refused untouched; 0.0.9 and earlier moved the original to .bak (pre-07e0218 os.Rename then re-read), so users find it there. Sub-command table row notes the engine requirement. Gap left: Load checks the engine before the 'agent.hermes.enabled not set' exit, so even a disabled-Hermes run fails without an engine — not spelled out. Waits for review together with k101/k99.
+
+Doc part done in the main tree (README hermes-setup section), see the earlier note. Ready for review together with k101/k99.
+
+**Review (unreagent-reviewer, 2026-11-21): CHANGES REQUESTED.** Check run on main @ 2e72af4 + the uncommitted tree: gofmt -l cmd internal (clean), go vet ./... (clean), go test -count=1 ./... (4 packages ok, no skips), make windows (PE32+ built; no Go changed, Windows behaviour not exercised). Files reviewed: README.md (hermes-setup section, sub-command row), unreagent.example.yaml (Hermes comment).
+
+Findings:
+1. README.md:590-595 says "in order", but steps 2 and 3 are swapped: hermes.go:67-87 generates mcp.token and persists it to unreagent.local.yaml BEFORE resolveHermesConfigPath (hermes.go:89). Swap them.
+2. README.md:612-615 "changes nothing (no backup, no write)" is false when mcp.token is empty (the first-run default): the token is already written to unreagent.local.yaml (hermes.go:82-87) before loadHermesYAML / mergeHermesServer refuse (hermes.go:97-103); same for an unparseable Hermes config. Say the Hermes config is left untouched and a generated token is already persisted. (TestHermesSetupRefusesUnmergeableServers uses a user token, so this path is untested.)
+
+Nits:
+3. The ordered list skips the agent.hermes.enabled check (hermes.go:60-65: "nothing to do", exit 0, after Load). One line would also make clear that even a disabled run needs an engine (the gap the doc-writer noted).
+4. README.md:620 is not wrapped.
+5. Optional / follow-up: step 3 does not say persistGeneratedToken re-serializes unreagent.local.yaml (hermes.go:184-208), so its comments are lost and a generated header goes on top.
+
+Verified true: engine needed at load (hermes.go:55 -> config.go:457); merge before backup; O_EXCL .bak never overwritten (hermes.go:239-258); no backup for a missing or zero-byte file (hermes.go:107); non-mapping / non-string-key mcp_servers refused with the quoted message, Hermes file and .bak untouched; comments and key order lost (yaml.Marshal of a map) plus the marker line; 0.0.9 and earlier: v0.0.8 and v0.0.9 did os.Rename(hermesPath, bak) and then read the now-missing file; 07e0218 is v0.0.9-4 and in no tag. English only, no machine paths.
+
+**Re-review (unreagent-reviewer, 2026-11-21): APPROVE.** Judged against main @ 3c920ef (it touches none of the reviewed files; hermes.go and main.go unchanged). Re-ran: YAML parse of unreagent.example.yaml (ok, structure identical to HEAD), go test -count=1 ./internal/config/ (ok). Earlier full check (gofmt / vet / go test ./... / make windows) was green; no Go changed since.
+Verified fixes in README.md:
+- step list now matches hermes.go: Load (55) -> enabled check (60-65, "nothing to do", exit 0) -> token (67-87) -> resolve path (89) -> read/merge (97-103) -> backup (107) -> write (119-124);
+- refusal paragraph: Hermes config untouched, unparseable config included, a generated token may already be in unreagent.local.yaml and is reused on the re-run (the next Load reads it);
+- step 3 now says unreagent.local.yaml is re-serialized and loses its comments (persistGeneratedToken, hermes.go:184-208);
+- recovery paragraph re-wrapped.
+Nothing introduced, nothing open.
+
+Committed in c563b81
