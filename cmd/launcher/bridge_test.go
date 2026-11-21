@@ -234,7 +234,9 @@ func TestPrepareNodeBridgeMarksFreshInstall(t *testing.T) {
 	}
 }
 
-// k106: node_modules with the marker is complete — no npm install.
+// k106: node_modules with the marker is complete — no npm install. k135: and
+// a bridge that passes its smoke test on it gets no repair hint, nor any
+// other WARN, on every start.
 func TestPrepareNodeBridgeSkipsInstallWithMarker(t *testing.T) {
 	f := newInstallFixture(t, npmOffline, initAnswer)
 	f.withModules(t, true)
@@ -244,6 +246,9 @@ func TestPrepareNodeBridgeSkipsInstallWithMarker(t *testing.T) {
 	}
 	if !strings.Contains(log, "smoke test OK") {
 		t.Fatalf("expected 'smoke test OK', got:\n%s", log)
+	}
+	if strings.Contains(log, "WARN") {
+		t.Fatalf("a marked node_modules whose bridge passed its smoke test got a WARN:\n%s", log)
 	}
 }
 
@@ -557,6 +562,154 @@ func TestPrepareMCPBridgesCancelledStartsNothing(t *testing.T) {
 	}
 	if out := log.String(); out != "" {
 		t.Fatalf("a bridge was started although the context was already cancelled:\n%s", out)
+	}
+}
+
+// k135: node 24's report of a missing module, as node 24.19.0 prints it on
+// Linux for a bridge whose index.js requires 'dep' (captured, the path
+// replaced). The line that names the error is the 5th of 24, so the last 15
+// lines are the stack trace and the error's properties alone.
+const nodeMissingModule = `node:internal/modules/cjs/loader:1520
+  throw err;
+  ^
+
+Error: Cannot find module 'dep'
+Require stack:
+- /opt/toolkit/bridge/index.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1517:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1071:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1095:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1122:12)
+    at Module._load (node:internal/modules/cjs/loader:1294:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.require (node:internal/modules/cjs/loader:1617:12)
+    at require (node:internal/modules/helpers:153:16)
+    at Object.<anonymous> (/opt/toolkit/bridge/index.js:1:13)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '/opt/toolkit/bridge/index.js'
+  ]
+}
+
+Node.js v24.19.0
+`
+
+// k135: the smoke test showed only the last 15 lines of a failing bridge's
+// stderr. For node's missing-module error that cut "Error: Cannot find module
+// 'dep'" itself, and the repair hint's "if the error above names a missing
+// module" had only the code field left to go by. The line that names the
+// error now leads the tail, which stays 15 lines.
+func TestSmokeTestMCPKeepsNodeErrorLine(t *testing.T) {
+	s := newScripts(t)
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "stderr")
+	if err := os.WriteFile(trace, []byte(nodeMissingModule), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bridge := filepath.Join(dir, "bridge.sh")
+	s.write(bridge, "cat '"+trace+"' >&2\nexit 1\n")
+
+	var log syncLog
+	if smokeTestMCP(context.Background(), "toolkit", bridge, nil, nil, dir, log.log) {
+		t.Fatalf("a bridge that dies on a missing module passed its smoke test:\n%s", log.String())
+	}
+	lines := strings.Split(strings.TrimSpace(nodeMissingModule), "\n")
+	want := "WARN MCP server 'toolkit': smoke test failed (no initialize response):\n" +
+		"Error: Cannot find module 'dep'\n[...]\n" + strings.Join(lines[len(lines)-15:], "\n")
+	if got := log.String(); got != want {
+		t.Fatalf("smoke test log:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// k135: which error line leads the tail. nodeThrowWithCause is node 24.19.0
+// on Linux for a bridge that logs an "Error: …" line of its own and then
+// throws a TypeError with a cause (captured, the path replaced): the crash's
+// line is the last unindented one, the nested cause is indented.
+const nodeThrowWithCause = `Error: config not found, using defaults
+/opt/toolkit/bridge/index.js:3
+throw new TypeError('outer', { cause: new Error('inner') });
+^
+
+TypeError: outer
+    at Object.<anonymous> (/opt/toolkit/bridge/index.js:3:7)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    ... 5 lines matching cause stack trace ...
+    at node:internal/main/run_main_module:33:47 {
+  [cause]: Error: inner
+      at Object.<anonymous> (/opt/toolkit/bridge/index.js:3:39)
+      at Module._compile (node:internal/modules/cjs/loader:1872:14)
+      at Object..js (node:internal/modules/cjs/loader:2003:10)
+      at Module.load (node:internal/modules/cjs/loader:1594:32)
+      at Module._load (node:internal/modules/cjs/loader:1396:12)
+      at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+      at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+      at node:internal/main/run_main_module:33:47
+}
+
+Node.js v24.19.0
+`
+
+// k135: nodeFetchRejection is node 24.19.0 on Linux for a bridge whose fetch
+// is rejected and never handled (captured, the path replaced): node prints
+// that error in brackets.
+const nodeFetchRejection = `node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+[TypeError: fetch failed] {
+  [cause]: Error: bad port
+      at makeNetworkError (node:internal/deps/undici/undici:11806:35)
+      at mainFetch (node:internal/deps/undici/undici:13189:22)
+      at fetching (node:internal/deps/undici/undici:13176:7)
+      at fetch (node:internal/deps/undici/undici:13040:20)
+      at fetch (node:internal/deps/undici/undici:17708:10)
+      at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)
+      at Object.<anonymous> (/opt/toolkit/bridge/index.js:1:1)
+      at Module._compile (node:internal/modules/cjs/loader:1872:14)
+      at Object..js (node:internal/modules/cjs/loader:2003:10)
+      at Module.load (node:internal/modules/cjs/loader:1594:32)
+}
+
+Node.js v24.19.0
+`
+
+func TestStderrTail(t *testing.T) {
+	last := func(s string, n int) string {
+		lines := strings.Split(strings.TrimSpace(s), "\n")
+		return strings.Join(lines[len(lines)-n:], "\n")
+	}
+	for _, c := range []struct{ name, in, want string }{
+		{"shorter than n: all of it", "Error: boom\n    at f", "Error: boom\n    at f"},
+		{"error line in the tail: the tail alone",
+			"log\nError: boom\n    at f\n    at g", "Error: boom\n    at f\n    at g"},
+		{"error line right above the tail: no gap to mark",
+			"Error: boom\n    at f\n    at g\n    at h", "Error: boom\n    at f\n    at g\n    at h"},
+		{"error line further up: it, the marker, the tail",
+			"Error: boom\n    at e\n    at f\n    at g\n    at h", "Error: boom\n[...]\n    at f\n    at g\n    at h"},
+		{"node's [CODE] form",
+			"Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'dep'\n    at e\n    at f\n    at g\n    at h",
+			"Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'dep'\n[...]\n    at f\n    at g\n    at h"},
+		{"no error line: the tail alone", "one\ntwo\nthree\nfour\nfive", "three\nfour\nfive"},
+		{"a log line naming Error is no error line",
+			"[bridge] Error: retrying\nWARN Error: x\none\ntwo\nthree", "one\ntwo\nthree"},
+		{"the crash, not the bridge's earlier log line nor the nested cause",
+			nodeThrowWithCause, "TypeError: outer\n[...]\n" + last(nodeThrowWithCause, 3)},
+		{"the last error line in the tail: no earlier one put on top",
+			"Error: early\nlog\nError: boom\n    at f\n    at g", "Error: boom\n    at f\n    at g"},
+		{"node's source-location header is no error line",
+			"node:internal/modules/cjs/loader:1520\n  throw err;\n  ^\none\ntwo\nthree", "one\ntwo\nthree"},
+		{"a name that does not end in Error is no error line",
+			"Errors: 3\nlog\none\ntwo\nthree", "one\ntwo\nthree"},
+		{"a drive-letter colon in the message: the first colon ends the name",
+			`Error: Cannot find module 'C:\bridge\node_modules\dep\index.js'` + "\n    at e\n    at f\n    at g\n    at h",
+			`Error: Cannot find module 'C:\bridge\node_modules\dep\index.js'` + "\n[...]\n    at f\n    at g\n    at h"},
+		{"node 24's bracketed form for an unhandled rejection",
+			nodeFetchRejection, "[TypeError: fetch failed] {\n[...]\n" + last(nodeFetchRejection, 3)},
+	} {
+		if got := stderrTail(c.in, 3); got != c.want {
+			t.Errorf("%s:\n%s\n\nwant:\n%s", c.name, got, c.want)
+		}
 	}
 }
 

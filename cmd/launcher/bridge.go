@@ -318,11 +318,51 @@ func smokeTestMCP(parent context.Context, name, command string, args, env []stri
 		reason = fmt.Sprintf("timeout after %s", smokeTestTimeout)
 	}
 	if detail != "" {
-		logger(fmt.Sprintf("WARN MCP server '%s': smoke test failed (%s):\n%s", name, reason, tailLines(detail, 15)))
+		logger(fmt.Sprintf("WARN MCP server '%s': smoke test failed (%s):\n%s", name, reason, stderrTail(detail, 15)))
 	} else {
 		logger("WARN MCP server '" + name + "': smoke test failed (" + reason + ", no stderr)")
 	}
 	return false
+}
+
+// stderrTail returns the last n lines of a failed bridge's stderr, led by the
+// line that names the error when that line is not among them: node prints it
+// above a stack trace and the error's properties, which alone can fill n
+// lines ("Cannot find module 'dep'" was cut that way). Node prints the
+// uncaught error last, so the last such line is the one; "[...]" stands for
+// what lies between it and the tail.
+func stderrTail(stderr string, n int) string {
+	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
+	cut := max(len(lines)-n, 0) // lines[cut:] are the tail
+	tail := strings.Join(lines[cut:], "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		switch {
+		case !jsErrorLine(lines[i]):
+		case i >= cut:
+			return tail
+		case i == cut-1:
+			return lines[i] + "\n" + tail
+		default:
+			return lines[i] + "\n[...]\n" + tail
+		}
+	}
+	return tail
+}
+
+// jsErrorLine reports whether line opens a JavaScript error as node prints
+// one: an unindented name ending in Error, an optional [CODE], a colon —
+// "Error: …", "TypeError: …", "Error [ERR_MODULE_NOT_FOUND]: …". A cause
+// nested inside ("  [cause]: Error: …") is indented and does not count.
+// Node 24's bracketed form for an unhandled rejection ("[TypeError: fetch
+// failed] {") counts: the leading [ is no space, so "[TypeError" passes the
+// no-space test.
+func jsErrorLine(line string) bool {
+	name, _, ok := strings.Cut(line, ":")
+	if !ok {
+		return false
+	}
+	name, _, _ = strings.Cut(name, " [")
+	return strings.HasSuffix(name, "Error") && !strings.ContainsAny(name, " \t")
 }
 
 // waitForEndpoint reports as soon as the in-editor HTTP server (UNREAL_MCP_URL)
