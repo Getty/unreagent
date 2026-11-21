@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-11-21T13:32:27Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T13:32:27Z
+created: 2026-11-21T12:14:19Z
+id: 165
+priority: low
+started: 2026-11-21T12:48:32Z
+status: done
+tags:
+- hermes
+title: 'hermes-setup: a block scalar inside mcp_servers.<name> gets the bare ''would
+  not hold the new entry'' refusal'
+updated: 2026-11-21T13:32:39Z
+---
+
+From k145. k145 names the value when checkEdit refuses because a value OUTSIDE mcp_servers.unreagent would be re-encoded differently by yaml.v3 (folded block with a more-indented line, literal block starting with a blank line). A block scalar of that kind INSIDE the managed entry (e.g. an extra key in mcp_servers.<name>) still gets the bare 'the result would not hold the new mcp_servers.unreagent' without the key or cause. Done: name the value and the fix the same way, with a test. Lane: unreagent-worker; cmd/launcher/hermes.go — after k145 lands.
+
+Note: the README's hermes-setup failure list (k145) documents this gap in one sentence; remove that sentence when this is fixed.
+
+Worker (code done, uncommitted, docs pending): checkEdit's 'would not hold' branch now names the value when want is a mapping or list and changedPath(want, got) finds one: 'the result would not hold the new mcp_servers.unreagent: the value at mcp_servers.unreagent.description would change (the YAML writer re-encodes it differently, e.g. a block scalar); rewrite that value as a quoted string, or as a block scalar without a leading blank line or extra-indented lines, then re-run hermes-setup'. The k145 fix text moved into one helper, reencoded(), shared by both branches, so the wording cannot drift. A scalar want (mcp.token) and an unnamed difference keep the bare message. Assumption, stated in a comment: the values the edit sets are fresh plain string nodes the encoder writes back unchanged, so a difference inside the entry is a user value (the same assumption k145 makes outside). Test: TestHermesSetupNamesTheValueTheWriterWouldChangeInTheEntry (folded block in an extra key, literal with a leading blank line in headers, one in a list as notes[1]); red before the fix with the bare refusal, green after, nothing written. README: the sentence 'A block scalar inside the mcp_servers.<name> entry itself is not named: ...' in the hermes-setup failure list goes (doc-writer). Bundled with k167; not handed to review yet.
+
+doc-writer: README failure list updated (worktree agent-a827101b3aa454e0f, uncommitted): the "block scalar inside mcp_servers.<name> is not named" sentence is gone; it now says the same check names such a value inside the entry (the result would not hold the new mcp_servers.unreagent: the value at <path> would change (...)) with the same fix, and that only a token edit or an unplaceable difference keeps the bare message. gofmt clean. Changes proposal: extend the existing entry "hermes-setup names the value it refuses to rewrite (a folded block ..." with: "This includes a value inside the mcp_servers.unreagent entry itself, which used to get a bare refusal.
+
+Bundled with k167, same worktree; ready for review.
+
+Reviewer (unreagent-reviewer, reviewed with k167 in the same worktree; full check, run and all green, plus findings 1-4 on k167). VERDICT for the bundle: changes needed (small). The k165 code is correct.
+Verified: checkEdit (cmd/launcher/hermes.go:791-799) names the value through pathTo(where, want, got) only when want and got are both a mapping or a list and changedPath finds a difference. The k145 fix text sits in one helper, reencoded() (hermes.go:816), so the wording cannot drift. Mutations in a scratch copy: removing the branch, or dropping 'where' from the path, turns TestHermesSetupNamesTheValueTheWriterWouldChangeInTheEntry red. The README failure list (README.md:899-903) matches the code: the old 'is not named' sentence is gone.
+Findings for k165:
+5. cmd/launcher/hermes_test.go:1588-1593 (worker): the claim 'a scalar want (mcp.token) keeps the bare message' is true (probe: checkEdit({}, "mcp:\n  token: other\n", "t", "mcp", "token") gives exactly 'the result would not hold the new mcp.token'), but nothing pins it. A mutation that always takes the named branch passes the whole suite. One exact-message case in TestCheckEdit pins it.
+6. Changes (release-manager): the doc-writer's 'which used to get a bare refusal' describes a change no user saw. v0.0.9 has no checkEdit and no 'would not hold' message (it replaced the Hermes config whole), and the in-place edit and k145's naming are both unreleased under {{$NEXT}}. Fold it into the existing entry (Changes:22) instead: 'hermes-setup names the value it refuses to rewrite, outside its own mcp_servers.unreagent entry or inside it (a folded block scalar ...'. That adds nothing about a former bare refusal.
+7. Info, accepted as stated in the comment at hermes.go:792-795: an edit bug that left an owned key unset would now read as a re-encoded user value (TestCheckEdit 'edit wrong' now gives '... the value at mcp_servers.unreagent.url would change (the YAML writer re-encodes it ...)'). It cannot happen while the edit sets fresh plain nodes.
+Correction to my k167 note: the two \' there are a quoting slip and should be a plain apostrophe. Commit subject: Tighten hermes-setup's token file to 0600, name block scalars in its entry (k167, k165). Not moved.
+
+Reviewer round 2 (unreagent-reviewer, with k167 in worktree agent-a827101b3aa454e0f; full check run and green, see k167). VERDICT: ready.
+Round-1 finding 5 fixed: TestCheckEdit now pins the bare refusal word for word for a scalar want (mcp.token) and for an entry changedPath cannot place (missing mcp_servers.unreagent). Mutations in a scratch copy, each restored after: 'always take the named branch' turns both rows red (hermes_test.go:1613); 'name every mapping want' turns the missing-entry row red; 'drop the k165 branch' turns all three subtests of TestHermesSetupNamesTheValueTheWriterWouldChangeInTheEntry red. hermes.go unchanged since round 1; the README failure list (k165 part) unchanged and still matches checkEdit. Finding 7 (info) stands as accepted.
+Commit subject (shared with k167): Tighten hermes-setup's token file to 0600, name block scalars in its entry (k167, k165)
+Changes for k165 (finding 6): no new bullet and no 'used to get a bare refusal', since checkEdit and its naming are unreleased under {{$NEXT}}. In the existing entry change 'hermes-setup names the value it refuses to rewrite (a folded block' to 'hermes-setup names the value it refuses to rewrite, outside its own mcp_servers.unreagent entry or inside it (a folded block', rest unchanged. Not moved.
+
+Committed as 53b9d86 on main (round-2 review ready).
