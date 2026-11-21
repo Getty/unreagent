@@ -1,0 +1,119 @@
+---
+claimed_at: 2026-11-21T06:27:37Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T06:27:48Z
+created: 2026-08-21T23:23:58Z
+depends_on:
+- 8
+id: 26
+priority: medium
+started: 2026-11-21T05:30:52Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: Python, Tasks & Context (Class A)'
+updated: 2026-11-21T06:27:48Z
+---
+
+- ue-python -- execute_script, cleanup_scripts, get_script_history (UE-side Python; contrast with unreagent-runtimes, which is host-side)
+- ue-tasks -- task_submit, task_status, task_result, task_list, task_cancel
+- ue-context -- get_ue_context; this one points AT the plugin's own contexts/domains rather than replacing them
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size M. k19 first.
+
+Started 2026-11-21 under the main agent's Class A decision: written from the toolkit C++ source only (VibeUE not checked out, so no attribution line); toolkit_tools checked by hand until k18 lands. The k24 skills (ue-level-actors, ue-levels, ue-assets) are the format precedent.
+
+Skill-author finished (worktree-agent-ae114802b82026ea0): skills/ue-tasks, ue-python, ue-context from the toolkit C++ and bridge source; no unreal_classes (no class is named in the toolkit, so any would be a guess). Upstream bugs added to k132; the approval-window limit is k136; lint note on k18.
+
+Ready for review: three Class A skills in worktree-agent-ae114802b82026ea0.
+
+2026-11-21 06:14 Review (unreagent-reviewer): CHANGES NEEDED. Small wording edits only. All 25+ traced claims hold.
+
+Files: skills/ue-tasks/SKILL.md, skills/ue-python/SKILL.md, skills/ue-context/SKILL.md (untracked, worktree-agent-ae114802b82026ea0, base 9792365). Scope OK: all three resolve to unreagent-skill-author.
+Check, run in the worktree: gofmt -l cmd internal skills (empty), go vet ./... (ok), go test -count=1 ./... (all ok; internal/skills loads 7 skills), make windows (ok; dist/ is git-ignored). No Windows code path is touched.
+
+Findings, most important first:
+1. ue-context/SKILL.md:8 lists toolkit_tools: [get_ue_context]. That breaks the rule as it is written today. unreagent-skill-authoring SKILL.md:70-71 and :144-149, and spec section 8, say every entry must exist in MCPToolRegistry.cpp, checked by hand until k18. The registry (MCPToolRegistry.cpp:84-194) has no get_ue_context. The bridge defines it (index.js:118-140, handled at :151). The loader does not care, and go test passes. Spec section 7 (line 286) and the card still ask for it, so the file is right and the rule is wrong. Fix: amend the rule in unreagent-skill-authoring (also skill-author) to accept the plugin bridge's own tools from index.js, and spec section 8 (doc-writer), before k18 is written. The other option is to drop the entry. Main agent decides.
+2. ue-python/SKILL.md:37-38 says that with nobody at the editor, every script waits 10 minutes and then fails. That is asserted before the -unattended hedge at :38-40, but under unreagent's default (config.go:317-319, main.go:155-157) that is exactly the unverified case. The window is an engine AddModalWindow (ScriptPermissionDialog.cpp:50). Its -unattended behaviour is not in the toolkit. Scope the 10-minute sentence to an editor without -unattended. Also hedge the Deny row at :217, because under -unattended a denial need not mean a human clicked Deny (k136).
+3. ue-python/SKILL.md:183, cpp row: "compiled with Live Coding" reads as fact. The plugin only writes the file and calls LiveCoding->Compile (ScriptExecutionManager.cpp:99-163, :231-289). Whether that builds a newly added .cpp is engine behaviour and unverified. Also nothing ever calls the compiled code. Say both. With Live Coding off, the message is "Compilation failed. Fix these errors and call execute_script again:" followed by the Live Coding text (:144-147, :241-244), not that text alone.
+4. Commit order: ue-python:19/:51/:231-232, ue-tasks:227-228 and ue-context:157-158 refer to ue-level-actors, ue-levels and ue-assets (k24, not on main). Commit k24 first or together with k26. k24/k20 consistency checked: the result envelope, Error-without-data, the 300 s timeout and "follow the task up" that they hand off to ue-tasks are all covered by ue-tasks:59-78 and :183-191, with no contradictions.
+
+Nits (optional):
+- ue-tasks:98-99: progress stays -1 for a task cancelled while pending, and for timed_out (MCPTaskQueue.cpp:185-187, :467-471).
+- ue-tasks:103-104: timed_out turns cancelled when the queue's wait ends (:385-409), which can come before the tool finishes.
+- ue-tasks:80-82: MCP_REQUEST_TIMEOUT_MS (index.js:11/:45) sets the bridge's 30 s and is not named.
+- ue-context:36: the no-argument result starts "# Available UE 5.7 Context Categories" (index.js:201).
+- ue-context:133-134: parallel_workflows.md does not open with "This context is automatically loaded".
+- ue-python:163: a cpp failure's history result can reach 220 chars (ScriptExecutionManager.cpp:155).
+
+Verified, no finding:
+- Approval window: title, 2000 chars, Allow/Deny, closing it counts as Deny, no bypass setting (ScriptPermissionDialog.cpp; ScriptExecutionManager.cpp:61-65). The 600 s task (MCPTool_ExecuteScript.cpp:37-39) still runs after a late Allow (MCPTaskQueue.cpp:378-392).
+- The script task id is in the message and in data.task_id, not the top-level task_id (index.js:333-335, lib.js:236-244).
+- @Description is the first match anywhere, rest of line (ScriptTypes.h:108-129). /** */ is a Python syntax error. Error text at MCPTool_ExecuteScript.cpp:96-103.
+- The 14 scanned failure strings, case-insensitive (ScriptExecutionManager.cpp:362-375). Failure data is dropped by the bridge (index.js:333-335). Actor delta and the warning line (:385-397).
+- cleanup_scripts deletes both directories recursively and clears the history (:710-756). The tool's own description names only the C++ directory.
+- History: 100 entries on disk, count clamped to 1-50, denied or argument-failed scripts not recorded.
+- Statuses and limits: 4 concurrent, 100 unfinished, 5 min retention, a sweep every 60 s, a 120000 default with 0 also meaning 120000. Neither the limit nor task_cancel stops the tool, and nothing checks bCancellationRequested.
+- Unknown-parameter warning is skipped above 30 s (MCPToolRegistry.cpp:308-342 vs MCPTaskQueue.cpp:360-397).
+- The bridge treats completed, failed and cancelled as terminal and gives up after 300 s (lib.js:203-259). task_* calls are direct (index.js:304).
+- get_ue_context: category wins over query, an exact key is needed, substring keywords. "build a level" gives slate+actor+parallel_workflows, about 27 KB (context-loader.js:273-289). Listed only while connected (index.js:77-91). Domains are not served.
+- No unreal_classes is right: no unreal.* class appears anywhere in the toolkit, so naming one would be a guess.
+- No contradiction with unreagent-runtimes. No VibeUE text, no attribution line, English only.
+
+Review fixes (skill-author, worktree-agent-ae114802b82026ea0), each checked against the toolkit source; go test ./internal/skills green.
+Fix 1: ue-python:32-40 - the 10-minute unapproved wait now applies to an editor started without -unattended; under unreagent's default -unattended the engine's handling of the window (ScriptPermissionDialog.cpp:50) is unverified and not the plugin's decision. ue-python:219 - Deny row hedged the same way. No ticket id in the text: shipped skills carry none.
+Fix 2: ue-python:185 (cpp row) - the plugin only writes the file and starts a Live Coding compile; whether a new .cpp is built is unverified; nothing runs the compiled code; failures start with 'Compilation failed. Fix these errors and call execute_script again:', Live Coding off included.
+Fix 3: get_ue_context stays in ue-context's toolkit_tools; no change, the frontmatter has no comment syntax.
+Nits: ue-tasks:80-83 names MCP_REQUEST_TIMEOUT_MS as the bridge's 30 s; ue-tasks:97-107 progress stays -1 for pending-cancelled and timed_out, and timed_out turns cancelled when the queue stops waiting (cancelled row aligned); ue-context:36-38 no-argument header; ue-context:134-136 parallel_workflows lacks the 'automatically loaded' line; ue-python:164-165 failed C++ history entry up to 220 characters.
+
+2026-11-21 06:20 Re-review round 2 (unreagent-reviewer): READY.
+
+Files: skills/ue-tasks/SKILL.md, skills/ue-python/SKILL.md, skills/ue-context/SKILL.md (untracked, worktree-agent-ae114802b82026ea0).
+Check, run in the worktree: gofmt -l cmd internal skills (empty); go test -count=1 ./internal/skills (ok; TestLoadParsesEveryEmbeddedSkill and TestEmbedMissesNoSourceFile pass, 7 skills); go vet ./... (ok); go test -count=1 ./... (all ok); make windows (ok).
+
+Round-1 findings:
+- 1: moved to k18 by the main agent's decision. Not counted here.
+- 2 resolved: ue-python:32-40 and :219 limit the 10-minute wait to an editor started without -unattended, and leave the -unattended case unverified.
+- 3 resolved: ue-python:185 says the plugin only writes and compiles (ScriptExecutionManager.cpp:99-163), the new-file build is unverified, nothing calls the code, and the message carries the prefix (:144-147, :241-244).
+- 4: settled, since k20, k24 and k26 are committed together.
+
+Nits, all fixed and traced:
+- ue-tasks:80-83 MCP_REQUEST_TIMEOUT_MS (index.js:45, lib.js:69-78)
+- ue-tasks:97 cancelled row (MCPTaskQueue.cpp:405-409)
+- ue-tasks:99-102 progress -1 (:185-187, :467-471, :417)
+- ue-tasks:103-107 timed_out -> cancelled (:385-409)
+- ue-context:36-38 no-argument header (index.js:201, :213)
+- ue-context:134-136 parallel_workflows.md is the exception
+- ue-python:164-165 220 characters (ScriptExecutionManager.cpp:155)
+
+Optional, not blocking:
+- ue-python:185: "A failure starts with Compilation failed..." does not hold for every failure. "Failed to write C++ script file" (:108-111) and "Live Coding not available - C++ scripts cannot be compiled" (:161) come without the prefix. The reasons also include "Live Coding module not loaded" (:237) and "Live Coding compilation timed out (60s)" (:271).
+- ue-python:185: "Nothing ever runs the compiled code" is safer as "the plugin never calls it". What Live Coding loads is engine behaviour.
+- ue-tasks:82-83 and ue-context:136 are unwrapped (113 and 108 chars). In ue-tasks the new sentence now sits before "In unreagent that is the bridge server's env", so "that" reads as MCP_REQUEST_TIMEOUT_MS.
+
+Round 3 fixes (skill-author, worktree-agent-ae114802b82026ea0), strings checked against ScriptExecutionManager.cpp; go test ./internal/skills and gofmt -l clean.
+1. ue-python:186 (cpp row) - only compile-step failures carry the 'Compilation failed. Fix these errors and call execute_script again:' prefix; reasons now list compile errors, 'Live Coding is not enabled. Press Ctrl+Alt+F11 to enable.', 'Live Coding module not loaded' (:237) and 'Live Coding compilation timed out (60s)' (:271). Unprefixed: 'Failed to write C++ script file' (:110) and 'Live Coding not available - C++ scripts cannot be compiled' (:161, editor built without Live Coding).
+2. Same row: 'Nothing ever runs the compiled code' is now 'The plugin never calls the compiled code'.
+3. ue-tasks:82-85 rewrapped; 'In unreagent that is' is now 'In unreagent, these variables go in the bridge server's env'. ue-context:135-140 rewrapped. Also rewrapped ue-python:133-136 (83/82 chars, from round 1).
+
+2026-11-21 06:24 Re-review round 3 (unreagent-reviewer): READY. The C++ row (skills/ue-python/SKILL.md:185) quotes five plugin strings, each verbatim in ScriptExecutionManager.cpp: 'Failed to write C++ script file' (:110), 'Live Coding not available - C++ scripts cannot be compiled' (:161), 'Live Coding module not loaded' (:237), 'Live Coding is not enabled. Press Ctrl+Alt+F11 to enable.' (:243) and 'Live Coding compilation timed out (60s)' (:271). The three compile-step reasons sit behind the 'Compilation failed...' prefix (:144-147); the first two have no prefix. 'The plugin never calls the compiled code' matches :99-163. Rewraps: ue-tasks:80-87 (now 'these variables go in the bridge server's env'), ue-context:132-141 and ue-python:131-136 keep the words unchanged. I compared all three files line by line with my round-1 and round-2 reads. Nothing else changed. Check in the worktree: go test -count=1 ./internal/skills ok, gofmt -l cmd internal skills empty. No open findings.
+
+Committed as e66eb98
