@@ -79,10 +79,14 @@ minutes; a failed install is logged as a warning and skips the smoke test,
 but the bridge stays in the agent's config — unless a `node_modules` was
 already there, which is kept and left to the smoke test)? does the bridge
 answer a real `initialize` handshake
-(smoke test)? And once the in-editor server (`UNREAL_MCP_URL`) is reachable,
-that's logged too — or a warning with the usual suspects if it isn't. These
-checks run only for stdio entries (those with a `command`). An HTTP / SSE
-entry such as Unreal MCP gets only a reachability watch, see
+(smoke test: only a JSON-RPC response with id 1 and a `result.serverInfo`
+object passes; any other response with id 1 fails at once — an error names
+its code and message, a result without `serverInfo` says so; any other
+stdout line is skipped, and 20 seconds without an answer fail it)? And once
+the in-editor server (`UNREAL_MCP_URL`) is reachable, that's logged too — or
+a warning with the usual suspects if it isn't. These checks run only for
+stdio entries (those with a `command`). An HTTP / SSE entry such as Unreal
+MCP gets only a reachability watch, see
 [Option A: Unreal MCP](#option-a-unreal-mcp-ue-58-built-in-experimental) below.
 
 The same config can additionally be written to a file for **external clients**
@@ -548,9 +552,15 @@ Things to know:
 
 What the launcher does **automatically** on startup (see above): install
 bridge `node_modules`, check binary / script, `initialize` smoke test, wait
-for port 3000 — every step with a clear message in `unreagent.log`. Ctrl-C
-while the bridges are being prepared (a running `npm install` included) exits
-at once; the editor is not started.
+for port 3000 — every step with a clear message in `unreagent.log`. In window
+mode the first line of a `WARN` from this preparation (a missing bridge
+command, a failed install or smoke test, an unreachable `UNREAL_MCP_URL`, a
+failed runtime preparation) also goes to stderr; the full text stays in
+`unreagent.log`. Most of these come before the agent takes the window, but
+not all: an unreachable `UNREAL_MCP_URL` is reported after 5 minutes, and
+runtime preparation runs while the agent starts, so its `WARN` can land in
+the agent's window. Ctrl-C while the bridges are being prepared (a running
+`npm install` included) exits at once; the editor is not started.
 
 ### Access from another machine
 
@@ -575,8 +585,9 @@ then points to `http://<windows-ip>:3000`.
 ### Troubleshooting: "Failed to reconnect: -32000"
 
 `-32000` from Claude Code just means "bridge process immediately gone again"
-— the real cause is in `unreagent.log` (check chain) or in Claude Code's MCP
-logs (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project>\mcp-logs-*`). Usual
+— the real cause is in `unreagent.log` (check chain; in window mode a
+`WARN`'s first line is also on stderr) or in Claude Code's MCP logs
+(`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project>\mcp-logs-*`). Usual
 suspects, in this order:
 
 1. **Bridge path wrong** (`Cannot find module ...`) — check the path in
@@ -585,12 +596,13 @@ suspects, in this order:
 3. **`node_modules` missing, or the install was cut short.** The launcher
    runs `npm install` itself, but gives up after 5 minutes (the whole install,
    not a single request) — slow link, unreachable registry or proxy. The
-   launcher then logs a warning (in `unreagent.log` in window mode, on the
-   console otherwise) and skips the smoke test, but the bridge stays in the
-   agent's config and the editor still starts, so Claude Code reports the
-   server as failed. Once the bridge passes the smoke test, the launcher
-   writes `node_modules/.unreagent-installed`; the next start skips the
-   install only if that marker exists. Without it, the launcher runs
+   launcher then logs a warning (in window mode to `unreagent.log`, with its
+   first line also on stderr; otherwise on the console) and skips the smoke
+   test, but the bridge stays in the agent's config and the editor still
+   starts, so Claude Code reports the server as failed. Once the bridge
+   passes the smoke test, the launcher writes
+   `node_modules/.unreagent-installed`; the next start skips the install
+   only if that marker exists. Without it, the launcher runs
    `npm install` over whatever `node_modules` is there — say, one left by an
    install cut short (the timeout, or Ctrl-C) — once the network works, or
    you run `npm install` there by hand (the launcher deletes nothing; npm

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -256,7 +257,9 @@ func markInstalled(name, modules string, logger func(string)) {
 // smokeTestMCP starts the stdio server once as a trial, sends a real MCP
 // initialize and waits for the answer. If the start fails, the real cause
 // (stderr) is in the log instead of just a connect error at the agent. It
-// reports whether the bridge answered.
+// reports whether the bridge answered with an initialize result
+// (initResponse); any other response to it ends the wait at once and is
+// named.
 //
 // The bridge runs in a job object, as every service and one-shot command
 // does (only the short-lived taskkill/pkill, reg query and git check-ignore
@@ -295,23 +298,25 @@ func smokeTestMCP(parent context.Context, name, command string, args, env []stri
 	}
 	_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unreagent-smoketest","version":"`+version+`"}}}`+"\n")
 	// Read in the background so the timeout and the parent can end the wait;
-	// Wait below closes stdout, which ends this reader.
-	answered := make(chan bool, 1)
+	// Wait below closes stdout, which ends this reader. It sends "" for the
+	// initialize result, the failure for any other response to it, and "no
+	// initialize response" once stdout ends without one.
+	answer := make(chan string, 1)
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1<<20), 1<<20)
 		for sc.Scan() {
-			line := sc.Text()
-			if strings.Contains(line, `"serverInfo"`) || (strings.Contains(line, `"result"`) && strings.Contains(line, `"id":1`)) {
-				answered <- true
+			if ok, failure := initResponse(sc.Bytes()); ok || failure != "" {
+				answer <- failure
 				return
 			}
 		}
-		answered <- false
+		answer <- "no initialize response"
 	}()
-	ok := false
+	ok, reason := false, "" // reason stays "" when the timeout ends the wait
 	select {
-	case ok = <-answered:
+	case reason = <-answer:
+		ok = reason == ""
 	case <-ctx.Done():
 	}
 	// The job first (Windows: the bridge's whole tree), the direct child as the
@@ -329,8 +334,7 @@ func smokeTestMCP(parent context.Context, name, command string, args, env []stri
 		return false
 	}
 	detail := strings.TrimSpace(stderr.String())
-	reason := "no initialize response"
-	if ctx.Err() == context.DeadlineExceeded {
+	if reason == "" {
 		reason = fmt.Sprintf("timeout after %s", smokeTestTimeout)
 	}
 	if detail != "" {
@@ -339,6 +343,64 @@ func smokeTestMCP(parent context.Context, name, command string, args, env []stri
 		logger("WARN MCP server '" + name + "': smoke test failed (" + reason + ", no stderr)")
 	}
 	return false
+}
+
+// initResponse reads one line of a bridge's stdout as the answer to the
+// smoke test's initialize, which goes out with id 1. A response to it, a
+// JSON object with id 1, a result or an error and no method, ends the wait:
+// ok only for a result whose serverInfo is an object; any other is the
+// failure, an error named by initError. No second answer to id 1 would
+// come. Any other line is neither, and the smoke test reads on: one that is
+// not JSON (a bridge's debug output), a notification or request, a reply to
+// another id.
+func initResponse(line []byte) (ok bool, failure string) {
+	var msg struct {
+		ID     json.RawMessage `json:"id"`
+		Method json.RawMessage `json:"method"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(line, &msg) != nil || string(msg.ID) != "1" || msg.Method != nil {
+		return false, ""
+	}
+	if msg.Error != nil && string(msg.Error) != "null" {
+		return false, initError(msg.Error)
+	}
+	if msg.Result == nil {
+		return false, "" // neither result nor error: no response
+	}
+	var result struct {
+		ServerInfo json.RawMessage `json:"serverInfo"`
+	}
+	if json.Unmarshal(msg.Result, &result) != nil || !bytes.HasPrefix(bytes.TrimSpace(result.ServerInfo), []byte("{")) {
+		return false, "initialize answered without serverInfo"
+	}
+	return true, ""
+}
+
+// initError names an error response to initialize by its code and message
+// as the bridge sent them: a code that is no integer, or a message that is
+// no string, shows as its JSON instead of hiding the rest.
+func initError(raw json.RawMessage) string {
+	var e struct {
+		Code    json.RawMessage `json:"code"`
+		Message json.RawMessage `json:"message"`
+	}
+	if json.Unmarshal(raw, &e) != nil { // the error is no object
+		return "initialize answered with error " + string(raw)
+	}
+	s := "initialize answered with error"
+	if e.Code != nil {
+		s += " " + string(e.Code)
+	}
+	var text string
+	if json.Unmarshal(e.Message, &text) != nil {
+		text = string(e.Message)
+	}
+	if text != "" {
+		s += ": " + text
+	}
+	return s
 }
 
 // stderrTail returns the last n lines of a failed bridge's stderr, led by the

@@ -748,6 +748,120 @@ echo '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake","version":"0
 	}
 }
 
+// k56: the smoke test took any stdout line holding "serverInfo", or "result"
+// next to "id":1, for the answer to initialize. A bridge's debug line naming
+// serverInfo, or its reply to id 12, passed a bridge that never answered; an
+// error response with id 1 left it waiting out the timeout. Each line is read
+// as JSON-RPC now: only the result for id 1 whose serverInfo is an object
+// passes, any other response to id 1 fails at once (no second one comes),
+// every other line is read past.
+func TestInitResponse(t *testing.T) {
+	const (
+		failed  = "initialize answered with error -32602: Unsupported protocol version"
+		without = "initialize answered without serverInfo"
+	)
+	for _, c := range []struct {
+		name, line string
+		ok         bool
+		failure    string
+	}{
+		{"the initialize result", `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"toolkit","version":"1.0"}}}`, true, ""},
+		{"an empty serverInfo is still one", `{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{}}}`, true, ""},
+		{"the error response", `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Unsupported protocol version"}}`, false, failed},
+		{"a debug line naming serverInfo", `[bridge] waiting for "serverInfo" from the editor`, false, ""},
+		{"a JSON debug line with id 1", `{"level":"debug","msg":"serverInfo pending","id":1}`, false, ""},
+		{"the reply to id 12", `{"jsonrpc":"2.0","id":12,"result":{"serverInfo":{"name":"other"}}}`, false, ""},
+		{"an error for another id", `{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}}`, false, ""},
+		{"id 1 as a string", `{"jsonrpc":"2.0","id":"1","result":{"serverInfo":{"name":"x"}}}`, false, ""},
+		{"space ahead of serverInfo's object", `{"jsonrpc":"2.0","id":1,"result":{"serverInfo": {"name":"x"}}}`, true, ""},
+		{"a null error beside the result", `{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"x"}},"error":null}`, true, ""},
+		{"a result without serverInfo", `{"jsonrpc":"2.0","id":1,"result":{}}`, false, without},
+		{"a null serverInfo", `{"jsonrpc":"2.0","id":1,"result":{"serverInfo":null}}`, false, without},
+		{"a null result", `{"jsonrpc":"2.0","id":1,"result":null}`, false, without},
+		{"a result that is no object", `{"jsonrpc":"2.0","id":1,"result":"ok"}`, false, without},
+		{"serverInfo as a string", `{"jsonrpc":"2.0","id":1,"result":{"serverInfo":"toolkit 1.0"}}`, false, without},
+		{"an error whose code is a string", `{"jsonrpc":"2.0","id":1,"error":{"code":"E_PROTO","message":"Unsupported protocol version"}}`,
+			false, `initialize answered with error "E_PROTO": Unsupported protocol version`},
+		{"an error whose code is a fraction", `{"jsonrpc":"2.0","id":1,"error":{"code":-32602.5,"message":"Unsupported protocol version"}}`,
+			false, "initialize answered with error -32602.5: Unsupported protocol version"},
+		{"an error without a code", `{"jsonrpc":"2.0","id":1,"error":{"message":"Unsupported protocol version"}}`,
+			false, "initialize answered with error: Unsupported protocol version"},
+		{"an error whose message is no string", `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":{"text":"bad"}}}`,
+			false, `initialize answered with error -32602: {"text":"bad"}`},
+		{"an error that is no object", `{"jsonrpc":"2.0","id":1,"error":"boom"}`, false, `initialize answered with error "boom"`},
+		{"a request of the bridge's own with id 1", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, false, ""},
+		{"a notification", `{"jsonrpc":"2.0","method":"notifications/message","params":{"data":"serverInfo"}}`, false, ""},
+		{"an empty line", ``, false, ""},
+	} {
+		ok, failure := initResponse([]byte(c.line))
+		if ok != c.ok || failure != c.failure {
+			t.Errorf("%s: initResponse(%s) = %v, %q; want %v, %q", c.name, c.line, ok, failure, c.ok, c.failure)
+		}
+	}
+}
+
+// k56 through smokeTestMCP: a bridge whose stdout carries lines the substring
+// match took for the answer, and which then ends without answering, fails
+// the smoke test; the same lines ahead of the answer are read past.
+func TestSmokeTestMCPReadsOnlyTheInitializeAnswer(t *testing.T) {
+	const noise = `read line
+echo '[bridge] waiting for "serverInfo" from the editor'
+echo '{"jsonrpc":"2.0","id":12,"result":{"serverInfo":{"name":"other"}}}'
+`
+	for _, c := range []struct {
+		name, body, want string
+		ok               bool
+	}{
+		{"noise, then the bridge ends", noise + "exit 0\n",
+			"WARN MCP server 'toolkit': smoke test failed (no initialize response, no stderr)", false},
+		{"noise, then the answer", noise + `echo '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake","version":"0"}}}'` + "\n",
+			"MCP server 'toolkit': smoke test OK — bridge answers initialize.", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newScripts(t)
+			dir := t.TempDir()
+			bridge := filepath.Join(dir, "bridge.sh")
+			s.write(bridge, c.body)
+			var log syncLog
+			if ok := smokeTestMCP(context.Background(), "toolkit", bridge, nil, nil, dir, log.log); ok != c.ok {
+				t.Fatalf("smoke test passed = %v, want %v:\n%s", ok, c.ok, log.String())
+			}
+			if got := log.String(); got != c.want {
+				t.Fatalf("smoke test log:\n%s\n\nwant:\n%s", got, c.want)
+			}
+		})
+	}
+}
+
+// k56: an error response to initialize, or a result without serverInfo,
+// failed the smoke test only once its timeout ran out, and the warning named
+// the timeout instead of the answer. It fails at once now and names what
+// came. The bridge keeps running after its answer, so nothing but that
+// answer ends the wait before the timeout.
+func TestSmokeTestMCPFailsOnAWrongAnswer(t *testing.T) {
+	for _, c := range []struct{ name, answer, reason string }{
+		{"an error response", `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Unsupported protocol version"}}`,
+			"initialize answered with error -32602: Unsupported protocol version"},
+		{"a result without serverInfo", `{"jsonrpc":"2.0","id":1,"result":{}}`,
+			"initialize answered without serverInfo"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newScripts(t)
+			dir := t.TempDir()
+			bridge := filepath.Join(dir, "bridge.sh")
+			s.write(bridge, "read line\necho '"+c.answer+"'\n")
+			var log syncLog
+			if smokeTestMCP(context.Background(), "toolkit", bridge, nil, nil, dir, log.log) {
+				t.Fatalf("a bridge that answered %s passed its smoke test:\n%s", c.answer, log.String())
+			}
+			want := "WARN MCP server 'toolkit': smoke test failed (" + c.reason + ", no stderr)"
+			if got := log.String(); got != want {
+				t.Fatalf("smoke test log:\n%s\n\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
 // shortenEndpointWait sets waitForEndpoint's window and pause for one test.
 // waitForEndpoint reads both before it logs anything, so a test that has seen
 // a watcher's line may restore them.

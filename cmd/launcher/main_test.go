@@ -801,6 +801,137 @@ func TestRunWarnsWhenThePermissionsPolicyIsInert(t *testing.T) {
 	}
 }
 
+// k56, k79 through run(): the warnings of the bridge and the runtime
+// preparation went to the launcher log alone, which window mode puts in a
+// file: the agent complained about a broken MCP server while the explanation
+// sat where the user never looked. In window mode they also go to stderr,
+// once each, and the preparation's other lines stay in the log; with the log
+// on stdout stderr stays clean. stderr gets a WARN's first line only, with a
+// pointer to the log for an output tail, which the log keeps whole (main
+// agent's decision on the review).
+func TestRunAlertsPreparationWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		window bool
+	}{
+		{"window mode, log is a file", true},
+		{"log on stdout", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := freeLoopbackAddr(t)
+			dir := t.TempDir()
+			missing := filepath.Join(dir, "missing") // the bridge is not there
+			uv := filepath.Join(dir, "uv")           // fails with two lines of output
+			newScripts(t).write(uv, "echo 'error: no solution found'\necho 'hint: pin a version'\nexit 1\n")
+			if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			yaml := withMCP(launcherYAML("sleep", fmt.Sprintf(`  enabled: true
+  command: sleep
+  args: ["20"]
+  window: %v
+  claudeIntegration: false
+  startDelaySeconds: 1
+`, tc.window)), addr)
+			yaml = strings.Replace(yaml, "  address: \""+addr+"\"\n",
+				"  address: \""+addr+"\"\n  extraServers:\n    toolkit:\n      command: \""+missing+"\"\n", 1)
+			yaml = strings.Replace(yaml, "  python: { enabled: false }\n",
+				"  python: { enabled: true, uv: \""+uv+"\", project: \""+dir+"\", prepareOnStart: true }\n", 1)
+			l := startLauncherIn(t, dir, yaml)
+			const (
+				bridgeWarn  = "WARN MCP server 'toolkit': command '"
+				runtimeWarn = "WARN Runtime: preparing Python failed — "
+				runtimeInfo = "Runtime: preparing Python (uv sync)"
+				tail        = "error: no solution found"
+			)
+			// No .uproject: the log is unreagent.log in the working directory.
+			runtimeAlert := "unreagent: " + runtimeWarn + uv + " sync in " + dir + ": exit 1 (the rest is in unreagent.log)\n"
+			// The bridge is checked before the services start, the runtime
+			// prepared after: the bridge's warning comes first. Each copy is
+			// waited for before the signal, so neither can be cut off.
+			if tc.window {
+				log := filepath.Join(dir, "unreagent.log")
+				waitFileLine(t, log, bridgeWarn)
+				waitFileLine(t, log, runtimeWarn)
+				waitFileLine(t, log, tail)
+				l.waitStderr(t, "unreagent: "+bridgeWarn)
+				l.waitStderr(t, runtimeAlert)
+			} else {
+				l.waitLine(t, bridgeWarn)
+				l.waitLine(t, runtimeWarn)
+				l.waitLine(t, tail)
+			}
+			if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("SIGTERM: %v", err)
+			}
+			if code := l.exitCode(t); code != 0 {
+				t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			stderr := l.stderr.String()
+			for _, alert := range []string{"unreagent: " + bridgeWarn, runtimeAlert} {
+				alerts := strings.Count(stderr, alert)
+				if tc.window && alerts != 1 {
+					t.Errorf("stderr has %q %d times; want once:\n%s", alert, alerts, stderr)
+				}
+				if !tc.window && strings.Contains(stderr, "unreagent: WARN") {
+					t.Errorf("stderr repeats a warning that the log on stdout already shows:\n%s", stderr)
+				}
+			}
+			if strings.Contains(stderr, tail) {
+				t.Errorf("stderr carries the output tail, which belongs in the log alone:\n%s", stderr)
+			}
+			if strings.Contains(stderr, runtimeInfo) {
+				t.Errorf("stderr carries the preparation's info line, which belongs in the log alone:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// waitStderr waits until the launcher's stderr holds want.
+func (l *launcherRun) waitStderr(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(l.stderr.String(), want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("stderr has no %q within 15s:\n%s", want, l.stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Main agent's decision on the k56/k79 review: alertWarnings gives alert
+// the first line of a WARN and, when there are more, points to the log for
+// them; the log keeps every line whole, and a line that is no WARN stays in
+// the log alone. Without alert it is the log alone.
+func TestAlertWarnings(t *testing.T) {
+	lines := []string{
+		"WARN MCP server 'toolkit': command 'node' not found (PATH)",
+		"WARN Runtime: preparing Node failed — npm install in proj: exit 1\nnpm ERR! code E404\nnpm ERR! 404 Not Found",
+		"Runtime: preparing Node (npm install) …",
+		"[prepare:node] WARN job assign failed",
+	}
+	var log syncLog
+	var alert bytes.Buffer
+	logger := alertWarnings(log.log, &alert, filepath.Join("proj", "unreagent.log"))
+	for _, line := range lines {
+		logger(line)
+	}
+	if !slices.Equal(log.lines, lines) {
+		t.Errorf("logged %q; want every line whole: %q", log.lines, lines)
+	}
+	want := "unreagent: WARN MCP server 'toolkit': command 'node' not found (PATH)\n" +
+		"unreagent: WARN Runtime: preparing Node failed — npm install in proj: exit 1 (the rest is in " + filepath.Join("proj", "unreagent.log") + ")\n"
+	if got := alert.String(); got != want {
+		t.Errorf("alert got\n%s\nwant\n%s", got, want)
+	}
+
+	var only syncLog
+	alertWarnings(only.log, nil, "")(lines[1])
+	if !slices.Equal(only.lines, lines[1:2]) {
+		t.Errorf("without alert, logged %q; want %q", only.lines, lines[1:2])
+	}
+}
+
 // k48: the sub-command after a bool flag or a -flag=value form was taken as
 // that flag's value, so the launcher started the editor and the agent instead
 // of the one-shot sub-command; an unknown word launched as well. Each line

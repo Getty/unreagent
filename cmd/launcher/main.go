@@ -132,12 +132,13 @@ func run() error {
 			agentInteractive = *cfg.Agent.Window
 		}
 	}
+	var logPath string // window mode's launcher log file; logOut once it opens
 	if agentInteractive {
 		dir := "."
 		if info.Project != "" {
 			dir = filepath.Dir(info.Project)
 		}
-		logPath := filepath.Join(dir, "unreagent.log")
+		logPath = filepath.Join(dir, "unreagent.log")
 		if f := openLauncherLog(logPath, os.Stderr); f != nil {
 			logOut = f
 			defer f.Close()
@@ -375,8 +376,11 @@ func run() error {
 		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, con)
 	}
 
+	// A broken bridge or runtime is what the agent trips over, so their
+	// warnings reach the user's console in window mode too (k56, k79).
+	prepLogger := alertWarnings(logger, alert, logPath)
 	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
-		prepareMCPBridges(ctx, sup, cfg, agentWorkdir, logger)
+		prepareMCPBridges(ctx, sup, cfg, agentWorkdir, prepLogger)
 	}
 
 	var wg sync.WaitGroup
@@ -384,7 +388,7 @@ func run() error {
 	// again — the select below shuts down right away.
 	if ctx.Err() == nil {
 		sup.Start(ctx, &wg)
-		prepareRuntimes(sup, cfg, agentWorkdir, logger)
+		go prepareRuntimes(sup, cfg, agentWorkdir, prepLogger)
 		// In interactive mode stdin belongs to the agent — no command loop of our own.
 		if !agentInteractive {
 			go commandLoop(ctx, con, sess.end, sup, logger, "")
@@ -447,6 +451,29 @@ func serveMCP(srv *http.Server, ln net.Listener, serving *atomic.Bool, logger fu
 	line := fmt.Sprintf("ERROR MCP server on %s stopped serving: %v — the agent's unreagent tools (and permission prompts through approve) no longer work; everything else keeps running. Save your work in the editor, then restart unreagent.", ln.Addr(), err)
 	logger(line)
 	if alert != nil {
+		fmt.Fprintln(alert, "unreagent: "+line)
+	}
+}
+
+// alertWarnings returns a logger that writes every line to logger and a
+// "WARN " line also to alert, the way run() mirrors its own warnings: alert
+// is stderr in window mode and nil otherwise, which leaves logger as it is.
+// alert gets the first line of a WARN only, and for one with more lines (an
+// output tail) a pointer to logPath, the log the whole text goes to: such a
+// warning can come while the agent's terminal UI owns the console, where
+// twenty lines of npm output do more harm than good.
+func alertWarnings(logger func(string), alert io.Writer, logPath string) func(string) {
+	if alert == nil {
+		return logger
+	}
+	return func(line string) {
+		logger(line)
+		if !strings.HasPrefix(line, "WARN ") {
+			return
+		}
+		if first, _, more := strings.Cut(line, "\n"); more {
+			line = first + " (the rest is in " + logPath + ")"
+		}
 		fmt.Fprintln(alert, "unreagent: "+line)
 	}
 }

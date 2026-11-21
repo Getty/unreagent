@@ -150,7 +150,10 @@ curl -s -X POST http://127.0.0.1:8765/mcp -H 'Content-Type: application/json' \
 ```
 
 The server's own protocol — `initialize`, `tools/list`, `tools/call`, batches,
-bearer auth, origin checks — is tested in `internal/mcp/mcp_test.go`;
-`cmd/launcher/mcpcheck_test.go` tests only the bridge smoke test
-(`smokeTestMCP` against a fake stdio server). Extend the matching file rather
-than writing a new harness.
+bearer auth, origin checks — is tested in `internal/mcp/mcp_test.go`. Bridge
+preparation is tested in `cmd/launcher/bridge_test.go`: most of the smoke-test
+cases (`smokeTestMCP` against a fake stdio server, `initResponse`,
+`stderrTail`), the node bridge install, `prepareMCPBridges`,
+`waitForEndpoint` and `dialAddr`. `cmd/launcher/mcpcheck_test.go` holds only
+the two oldest smoke-test cases, a good answer and a crash. Extend the matching
+file rather than writing a new harness.

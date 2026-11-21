@@ -100,8 +100,25 @@ was split by concern.
 6. **The launcher must never wedge unattended.** Every wait has a timeout, every
    failed precondition is logged with the concrete cause and the check continues.
    Silent failure is the one unacceptable outcome — see the bridge smoke tests in
-   `prepareMCPBridges` / `smokeTestMCP` for the house pattern: check, log loudly,
-   name the usual suspects, keep going. One deliberate exception, the MCP bind:
+   `prepareMCPBridges` / `smokeTestMCP` for the house pattern: check the real
+   answer (`initResponse` decodes each stdout line rather than match a
+   substring: any JSON-RPC response with id 1 — `result` or `error`, no
+   `method` — ends the wait, and passes only when `result.serverInfo` is an
+   object; an error fails at once, named from its raw code and message by
+   `initError`, any other result as "initialize answered without serverInfo";
+   a request with id 1 from the bridge, or any other line, is read past), log
+   loudly, name the usual suspects, keep going. Loudly means where the user
+   looks: in window mode the log is a file and the console the agent's, so a
+   line the user must see also goes to `alert` — stderr then, nil otherwise.
+   One-line WARNs before the agent starts write to `alert` directly: the inert
+   permissions in `run()`, k44's token file in `writeMCPConfigs`.
+   `alertWarnings(logger, alert, logPath)` (`main.go`) wraps a logger for
+   warnings that can come while the agent's terminal UI owns the console: the
+   log gets every line in full, `alert` only a WARN's first line, plus
+   " (the rest is in <logPath>)" when it has more. `run()` hands it to bridge
+   preparation and to `prepareRuntimes`, which it starts with `go` and which
+   warns on a failed `uv sync` / `npm install` with the cause and the output's
+   last 20 lines. One deliberate exception, the MCP bind:
    `run()` binds `mcp.address` (`listenMCP`) right after config load (which
    already refuses an address that is not host:port with a port 1–65535), and a
    bind failure ends the launcher with exit 1 before it writes any file —

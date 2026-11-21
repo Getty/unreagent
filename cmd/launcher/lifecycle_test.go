@@ -66,7 +66,7 @@ type launcherRun struct {
 	cmd    *exec.Cmd
 	lines  chan string // stdout, line by line; closed at EOF
 	stdout *syncLog
-	stderr bytes.Buffer
+	stderr syncBuffer // read while the launcher runs, too (waitStderr)
 	done   chan struct{}
 	err    error
 }

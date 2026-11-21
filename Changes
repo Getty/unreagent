@@ -328,6 +328,18 @@ Revision history for unreagent
     denied.
   - On Windows path rules ignore case, and .. cannot climb above a drive or
     \\server\share root.
+  - The bridge smoke test reads the bridge's stdout as JSON-RPC: only the
+    answer to its initialize (id 1, with a serverInfo object) passes. A debug
+    line that mentions serverInfo no longer passes a bridge that never
+    answered. Any other answer to the initialize fails the test at once
+    instead of after the 20 s timeout: an error names its code and message,
+    and a result without serverInfo says so.
+  - A failed uv sync or npm install at start (prepareOnStart), or a uv or npm
+    that cannot be started, logs a WARN naming the cause, with the last 20
+    lines of output; before, its output was dropped and a missing uv left only
+    the 'starting' line.
+  - In window mode the first line of a WARN from the bridge or runtime
+    preparation also goes to stderr; the full text stays in unreagent.log.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

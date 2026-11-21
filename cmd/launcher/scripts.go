@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/mcp"
@@ -147,20 +148,45 @@ func isStaleScriptName(name string) bool {
 }
 
 // prepareRuntimes warms up the environments (uv sync / npm install) if they are
-// configured and a manifest is present. Runs asynchronously.
+// configured and a manifest is present, both at once, and returns when both
+// are done; run() calls it in a goroutine of its own. A preparation that fails
+// (prepareRuntime) is a WARN.
 func prepareRuntimes(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
+	var wg sync.WaitGroup
 	if cfg.Runtimes.Python.Enabled && cfg.Runtimes.Python.PrepareOnStart {
 		dir := runtimeDir(cfg.Runtimes.Python.Project, agentWorkdir)
 		if fileExists(filepath.Join(dir, "pyproject.toml")) {
 			logger("Runtime: preparing Python (uv sync) …")
-			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Python.UV, []string{"sync"}, dir, nil, "prepare:python") }()
+			wg.Go(func() { prepareRuntime(sup, "Python", cfg.Runtimes.Python.UV, "sync", dir, logger) })
 		}
 	}
 	if cfg.Runtimes.Node.Enabled && cfg.Runtimes.Node.PrepareOnStart {
 		dir := runtimeDir(cfg.Runtimes.Node.Project, agentWorkdir)
 		if fileExists(filepath.Join(dir, "package.json")) {
 			logger("Runtime: preparing Node (npm install) …")
-			go func() { _, _ = sup.RunOnce(cfg.Runtimes.Node.Npm, []string{"install"}, dir, nil, "prepare:node") }()
+			wg.Go(func() { prepareRuntime(sup, "Node", cfg.Runtimes.Node.Npm, "install", dir, logger) })
 		}
 	}
+	wg.Wait()
+}
+
+// prepareRuntime runs one preparation, command with the single argument verb
+// in dir. When it fails, the command missing or a non-zero exit, a WARN names
+// the error and the last 20 lines of the output.
+func prepareRuntime(sup *supervisor.Supervisor, lang, command, verb, dir string, logger func(string)) {
+	res, err := sup.RunOnce(command, []string{verb}, dir, nil, "prepare:"+strings.ToLower(lang))
+	var cause string
+	switch {
+	case err != nil:
+		cause = err.Error()
+	case res.ExitCode != 0:
+		cause = fmt.Sprintf("exit %d", res.ExitCode)
+	default:
+		return
+	}
+	msg := fmt.Sprintf("WARN Runtime: preparing %s failed — %s %s in %s: %s", lang, command, verb, dir, cause)
+	if out := tailLines(res.Output, 20); out != "" {
+		msg += "\n" + out
+	}
+	logger(msg)
 }
