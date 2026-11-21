@@ -35,6 +35,9 @@
 #
 #  Machine-specific overrides (engine path, claude path …) belong in a
 #  git-ignored  unreagent.local.yaml  — example at the very bottom.
+#  Each file is a single YAML document: content after a second '---' is a
+#  load error. A symlinked unreagent.local.yaml that leads to no file is a
+#  load error too, not a missing overlay.
 # ============================================================
 
 agent:

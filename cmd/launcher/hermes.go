@@ -4,6 +4,7 @@ import (
 	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -301,7 +302,7 @@ func parseYAMLFile(raw []byte) (*yamlFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !emptyDocument(&next) {
+		if !config.EmptyDocument(&next) {
 			return nil, fmt.Errorf("it holds more than one YAML document (another one starts at line %d); refusing to drop all but the first", next.Line)
 		}
 	}
@@ -327,17 +328,6 @@ func parseYAMLFile(raw []byte) (*yamlFile, error) {
 		return nil, fmt.Errorf("the top level is not a mapping")
 	}
 	return f, nil
-}
-
-// emptyDocument reports whether the document node d is what a bare "---"
-// starts: a plain null with no text, no tag, no anchor and no comments.
-func emptyDocument(d *yaml.Node) bool {
-	if len(d.Content) != 1 || d.HeadComment != "" || d.LineComment != "" || d.FootComment != "" {
-		return false
-	}
-	n := d.Content[0]
-	return n.Kind == yaml.ScalarNode && n.ShortTag() == "!!null" && n.Value == "" && n.Style == 0 &&
-		n.Anchor == "" && n.HeadComment == "" && n.LineComment == "" && n.FootComment == ""
 }
 
 // encode renders the file, the comment-only prefix first.
@@ -819,58 +809,13 @@ func bearerSummary(token string, generated bool) string {
 // dangling symlink is refused: the real file usually lives somewhere that is
 // unavailable right now, and writing would replace the link with a new file
 // that holds none of it. So is a link that cannot be resolved at all, such as
-// a loop. Every error names path.
+// a loop. Every error names path (config.ResolveLink).
 func writeTarget(path string) (string, error) {
-	fi, err := os.Lstat(path)
-	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return path, nil // not a symlink, or not there yet
+	target, err := config.ResolveLink(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("%w; refusing to replace the link with a new file", err)
 	}
-	target, err := filepath.EvalSymlinks(path)
-	switch {
-	case err == nil:
-		return target, nil
-	case os.IsNotExist(err):
-		dest, _ := os.Readlink(path)
-		if missing, chain := danglingEnd(path); chain {
-			return "", fmt.Errorf("%s is a symlink to %s; following the links leads to %s, which does not exist; refusing to replace the link with a new file", path, dest, missing)
-		}
-		return "", fmt.Errorf("%s is a symlink to %s, which does not exist; refusing to replace the link with a new file", path, dest)
-	default:
-		return "", fmt.Errorf("%s is a symlink that cannot be resolved: %w", path, err)
-	}
-}
-
-// danglingEnd follows the symlink at path from link to link and returns the
-// first target that does not exist. A relative target is read against the
-// directory its link really is in, symlinks resolved, as the system does: a
-// ".." in it leaves the directory a symlinked one points to. A target that
-// starts at the root but names no drive (\x on Windows) is taken as it is, as
-// filepath.EvalSymlinks takes it. chain is false when the missing target is
-// path's own, or when none turns up.
-func danglingEnd(path string) (missing string, chain bool) {
-	cur := path
-	for hops := 0; hops < 255; hops++ { // filepath.EvalSymlinks gives up after 255 links
-		dest, err := os.Readlink(cur)
-		if err != nil {
-			return "", false
-		}
-		if rooted := filepath.IsAbs(dest) || dest != "" && os.IsPathSeparator(dest[0]); !rooted {
-			dir, err := filepath.EvalSymlinks(filepath.Dir(cur))
-			if err != nil {
-				return "", false
-			}
-			dest = filepath.Join(dir, dest)
-		}
-		fi, err := os.Lstat(dest)
-		if os.IsNotExist(err) {
-			return dest, hops > 0
-		}
-		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-			return "", false
-		}
-		cur = dest
-	}
-	return "", false
+	return target, err
 }
 
 // writeFileAtomic writes data to path safely: to a temp file

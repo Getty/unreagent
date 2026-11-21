@@ -23,9 +23,18 @@ placeholder system exists.
    `-config` once made
    `${PROJECT_DIR}` `.`, and `Write(${PROJECT_DIR}/*)` then matched anything.
 2. Decode `unreagent.yaml`. Unknown keys are an error (`KnownFields(true)`,
-   typo protection); an empty file is fine.
+   typo protection); an empty file is fine. In it and in the overlay, a
+   second YAML document, even one holding only a comment, is an error naming
+   the file and the line it starts on; a bare trailing `---` or `...` goes
+   through (`EmptyDocument`, the same test as hermes-setup's
+   `parseYAMLFile`). Where a comment lands is yaml.v3's call: on the line
+   right after a final `---` it is the first document's, so the file loads
+   (`TestLoadAcceptsEmptyTrailingDocument`).
 3. If `unreagent.local.yaml` (the config's name with `.local` before the
-   extension, `localPathFor`) exists, decode it **into the same struct**. This is
+   extension, `localPathFor`) is there, decode it **into the same struct**.
+   Only a missing path is absent (`overlayPresent`, `os.Lstat`): a symlink
+   that leads to no file, dangling or looping, is a load error from
+   `ResolveLink`, the check hermes-setup's `writeTarget` uses. This is
    a YAML-decode overlay with yaml.v3 semantics, not a deep merge (pinned by
    `internal/config/overlay_test.go`): a scalar wins; an absent key leaves the
    base value alone; a nested struct (`unreal:`, `agent.hermes:`, `skills:` …)

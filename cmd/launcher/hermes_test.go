@@ -373,21 +373,26 @@ func TestHermesSetupAcceptsEmptyTrailingDocument(t *testing.T) {
 
 // k118: a generated token is not written into an unreagent.local.yaml that
 // holds more than one YAML document either; the rewrite would drop the others.
+// Since k124 config.Load refuses such a file first, so hermes-setup stops
+// before the token edit; the edit's own refusal stays, checked directly.
 func TestHermesSetupRefusesMultiDocumentLocalConfig(t *testing.T) {
 	f := newHermesFixture(t, "", userHermesConfig)
 	localPath := localOverridePath(f.cfgPath)
 	const local = "agent:\n  hermes:\n    serverName: unreagent\n---\n# second document\nmcp:\n  address: 127.0.0.1:9999\n"
 	writeFile(t, localPath, local)
 
+	const want = "it holds more than one YAML document (another one starts at line 4); refusing to drop all but the first"
 	_, err := f.run(t)
 	if err == nil {
 		t.Fatal("expected an error for a multi-document unreagent.local.yaml, got nil")
 	}
-	if want := "add the token to " + localPath + ": not parseable: it holds more than one YAML document (another one starts at line 4)"; !strings.Contains(err.Error(), want) {
-		t.Errorf("error %q does not say %q", err, want)
+	if want := "unreagent.local.yaml: " + want; err.Error() != want {
+		t.Errorf("error %q,\nwant %q", err, want)
 	}
-	if !strings.HasSuffix(err.Error(), "(nothing written)") {
-		t.Errorf("error %q does not say that nothing was written", err)
+	if _, err := localConfigWithToken(localPath, "user-token-0123456789"); err == nil {
+		t.Error("the token edit accepted a multi-document unreagent.local.yaml")
+	} else if want := "not parseable: " + want; err.Error() != want {
+		t.Errorf("token edit error %q,\nwant %q", err, want)
 	}
 	if got := readFile(t, localPath); got != local {
 		t.Errorf("unreagent.local.yaml was changed:\n%s", got)
@@ -1277,7 +1282,9 @@ func TestHermesSetupRefusesDanglingSymlinks(t *testing.T) {
 
 // k122: in a chain of links that ends at a missing file, the error names that
 // file, not the first hop, which exists as a link. A relative target is read
-// against the directory of the link that holds it.
+// against the directory of the link that holds it. Since k124 config.Load
+// refuses such an unreagent.local.yaml before hermes-setup writes anything,
+// with the same diagnosis.
 func TestHermesSetupNamesEndOfDanglingChain(t *testing.T) {
 	for _, which := range []string{"Hermes config", "unreagent.local.yaml"} {
 		t.Run(which, func(t *testing.T) {
@@ -1303,6 +1310,10 @@ func TestHermesSetupNamesEndOfDanglingChain(t *testing.T) {
 
 			want := link + " is a symlink to " + hop1 + "; following the links leads to " + missing +
 				", which does not exist; refusing to replace the link with a new file (nothing written)"
+			if which == "unreagent.local.yaml" {
+				want = "config not readable: " + link + " is a symlink to " + hop1 + "; following the links leads to " + missing +
+					", which does not exist"
+			}
 			if _, err := f.run(t); err == nil {
 				t.Error("expected an error for a dangling chain of symlinks, got nil")
 			} else if filepath.ToSlash(err.Error()) != filepath.ToSlash(want) {
@@ -1382,7 +1393,8 @@ func TestHermesSetupNamesEndOfDanglingChainThroughLinkedDir(t *testing.T) {
 
 // k122: a symlink loop at either path is refused before anything is written,
 // and the error names the path the user gave; filepath.EvalSymlinks alone
-// says only "too many links".
+// says only "too many links". Since k124 config.Load refuses such an
+// unreagent.local.yaml first, as a config it cannot read.
 func TestHermesSetupRefusesSymlinkLoop(t *testing.T) {
 	for _, which := range []string{"Hermes config", "unreagent.local.yaml"} {
 		t.Run(which, func(t *testing.T) {
@@ -1406,10 +1418,17 @@ func TestHermesSetupRefusesSymlinkLoop(t *testing.T) {
 				t.Fatal("expected an error for a symlink loop, got nil")
 			}
 			msg := filepath.ToSlash(err.Error())
-			if want := filepath.ToSlash(link) + " is a symlink that cannot be resolved: "; !strings.HasPrefix(msg, want) {
+			// A looping unreagent.local.yaml stops config.Load before hermes-setup
+			// starts, so its error has no "(nothing written)"; the file checks
+			// below show that nothing was.
+			want := filepath.ToSlash(link) + " is a symlink that cannot be resolved: "
+			if which == "unreagent.local.yaml" {
+				want = "config not readable: " + want
+			}
+			if !strings.HasPrefix(msg, want) {
 				t.Errorf("error %q does not start with %q", err, want)
 			}
-			if !strings.HasSuffix(msg, "(nothing written)") {
+			if which == "Hermes config" && !strings.HasSuffix(msg, "(nothing written)") {
 				t.Errorf("error %q does not say that nothing was written", err)
 			}
 			for l, dest := range map[string]string{link: partner, partner: link} {

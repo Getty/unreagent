@@ -9,17 +9,21 @@ Revision history for unreagent
     order, anchors and other MCP servers survive, and the managed marker sits
     on that entry. It refuses entries it cannot edit safely (anchored or
     aliased mcp_servers, even an empty one, anchors inside the old entry) and
-    a dangling symlink at either file. Both files are written atomically, keep their permissions
-    and follow symlinks; a new token is saved to unreagent.local.yaml only
+    a dangling symlink at the Hermes config. Both files are written
+    atomically, keep their permissions and follow symlinks; a new token is saved to unreagent.local.yaml only
     once the merge has succeeded.
   - hermes-setup refreshes only url and headers.Authorization in its entry and
     keeps the other keys, headers and comments you added there. It matches
     Authorization ignoring case, and refuses an entry that is a stdio server
     (command) or spells Authorization more than one way, or that it cannot
     edit in place (not a mapping, an alias, or brought in by a merge key).
-  - hermes-setup refuses a Hermes config, or an unreagent.local.yaml it has to
-    write, that holds more than one YAML document, instead of dropping all but
-    the first.
+  - hermes-setup refuses a Hermes config that holds more than one YAML
+    document, instead of dropping all but the first.
+  - The config load refuses an unreagent.yaml or unreagent.local.yaml that
+    holds more than one YAML document, naming the file and the line the
+    second one starts on, instead of reading only the first; a bare trailing
+    --- or ... still loads. A dangling or looping unreagent.local.yaml
+    symlink is a load error naming the link, not a missing overlay.
   - hermes-setup symlink errors name the path: a loop no longer prints a bare
     "too many links", and a dangling chain names its missing end, read through
     symlinked directories.

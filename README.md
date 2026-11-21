@@ -279,6 +279,25 @@ out with the local definition only — you cannot override just its `args`.
 The `skills` section has no list or map option: each of its keys overlays on
 its own, like a scalar.
 
+Each file holds one YAML document. Anything after a second `---` is a load
+error rather than being ignored: `<file>: it holds more than one YAML document
+(another one starts at line N); refusing to drop all but the first`, where
+`<file>` is the file's name (`unreagent.yaml` or `unreagent.local.yaml`;
+`foo.yaml` or `foo.local.yaml` with `-config foo.yaml`). A bare `---` or `...`
+at the end is fine.
+`unreagent.local.yaml` may be a symlink, but one that leads to no file is a
+load error naming the link, not skipped like a missing overlay:
+
+- dangling: `config not readable: <link> is a symlink to <target>, which does
+  not exist`;
+- a chain of links whose end is missing: `config not readable: <link> is a
+  symlink to <hop1>; following the links leads to <missing>, which does not
+  exist`;
+- a loop: `config not readable: <link> is a symlink that cannot be resolved:
+  ...`.
+
+Fix the link or delete it.
+
 Recommended `.gitignore` entry in the UE project:
 
 ```
@@ -808,14 +827,14 @@ The `.bak` holds the exact original if you want any of it back.
   comment starts a second document, which is. The message is `Hermes config
   <path> not parseable: it holds more than one YAML document (another one
   starts at line N); refusing to drop all but the first`, with N the line of
-  the next document's `---`. The same check covers `unreagent.local.yaml` when
-  a token has to be written there. Merge the documents into one, or delete the
-  extra ones, and re-run;
+  the next document's `---`. `unreagent.yaml` and `unreagent.local.yaml` are
+  refused the same way when the config loads, before `hermes-setup` does
+  anything. Merge the documents into one, or delete the extra ones, and
+  re-run;
 - the Hermes config is a dangling symlink (a link whose target does not
-  exist) or one that cannot be resolved, or `unreagent.local.yaml` is one and
-  a token has to be generated (an existing `mcp.token` means that file is not
-  written at all). The message names the link and the target as the link
-  stores it, so a relative target prints relative, as `ls -l` shows it:
+  exist) or one that cannot be resolved. The message names the link and the
+  target as the link stores it, so a relative target prints relative, as
+  `ls -l` shows it:
 
   ```
   Error: <link> is a symlink to <target>, which does not exist; refusing to replace the link with a new file (nothing written)
@@ -836,6 +855,10 @@ The `.bak` holds the exact original if you want any of it back.
   A link that cannot be resolved at all, such as a loop, reads
   `<path> is a symlink that cannot be resolved: ... (nothing written)`; break
   the loop and re-run.
+
+  A dangling or looping `unreagent.local.yaml` stops the config load first
+  (`config not readable: <link> is a symlink ...`, without "(nothing
+  written)"); nothing is written then either.
 
 Fix the file by hand and re-run. A token generated in step 3 is **not** saved
 in these cases: it goes to `unreagent.local.yaml` only after the Hermes merge

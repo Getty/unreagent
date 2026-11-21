@@ -286,7 +286,8 @@ type Info struct {
 
 // Load reads the configuration. explicitPath is optional; if it is empty,
 // unreagent.yaml is looked for next to the executable. An unreagent.local.yaml
-// sitting beside it is overlaid on top.
+// sitting beside it is overlaid on top; a symlink there that leads to no file
+// is an error, not a missing overlay. Each file holds one YAML document.
 func Load(explicitPath string) (*Config, Info, error) {
 	var info Info
 
@@ -309,7 +310,12 @@ func Load(explicitPath string) (*Config, Info, error) {
 	if err := decodeYAML(path, &c); err != nil {
 		return nil, info, err
 	}
-	if local := localPathFor(path); fileExists(local) {
+	local := localPathFor(path)
+	present, err := overlayPresent(local)
+	if err != nil {
+		return nil, info, err
+	}
+	if present {
 		info.LocalPath = local
 		if err := decodeYAML(local, &c); err != nil {
 			return nil, info, err
@@ -845,6 +851,10 @@ func resolveProject(c *Config, baseDir string) (project, dir, name string, err e
 
 // --- file helpers ---
 
+// decodeYAML decodes the config file at path into c. An empty file is fine; a
+// second YAML document that holds anything, even just a comment, is an error,
+// since only the first would be read. A bare "---" or "..." at the end holds
+// nothing and goes through (EmptyDocument).
 func decodeYAML(path string, c *Config) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -858,7 +868,120 @@ func decodeYAML(path string, c *Config) error {
 		}
 		return fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
-	return nil
+	for {
+		var next yaml.Node
+		err := dec.Decode(&next)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(path), err)
+		}
+		if !EmptyDocument(&next) {
+			return fmt.Errorf("%s: it holds more than one YAML document (another one starts at line %d); refusing to drop all but the first", filepath.Base(path), next.Line)
+		}
+	}
+}
+
+// EmptyDocument reports whether the document node d is what a bare "---"
+// starts: a plain null with no text, no tag, no anchor and no comments. A
+// later document like that holds nothing a reader of only the first one
+// could miss.
+func EmptyDocument(d *yaml.Node) bool {
+	if len(d.Content) != 1 || d.HeadComment != "" || d.LineComment != "" || d.FootComment != "" {
+		return false
+	}
+	n := d.Content[0]
+	return n.Kind == yaml.ScalarNode && n.ShortTag() == "!!null" && n.Value == "" && n.Style == 0 &&
+		n.Anchor == "" && n.HeadComment == "" && n.LineComment == "" && n.FootComment == ""
+}
+
+// overlayPresent reports whether the overlay at path is there to be read. Only
+// a path that does not exist is absent. The check does not follow a symlink,
+// so one that leads to no file, dangling or looping, is an error naming it
+// instead of an overlay skipped without a word.
+func overlayPresent(path string) (bool, error) {
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("config not readable (%s): %w", path, err)
+	}
+	if _, err := ResolveLink(path); err != nil {
+		return false, fmt.Errorf("config not readable: %w", err)
+	}
+	return true, nil
+}
+
+// ResolveLink returns the file a symlink at path leads to, or path itself when
+// path is not a symlink or is not there. Only a symlinked file is resolved: a
+// path through a symlinked directory stays as given. A symlink that leads to
+// no file is an error naming path: a dangling one names its target and, at
+// the end of a chain of links, the first one that is missing; its error
+// matches os.ErrNotExist (errors.Is). A link that cannot be resolved at all,
+// such as a loop, gets the error filepath.EvalSymlinks gives.
+func ResolveLink(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return path, nil // not a symlink, or not there
+	}
+	target, err := filepath.EvalSymlinks(path)
+	switch {
+	case err == nil:
+		return target, nil
+	case os.IsNotExist(err):
+		dest, _ := os.Readlink(path)
+		if missing, chain := danglingEnd(path); chain {
+			return "", &danglingLinkError{fmt.Sprintf("%s is a symlink to %s; following the links leads to %s, which does not exist", path, dest, missing), err}
+		}
+		return "", &danglingLinkError{fmt.Sprintf("%s is a symlink to %s, which does not exist", path, dest), err}
+	default:
+		return "", fmt.Errorf("%s is a symlink that cannot be resolved: %w", path, err)
+	}
+}
+
+// danglingLinkError is ResolveLink's error for a symlink whose target does not
+// exist. It wraps the error filepath.EvalSymlinks gave, so it matches
+// os.ErrNotExist, but says which link leads where: that error names only a
+// path along the way.
+type danglingLinkError struct {
+	msg string
+	err error
+}
+
+func (e *danglingLinkError) Error() string { return e.msg }
+func (e *danglingLinkError) Unwrap() error { return e.err }
+
+// danglingEnd follows the symlink at path from link to link and returns the
+// first target that does not exist. A relative target is read against the
+// directory its link really is in, symlinks resolved, as the system does: a
+// ".." in it leaves the directory a symlinked one points to. A target that
+// starts at the root but names no drive (\x on Windows) is taken as it is, as
+// filepath.EvalSymlinks takes it. chain is false when the missing target is
+// path's own, or when none turns up.
+func danglingEnd(path string) (missing string, chain bool) {
+	cur := path
+	for hops := 0; hops < 255; hops++ { // filepath.EvalSymlinks gives up after 255 links
+		dest, err := os.Readlink(cur)
+		if err != nil {
+			return "", false
+		}
+		if rooted := filepath.IsAbs(dest) || dest != "" && os.IsPathSeparator(dest[0]); !rooted {
+			dir, err := filepath.EvalSymlinks(filepath.Dir(cur))
+			if err != nil {
+				return "", false
+			}
+			dest = filepath.Join(dir, dest)
+		}
+		fi, err := os.Lstat(dest)
+		if os.IsNotExist(err) {
+			return dest, hops > 0
+		}
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return "", false
+		}
+		cur = dest
+	}
+	return "", false
 }
 
 func findConfig() string {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -490,6 +491,186 @@ func TestNpmIsUsedByNodeExtraServers(t *testing.T) {
 				t.Errorf("npm is not used here, yet: %v", err)
 			}
 		})
+	}
+}
+
+// k124: yaml.v3 decodes one YAML document at a time, and Load read only the
+// first one of unreagent.yaml and of unreagent.local.yaml: whatever followed a
+// second "---" was dropped without a word. A file that holds more than one is
+// a load error naming the file and the line the next document starts on. A
+// document that holds nothing but a comment counts, as in hermes-setup (k118).
+func TestLoadRefusesMultipleDocuments(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	for name, c := range map[string]struct {
+		yaml string
+		line int
+	}{
+		"two documents":                    {"mcp:\n  address: 127.0.0.1:1111\n---\nmcp:\n  address: 127.0.0.1:2222\n", 3},
+		"after an explicit end":            {"mcp:\n  address: 127.0.0.1:1111\n...\n---\nmcp:\n  address: 127.0.0.1:2222\n", 4},
+		"content after an empty first one": {"---\n---\nmcp:\n  address: 127.0.0.1:2222\n", 2},
+		"a comment-only second document":   {"mcp:\n  address: 127.0.0.1:1111\n--- # kept for later\n", 3},
+	} {
+		for _, file := range []string{"unreagent.yaml", "unreagent.local.yaml"} {
+			t.Run(name+"/"+file, func(t *testing.T) {
+				base, local := c.yaml, ""
+				if file == "unreagent.local.yaml" {
+					base, local = "", c.yaml
+				}
+				_, _, err := Load(writeConfigFiles(t, t.TempDir(), base, local))
+				want := fmt.Sprintf("%s: it holds more than one YAML document (another one starts at line %d); refusing to drop all but the first", file, c.line)
+				if err == nil {
+					t.Fatal("Load succeeded; want an error for a multi-document file")
+				}
+				if err.Error() != want {
+					t.Errorf("error %q,\nwant %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+// k124 control: a bare "---" or "..." at the end starts or ends a document
+// that holds nothing, so there is nothing to drop and the file loads, in
+// either file, as in hermes-setup (k118). A comment after a trailing "---"
+// belongs to the first document for yaml.v3.
+func TestLoadAcceptsEmptyTrailingDocument(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	const doc = "mcp:\n  address: 127.0.0.1:2222\n"
+	for name, yaml := range map[string]string{
+		"trailing ---":             doc + "---\n",
+		"trailing ...":             doc + "...\n",
+		"trailing --- then ...":    doc + "---\n...\n",
+		"two trailing ---":         doc + "---\n---\n",
+		"comment after the ---":    doc + "---\n# the end\n",
+		"leading and trailing ---": "---\n" + doc + "---\n",
+		"comment before a ---":     "# machine overrides\n---\n" + doc,
+		"CRLF line breaks":         strings.ReplaceAll(doc+"---\n", "\n", "\r\n"),
+	} {
+		for _, file := range []string{"unreagent.yaml", "unreagent.local.yaml"} {
+			t.Run(name+"/"+file, func(t *testing.T) {
+				base, local := yaml, ""
+				if file == "unreagent.local.yaml" {
+					base, local = "mcp:\n  address: 127.0.0.1:1111\n", yaml
+				}
+				c, _, err := Load(writeConfigFiles(t, t.TempDir(), base, local))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if c.MCP.Address != "127.0.0.1:2222" {
+					t.Errorf("mcp.address = %q; want 127.0.0.1:2222 from %s", c.MCP.Address, file)
+				}
+			})
+		}
+	}
+}
+
+// k124: Load looked for unreagent.local.yaml with a check that follows a
+// symlink, so a dangling or looping one read as "no overlay", and the machine
+// overrides in it were missing without a word. Only a path that does not
+// exist is absent: a symlink there that leads to no file is a load error
+// naming it, and the end of a chain of links that is missing. The check runs
+// before anything else is read from the overlay.
+func TestLoadRefusesBrokenLocalOverlayLink(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	for name, link := range map[string]func(t *testing.T, local string) (want string, exact bool){
+		"dangling": func(t *testing.T, local string) (string, bool) {
+			missing := filepath.Join(t.TempDir(), "gone", "unreagent.local.yaml")
+			symlink(t, missing, local)
+			return "config not readable: " + local + " is a symlink to " + missing + ", which does not exist", true
+		},
+		"dangling chain": func(t *testing.T, local string) (string, bool) {
+			shared, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			hop := filepath.Join(shared, "hop.yaml")
+			symlink(t, hop, local)
+			symlink(t, "gone.yaml", hop) // relative: next to hop
+			return "config not readable: " + local + " is a symlink to " + hop + "; following the links leads to " +
+				filepath.Join(shared, "gone.yaml") + ", which does not exist", true
+		},
+		"loop": func(t *testing.T, local string) (string, bool) {
+			partner := local + ".partner"
+			symlink(t, partner, local)
+			symlink(t, local, partner)
+			return "config not readable: " + local + " is a symlink that cannot be resolved: ", false
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeConfigFiles(t, dir, "mcp:\n  address: 127.0.0.1:1111\n", "")
+			want, exact := link(t, filepath.Join(dir, "unreagent.local.yaml"))
+
+			_, _, err := Load(path)
+			if err == nil {
+				t.Fatal("Load succeeded; want an error for an overlay symlink that leads to no file")
+			}
+			got, want := filepath.ToSlash(err.Error()), filepath.ToSlash(want)
+			if exact && got != want || !exact && !strings.HasPrefix(got, want) {
+				t.Errorf("error %q,\nwant %q", got, want)
+			}
+		})
+	}
+}
+
+// k124 review: only a path that does not exist is an absent overlay; any other
+// error from looking for it is a load error naming the overlay path. A config
+// named with 250 bytes gets an overlay name of 256 bytes, one past NAME_MAX on
+// Linux, so the lookup fails with "file name too long". No overlay can exist
+// under that name, but Load does not sort errors into harmless ones: ce31def
+// skipped the overlay here, as it did for a broken symlink.
+func TestLoadReportsOverlayLookupError(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	dir := t.TempDir()
+	stem := strings.Repeat("u", 245)
+	path := filepath.Join(dir, stem+".yaml")
+	if err := os.WriteFile(path, []byte("mcp:\n  address: 127.0.0.1:1111\n"), 0o644); err != nil {
+		t.Skipf("cannot create a config with a 250-byte name here: %v", err)
+	}
+	local := filepath.Join(dir, stem+".local.yaml")
+	_, lookupErr := os.Lstat(local)
+	if lookupErr == nil || os.IsNotExist(lookupErr) {
+		t.Skipf("this file system takes a 256-byte name (lstat: %v)", lookupErr)
+	}
+
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("Load succeeded; want an error for an overlay that cannot be looked up")
+	}
+	if want := "config not readable (" + local + "): " + lookupErr.Error(); err.Error() != want {
+		t.Errorf("error %q,\nwant %q", err, want)
+	}
+}
+
+// k124 control: a symlinked unreagent.local.yaml that resolves is overlaid as
+// before.
+func TestLoadFollowsLocalOverlayLink(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	dir := t.TempDir()
+	path := writeConfigFiles(t, dir, "mcp:\n  address: 127.0.0.1:1111\n", "")
+	target := filepath.Join(t.TempDir(), "machine.yaml")
+	if err := os.WriteFile(target, []byte("mcp:\n  address: 127.0.0.1:2222\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(dir, "unreagent.local.yaml")
+	symlink(t, target, local)
+
+	c, info, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.LocalPath != local || c.MCP.Address != "127.0.0.1:2222" {
+		t.Errorf("LocalPath %q, mcp.address %q; want %q, 127.0.0.1:2222", info.LocalPath, c.MCP.Address, local)
+	}
+}
+
+// symlink creates the symlink link -> target, and skips the test where the
+// system or the account cannot create one (Windows without the privilege or
+// developer mode).
+func symlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
 	}
 }
 
