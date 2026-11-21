@@ -268,15 +268,26 @@ func (s *Supervisor) RunCommand(name string) (CommandResult, error) {
 	if !ok {
 		return CommandResult{}, fmt.Errorf("unknown command %q", name)
 	}
-	return s.runOnce(spec.Command, spec.Args, spec.Dir, nil, fmt.Sprintf("cmd:%s", name))
+	return s.runOnce(context.Background(), spec.Command, spec.Args, spec.Dir, nil, fmt.Sprintf("cmd:%s", name))
 }
 
 // RunOnce runs an arbitrary command synchronously (used by runtimes).
 func (s *Supervisor) RunOnce(command string, args []string, dir string, env []string, label string) (CommandResult, error) {
-	return s.runOnce(command, args, dir, env, label)
+	return s.runOnce(context.Background(), command, args, dir, env, label)
 }
 
-func (s *Supervisor) runOnce(command string, args []string, dir string, env []string, label string) (CommandResult, error) {
+// RunOnceContext is RunOnce bounded by ctx. When ctx is done before the command
+// ends, its job object is closed (on Windows that ends the whole tree) and the
+// process is killed; the output collected up to then comes back together with
+// an error wrapping ctx.Err(). A ctx that is already done starts nothing.
+func (s *Supervisor) RunOnceContext(ctx context.Context, command string, args []string, dir string, env []string, label string) (CommandResult, error) {
+	return s.runOnce(ctx, command, args, dir, env, label)
+}
+
+func (s *Supervisor) runOnce(ctx context.Context, command string, args []string, dir string, env []string, label string) (CommandResult, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, fmt.Errorf("not started: %w", err)
+	}
 	cmd := exec.Command(command, args...)
 	cmd.Dir = dir
 	if len(env) > 0 {
@@ -318,7 +329,19 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 			s.logf("[%s] output stream ended: %v", label, err)
 		}
 	})
-	err = cmd.Wait()
+	waitc := make(chan error, 1)
+	go func() { waitc <- cmd.Wait() }()
+	var aborted error
+	select {
+	case err = <-waitc:
+	case <-ctx.Done():
+		aborted = ctx.Err()
+		// The order of stopping a service: the job first (Windows: the whole
+		// tree), the direct child as the fallback where there is no job.
+		job.Close()
+		_ = cmd.Process.Kill()
+		err = <-waitc
+	}
 	// Close the job before draining, not after: on Windows KILL_ON_JOB_CLOSE
 	// ends whatever the command left behind, and with it their copies of the
 	// pipe, so the drain reaches EOF right away. The timeout covers the rest —
@@ -330,6 +353,10 @@ func (s *Supervisor) runOnce(command string, args []string, dir string, env []st
 	// join it, so nothing writes to buf any more once it is read.
 	<-ss.done
 	res := CommandResult{Output: buf.String(), ExitCode: exitCodeOf(err)}
+	if aborted != nil {
+		s.logf("[%s] aborted (%v)", label, aborted)
+		return res, fmt.Errorf("aborted: %w", aborted)
+	}
 	s.logf("[%s] done (exit %d)", label, res.ExitCode)
 	return res, nil
 }
@@ -466,8 +493,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		return st
 	}
 
-	// Initial start (with an optional delay).
-	if desired {
+	// Initial start (with an optional delay) — not when the launcher is already
+	// shutting down: the process would only be killed again on the next turn.
+	if desired && ctx.Err() == nil {
 		if spec.StartDelay > 0 {
 			backoff = time.After(spec.StartDelay)
 		} else {

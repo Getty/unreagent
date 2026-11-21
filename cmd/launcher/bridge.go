@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,24 @@ import (
 	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
+const (
+	// smokeTestTimeout bounds one bridge's smoke test (start + initialize).
+	smokeTestTimeout = 20 * time.Second
+	// smokeTestWaitDelay bounds the wait for a killed bridge's output pipes. A
+	// grandchild that inherited them (a worker the bridge forked) can hold them
+	// open long after; on Windows the job object ends it, elsewhere this bound
+	// is what returns. Same bound as the supervisor's output drain.
+	smokeTestWaitDelay = 2 * time.Second
+)
+
+// bridgeInstallTimeout caps the whole npm install of a node bridge. It runs
+// before the services start, so without a cap a stalled registry keeps the
+// editor from ever starting. Five minutes is a choice made here, not a known
+// requirement: npm's default fetch-timeout (five minutes, per request) was the
+// reference point, which leaves a cold install over a slow link room while a
+// wedged one still lets the launcher go on. A var so tests can shorten it.
+var bridgeInstallTimeout = 5 * time.Minute
+
 // prepareMCPBridges checks all stdio extraServers (e.g. the UE LLM Toolkit
 // bridge) completely once BEFORE the services start and complains loudly about
 // every link in the chain, instead of letting the agent run into a meaningless
@@ -27,8 +46,14 @@ import (
 //  3. Smoke test: start the server, send MCP initialize, wait for the answer.
 //  4. UNREAL_MCP_URL: report asynchronously as soon as the in-editor server is
 //     reachable — or warn if it is not.
-func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
+//
+// ctx is the launcher's signal context: once it is cancelled, the install or
+// smoke test in progress is stopped and the remaining bridges are skipped.
+func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *config.Config, agentWorkdir string, logger func(string)) {
 	for name, def := range cfg.MCP.ExtraServers {
+		if ctx.Err() != nil {
+			return // shutting down — no further bridge to check
+		}
 		command, _ := def["command"].(string)
 		if command == "" {
 			continue // http/sse server — starts no process, nothing to check
@@ -58,14 +83,14 @@ func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWork
 		}
 
 		if strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe") == "node" {
-			if !prepareNodeBridge(sup, cfg, name, args, agentWorkdir, logger) {
+			if !prepareNodeBridge(ctx, sup, cfg, name, args, agentWorkdir, logger) {
 				continue
 			}
 		}
 
-		smokeTestMCP(name, command, args, env, agentWorkdir, logger)
+		smokeTestMCP(ctx, name, command, args, env, agentWorkdir, logger)
 
-		if u := envMap["UNREAL_MCP_URL"]; u != "" {
+		if u := envMap["UNREAL_MCP_URL"]; u != "" && ctx.Err() == nil {
 			go waitForEndpoint(name, u, logger)
 		}
 	}
@@ -73,7 +98,7 @@ func prepareMCPBridges(sup *supervisor.Supervisor, cfg *config.Config, agentWork
 
 // prepareNodeBridge makes sure the script and node_modules of a Node bridge are
 // present (npm install if needed). false = the bridge is unusable.
-func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name string, args []string, agentWorkdir string, logger func(string)) bool {
+func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *config.Config, name string, args []string, agentWorkdir string, logger func(string)) bool {
 	var script string
 	for _, a := range args {
 		if strings.HasSuffix(a, ".js") || strings.HasSuffix(a, ".mjs") || strings.HasSuffix(a, ".cjs") {
@@ -99,9 +124,22 @@ func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name stri
 	if npm == "" {
 		npm = "npm"
 	}
-	logger("MCP server '" + name + "': node_modules missing — installing dependencies (npm install) in " + dir + " …")
-	res, err := sup.RunOnce(npm, []string{"install"}, dir, nil, "prepare:mcp:"+name)
-	if err != nil {
+	logger(fmt.Sprintf("MCP server '%s': node_modules missing — installing dependencies (npm install, at most %s) in %s …", name, bridgeInstallTimeout, dir))
+	ictx, cancel := context.WithTimeout(ctx, bridgeInstallTimeout)
+	defer cancel()
+	res, err := sup.RunOnceContext(ictx, npm, []string{"install"}, dir, nil, "prepare:mcp:"+name)
+	// An install cut short can leave a partial node_modules, and the check
+	// above then skips the install on the next start.
+	partial := "A partial node_modules left in " + dir + " makes the next start skip the install — remove it first."
+	switch {
+	case err != nil && ctx.Err() != nil:
+		logger("MCP server '" + name + "': npm install aborted — the launcher is shutting down. " + partial)
+		return false
+	case errors.Is(err, context.DeadlineExceeded):
+		logger(fmt.Sprintf("WARN MCP server '%s': npm install timed out after %s — bridge will not start. Registry or proxy unreachable? Run npm install in %s by hand. %s\n%s",
+			name, bridgeInstallTimeout, dir, partial, tailLines(res.Output, 20)))
+		return false
+	case err != nil:
 		logger("WARN MCP server '" + name + "': npm install failed: " + err.Error() + " — bridge will not start")
 		return false
 	}
@@ -117,12 +155,20 @@ func prepareNodeBridge(sup *supervisor.Supervisor, cfg *config.Config, name stri
 // smokeTestMCP starts the stdio server once as a trial, sends a real MCP
 // initialize and waits for the answer. If the start fails, the real cause
 // (stderr) is in the log instead of just a connect error at the agent.
-func smokeTestMCP(name, command string, args, env []string, dir string, logger func(string)) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+//
+// The bridge runs in a job object like every process the launcher spawns, so
+// ending the trial — answer, timeout or parent cancelled — ends what the
+// bridge started as well, and a launcher crash leaves nothing behind.
+func smokeTestMCP(parent context.Context, name, command string, args, env []string, dir string, logger func(string)) {
+	if parent.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, smokeTestTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.Command(command, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
+	cmd.WaitDelay = smokeTestWaitDelay
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err1 := cmd.StdinPipe()
@@ -131,32 +177,57 @@ func smokeTestMCP(name, command string, args, env []string, dir string, logger f
 		logger("WARN MCP server '" + name + "': smoke test could not open pipes")
 		return
 	}
+	job, err := supervisor.NewJob()
+	if err != nil {
+		logger("WARN MCP server '" + name + "': smoke test: job object could not be created: " + err.Error() + " — a launcher crash leaves the bridge behind")
+	}
 	if err := cmd.Start(); err != nil {
+		job.Close()
 		logger("WARN MCP server '" + name + "': smoke test failed to start: " + err.Error())
 		return
 	}
-	_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unreagent-smoketest","version":"`+version+`"}}}`+"\n")
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	ok := false
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.Contains(line, `"serverInfo"`) || (strings.Contains(line, `"result"`) && strings.Contains(line, `"id":1`)) {
-			ok = true
-			break
-		}
+	if err := job.Assign(cmd.Process.Pid); err != nil {
+		logger("WARN MCP server '" + name + "': smoke test: job assign failed: " + err.Error() + " — the bridge runs unsupervised")
 	}
-	_ = stdin.Close()
+	_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unreagent-smoketest","version":"`+version+`"}}}`+"\n")
+	// Read in the background so the timeout and the parent can end the wait;
+	// Wait below closes stdout, which ends this reader.
+	answered := make(chan bool, 1)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 1<<20), 1<<20)
+		for sc.Scan() {
+			line := sc.Text()
+			if strings.Contains(line, `"serverInfo"`) || (strings.Contains(line, `"result"`) && strings.Contains(line, `"id":1`)) {
+				answered <- true
+				return
+			}
+		}
+		answered <- false
+	}()
+	ok := false
+	select {
+	case ok = <-answered:
+	case <-ctx.Done():
+	}
+	// The job first (Windows: the bridge's whole tree), the direct child as the
+	// fallback where there is no job.
+	job.Close()
 	_ = cmd.Process.Kill()
+	_ = stdin.Close()
 	_ = cmd.Wait()
 	if ok {
 		logger("MCP server '" + name + "': smoke test OK — bridge answers initialize.")
 		return
 	}
+	if parent.Err() != nil {
+		logger("MCP server '" + name + "': smoke test aborted — the launcher is shutting down")
+		return
+	}
 	detail := strings.TrimSpace(stderr.String())
 	reason := "no initialize response"
 	if ctx.Err() == context.DeadlineExceeded {
-		reason = "timeout after 20s"
+		reason = fmt.Sprintf("timeout after %s", smokeTestTimeout)
 	}
 	if detail != "" {
 		logger(fmt.Sprintf("WARN MCP server '%s': smoke test failed (%s):\n%s", name, reason, tailLines(detail, 15)))

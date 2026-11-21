@@ -312,23 +312,32 @@ func run() error {
 	}
 
 	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
-		prepareMCPBridges(sup, cfg, agentWorkdir, logger)
+		prepareMCPBridges(ctx, sup, cfg, agentWorkdir, logger)
 	}
 
 	var wg sync.WaitGroup
-	sup.Start(ctx, &wg)
-	prepareRuntimes(sup, cfg, agentWorkdir, logger)
-	// In interactive mode stdin belongs to the agent — no command loop of our own.
-	if !agentInteractive {
-		go commandLoop(ctx, stop, sup, logger)
+	// A signal during the bridge preparation: start nothing only to stop it
+	// again — the select below shuts down right away.
+	if ctx.Err() == nil {
+		sup.Start(ctx, &wg)
+		prepareRuntimes(sup, cfg, agentWorkdir, logger)
+		// In interactive mode stdin belongs to the agent — no command loop of our own.
+		if !agentInteractive {
+			go commandLoop(ctx, stop, sup, logger)
+		}
 	}
 
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	select {
 	case <-ctx.Done():
-		logger("Signal received — stopping all processes …")
 	case <-done:
+	}
+	// Decided after the select, not by it: with nothing started, done is
+	// ready as early as the cancelled ctx and the select would pick at random.
+	if ctx.Err() != nil {
+		logger("Signal received — stopping all processes …")
+	} else {
 		logger("All services stopped.")
 	}
 	stop()

@@ -21,6 +21,13 @@ const (
 	helperBurstLines = 5000
 	helperFloodBytes = 3 << 20 // more than head + tail of a command's output
 	helperLinger     = 5 * time.Second
+	// helperHang is how long the "hang" helper sleeps: far longer than any
+	// bound a cancellation test waits for, so returning early proves a kill.
+	helperHang = 60 * time.Second
+	// helperReadyEnv names a file the "hang" helper writes its PID to once it is
+	// up, so a test cancels a running process instead of racing its start, and
+	// a failing test can still kill it.
+	helperReadyEnv = "UNREAGENT_TEST_READY"
 )
 
 // helperSpec builds a ServiceSpec that re-executes this test binary in the
@@ -88,6 +95,15 @@ func TestSupervisorHelperProcess(t *testing.T) {
 		fmt.Fprintln(out, helperTailMarker)
 	case "linger":
 		time.Sleep(helperLinger)
+	case "hang":
+		// A command that never finishes on its own — npm against a stalled
+		// registry. What it wrote before it got stuck must survive the kill.
+		fmt.Fprintln(out, helperHeadMarker)
+		out.Flush()
+		if p := os.Getenv(helperReadyEnv); p != "" {
+			_ = os.WriteFile(p, []byte(fmt.Sprint(os.Getpid())), 0o600)
+		}
+		time.Sleep(helperHang)
 	}
 	out.Flush()
 	os.Exit(0)

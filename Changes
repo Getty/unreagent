@@ -32,6 +32,15 @@ Revision history for unreagent
     runs in the foreground.
   - The release archives (zip and tar.gz) include NOTICE with the third-party
     attribution.
+  - The npm install of a node MCP bridge gives up after 5 minutes instead of
+    blocking the launcher forever on a stalled registry; the bridge is left
+    out with a warning and the editor starts. When the install is cut short,
+    the log says to remove the partial node_modules it may have left.
+  - Ctrl-C during the bridge preparation stops it at once, and the editor is
+    no longer started only to be killed again.
+  - The bridge smoke test runs in a job object like every other process, so
+    what the bridge spawned ends with it, and the launcher no longer waits
+    on a leftover process that keeps the bridge's output open.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
