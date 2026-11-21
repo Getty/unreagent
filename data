@@ -1,0 +1,156 @@
+---
+claimed_at: 2026-11-21T18:06:57Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:07:08Z
+created: 2026-11-21T10:38:54Z
+id: 159
+priority: low
+started: 2026-11-21T17:25:07Z
+status: done
+tags:
+- cli
+title: 'Usage polish: hermes-setup flag errors, extra words, and -h without the sub-commands'
+updated: 2026-11-21T18:07:08Z
+---
+
+Found during k48:
+1. hermes-setup flag errors exit 1 instead of 2 (the usage-error code the launcher uses since k48), and the message is printed twice. `hermes-setup -h` exits 1 with "Error: flag: help requested".
+2. Extra words after `hermes-setup` are silently ignored.
+3. The launcher's -h does not list the sub-commands.
+
+Done when: hermes-setup flag errors and extra words are a usage error (exit 2, printed once), -h exits 0 for both the launcher and hermes-setup, and the launcher's -h names the sub-commands; tests for each. Lane: unreagent-worker (main.go/hermes.go: serial with the other cards there).
+
+Main agent's decision 2026-11-21: as the card says.
+- A hermes-setup flag error or an extra word is a usage error. It exits 2 and the message is printed once.
+- hermes-setup -h and the launcher's -h exit 0.
+- The launcher's -h names the sub-commands with one line each.
+- Lane: unreagent-worker. It runs in parallel with k163 (bridge.go), so stay off bridge.go. It also runs alongside k177 (helpers.go/tools.go/scripts.go, in review).
+
+Worker report (unreagent-worker), base main 7036a88, branch worktree-agent-aef67a596111cdf97, not committed.
+
+Files:
+- cmd/launcher/hermes.go: hermesSetup returns nil on flag.ErrHelp (-h, -help, --help: the flag set has printed its usage, exit 0). Any other flag error is usageError{printed: true}: the flag set has already printed the error and its usage, so main exits 2 without printing it again. A word left after its flags (fs.NArg() > 0, also after "--") is usageError `hermes-setup takes flags only, not "<word>" (unreagent hermes-setup -h lists them)`, printed once by main, before config.Load, so nothing is read or written.
+- cmd/launcher/main.go: usageError gets a `printed` field; main skips the "Error:" line when it is set and still exits 2. The two existing literals now use `msg:`. The subcommands table is map[string]subcommand{run, summary}. printUsage(fs) is the launcher's -h (flag.Usage, set in run() right before extractSubcommand): the two call forms, one line per sub-command (sorted, padded), then fs.PrintDefaults. The flag package prints it after a bad launcher flag as well. The launcher's -h already exited 0 (the flag package's ExitOnError, as in v0.0.9); now a test pins it.
+- cmd/launcher/main_test.go: three new tests plus the helper runCommandLine (runs the launcher process and fails if the editor started or the project changed). One claim changed: in TestRunFindsTheSubcommandAfterAnyFlag, row "bool flag before" (-no-agent hermes-setup) asserted exit 1. The card replaces that claim, so the row now asserts 2.
+
+Tests (one per item):
+- TestRunHermesSetupUsageErrors (process): unknown flag after the word, a launcher flag before it, -config missing its value, a word after the flags, a word before a flag, a flag after "--". Each asserts exit 2, the message on stderr exactly once, hermes-setup's usage there for flag errors only, empty stdout, no editor started, nothing written.
+- TestRunHelpExitsZero (process): launcher -h, launcher --help after -no-agent, hermes-setup -h, hermes-setup --help. Each asserts exit 0, the usage on stderr, no "Error:", empty stdout. The hermes-setup summary line appears in the launcher's usage only.
+- TestPrintUsageNamesTheSubcommands (unit): call forms, then Sub-commands, then Flags. Every subcommands entry has a non-empty one-line summary and its own "  <name>  <summary>" line between the two headers.
+
+Mutations (go test -overlay, copies in the scratchpad; the tree was not edited), each run against the three tests:
+- M1 hermes.go, printed: true -> false: UsageErrors fails, 3 flag rows (message twice).
+- M2 hermes.go, return the plain err: UsageErrors fails, 3 flag rows (exit 1, twice).
+- M3 hermes.go, NArg check disabled: UsageErrors fails, 3 word rows (exit 0, hermes-setup ran).
+- M4 hermes.go, ErrHelp branch disabled: HelpExitsZero fails, both hermes-setup rows.
+- M5 main.go, flag.CommandLine.Init(..., ContinueOnError) added: HelpExitsZero fails, both launcher rows (exit 1, "Error: flag: help requested").
+- M6 main.go, flag.Usage assignment removed: HelpExitsZero fails, both launcher rows (no sub-command line).
+- M7 main.go, sub-command loop in printUsage emptied: PrintUsageNamesTheSubcommands fails, and so do HelpExitsZero's launcher rows.
+- M8 main.go, main ignores printed: UsageErrors fails, 3 flag rows.
+
+Check, all green: gofmt -l cmd internal skills (empty); go vet ./... and GOOS=windows go vet ./... (clean); go test -count=1 ./... (all ok); go test -race ./cmd/launcher (ok); make linux and make windows (built). Windows: the change is stdlib flag/os.Exit only and compiles for windows/amd64, but it was not run on Windows. The Windows exit codes and the stderr output are unverified.
+
+Proposed subject (70): Exit 2 on hermes-setup usage errors, 0 on -h; list sub-commands (k159)
+
+Proposed Changes entry:
+  - hermes-setup treats a flag it does not know, a flag missing its value
+    and any word among its arguments as a usage error: exit 2, the message
+    printed once, before any file is read. It used to print a bad flag's
+    message twice and exit 1, and it ignored the word. "unreagent
+    hermes-setup -h" prints its usage and exits 0, where it exited 1 with
+    "Error: flag: help requested". "unreagent -h" lists the sub-commands,
+    one line each, before the flags.
+
+For the release manager: the unreleased k48 entry in Changes ({{$NEXT}}, "hermes-setup is found after any launcher flag ...") says "-no-agent hermes-setup" gets the refusal "(exit 1)". That is exit 2 after this card. Amend it in the same commit.
+
+Docs to update (not touched here):
+- unreagent-doc-writer, README "Exit codes" table: row 2 should add hermes-setup's flag it does not know, flag missing its value, and word among its arguments. Add that -h / --help, for the launcher and for hermes-setup, prints the usage on stderr and exits 0.
+- unreagent-doc-writer, README: there is no command-line section. Setup step 3 and the "Hermes Agent" section (the `unreagent hermes-setup` block) should say that `unreagent -h` lists the flags and the sub-commands, that `unreagent hermes-setup -h` lists its one flag (-config), and that hermes-setup takes flags only. A short "Command line" section with the two call forms would be a natural home for this.
+- unreagent-skill-author, .claude/skills/unreagent-core/SKILL.md, the main.go row: the subcommands table now holds {run, summary}; printUsage is the launcher's -h (flag.Usage); a usageError with printed set has already been printed by a sub-command's flag set, and main exits 2 without printing it again.
+
+Ready for review: hermes-setup's flag errors and extra words now exit 2 with the message printed once, -h exits 0 for the launcher and for hermes-setup, and the launcher's -h lists the sub-commands. 3 new tests, each failing under the 8 overlay mutations noted above. Full check green, including make windows; not run on Windows. Uncommitted on branch worktree-agent-aef67a596111cdf97.
+
+Skill update (unreagent-skill-author), same worktree, not committed. .claude/skills/unreagent-core/SKILL.md, the main.go row of the wiring table: subcommands now maps a word to a subcommand (its run and a one-line summary). It also says that a usageError with printed set means a sub-command's flag set has already printed the error and its usage, so main exits 2 without its Error: line. printUsage is named as the launcher's -h (flag.Usage, so the flag package prints it after a bad flag too): the call forms, then one line per sub-command with its summary, then the flags; -h exits 0. I checked the other unreagent-* skills (.claude/skills/unreagent-*, skills/unreagent-*) and the shipped ue-* skills: none says that hermes-setup exits 1 on a bad flag or that -h exits 1, so nothing else changed. Check: go test -count=1 -timeout 180s ./internal/skills ok.
+
+Review (unreagent-reviewer), worktree branch worktree-agent-aef67a596111cdf97, uncommitted: cmd/launcher/main.go, hermes.go, main_test.go, README.md, .claude/skills/unreagent-core/SKILL.md. Verdict: CHANGES NEEDED. The code is correct. One test gap and two README wording points remain.
+
+Check run by me, all green: gofmt -l cmd internal skills (empty); go vet ./... and GOOS=windows go vet ./... (clean); go test -count=1 -timeout 600s ./... (all ok); go test -race -timeout 600s ./cmd/launcher (ok); make linux, make windows (PE32+ x86-64 built). The patch applies cleanly (git apply --check) onto f0c7132 and onto current main d61227a (k189). Main has not touched main.go, hermes.go or main_test.go since 7036a88, and nothing on main uses usageError or subcommands outside main.go. main + patch: go vet (linux, windows) and go test ./cmd/launcher are ok. Windows: compiled only, not run. Exit codes and stderr on Windows are unverified, and the process tests skip themselves there.
+
+Behavior, built binary, project with agent.hermes.enabled. Run once with a readable config, so any write would show, and once with unreagent.yaml chmod 000, so any read would show:
+- -h, -help, --help, -no-agent --help: exit 0. The launcher's usage is printed once, with the hermes-setup line. Stdout is empty, there is no Error: line, nothing is read and nothing is written.
+- hermes-setup -h / -help / --help: exit 0. "Usage of hermes-setup:" is printed once. Nothing is read or written.
+- hermes-setup -bogus, hermes-setup -config (no value), -no-agent hermes-setup, hermes-setup -no-agent: exit 2. The flag message is printed once with hermes-setup's usage, and there is no Error: line. Nothing is read or written.
+- hermes-setup word, hermes-setup -- word: exit 2. `Error: hermes-setup takes flags only, not "word" (...)` is printed once, with no usage. Nothing is read or written.
+- -bogus hermes-setup: exit 2. The message is printed once with the LAUNCHER's usage, not hermes-setup's. Nothing is read or written.
+- Controls: plain hermes-setup writes the Hermes config and unreagent.local.yaml (readable config). It exits 1 with "config not readable" (chmod 000). So both detectors work.
+
+usageError.printed: no false case. printed is set only at hermes.go:62-63, after fs.Parse returns an error other than ErrHelp. In Go 1.26.6 every such error comes from failf, which prints the message and the usage to fs.Output(). That is stderr, because hermesSetup never calls SetOutput. ErrHelp returns nil. Every other error is printed once by main (main.go:41-54).
+
+Mutations (go test -overlay, the three new tests plus TestRunFindsTheSubcommandAfterAnyFlag):
+- NArg check disabled: UsageErrors fails, 3 word rows.
+- main ignores printed: UsageErrors fails, 3 flag rows.
+- printUsage drops the summary: PrintUsageNamesTheSubcommands and the two launcher rows of HelpExitsZero fail.
+- NArg check moved below config.Load: NOTHING fails, the whole ./cmd/launcher package included.
+
+Findings:
+1. cmd/launcher/main_test.go:1210 (also hermes.go:54 and the proposed Changes entry). The claim that a word is refused "before anything is read" is not pinned. The harness config is valid and has hermes off, so a check after config.Load still exits 2 and prints nothing to stdout. With a broken config, a regression would turn `hermes-setup extra` into a load error (exit 1). Fix direction (unreagent-worker): add a unit test in hermes_test.go, `hermesSetup([]string{"-config", <missing or unreadable path>, "extra"}, &out)` must return a usageError (errors.As), not a load error. Or give the word rows an unreadable config.
+2. README.md:1418-1421. "Any other flag ... on either side of the word, printed with hermes-setup's usage" does not hold for a flag the launcher does not know, placed before the word: `-bogus hermes-setup` prints the launcher's usage. Also, "so is a word after it" reads as if the word error comes with the usage, but it is printed alone as an Error: line. Fix direction (main agent / unreagent-doc-writer): split it up. Before the word, an unknown flag is the launcher's usage error, printed with the launcher's usage. A launcher flag such as -no-agent on either side, or any flag but -config after the word, is hermes-setup's, printed with hermes-setup's usage. A word after it is a usage error printed on its own.
+3. README.md:405. "any flag but -config" should except -h/-help/--help (row 0 at :401 says those exit 0). Low.
+
+Checked and fine: README row 0 (:401). The skill row in .claude/skills/unreagent-core/SKILL.md:57 matches the code and the observed behavior. The summary "needs agent.hermes.enabled" is accurate: without it, hermes-setup prints "agent.hermes.enabled is not set — nothing to do." and exits 0. main_test.go:1057, the "bool flag before" row: the claim that exit is 1 is replaced by exit 2, as the card's decision says. The row still proves that hermes-setup's flag set parsed it. The diff has no German. Subject "Exit 2 on hermes-setup usage errors, 0 on -h; list sub-commands (k159)" is 70 chars, OK.
+
+Scope: the worker's files and the skill row are in their owners' OWNERS paths. README.md belongs to unreagent-doc-writer in OWNERS. It was edited by the main agent, which the delegation rule allows for prose. Noted only.
+
+Changes (unreagent-release-manager): amend the unreleased k48 entry, Changes:272-273. Change "the second gets its refusal of -no-agent (exit 1), as when the flag follows the word" to "... its refusal of -no-agent, a usage error (exit 2), as when the flag follows the word", in the same commit as k159's entry. The proposed k159 entry is accurate against the last release (message printed twice, exit 1, word ignored, -h exit 1).
+
+Worker: review finding 1 fixed, same worktree and branch, not committed.
+
+The finding holds. With the fs.NArg() check moved below config.Load, the process test TestRunHermesSetupUsageErrors still passes: its config is valid and has Hermes off, so it still exits 2.
+
+Fix: cmd/launcher/hermes_test.go gets TestHermesSetupUsageErrorBeforeLoad (unit). It calls hermesSetup with -config pointing at a file that does not exist, in two rows:
+- an extra word ("extra"),
+- a bad flag (-nosuch).
+Each row requires a usageError holding the word or flag (`hermes-setup takes flags only, not "extra"` / `flag provided but not defined: -nosuch`), not a load error, and no output. The test also imports errors. No production code changed.
+
+Mutations (go test -overlay, copies in the scratchpad; the tree was not edited):
+- M9, the NArg check moved below config.Load: TestHermesSetupUsageErrorBeforeLoad/a_word fails with "config not readable (...)". TestRunHermesSetupUsageErrors still passes, as the finding said.
+- M10, the flag-error return dropped, so a bad flag falls through to config.Load: TestHermesSetupUsageErrorBeforeLoad/a_bad_flag fails with "config not readable (...)", and so do the 3 flag rows of TestRunHermesSetupUsageErrors.
+Without a mutation, both tests pass.
+
+Check, green:
+- go test -count=1 -timeout 300s ./cmd/launcher: ok
+- gofmt -l cmd: empty
+- go vet ./cmd/launcher on linux and on windows: clean
+
+For the release manager, the Changes amendment. In the unreleased k48 entry ({{$NEXT}}, "hermes-setup is found after any launcher flag, and after "--"", around lines 272-273), change "its refusal of -no-agent (exit 1)" to "its refusal of -no-agent, a usage error (exit 2)". Make the change in the k159 commit. The proposed k159 Changes entry and the subject are unchanged from the note above.
+
+The worktree also shows README.md and .claude/skills/unreagent-core/SKILL.md as modified. Those are not mine; they are presumably the coordinator's findings 2 and 3.
+
+Re-review (unreagent-reviewer), same worktree, uncommitted. Changed since the first review: cmd/launcher/hermes_test.go and README.md only (hermes.go, main.go, main_test.go and the skill row unchanged). Verdict: READY. All three findings are fixed.
+
+1. Finding 1, fixed. TestHermesSetupUsageErrorBeforeLoad (hermes_test.go:92) calls hermesSetup with -config naming a missing file and requires a usageError. Mutations (go test -overlay, run against it and the k159/k48 tests):
+- word check moved below config.Load: fails, row "a word" (got "config not readable ... no such file or directory").
+- the flag-error return dropped from the Parse branch: fails, row "a bad flag", plus TestRunHermesSetupUsageErrors' 3 flag rows and TestRunFindsTheSubcommandAfterAnyFlag/bool_flag_before.
+Baseline: all pass.
+2. Finding 2, fixed. README.md:1418-1426 now matches the behavior I observed:
+- any other flag on either side of the word (a launcher flag such as -no-agent included) is exit 2 with hermes-setup's usage;
+- an unknown flag before the word is refused by the launcher with its own usage (observed: -bogus hermes-setup, exit 2, the launcher's usage);
+- a word after the sub-command is one line, `hermes-setup takes flags only, not "<word>"` (observed: one Error: line, no usage);
+- -h exits 0 for both.
+3. Finding 3, fixed. README.md:405: "any flag but -config and -h".
+
+Check run by me, all green:
+- gofmt -l cmd internal skills: empty
+- go vet ./... and GOOS=windows go vet ./...: clean
+- go test -count=1 -timeout 600s ./cmd/launcher: ok
+- make windows: PE32+ x86-64 built
+The patch still applies (git apply --check) onto current main e14ad0e (k163). It touched only bridge.go, bridge_test.go and Changes, and nothing there uses usageError or subcommands.
+
+Windows: compiled only, not run. Exit codes and stderr on Windows are unverified, and the process tests skip themselves there.
+
+For unreagent-release-manager:
+- amend the unreleased k48 entry in the same commit. Changes:272-273 on main e14ad0e: "its refusal of -no-agent (exit 1)" becomes "its refusal of -no-agent, a usage error (exit 2)".
+- Subject (70 chars) and the proposed Changes entry are OK.
+
+Committed as dc53cfe on main (ff from worktree branch). Full check green on the combined tree: gofmt, vet linux+windows, go test ./..., -race ./cmd/launcher, make linux, make windows. Windows: compiled only. k48 Changes entry amended (exit 2).
