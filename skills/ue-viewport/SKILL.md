@@ -262,6 +262,7 @@ Capture without `asset_path` while PIE runs, or use `gameplay_debug`
 | a distorted picture | the viewport is not 16:9 | compare `original_width` and `original_height` |
 | `Error: Task timed out after 300000ms (task_id: …)` | the bridge stopped waiting | skill `ue-tasks` |
 | `Tool 'capture_viewport' execution timed out after 30 seconds`, from the `run_python` sketch | the request was handled off the game thread and waited 30 s for it; the job left queued can crash the editor | do not retry; check the editor with unreagent's `status` ("Getting the picture") |
+| `TimeoutError: timed out` after 60 s, from the `run_python` sketch | the request was handled on the game thread, which stayed busy past the sketch's own 60 s; the capture may still run | check the editor with unreagent's `status`; capture again only while the editor is idle ("Getting the picture") |
 
 ## Background in the plugin
 

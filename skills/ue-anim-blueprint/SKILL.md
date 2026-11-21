@@ -176,6 +176,11 @@ a new one instead.
 - **Timeouts.** After 300 s the bridge returns
   `Error: Task timed out after 300000ms (task_id: …)`. That ends the wait, not
   the work. Read the AnimBP back before you retry (skill `ue-tasks`).
+  `find_animations` with a skeleton filter (section `anim-nodes`) loads every
+  candidate asset in one call and can hold the editor for more than 30 s on a
+  large project, and a request that waits 30 s behind it may crash the
+  editor; run it as skill `ue-tasks`, "A 30 s timeout can crash the editor",
+  describes.
 
 ## Reading with blueprint_query
 

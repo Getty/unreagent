@@ -135,12 +135,12 @@ A missing or empty required string returns
 
 - **The call succeeds when at least one asset succeeded.** The data has
   `success_count`, `fail_count`, `total` and `results`: one entry per path,
-  with `success`, and `error` when that asset failed. A succeeded
-  `adjust_track` or `resample` entry has a `message` and has the path under
-  `asset_path`. A `replace_skeleton` entry has the path under `path`, and when
-  it succeeded `old_skeleton` and `new_skeleton` instead of a message
-  (section `sequences`). A partial failure is still a success: read
-  `fail_count`.
+  with `success`, and `error` when that asset failed. Every entry, a failed
+  one too, has its path: under `asset_path` for `adjust_track` and
+  `resample`, under `path` for `replace_skeleton`. A succeeded `adjust_track`
+  or `resample` entry has a `message`; a succeeded `replace_skeleton` entry
+  has `old_skeleton` and `new_skeleton` instead (section `sequences`). A
+  partial failure is still a success: read `fail_count`.
 - **When every asset failed, the call is an error**, for example
   `Batch adjust: 0 succeeded, 2 failed out of 2`. The reasons per asset do not
   reach you, and that holds for a single path too. `inspect_track` on the same
@@ -159,7 +159,12 @@ A missing or empty required string returns
   the work: a `resample` over many sequences or a `set_ref_pose` on a large
   mesh may still finish. Read the state back before you retry (skill
   `ue-tasks`). A retried `adjust_track` or `transform_vertices` applies its
-  change a second time.
+  change a second time. A batch over many sequences (`adjust_track`,
+  `resample`, `replace_skeleton`) and a vertex edit on a large mesh
+  (`set_ref_pose`, `transform_vertices`, each over every LOD) run as one call
+  and can hold the editor for more than 30 s, and a request that waits 30 s
+  behind it may crash the editor; run such a call as skill `ue-tasks`, "A 30 s
+  timeout can crash the editor", describes.
 - **Misspelt parameters.** Calls the bridge queues do not warn about a
   parameter the tool does not declare (skill `ue-tasks`). The curve parameters
   are declared, so they draw no warning either.
