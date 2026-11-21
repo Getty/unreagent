@@ -1,0 +1,55 @@
+---
+claimed_at: 2026-11-21T02:51:49Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:51:49Z
+created: 2026-11-21T02:00:11Z
+depends_on:
+- 54
+- 78
+id: 107
+priority: medium
+started: 2026-11-21T02:34:54Z
+status: done
+tags:
+- docs
+- skills
+title: Docs and skills after k54/k55/k68 and k78/k98 land
+updated: 2026-11-21T02:52:02Z
+---
+
+Follow-ups the workers listed but did not edit (lanes: doc-writer for README, skill-author for .claude/skills):
+- README bridge/troubleshooting: npm install of a node bridge gives up after 5 minutes (bridgeInstallTimeout), a partial node_modules may need deleting (k106 fixes that properly), Ctrl-C during preparation now exits at once and the editor is not started (k54, k68).
+- README approve note (around the permission-prompt section): an unreadable request (no tool name / no tool input object) is denied; the alias list lacks tool and parameters, which the code accepts (k78).
+- unreagent-mcp-tools skill: mention Supervisor.RunOnceContext next to RunCommand/RunOnce (k54).
+- unreagent-windows skill: the bridge smoke test now runs in a job like every other process (k55).
+skills/unreagent-iterate (lines/getInt, the run_command ue_restart advice) goes via k100, not here.
+
+Both parts done in the main tree, uncommitted (base fc5f9ec): README (doc-writer) — npm install 5-min cap for the whole install, bridge left out with a warning, partial node_modules after a cut-short install (delete it), Ctrl-C during preparation exits at once without starting the editor; approve note: unreadable request denied, full alias lists. Skills (skill-author) — unreagent-mcp-tools: RunOnceContext, handlers wait for k75; unreagent-windows: smoke test runs in a job, Assign-after-Start window (k37); unreagent-core: job invariant names the taskkill/pkill and reg query exceptions.
+
+**Review 2026-11-21** (unreagent-reviewer, base fc5f9ec; files README.md, .claude/skills/unreagent-core/SKILL.md, unreagent-mcp-tools/SKILL.md, unreagent-windows/SKILL.md): CHANGES REQUESTED.
+Check: gofmt -l cmd internal (empty), go vet ./..., go test -count=1 ./... (4 packages ok), make windows: all green. No Go changed. The Windows job behaviour the skills describe was compiled, not run (unverified).
+1) README.md:580 (doc-writer): '[approve] in unreagent.log shows it' is wrong. approve is only wired in headless mode (main.go:216-226 passes --permission-prompt-tool only when !agentInteractive), and headless launcher logs go to stdout (main.go:61). unreagent.log exists only in window mode (main.go:109-116, README :474). Name the launcher's console output instead.
+2) README.md:76-77 and :453 (doc-writer): 'leaves the bridge out' is wrong. The agent's --mcp-config is built from every extraServers entry (mcpconfig.go:25-27, main.go:196/211) before prepareMCPBridges runs (main.go:315). A failed install only skips that bridge's smoke test and reachability log (bridge.go:86-88). The bridge stays in the agent config and Claude Code starts it itself, which is why :454 'Claude Code reports the server as failed' is true. README :235 uses 'left out with a warning' to mean 'not registered at all'.
+3) unreagent-core SKILL.md:72-77 (skill-author): the rewrite dropped 'on Windows', so it now reads as if every platform has KILL_ON_JOB_CLOSE. job_other.go:14-26 is a no-op. Restore the qualifier. pkill is the non-Windows branch of killCrashReporter (lifecycle.go:170) and only fits once the platform split is stated. Coverage of services, one-shot commands and the smoke test, and the 'Removing or bypassing it' ban under 'Non-negotiable invariants', are intact.
+Nits: 4) README.md:457: 'delete node_modules, fix the network, or run npm install by hand' offers fixing the network as an alternative, but on its own it leaves a partial node_modules that bridge.go:120 keeps skipping. 5) README.md:580-582, the hint beyond the card: keep it (only Claude Code calls approve, main.go:225), but hedge it ('most likely') and make it actionable: the logged keys show the new field names for tools.go:158-159. 6) unreagent-windows SKILL.md:61: pkill never runs on Windows; write 'taskkill (pkill elsewhere)'. 7) unreagent-mcp-tools SKILL.md:92-94: the console 'run' (lifecycle.go:149) also stays on RunCommand and is outside k75; name it or say 'every other caller'.
+Verified correct: 5-minute cap on the whole install (bridge.go:38,128-130); the editor still starts; the partial node_modules skip (bridge.go:120) and the log naming the dir (bridge.go:133); the Ctrl-C ctx guards (main.go:315-321); alias lists match tools.go:158-159; the deny message names fields and keys (tools.go:166-168); the non-empty-string / object rules (helpers.go:81-97); RunOnceContext semantics (supervisor.go:279-360) with bridge.go:130 as its only caller; ToolHandler has no ctx (mcp.go:50); k75 and k37 match; Assign comes after Start at all three spawn sites (supervisor.go:313/323, :449/476; bridge.go:184/189); the only unjobbed spawns are lifecycle.go:174 and engine.go:266. English only, no machine paths, frontmatter intact, added lines at most 82 columns, code spans balanced.
+
+**Back for fixes (2026-11-21), review requested changes:** README items 1, 2, 4, 5 (approve log location, 'bridge left out', npm/network wording, hedge the format hint) by the main agent (plain prose); skill items 3, 6, 7 (core 'on Windows', windows taskkill/pkill, mcp-tools console run caller) to unreagent-skill-author.
+
+Fixes done (2026-11-21), in the main tree, uncommitted: README items 1, 2, 4, 5 by the main agent (approve logs on the console in headless mode; a failed install skips only the smoke test, the bridge stays in the agent's config; network/npm wording; format hint hedged and actionable). Skill items 3, 6, 7 by unreagent-skill-author (core invariant restores 'On Windows' and states the off-Windows no-op; windows 'taskkill (pkill elsewhere)'; mcp-tools names the console 'c <name>' command — there is no 'run' console command, lifecycle.go:147). Back to the same reviewer.
+
+**Re-review 2026-11-21** (unreagent-reviewer, HEAD 3c88864 incl. k108 5a2368e and k112; files README.md, .claude/skills/unreagent-core/SKILL.md, unreagent-mcp-tools/SKILL.md, unreagent-windows/SKILL.md): APPROVE WITH ONE NIT. Ready for the release-manager.
+Check: gofmt -l cmd internal (empty), go vet ./..., go test -count=1 ./... (4 packages ok), make windows: all green. No Go in this card. The Windows job behaviour in the skills was compiled, not run (unverified).
+All 7 findings fixed and checked against the code:
+(1) README:580-584: [approve] goes to the console; the permission tool is wired only headless (main.go:216-226), where the launcher logs to stdout (main.go:61, :109-116).
+(2) README:76-78 and :454-457: the bridge stays in the agent's config (mcpconfig.go:25-27, built at main.go:196 before main.go:315), and the smoke test is skipped (bridge.go:86-88). The log goes to unreagent.log in window mode and to the console otherwise (main.go:109-116).
+(3) core SKILL.md:72-79: 'On Windows' is back. The off-Windows text matches job_other.go:1-26 (no-op, direct child only) and lifecycle.go:170 (pkill). The services / one-shot / smoke-test coverage and the 'Removing or bypassing' ban are intact.
+(4) README:459-461: the delete-then-restart order is right.
+(5) README:585-588: hedged and actionable.
+(6) windows SKILL.md:60-61: right.
+(7) mcp-tools SKILL.md:95-97: the coordinator is right that my 'run' was wrong. The console command is 'c'/'cmd' (lifecycle.go:147-149, commandLoop at lifecycle.go:110), and the skill now names it correctly.
+Nit, from k108 landing, not from these fixes: README:582 'The denial message names the fields it looked for and the keys it got'. Since 5a2368e, a name key that holds a non-string gets 'tool name is not a string (<key> is <type>)' instead (tools.go:168-172). Optional: add '(or the name key that is not a string)'.
+English only, no machine paths, frontmatter intact, added lines at most 81 columns, code spans balanced.
+
+Committed as 7dd25cf (docs and skills only, no Changes entry; check green: gofmt, vet, test, make windows)
