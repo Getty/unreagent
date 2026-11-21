@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,9 +40,15 @@ func runHermesSetup() error {
 	filtered := make([]string, 0, len(os.Args))
 	filtered = append(filtered, os.Args[:subIndex]...)   // binary + everything before the sub-command
 	filtered = append(filtered, os.Args[subIndex+1:]...) // everything after the sub-command
+	return hermesSetup(filtered[1:], os.Stdout)
+}
+
+// hermesSetup does the work of `unreagent hermes-setup`: args are the
+// sub-command's own flags, out receives the progress and summary lines.
+func hermesSetup(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("hermes-setup", flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "Path to unreagent.yaml (default: next to the executable)")
-	if err := fs.Parse(filtered[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
@@ -51,9 +58,9 @@ func runHermesSetup() error {
 	}
 
 	if !cfg.Agent.Hermes.Enabled {
-		fmt.Println("agent.hermes.enabled is not set — nothing to do.")
-		fmt.Println("Set it in unreagent.yaml and re-run this command to integrate Hermes.")
-		fmt.Println("Hint: this file — " + info.ConfigPath)
+		fmt.Fprintln(out, "agent.hermes.enabled is not set — nothing to do.")
+		fmt.Fprintln(out, "Set it in unreagent.yaml and re-run this command to integrate Hermes.")
+		fmt.Fprintln(out, "Hint: this file — "+info.ConfigPath)
 		return nil
 	}
 
@@ -76,39 +83,38 @@ func runHermesSetup() error {
 		if err := persistGeneratedToken(info, token); err != nil {
 			return fmt.Errorf("write token to %s: %w", localOverridePath(info.ConfigPath), err)
 		}
-		fmt.Println("New bearer token generated and written to unreagent.local.yaml.")
+		fmt.Fprintln(out, "New bearer token generated and written to unreagent.local.yaml.")
 	}
 
 	hermesPath, err := resolveHermesConfigPath(cfg.Agent.Hermes.ConfigPath)
 	if err != nil {
 		return err
 	}
-	fmt.Println("Hermes config: " + hermesPath)
+	fmt.Fprintln(out, "Hermes config: "+hermesPath)
 
-	// Back up the existing file before we touch it. Empty file or not present
-	// — no backup needed.
-	if existing, statErr := os.Stat(hermesPath); statErr == nil && existing.Size() > 0 {
-		bak := hermesPath + ".bak"
-		if _, bakErr := os.Stat(bak); bakErr == nil {
-			// A backup from a previous hermes-setup run is already there — do
-			// not overwrite it; it is the user's value.
-			fmt.Println("Backup kept: " + bak)
-		} else {
-			if err := os.Rename(hermesPath, bak); err != nil {
-				return fmt.Errorf("create backup: %w", err)
-			}
-			fmt.Println("Backup: " + bak)
-		}
-	} else if statErr != nil && !os.IsNotExist(statErr) {
-		return fmt.Errorf("stat Hermes config: %w", statErr)
-	}
-
-	doc, err := loadHermesYAML(hermesPath)
+	// Read and merge first: the merge has to start from the user's config, and
+	// nothing is touched if it cannot be parsed or merged.
+	doc, raw, err := loadHermesYAML(hermesPath)
 	if err != nil {
 		return err
 	}
+	if err := mergeHermesServer(doc, cfg.Agent.Hermes.ServerName, cfg.MCP.Address, token); err != nil {
+		return fmt.Errorf("Hermes config %s left untouched: %w", hermesPath, err)
+	}
 
-	mergeHermesServer(doc, cfg.Agent.Hermes.ServerName, cfg.MCP.Address, token)
+	// Back up the existing file (the bytes just read) before it is replaced.
+	// Empty file or not present — no backup needed.
+	if len(raw) > 0 {
+		bak, created, err := backupHermesConfig(hermesPath, raw)
+		if err != nil {
+			return fmt.Errorf("create backup: %w", err)
+		}
+		if created {
+			fmt.Fprintln(out, "Backup: "+bak)
+		} else {
+			fmt.Fprintln(out, "Backup kept: "+bak)
+		}
+	}
 
 	if err := os.MkdirAll(filepath.Dir(hermesPath), 0o755); err != nil {
 		return fmt.Errorf("create target dir: %w", err)
@@ -117,13 +123,13 @@ func runHermesSetup() error {
 		return fmt.Errorf("write Hermes config: %w", err)
 	}
 
-	fmt.Println()
-	fmt.Println("Hermes MCP server registered under mcp_servers." + cfg.Agent.Hermes.ServerName)
-	fmt.Println("  url:    http://" + cfg.MCP.Address + "/mcp")
-	fmt.Println("  bearer: " + token[:8] + "… (64 hex chars, in unreagent.local.yaml)")
-	fmt.Println()
-	fmt.Println("Restart Hermes so it re-reads the config. The unreagent tools")
-	fmt.Println("(ue_start/stop/restart, logs, run_command, …) will then be available.")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Hermes MCP server registered under mcp_servers."+cfg.Agent.Hermes.ServerName)
+	fmt.Fprintln(out, "  url:    http://"+cfg.MCP.Address+"/mcp")
+	fmt.Fprintln(out, "  bearer: "+bearerSummary(token, tokenGenerated))
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Restart Hermes so it re-reads the config. The unreagent tools")
+	fmt.Fprintln(out, "(ue_start/stop/restart, logs, run_command, …) will then be available.")
 	return nil
 }
 
@@ -202,33 +208,70 @@ func persistGeneratedToken(info config.Info, token string) error {
 	return os.WriteFile(override, []byte(header+string(out)), 0o600)
 }
 
-// loadHermesYAML reads the Hermes config and returns a mutable map. A missing
-// or empty file is OK (fresh Hermes install).
-func loadHermesYAML(path string) (map[string]interface{}, error) {
+// loadHermesYAML reads the Hermes config and returns a mutable map plus the
+// raw bytes it was parsed from (nil if the file does not exist). A missing or
+// empty file is OK (fresh Hermes install).
+func loadHermesYAML(path string) (map[string]interface{}, []byte, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]interface{}{}, nil
+			return map[string]interface{}{}, nil, nil
 		}
-		return nil, fmt.Errorf("read Hermes config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("read Hermes config %s: %w", path, err)
 	}
 	if len(bytes.TrimSpace(b)) == 0 {
-		return map[string]interface{}{}, nil
+		return map[string]interface{}{}, b, nil
 	}
 	doc := map[string]interface{}{}
 	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, fmt.Errorf("Hermes config %s not parseable: %w", path, err)
+		return nil, nil, fmt.Errorf("Hermes config %s not parseable: %w", path, err)
 	}
-	return doc, nil
+	if doc == nil { // a null document ("null", "~", a bare "---") decodes to a nil map
+		doc = map[string]interface{}{}
+	}
+	return doc, b, nil
+}
+
+// backupHermesConfig writes raw (the config as read before the merge) to
+// <path>.bak. An existing .bak is never overwritten — it may hold the user's
+// original from an earlier run — so created is false when one was already
+// there. A failed write removes the partial backup.
+func backupHermesConfig(path string, raw []byte) (bak string, created bool, err error) {
+	bak = path + ".bak"
+	f, err := os.OpenFile(bak, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return bak, false, nil
+		}
+		return bak, false, err
+	}
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		os.Remove(bak)
+		return bak, false, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(bak)
+		return bak, false, err
+	}
+	return bak, true, nil
 }
 
 // mergeHermesServer sets mcp_servers.<name> to the unreagent entry. If a
 // block with that name already exists (from a previous hermes-setup run), it
-// is overwritten. Other servers under mcp_servers are left alone.
-func mergeHermesServer(doc map[string]interface{}, name, address, token string) {
-	servers, _ := doc["mcp_servers"].(map[string]interface{})
-	if servers == nil {
+// is overwritten. Other servers under mcp_servers are left alone. An
+// mcp_servers that is not a mapping with string keys (a list, or a key YAML
+// reads as a number) cannot be merged into without dropping its content, so
+// it is refused and doc stays unchanged.
+func mergeHermesServer(doc map[string]interface{}, name, address, token string) error {
+	var servers map[string]interface{}
+	switch v := doc["mcp_servers"].(type) {
+	case nil:
 		servers = map[string]interface{}{}
+	case map[string]interface{}:
+		servers = v
+	default:
+		return fmt.Errorf("mcp_servers is not a mapping of server names (a list, or a key that is not a string); refusing to replace it")
 	}
 	servers[name] = map[string]interface{}{
 		"url": "http://" + address + "/mcp",
@@ -237,6 +280,19 @@ func mergeHermesServer(doc map[string]interface{}, name, address, token string) 
 		},
 	}
 	doc["mcp_servers"] = servers
+	return nil
+}
+
+// bearerSummary describes the bearer token for the setup summary. Only a
+// token this command generated is known to be 64 hex chars and to live in
+// unreagent.local.yaml, so only that one gets the claim and an eight-character
+// prefix. A token the user set in mcp.token can have any length and is not
+// echoed: a prefix of a short one is most of the secret.
+func bearerSummary(token string, generated bool) string {
+	if !generated {
+		return fmt.Sprintf("mcp.token from your unreagent config (%d chars, not shown)", len(token))
+	}
+	return token[:min(8, len(token))] + "… (64 hex chars, in unreagent.local.yaml)"
 }
 
 // writeYAMLAtomic writes the config safely: first to a temp file in the same
