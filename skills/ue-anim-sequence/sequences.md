@@ -161,7 +161,8 @@ Points one or more sequences at another skeleton.
 - **The tool checks nothing about compatibility.** It compares no bone names or
   hierarchy and retargets no keys; it only sets the sequence's skeleton. How the
   engine matches the tracks to the new skeleton is up to it. Check a few bones
-  with `inspect_track` afterwards.
+  with `inspect_track` afterwards. To convert animations to a skeleton with
+  other proportions, use `retarget` `batch_retarget` (skill `ue-retarget`).
 
 Each entry has `path`, `success`, and `old_skeleton` (`None` when there was
 none) and `new_skeleton`, or `error`. The call's message is

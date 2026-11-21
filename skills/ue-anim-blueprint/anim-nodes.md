@@ -106,6 +106,7 @@ is given; without it an unknown type returns
   such as `/Game/Rigs/CR_Hand.CR_Hand_C`. Errors:
   `control_rig_class parameter required for control_rig type`,
   `Invalid control_rig_class: '<p>' — must be a UControlRig subclass`.
+  The rig's own graph is edited with `control_rig` (skill `ue-control-rig`).
 - **`auto_connect: true`** links the new node's pose output to the graph's
   output pose without breaking the link already there. If no pose pin
   matches, **the call fails after the node was created**:

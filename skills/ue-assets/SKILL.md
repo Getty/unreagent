@@ -18,7 +18,7 @@ Five tools of the UE LLM Toolkit plugin work on Content Browser assets:
 | `asset` | 15 operations: info, listing, properties, saving, rename, duplicate, delete, migrate, folders, editors |
 | `asset_dependencies` | what an asset uses |
 | `asset_referencers` | what uses an asset |
-| `asset_import` | FBX import, batch import, export, reimport, source-file info |
+| `asset_import` | FBX import, batch import, export, reimport, source-file info. `retarget` has an animation-only FBX import of its own (skill `ue-retarget`, section `import`) |
 
 Actors placed in a level are the subject of `ue-level-actors`, and levels of
 `ue-levels`.

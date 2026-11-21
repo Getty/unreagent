@@ -113,6 +113,7 @@ functions `Add_FloatFloat`, `Subtract_FloatFloat`, `Multiply_FloatFloat` and
   can be shown as a pin is shown. Errors: `Control Rig Blueprint '<p>' not found`,
   `Control Rig '<p>' has no generated class (compile it first)`,
   `'<p>' is not a Control Rig (generated class is not a UControlRig subclass)`.
+  The rig's own graph is edited with `control_rig` (skill `ue-control-rig`).
 
 **Node IDs.** A new node's ID is `<node_type>_<detail>_<n>`: the type as you
 spelled it, then the function, event, action path, variable, math operation,

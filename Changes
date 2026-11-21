@@ -211,6 +211,13 @@ Revision history for unreagent
     skipped silently) and ue-sequencer (open a Level Sequence, scrub it, read
     its state, and drive the Take Recorder with sequencer). Written from the UE
     LLM Toolkit source, not yet exercised against a running editor.
+  - New shipped skills ue-control-rig (read and edit a Control Rig's RigVM
+    graph with control_rig: nodes, links, pin defaults, member variables,
+    recompile and batch, which is not transactional) and ue-retarget
+    (skeleton inspection, IK Rigs, IK Retargeters, FBX animation import, batch
+    retarget, root motion and animation diagnosis with retarget, including
+    which operations need UE 5.7 or later). Written from the UE LLM Toolkit
+    source, not yet exercised against a running editor.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.
