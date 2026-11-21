@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,32 +37,30 @@ var version = "dev"
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
+		if errors.As(err, new(usageError)) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
 
 func run() error {
-	// Sub-command dispatch must run before flag.Parse so a stray `-x` after a
-	// sub-command doesn't trip the flag parser. Sub-commands are self-contained.
-	//
-	// extractSubcommand scans os.Args for the first positional argument,
-	// skipping `-key value` pairs so both `unreagent -config foo hermes-setup`
-	// and `unreagent hermes-setup -config foo` recognize the sub-command without
-	// swallowing `-config` or `foo`. Each sub-command then re-parses its own
-	// flags from the remaining argv via its own FlagSet.
-	if sub, _ := extractSubcommand(); sub != "" {
-		switch sub {
-		case "hermes-setup":
-			return runHermesSetup()
-		}
-	}
-
 	cfgPath := flag.String("config", "", "Path to unreagent.yaml (default: next to the executable)")
 	noAgent := flag.Bool("no-agent", false, "Don't start the agent (UE + MCP server only; an external agent can connect)")
 	filesFlag := flag.Bool("files", false, "Expose file tools (read/write/list/edit) over the MCP server")
 	writeMcp := flag.String("write-mcp-config", "", "Also write the MCP config as a .mcp.json to this path")
 	noSkillsMCP := flag.Bool("no-skills-mcp", false, "Deliver the skills as files in skills.dir instead of through the skills MCP tool (skills.mcp: false, skills.materialize: true)")
-	flag.Parse()
+	// The launcher's flag set parses up to the first positional argument
+	// (a bad flag exits 2); that word, if any, must name a sub-command.
+	// Define every launcher flag above this call: one defined below it is
+	// unknown here, and exits 2.
+	sub, subArgs, err := extractSubcommand(flag.CommandLine, os.Args[1:])
+	if err != nil {
+		return err
+	}
+	if sub != "" {
+		return subcommands[sub](subArgs)
+	}
 
 	logOut := io.Writer(os.Stdout)
 	logger := func(line string) {
@@ -458,25 +458,81 @@ func strictWord(strict bool) string {
 	return ""
 }
 
-// extractSubcommand returns the first positional value from os.Args[1:] plus
-// its index into os.Args (used by callers that need to splice it out before
-// re-parsing flags). Values of `-key value` flags are skipped so both
-// `unreagent -config foo hermes-setup` and `unreagent hermes-setup -config foo`
-// resolve to "hermes-setup" without swallowing "-config" or "foo". index == 0
-// means no sub-command was found.
-func extractSubcommand() (name string, index int) {
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			// "-key" followed by something that doesn't start with "-" is
-			// treated as a key/value pair — consume the value (don't return it).
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-			}
+// subcommands are the words the launcher takes as its first positional
+// argument. Each runs instead of a launch and gets the arguments around the
+// word, see extractSubcommand.
+var subcommands = map[string]func(args []string) error{
+	"hermes-setup": func(args []string) error { return hermesSetup(args, os.Stdout) },
+}
+
+// usageError is a command line the launcher cannot run. main exits 2 for it,
+// the code the flag package gives a bad flag.
+type usageError struct{ msg string }
+
+func (e usageError) Error() string { return e.msg }
+
+// extractSubcommand parses args (os.Args[1:]) with fs, the launcher's flag
+// set, and returns the sub-command the first positional argument names.
+// Parsing stops at that word, and it does so as the flags are defined, so
+// neither a bool flag (-no-agent hermes-setup) nor -flag=value takes it as a
+// value. rest is args without the word, the flags on both sides of it as
+// typed: the sub-command parses them with its own flag set, so
+// `-config x hermes-setup` and `hermes-setup -config x` mean the same. A "--"
+// that ended the launcher's flags is left out of rest; passed on, it would
+// end the sub-command's flags before the first one after the word.
+// name == "" with a nil error is a plain launch. A positional that is no
+// sub-command is a usageError.
+func extractSubcommand(fs *flag.FlagSet, args []string) (name string, rest []string, err error) {
+	if err = fs.Parse(args); err != nil {
+		return "", nil, err
+	}
+	if fs.NArg() == 0 {
+		return "", nil, nil
+	}
+	i := len(args) - fs.NArg() // fs.Args() is the tail of args from the word on
+	name = args[i]
+	if _, ok := subcommands[name]; !ok {
+		return "", nil, unknownSubcommand(name)
+	}
+	before := args[:i]
+	if endsWithTerminator(fs, before) {
+		before = before[:i-1]
+	}
+	return name, slices.Concat(before, args[i+1:]), nil
+}
+
+// endsWithTerminator reports whether flags, the arguments fs parsed before
+// the first positional one, end with the "--" that stopped the parse, not
+// with a "--" that is a flag's value (-config --). It walks them as the flag
+// package does: a flag that is no bool and has no "=" takes the next argument
+// as its value.
+func endsWithTerminator(fs *flag.FlagSet, flags []string) bool {
+	for j := 0; j < len(flags); j++ {
+		if flags[j] == "--" {
+			return j == len(flags)-1 // the parse stops at the first one
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(flags[j], "-"), "-"), "=")
+		f := fs.Lookup(name)
+		if f == nil || hasValue {
 			continue
 		}
-		return a, i + 1 // +1 because os.Args[0] is the binary path
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+			j++ // the next argument is this flag's value
+		}
 	}
-	return "", 0
+	return false
+}
+
+// unknownSubcommand is the usage error for a positional that names no
+// sub-command. One that is an existing path gets its own text: a file dropped
+// onto the .exe arrives that way, and the launcher used to start with the
+// file ignored.
+func unknownSubcommand(word string) error {
+	known := "sub-commands: " + strings.Join(slices.Sorted(maps.Keys(subcommands)), ", ")
+	if _, err := os.Stat(word); err == nil {
+		return usageError{`"` + word + `" is not a sub-command: unreagent does not open files passed to it ` +
+			`(such as one dropped onto the .exe); it reads unreagent.yaml next to the .exe, or the file ` +
+			`given with -config <path> (` + known + `)`}
+	}
+	return usageError{`unknown sub-command "` + word + `" (` + known + `)`}
 }

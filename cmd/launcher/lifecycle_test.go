@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -35,8 +34,8 @@ const (
 )
 
 // TestLauncherRunProcess is not a test: it is the launcher process for the
-// run() tests, selected via runConfigEnv. It does what main() does, so the
-// parent sees run()'s result as the exit code.
+// run() tests, selected via runConfigEnv. It runs main(), so the parent sees
+// the launcher's exit code.
 func TestLauncherRunProcess(t *testing.T) {
 	path := os.Getenv(runConfigEnv)
 	if path == "" {
@@ -58,10 +57,7 @@ func TestLauncherRunProcess(t *testing.T) {
 	if extra := os.Getenv(runArgsEnv); extra != "" {
 		os.Args = append(os.Args, strings.Split(extra, "\n")...)
 	}
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
+	main() // exits non-zero itself
 	os.Exit(0)
 }
 

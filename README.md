@@ -180,7 +180,8 @@ The launcher is **dropped into the UE project** and the config is **committed**:
 2. Rename `unreagent.example.yaml` -> **`unreagent.yaml`**, place it next to
    the `.uproject` and **commit it to the repo**. This file is portable.
 3. Start `unreagent.exe` (double-click or console). Alternative config path
-   via `-config <path>`.
+   via `-config <path>`. The .exe opens no file passed to it: dropping a
+   file onto it ends with a usage error (exit 2) instead of starting.
 
 `unreagent.yaml` contains **no machine-specific paths**. Editor, `compile` and
 `package` are auto-derived. A minimal config is enough:
@@ -335,6 +336,7 @@ exact bound and the fast-fail rule does not apply then. It covers both
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
 | `1` | the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
+| `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included). The launcher checks the command line first, so nothing is started or written |
 
 An agent that fails and **is** restarted produces no exit code until it stops
 failing or gives up. With the default `restart: on-failure`, a headless agent
@@ -1034,6 +1036,18 @@ guessing:
 | Sub-command | Purpose |
 |---|---|
 | `unreagent hermes-setup` | One-shot merge of the unreagent MCP server into Hermes Agent's `config.yaml` (idempotent; auto-generates `mcp.token` if missing; needs a resolvable engine, like a normal start). See "Hermes Agent" above. |
+
+The sub-command is the first argument that is neither a flag nor a flag's
+value. Flags may stand before or after it and all go to the sub-command.
+`hermes-setup` takes only `-config`; any other launcher flag (such as
+`-no-agent`) is refused by it with exit 1, on either side of the word. A flag
+the launcher does not know at all exits 2 before the word and 1 after it. Any
+other word is a usage error (exit 2) that names it and lists the sub-commands:
+`unknown sub-command "<word>" (sub-commands: hermes-setup)`. If
+the word is an existing path, as for a file dropped onto the .exe, the message
+says instead that unreagent does not open files passed to it and reads
+`unreagent.yaml` next to the .exe, or the file given with `-config <path>`.
+On Windows a console opened by Explorer may close before the message can be read.
 
 ### How the agent runs (three modes)
 

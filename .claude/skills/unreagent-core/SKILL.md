@@ -43,7 +43,7 @@ imports `mcp` is a design error, not a shortcut.
 
 | File | What it holds |
 |---|---|
-| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, MCP bind (`listenMCP`), service and command registration, MCP serving (`serveMCP`), shutdown — plus small helpers (`extractSubcommand`, `hasArg`, …) |
+| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, MCP bind (`listenMCP`), service and command registration, MCP serving (`serveMCP`), shutdown — plus the sub-command table (`subcommands`, `extractSubcommand`; an unknown word is a `usageError`, which `main` exits 2 for) and small helpers (`hasArg`, …) |
 | `tools.go` | `registerTools` (every MCP tool except the file tools), `serviceAction`, `startFailure` |
 | `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |

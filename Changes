@@ -216,6 +216,14 @@ Revision history for unreagent
     or installed without an editor binary) logs a WARN naming the association,
     the engine used instead and how to pin one (engineRoot or UE_ROOT), instead
     of falling back to the highest installed engine silently.
+  - hermes-setup is found after any launcher flag, and after "--".
+    "unreagent -config=<path> hermes-setup" and "unreagent -no-agent
+    hermes-setup" used to start the editor and the agent instead; now the
+    first runs hermes-setup and the second gets its refusal of -no-agent
+    (exit 1), as when the flag follows the word. Any other word on the
+    command line, a file dropped onto the .exe included, is a usage error
+    (exit 2) that names it and the sub-commands, instead of a launch that
+    ignored it.
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
