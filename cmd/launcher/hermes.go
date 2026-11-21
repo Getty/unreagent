@@ -163,11 +163,18 @@ func hermesSetup(args []string, out io.Writer) error {
 			fmt.Fprintf(out, "unreagent.local.yaml was open to group or others (mode %04o); tightened it to 0600, since it now holds the bearer token.\n", uint32(was))
 		}
 	}
-	if _, err := writeFileAtomic(hermesPath, hermesOut, false); err != nil {
+	open, err := writeFileAtomic(hermesPath, hermesOut, false)
+	if err != nil {
 		if tokenGenerated {
 			return fmt.Errorf("write Hermes config: %w (the new token is already saved in %s; re-run hermes-setup to finish)", err, localPath)
 		}
 		return fmt.Errorf("write Hermes config: %w", err)
+	}
+	// The Hermes config holds the bearer token, too, but it belongs to Hermes:
+	// its mode is not changed, only named. chmod follows a symlinked path to
+	// the file written, whose mode open is.
+	if open != 0 {
+		fmt.Fprintf(out, "The Hermes config is open to group or others (mode %04o) and holds the bearer token; it belongs to Hermes, so its mode is kept. To close it: chmod 600 %s\n", uint32(open), hermesPath)
 	}
 
 	fmt.Fprintln(out)
@@ -998,24 +1005,28 @@ func writeTarget(path string) (string, error) {
 // path, so a kill mid-write leaves the old file whole. A symlinked file is
 // followed and its target replaced, so the link stays a link; a dangling one
 // is refused (see writeTarget). A replaced file keeps its permission bits; a
-// new one gets 0600, since it may hold a token. secret says that data holds
-// one: a replaced file whose bits let group or others at it then gets 0600 as
-// well, and the mode it had is returned (0 when nothing was tightened). The
-// temp file gets the final mode before the rename, so the secret is never on
-// disk under the old bits. On Windows the bits do not decide who can read the
-// file (it inherits its directory's ACL), so nothing is tightened there. The
-// directory must be writable for the temp file; there is no in-place fallback.
+// new one gets 0600, since it may hold a token. The mode of a replaced file
+// whose bits let group or others at it is returned, 0 when they do not (a new
+// file never does). secret says that data holds a token: such a file then
+// gets 0600 instead of its bits. The temp file gets the final mode before the
+// rename, so the secret is never on disk under the old bits. On Windows the
+// bits do not decide who can read the file (it inherits its directory's ACL),
+// so nothing is tightened or returned there. The directory must be writable
+// for the temp file; there is no in-place fallback.
 func writeFileAtomic(path string, data []byte, secret bool) (os.FileMode, error) {
 	path, err := writeTarget(path)
 	if err != nil {
 		return 0, err
 	}
-	mode, was := os.FileMode(0o600), os.FileMode(0)
+	mode, open := os.FileMode(0o600), os.FileMode(0)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	if secret && runtime.GOOS != "windows" && mode&0o077 != 0 {
-		mode, was = 0o600, mode
+	if runtime.GOOS != "windows" && mode&0o077 != 0 {
+		open = mode
+		if secret {
+			mode = 0o600
+		}
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
@@ -1041,5 +1052,5 @@ func writeFileAtomic(path string, data []byte, secret bool) (os.FileMode, error)
 	if err := os.Rename(tmpName, path); err != nil {
 		return 0, err
 	}
-	return was, nil
+	return open, nil
 }

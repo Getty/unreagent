@@ -14,7 +14,9 @@ Revision history for unreagent
     unreagent.local.yaml only once the merge has succeeded. They keep their
     permissions, except that an unreagent.local.yaml open to group or others
     is tightened to 0600 when hermes-setup saves a new token into it, and the
-    output says so (Unix only). A token that 0.0.9 or earlier saved into an
+    output says so; a Hermes config open to them keeps its mode, and the
+    output warns, naming the mode and the chmod 600 that closes it (both Unix
+    only). A token that 0.0.9 or earlier saved into an
     existing unreagent.local.yaml kept that file's mode and is not rewritten:
     chmod 600 the file yourself.
   - hermes-setup refreshes only url and headers.Authorization in its entry and

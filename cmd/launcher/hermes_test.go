@@ -1197,6 +1197,7 @@ func TestHermesSetupTightensOpenLocalConfig(t *testing.T) {
 	}{
 		{0o644, "unreagent.local.yaml was open to group or others (mode 0644); tightened it to 0600, since it now holds the bearer token."},
 		{0o640, "unreagent.local.yaml was open to group or others (mode 0640); tightened it to 0600, since it now holds the bearer token."},
+		{0o604, "unreagent.local.yaml was open to group or others (mode 0604); tightened it to 0600, since it now holds the bearer token."}, // others only
 		{0o600, ""},
 	} {
 		t.Run(fmt.Sprintf("%04o", c.mode), func(t *testing.T) {
@@ -1220,6 +1221,70 @@ func TestHermesSetupTightensOpenLocalConfig(t *testing.T) {
 			}
 			if c.want == "" && strings.Contains(out, says) {
 				t.Errorf("output reports a tightening of a 0600 file:\n%s", out)
+			}
+		})
+	}
+}
+
+// k169: the Hermes config holds the bearer token as well, but it belongs to
+// Hermes, so one open to group or others keeps its mode and the output warns,
+// naming the mode and the chmod that closes it. The mode is that of the file
+// written: the target, when the config is a symlink (the link's own 0777 does
+// not count). The warning does not depend on a generated token. A closed
+// config, and a new one (created 0600), get no warning.
+func TestHermesSetupWarnsOpenHermesConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits do not govern who can read a file on Windows (it inherits the directory's ACL); nothing is warned about there")
+	}
+	const says = "chmod 600"
+	for _, c := range []struct {
+		name  string
+		token string      // mcp.token in unreagent.yaml, "" to generate one
+		mode  os.FileMode // of the existing config, 0 for none
+		link  bool        // the config path is a symlink to the file
+		warn  bool
+	}{
+		{name: "0644", mode: 0o644, warn: true},
+		{name: "0640", mode: 0o640, warn: true},
+		{name: "0604", mode: 0o604, warn: true}, // others only
+		{name: "0620", mode: 0o620, warn: true}, // a write bit only
+		{name: "0600", mode: 0o600},
+		{name: "new"},
+		{name: "mcp.token set", token: "user-token-0123456789", mode: 0o644, warn: true},
+		{name: "symlink to 0644", mode: 0o644, link: true, warn: true},
+		{name: "symlink to 0600", mode: 0o600, link: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newHermesFixture(t, c.token, "")
+			written := f.hermesPath
+			if c.link {
+				written = filepath.Join(t.TempDir(), "hermes.yaml")
+				if err := os.Symlink(written, f.hermesPath); err != nil {
+					t.Skipf("cannot create a symlink here: %v", err)
+				}
+			}
+			if c.mode != 0 {
+				writeFile(t, written, userHermesConfig)
+				if err := os.Chmod(written, c.mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			out, err := f.run(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMode := c.mode
+			if wantMode == 0 {
+				wantMode = 0o600
+			}
+			assertMode(t, written, wantMode) // warned about, not changed
+			want := fmt.Sprintf("The Hermes config is open to group or others (mode %04o) and holds the bearer token; it belongs to Hermes, so its mode is kept. To close it: chmod 600 %s", c.mode, f.hermesPath)
+			if c.warn && !strings.Contains(out, want+"\n") {
+				t.Errorf("output does not warn about the open Hermes config (%q):\n%s", want, out)
+			}
+			if !c.warn && strings.Contains(out, says) {
+				t.Errorf("output warns about a Hermes config closed to group and others:\n%s", out)
 			}
 		})
 	}

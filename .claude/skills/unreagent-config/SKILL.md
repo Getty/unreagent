@@ -259,24 +259,32 @@ helpers in `cmd/launcher/hermes.go`:
   temp file in the same directory, synced, then renamed over the target, so a
   crash mid-write leaves the old file whole. It follows a symlink instead of
   replacing it and refuses a dangling one. A new file is created as `0600`; a
-  replaced one keeps its permission bits, unless `secret` is set and they let
-  group or others in (`mode & 0o077 != 0`): then it becomes `0600` and the old
-  mode is returned (`0` when nothing was tightened) for the caller to report.
-  The mode goes on the temp file before the rename, so the secret is never on
-  disk under the old bits. Unix only: on Windows the file inherits its
-  directory's ACL, the bits do not decide who can read it, and nothing is
-  tightened.
+  replaced one keeps its permission bits. Every write returns the mode of a
+  replaced file whose bits let group or others in (`mode & 0o077 != 0`), for
+  the caller to report, and `0` for a closed file or a new one. With `secret`
+  set such a file also becomes `0600`, so the returned mode is the one it had.
+  The mode checked is the written file's, the target when the path is a
+  symlink, never the link's own. The mode goes on the temp file before the
+  rename, so the secret is never on disk under the old bits. Unix only: on
+  Windows the file inherits its directory's ACL, the bits do not decide who
+  can read it, and nothing is tightened or returned.
 
 `hermesSetup` builds every edit before it writes anything, then saves the
 token before the Hermes config, so Hermes never holds a token the launcher
 does not know. Only the token write into `unreagent.local.yaml` passes
 `secret`, and the command prints the old mode when it tightened the file. The
 Hermes config holds the same bearer but belongs to another program, so its
-write keeps its mode (a warning for it is k169). A token already in the file
-is never rewritten, so its mode is never touched: one the user wrote by hand,
-or one `hermes-setup` 0.0.9 or earlier saved with `os.WriteFile(..., 0o600)`,
-which keeps an existing file's mode. An upgrade user may therefore already
-hold the token in a `0644` file; the README tells them to `chmod 600` it.
+write keeps its mode. When that write returns an open mode, the command warns,
+naming the mode and `chmod 600 <hermesPath>` with the path as given (`chmod`
+follows a link to the file whose mode was named). It warns on every run while
+the file stays open, whether or not this run generated the token, since the
+Hermes config always holds the bearer (pinned by
+`TestHermesSetupWarnsOpenHermesConfig`). A token already in
+`unreagent.local.yaml` is never rewritten, so its mode is never touched: one
+the user wrote by hand, or one `hermes-setup` 0.0.9 or earlier saved with
+`os.WriteFile(..., 0o600)`, which keeps an existing file's mode. An upgrade
+user may therefore already hold the token in a `0644` file; the README tells
+them to `chmod 600` it.
 
 Any future secret follows the same pattern: the git-ignored local file, a
 node edit checked by `checkEdit`, and `writeFileAtomic` with `secret` set.

@@ -816,9 +816,22 @@ What `hermes-setup` does, in order:
    wrote yourself, or one `hermes-setup` 0.0.9 or earlier wrote into a 0644
    file. For those, run `chmod 600 unreagent.local.yaml` yourself.
    The Hermes config, which holds the same bearer but belongs to another
-   program, keeps its mode. Unix only: on Windows the mode bits do not decide
-   who can read a file (it inherits its directory's ACL), so nothing is
-   tightened there.
+   program, keeps its mode. If it is open to group or others (any group or
+   other permission bit set), `hermes-setup` warns after writing it, naming
+   the mode and the command that closes it (`<path>` is the Hermes config
+   path from step 4):
+
+   ```
+   The Hermes config is open to group or others (mode 0644) and holds the bearer token; it belongs to Hermes, so its mode is kept. To close it: chmod 600 <path>
+   ```
+
+   The mode checked is that of the file written, the target when the config
+   is a symlink, and `chmod` follows the link to it. A new Hermes config is
+   created 0600 and gets no warning. The warning comes on every run while the
+   file stays open, whether or not the token was generated on this run. Unix
+   only: on Windows the mode bits do not decide who can read a file (it
+   inherits its directory's ACL), so nothing is tightened or warned about
+   there.
 8. In the Hermes config, the entry `mcp_servers.unreagent` is edited in place,
    or appended as the last server if it is new; a new `mcp_servers` block goes
    at the end of the file. unreagent owns two keys of the entry, `url` and
