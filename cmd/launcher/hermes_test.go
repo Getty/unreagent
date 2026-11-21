@@ -432,9 +432,12 @@ mcp_servers:
 		// k116: an entry that runs unreagent as a stdio server is the user's
 		// own; setting url and headers on it would leave Hermes a server with
 		// both. So is one that gets its command through a merge key.
-		"stdio entry":                 {"mcp_servers:\n  unreagent:\n    command: unreagent\n    args: [mcp]\n  github:\n    command: npx\n", "mcp_servers.unreagent is a stdio server (it sets command), and hermes-setup only manages an HTTP entry (url and headers); remove command and args from the entry, or rename or delete the entry, then re-run hermes-setup"},
-		"stdio entry with a url":      {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    command: unreagent\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
-		"command through a merge key": {"stdio: &s\n  command: unreagent\nmcp_servers:\n  unreagent:\n    <<: *s\n    timeout: 120\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
+		"stdio entry":            {"mcp_servers:\n  unreagent:\n    command: unreagent\n    args: [mcp]\n  github:\n    command: npx\n", "mcp_servers.unreagent is a stdio server (it sets command), and hermes-setup only manages an HTTP entry (url and headers); remove command and args from the entry, or rename or delete the entry, then re-run hermes-setup"},
+		"stdio entry with a url": {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    command: unreagent\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
+		// A null or empty command is still a command that is set: the entry has the key.
+		"stdio entry with a null command":   {"mcp_servers:\n  unreagent:\n    command: ~\n    url: http://old.invalid/mcp\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
+		"stdio entry with an empty command": {"mcp_servers:\n  unreagent:\n    command: \"\"\n    args: [mcp]\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
+		"command through a merge key":       {"stdio: &s\n  command: unreagent\nmcp_servers:\n  unreagent:\n    <<: *s\n    timeout: 120\n", "mcp_servers.unreagent is a stdio server (it sets command)"},
 		// k116: header names ignore case, so two spellings of Authorization
 		// leave it open which token counts.
 		"Authorization twice":           {"mcp_servers:\n  unreagent:\n    url: http://old.invalid/mcp\n    headers:\n      authorization: Bearer stale\n      Authorization: Bearer old\n", "mcp_servers.unreagent.headers sets the Authorization header more than once (Authorization, authorization); header names ignore case, so which token counts is ambiguous; keep one, then re-run hermes-setup"},
@@ -1491,5 +1494,34 @@ func TestCheckEdit(t *testing.T) {
 		if err := checkEdit(withNaN, []byte(out), "t", "mcp", "token"); (err != nil) != wantErr {
 			t.Errorf("checkEdit(%q) = %v, want error: %v", out, err, wantErr)
 		}
+	}
+}
+
+// k125: checkEdit has to stay wired into hermesSetup. This is one input that
+// only checkEdit refuses: an anchored null mcp_servers. childMapping replaces
+// the null with a fresh mapping and drops the anchor &m, so the alias under
+// other is left without it and the result would not parse. A hermesSetup that
+// no longer calls checkEdit writes that file. The test relies on that gap in
+// childMapping (k134): whoever closes k134 has to give this test another input
+// that only checkEdit refuses.
+func TestHermesSetupChecksTheEditBeforeWriting(t *testing.T) {
+	const hermesConfig = "mcp_servers: &m\nother: *m\n"
+	f := newHermesFixture(t, "", hermesConfig)
+
+	_, err := f.run(t)
+	if err == nil {
+		t.Fatalf("hermes-setup accepted an anchored null mcp_servers and wrote:\n%s", readFile(t, f.hermesPath))
+	}
+	if want := "the result would not parse"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q is not checkEdit's refusal (%q)", err, want)
+	}
+	if got := readFile(t, f.hermesPath); got != hermesConfig {
+		t.Errorf("Hermes config was changed:\n%s", got)
+	}
+	if _, err := os.Stat(f.hermesPath + ".bak"); !os.IsNotExist(err) {
+		t.Errorf("a .bak was created although nothing was written (stat: %v)", err)
+	}
+	if _, err := os.Stat(localOverridePath(f.cfgPath)); !os.IsNotExist(err) {
+		t.Errorf("the generated token was saved although the Hermes edit was refused (stat: %v)", err)
 	}
 }
