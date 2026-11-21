@@ -93,7 +93,14 @@ type ServiceStatus struct {
 type CommandResult struct {
 	Output   string `json:"output"`
 	ExitCode int    `json:"exitCode"`
+	// lines and keptLines are set when the output buffer dropped the middle
+	// of the output (see headTailBuffer.result and LinesBefore).
+	lines, keptLines int
 }
+
+// LogLines is how many output lines a service's log buffer keeps. Older lines
+// are dropped, and Logs says how many.
+const LogLines = 500
 
 // defaultCtrlTimeout is how long a control message waits for the service's
 // loop before the service counts as unresponsive.
@@ -148,7 +155,7 @@ func (s *Supervisor) AddService(spec ServiceSpec) {
 	s.services[spec.Name] = &service{
 		spec:   spec,
 		ctrl:   make(chan ctrlMsg),
-		logbuf: newRingBuffer(500),
+		logbuf: newRingBuffer(LogLines),
 	}
 	s.order = append(s.order, spec.Name)
 }
@@ -252,15 +259,18 @@ func (s *Supervisor) Status() []ServiceStatus {
 	return out
 }
 
-// Logs returns the last n output lines of a service.
-func (s *Supervisor) Logs(name string, n int) ([]string, error) {
+// Logs returns the last n output lines of a service (all it holds for n <= 0)
+// and how many older lines its buffer has dropped since the service was
+// added, restarts included: lines no call returns any more.
+func (s *Supervisor) Logs(name string, n int) ([]string, int, error) {
 	s.mu.Lock()
 	svc := s.services[name]
 	s.mu.Unlock()
 	if svc == nil {
-		return nil, fmt.Errorf("unknown service %q", name)
+		return nil, 0, fmt.Errorf("unknown service %q", name)
 	}
-	return svc.logbuf.tail(n), nil
+	lines, dropped := svc.logbuf.tail(n)
+	return lines, dropped, nil
 }
 
 // ServiceNames returns all registered service names.
@@ -382,7 +392,7 @@ func (s *Supervisor) runOnce(ctx context.Context, command string, args []string,
 	// close() woke a reader still blocked on a write end held by a grandchild;
 	// join it, so nothing writes to buf any more once it is read.
 	<-ss.done
-	res := CommandResult{Output: buf.String(), ExitCode: exitCodeOf(err)}
+	res := buf.result(exitCodeOf(err))
 	if aborted != nil {
 		s.logf("[%s] aborted (%v)", label, aborted)
 		return res, fmt.Errorf("aborted: %w", aborted)

@@ -98,7 +98,13 @@ in their snapshot did not start, and the result is `IsError` naming
 `ServiceStatus.LastError` — the bare snapshot would read as success. The other
 tools — `status`, `logs`, `run_command` — call the supervisor from their own
 closure; a one-shot tool returns what `run_command` and `scriptAction` return,
-`exit N` plus `tailLines(output, 300)`, with `IsError` on a non-zero exit.
+`exit N` plus `commandTail(res, toolOutputLines)`, with `IsError` on a
+non-zero exit. `commandTail` (`helpers.go`) is the last 300 lines, led by an
+`omittedMarker` line `[... N lines omitted]` when there were more; N comes from
+`CommandResult.LinesBefore`, which also counts what the supervisor's 2 MiB
+head/tail buffer dropped. `logs` uses `omittedMarker` with a reason for the
+lines its 500-line buffer dropped. `tailLines` alone, without a marker, is for
+log excerpts (`bridge.go`, `lifecycle.go`), not tool replies.
 
 Commands are one-shot and blocking (`RunCommand` / `RunOnce`); a UE `compile`
 takes minutes and the agent's MCP client is waiting the whole time. If you add

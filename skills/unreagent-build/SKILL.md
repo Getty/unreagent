@@ -65,12 +65,14 @@ no timeout and no working-directory parameter.
 ```
 exit <code>
 
+[... N lines omitted]
 <the last 300 lines of stdout and stderr, merged>
 ```
 
-The result is marked as an error when the exit code is non-zero. Decide success
-by the exit code, not by the text. `exit -1` means the launcher could not
-determine an exit code.
+The `[... N lines omitted]` line is there only when the command printed more
+than 300 lines. The result is marked as an error when the exit code is
+non-zero. Decide success by the exit code, not by the text. `exit -1` means the
+launcher could not determine an exit code.
 
 These errors come back before anything runs:
 
@@ -82,24 +84,29 @@ These errors come back before anything runs:
 
 ## Reading the result
 
-- **Only the last 300 lines come back, without a marker.** When the output was
-  longer, the beginning is missing and nothing says so: the text simply starts
-  mid-stream. If you received 300 lines after the `exit` line, assume they are
-  a tail.
-- **Nothing else is retained.** Beyond those 300 lines, the launcher keeps at
-  most the first and last MiB of output while the command runs, and discards
-  everything once the call returns. `logs` holds no command output. The
-  launcher log records only two lines per run:
+- **Only the last 300 lines come back.** When the command printed more, they
+  are led by `[... N lines omitted]` (`[... 1 line omitted]` for one), unless
+  what the 2 MiB cap below kept fits in 300 lines and only its
+  `[... B bytes omitted]` line marks the cut. The N lines are gone.
+- **Past 2 MiB the middle is dropped as well.** While the command runs, the
+  launcher keeps only the first and the last MiB of its output, and N counts
+  the dropped lines too. The gap itself shows only when the last MiB holds
+  fewer than 300 lines: a line `[... B bytes omitted]`, the lines on either
+  side of it can be cut mid-line. N then counts only the lines above what you
+  see.
+- **Nothing else is retained.** The launcher discards the output once the call
+  returns. `logs` holds no command output. The launcher log records only two
+  lines per run:
   `[cmd:<name>] starting: <command> [<args>]` and `[cmd:<name>] done (exit N)`.
   Calling again runs the command again; it does not fetch more output.
 - **stdout and stderr are merged** and cannot be told apart.
 
 For `compile`, errors print as they occur, and other compile actions keep
 running after the first failure. In a long failing build, the first error can
-sit above the 300-line window. If what you see looks like a follow-on error, for
-example an unknown type that a missing include would explain, the cause may be
-above the window. Fix what you can see and compile again. A build with fewer
-errors fits the window.
+be among the omitted lines. If the result starts with `[... N lines omitted]`
+and what you see looks like a follow-on error, for example an unknown type that
+a missing include would explain, the cause may be among them. Fix what you can
+see and compile again. A build with fewer errors fits in 300 lines.
 
 For `package`, the output runs to thousands of lines, and you see its end:
 whether the run failed, and in which stage.
@@ -168,9 +175,9 @@ There, a run's children are not killed with it.
 | `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
 | `Error: start failed: exec: …/Engine/…` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
 | `exit` non-zero, with `Unable to build while Live Coding is active` | the editor is running with Live Coding | `ue_stop`, then compile again |
-| `exit` non-zero, and the errors look like follow-ons | the first errors are above the 300-line window | fix what is visible, then compile again |
+| `exit` non-zero, `[... N lines omitted]`, and the errors look like follow-ons | the first errors are among the omitted lines | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
-| exactly 300 lines after the `exit` line | the output was cut, without a marker | the rest is gone. Rerun only if you must |
+| `[... N lines omitted]` after the `exit` line | the first N lines of the output were cut | they are gone. Rerun only if you must |
 | the call never returns, or the client times out | no timeout exists, and the run continues on the host | do not retry. Watch the launcher log for `[cmd:<name>] done` |
 | a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
 

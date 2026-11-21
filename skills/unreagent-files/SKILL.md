@@ -176,9 +176,11 @@ fixes are theirs:
 - `limit` (integer, optional) — the most bytes to return. Default and maximum
   262144 (256 KiB); a larger value is clamped to it, and 0 or less is an error.
 
-Both accept a numeric string such as `"65536"`; missing, `null` or `""` gives
-the default. Any other value, such as `"end"` or `true`, returns
-`Error: 'offset' must be an integer, got …` (or `'limit'`).
+Both accept an integer string such as `"65536"`; missing, `null` or `""` gives
+the default. Any other value, such as `1.5`, `"end"` or `true`, returns
+`Error: 'offset' must be an integer, got …` (or `'limit'`). A whole number past
+the 64-bit range, such as `1e20`, returns
+`Error: 'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got 1e+20`.
 
 Returns the bytes of the range as text, nothing else: no line numbers, no
 header. When the range is the whole file, that is all. Otherwise one line
@@ -297,7 +299,8 @@ back.
 | content ends in a line `[bytes X-Y of Z]` or `[bytes X-Y of Z; continue with offset=Y]` | `read_file` returned bytes `X` to `Y` (exclusive) of a `Z`-byte file, not the whole file; the line and the newline before it are not file content | to go on, call again with `offset=Y`; for the end of the file, a negative `offset` |
 | `Error: 'offset' <n> is past the end of "<given>" (<size> bytes)` | `offset` is larger than the file | use an offset up to the size named, or a negative one to count from the end |
 | `Error: 'limit' must be a positive number of bytes, got <n>` | `limit` is 0 or negative | omit it for the default of 262144, or pass a positive byte count |
-| `Error: 'offset' must be an integer, got …` (or `'limit'`) | not a number and not a numeric string | pass an integer number of bytes |
+| `Error: 'offset' must be an integer, got …` (or `'limit'`) | neither a whole number nor an integer string, such as `1.5` or `"end"` | pass an integer number of bytes |
+| `Error: 'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got …` (or `'limit'`) | the number does not fit a 64-bit integer | pass a byte count; a negative `offset` counts from the end |
 | `Error: 'content' missing` | `content` absent or not a string — typically a misspelled parameter name | rewrite with the correct parameter name; nothing was written |
 | `Error: open <root>: no such file or directory` | the root itself does not exist; every call fails | user fixes `files.root` |
 | `Error: openat <name>: no such file or directory` | nothing at that path under the root | check with `list_dir` |

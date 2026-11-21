@@ -18,7 +18,7 @@ func TestHeadTailBufferKeepsBothEnds(t *testing.T) {
 		{
 			"drops the middle",
 			[]string{"AAAA", "BBBB", "CCCC", "DDDD", "EEEE"},
-			"AAAABBBB\n... [4 bytes omitted] ...\nDDDDEEEE",
+			"AAAABBBB\n[... 4 bytes omitted]\nDDDDEEEE",
 		},
 	}
 	for _, tc := range cases {
@@ -31,6 +31,89 @@ func TestHeadTailBufferKeepsBothEnds(t *testing.T) {
 			}
 			if got := b.String(); got != tc.want {
 				t.Fatalf("String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// k74: the logs tool must be able to tell a log that lost lines from one that
+// is whole, so the buffer counts what it lets go — under the same lock as the
+// lines it returns.
+func TestRingBufferCountsDroppedLines(t *testing.T) {
+	r := newRingBuffer(3)
+	for _, l := range []string{"a", "b", "c"} {
+		r.add(l)
+	}
+	if lines, dropped := r.tail(10); strings.Join(lines, ",") != "a,b,c" || dropped != 0 {
+		t.Fatalf("full, nothing dropped: tail(10) = %q, %d; want [a b c], 0", lines, dropped)
+	}
+	r.add("d")
+	r.add("e")
+	if lines, dropped := r.tail(10); strings.Join(lines, ",") != "c,d,e" || dropped != 2 {
+		t.Fatalf("two lines past the size: tail(10) = %q, %d; want [c d e], 2", lines, dropped)
+	}
+	if lines, dropped := r.tail(1); strings.Join(lines, ",") != "e" || dropped != 2 {
+		t.Fatalf("tail(1) = %q, %d; want [e], 2", lines, dropped)
+	}
+}
+
+// k74: the launcher shows the last n lines of a command's output and has to
+// say how many lines of the whole output came before them. Past 2*limit bytes
+// the buffer drops the middle, and counting the lines it kept would leave out
+// every line in between. Here limit 8 keeps "l1\nl2\nl3" and "6\nl7\nl8\n" of
+// eight lines: the middle "\nl4\nl5\nl" goes, and its three lines with it.
+func TestCommandResultLinesBefore(t *testing.T) {
+	result := func(writes ...string) CommandResult {
+		b := newHeadTailBuffer(8)
+		for _, w := range writes {
+			b.Write([]byte(w))
+		}
+		return b.result(0)
+	}
+	dropped := result("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n")
+	if want := "l1\nl2\nl3\n[... 8 bytes omitted]\n6\nl7\nl8\n"; dropped.Output != want {
+		t.Fatalf("Output = %q, want %q", dropped.Output, want)
+	}
+	whole := result("l1\nl2\nl3\n")
+	// The kept tail is eight newlines, which trimming removes from Output:
+	// its last line is the byte marker, with l1..l3 above it.
+	blankTail := result("l1\nl2\nl3\nl4\nl5\nl6\n" + strings.Repeat("\n", 8))
+	// A pipe can deliver the closing newlines in writes of their own; all of
+	// them end the output, so l8 is still the eighth and last line.
+	splitNewlines := result("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8", "\n", "\n")
+	// UE and MSBuild end their lines in \r\n on Windows. Only the \n ends the
+	// output; the \r stays on the last line, as Output's trim leaves it.
+	crlf := result("l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\n")
+	for _, tc := range []struct {
+		name string
+		res  CommandResult
+		n    int
+		want int
+	}{
+		{"whole output, cut", whole, 2, 1},
+		{"whole output, fits exactly", whole, 3, 0},
+		{"whole output, fits", whole, 5, 0},
+		// The last n lines lie in the kept tail: everything before them in
+		// the whole output counts, the dropped middle included.
+		{"dropped middle, tail lines", dropped, 2, 6},
+		// "6" is what is left of l6; the lines before it are l1..l5.
+		{"dropped middle, the whole kept tail", dropped, 3, 5},
+		// The last n lines reach the byte marker, which shows the dropped
+		// middle itself: only the kept head lines above it count.
+		{"dropped middle, from the marker", dropped, 4, 3},
+		{"dropped middle, all of Output", dropped, 7, 0},
+		{"dropped middle, more than Output", dropped, 10, 0},
+		{"dropped middle, tail of newlines only", blankTail, 1, 3},
+		{"dropped middle, newlines written apart", splitNewlines, 2, 6},
+		{"dropped middle, \\r\\n lines", crlf, 2, 6},
+		// A result the buffer did not build counts Output's own lines.
+		{"zero value", CommandResult{Output: "a\nb\nc\n"}, 1, 2},
+		// n = 0 shows nothing (tailLines), so every line comes before.
+		{"zero value, n = 0", CommandResult{Output: "a\nb\nc\n"}, 0, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.res.LinesBefore(tc.n); got != tc.want {
+				t.Fatalf("LinesBefore(%d) = %d, want %d", tc.n, got, tc.want)
 			}
 		})
 	}
@@ -78,5 +161,12 @@ func TestRunOnceBoundsCommandOutput(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "bytes omitted") {
 		t.Fatal("dropped output was not reported")
+	}
+	// The flood helper prints its head marker, helperFloodBytes/1024 lines of
+	// 1 KiB and its tail marker. The MiB kept at each end holds about a third
+	// of them; the count must cover the dropped middle as well.
+	lines := helperFloodBytes/1024 + 2
+	if got := res.LinesBefore(300); got != lines-300 {
+		t.Fatalf("LinesBefore(300) = %d, want %d: the flood printed %d lines", got, lines-300, lines)
 	}
 }

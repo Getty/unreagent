@@ -367,3 +367,26 @@ func TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess(t *testing.
 		t.Errorf("scriptAction left %v behind in %s after a successful run, want none (defer os.Remove should have cleaned up)", names, dir)
 	}
 }
+
+// k74: run_python and run_node cut their output to the last 300 lines without
+// a word, as run_command did. The script handler must lead a cut output with
+// the same marker, and leave one that fits alone. sh stands in for uv/node:
+// it runs the script file scriptAction writes.
+func TestScriptActionMarksCutOutput(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH — skipping")
+	}
+	handler := scriptAction(supervisor.New(nil), "sh", nil, t.TempDir(), "sh", "test")
+	for _, tc := range []struct {
+		printed int
+		want    string
+	}{
+		{300, "exit 0\n\n" + lineRange(1, 300)},
+		{400, "exit 0\n\n[... 100 lines omitted]\n" + lineRange(101, 400)},
+	} {
+		res := handler(map[string]interface{}{"code": printLinesScript(tc.printed)})
+		if res.IsError || res.Text != tc.want {
+			t.Errorf("script printing %d lines (IsError %v):\n got  %.200q…\n want %.200q…", tc.printed, res.IsError, res.Text, tc.want)
+		}
+	}
+}

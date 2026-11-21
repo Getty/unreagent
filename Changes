@@ -185,6 +185,13 @@ Revision history for unreagent
     took any name, wrote some as a key that YAML reads as something else, and
     refused "<<" with an error that did not name the option. A bad name now
     stops every config load, a normal start included, not only hermes-setup.
+  - run_command, run_python and run_node say when they cut the output: a
+    line "[... N lines omitted]" leads the last 300 lines, and N also counts
+    the lines dropped from the middle of an output past 2 MiB. That gap now
+    reads "[... N bytes omitted]".
+  - logs says when its 500-line buffer has dropped lines a request asks for:
+    the reply starts with "[... N lines omitted; the log keeps only the last
+    500]".
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

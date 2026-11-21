@@ -193,19 +193,24 @@ launcher runs two hooks:
   its own agent. Any other name returns `Error: unknown service "<name>"`.
   `run_command` commands are not services. Their output exists only in the
   result of the call that ran them.
-- `lines` (integer, default 50). A numeric string such as `"200"` counts as
-  200. Missing, `null` or `""` gives 50. Any other value, such as `"all"` or
-  `true`, returns `Error: 'lines' must be an integer, got …`. `0`, a negative
-  number, or more lines than are buffered returns the whole buffer.
+- `lines` (integer, default 50). An integer string such as `"200"` counts as
+  200. Missing, `null` or `""` gives 50. `0`, a negative integer, or more lines
+  than are buffered returns the whole buffer. Any other value, such as `1.5`,
+  `"all"` or `true`, returns `Error: 'lines' must be an integer, got …`; a
+  whole number past the 64-bit range, such as `1e20`, returns
+  `Error: 'lines' must be an integer between -9223372036854775808 and 9223372036854775807, got 1e+20`.
 
-The result is the lines joined by newlines and nothing else: no header, no
-timestamps, no truncation marker. An empty result means nothing is buffered.
+The result is the lines joined by newlines: no header, no timestamps. An empty
+result means nothing is buffered. Once the buffer has dropped older lines, a
+request for more than it holds, or for all of it (`0` or negative), starts with
+`[... N lines omitted; the log keeps only the last 500]`. N is how many lines
+it has dropped since the launcher started, restarts included; a larger `lines`
+does not bring them back.
 
 What the buffer holds:
 
-- **The last 500 lines per service.** If you ask for more, you get at most
-  500, with no sign that older lines were dropped. On a busy editor startup,
-  500 lines is a short stretch.
+- **The last 500 lines per service.** On a busy editor startup, 500 lines is a
+  short stretch; `lines: 0` shows whether older ones were dropped.
 - **Only the process's own stdout and stderr**, interleaved as they arrived.
   The editor writes its log there because of the default arguments
   `-stdout -FullStdOutLogOutput`. If `unreal.args` is set without them, `logs ue`
@@ -313,7 +318,7 @@ nothing in `status` reflects this. Check the plugin itself:
 | `logs` is empty for `ue` | the editor has not written anything yet, or `unreal.args` lacks `-stdout` | check `status`. The user restores the args |
 | `logs` is empty for `agent` | the agent runs in the foreground | expected. Its output is on the console |
 | `Error: unknown service "agent"` | the launcher runs no agent of its own | expected with an external agent |
-| `logs` returns exactly 500 lines | the buffer is full and older lines were dropped | use the launcher log or `Saved/Logs/` |
+| `logs` starts with `[... N lines omitted; the log keeps only the last 500]` | N older lines were dropped from the buffer | a larger `lines` does not help; use the launcher log or `Saved/Logs/` |
 | plugin tools fail right after a restart | the editor is still loading | wait for the plugin, as above |
 
 ## See also

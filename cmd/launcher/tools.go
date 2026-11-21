@@ -54,12 +54,12 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "logs",
-		Description: "Returns the last output lines (stdout+stderr) of a supervised process. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured.",
+		Description: fmt.Sprintf("Returns the last output lines (stdout+stderr) of a supervised process, from a buffer that keeps only its last %[1]d lines. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured. When you ask for more than it still holds and it has dropped older lines, the reply starts with [... N lines omitted; the log keeps only the last %[1]d]; a larger lines value does not bring those back.", supervisor.LogLines),
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{"type": "string", "description": "Service name (ue, agent). Default: ue"},
-				"lines":   map[string]interface{}{"type": "integer", "description": "Number of lines (default 50)"},
+				"lines":   map[string]interface{}{"type": "integer", "description": fmt.Sprintf("Number of lines (default 50; at most %d are kept)", supervisor.LogLines)},
 			},
 		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
@@ -68,18 +68,30 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 			if err != nil {
 				return errResult(err)
 			}
-			lines, err := sup.Logs(service, n)
+			lines, dropped, err := sup.Logs(service, n)
 			if err != nil {
 				return errResult(err)
 			}
-			return mcp.ToolResult{Text: strings.Join(lines, "\n")}
+			text := strings.Join(lines, "\n")
+			// n <= 0 asks for the whole buffer; n past what it holds reaches
+			// back into the lines it dropped.
+			if dropped > 0 && (n <= 0 || n > len(lines)) {
+				text = omittedMarker(dropped, fmt.Sprintf("the log keeps only the last %d", supervisor.LogLines)) + "\n" + text
+			}
+			return mcp.ToolResult{Text: text}
 		},
 	})
+
+	// cutNote tells the one-shot tools' callers how a cut shows: the line
+	// marker of commandTail, the byte marker of the supervisor's output buffer.
+	const cutNote = "A cut is marked by a line: [... N lines omitted] at the top, [... N bytes omitted] where the middle of output past 2 MiB was dropped."
 
 	cmdNames := sup.CommandNames()
 	srv.AddTool(mcp.Tool{
 		Name: "run_command",
-		Description: "Runs a preconfigured one-off command and returns once it exits, with its exit code and the last 300 lines of its output (stdout+stderr merged). That output is kept nowhere else; logs does not have it. Typical commands: compile (build the C++ modules), package (create a build). Available commands: " +
+		Description: fmt.Sprintf("Runs a preconfigured one-off command and returns once it exits, with its exit code and the last %d lines of its output (stdout+stderr merged). ", toolOutputLines) +
+			cutNote + " What was cut, which can hold the first compile errors, is gone: that output is kept nowhere else, and logs does not have it. " +
+			"Typical commands: compile (build the C++ modules), package (create a build). Available commands: " +
 			strings.Join(cmdNames, ", ") + ". Stop the editor (ue_stop) before 'compile', since UnrealBuildTool refuses to build while Live Coding is active, and ue_start it afterwards to load the new modules.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -98,7 +110,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 				return errResult(err)
 			}
 			return mcp.ToolResult{
-				Text:    fmt.Sprintf("exit %d\n\n%s", res.ExitCode, tailLines(res.Output, 300)),
+				Text:    fmt.Sprintf("exit %d\n\n%s", res.ExitCode, commandTail(res, toolOutputLines)),
 				IsError: res.ExitCode != 0,
 			}
 		},
@@ -115,7 +127,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		uv := cfg.Runtimes.Python.UV
 		srv.AddTool(mcp.Tool{
 			Name:        "run_python",
-			Description: "Runs Python code in a clean, uv-managed environment and returns stdout/stderr + exit code. The environment (venv, dependencies from pyproject.toml/requirements, matching Python version) is provided automatically by uv — you do NOT need to create a venv, install anything or analyse the environment. Just pass the code. The script is stored in the project directory and executed there, so modules sitting next to the pyproject.toml are importable directly by name. For additional packages use dependencies declared in pyproject.toml; an ad-hoc 'import' only works for packages that are already present.",
+			Description: "Runs Python code in a clean, uv-managed environment and returns the exit code and the last " + fmt.Sprint(toolOutputLines) + " lines of stdout+stderr. " + cutNote + " The environment (venv, dependencies from pyproject.toml/requirements, matching Python version) is provided automatically by uv — you do NOT need to create a venv, install anything or analyse the environment. Just pass the code. The script is stored in the project directory and executed there, so modules sitting next to the pyproject.toml are importable directly by name. For additional packages use dependencies declared in pyproject.toml; an ad-hoc 'import' only works for packages that are already present.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -131,7 +143,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 		node := cfg.Runtimes.Node.Node
 		srv.AddTool(mcp.Tool{
 			Name:        "run_node",
-			Description: "Runs Node.js code in the project context and returns stdout/stderr + exit code. The script is stored in the project directory and executed there, so bare imports are resolved via the project's node_modules — you do not need to set up or analyse the environment yourself. The code ALWAYS runs as an ES module, regardless of package.json: import/export and top-level await work, require is not defined. Reach CommonJS packages via a dynamic import() or via createRequire from 'node:module'.",
+			Description: "Runs Node.js code in the project context and returns the exit code and the last " + fmt.Sprint(toolOutputLines) + " lines of stdout+stderr. " + cutNote + " The script is stored in the project directory and executed there, so bare imports are resolved via the project's node_modules — you do not need to set up or analyse the environment yourself. The code ALWAYS runs as an ES module, regardless of package.json: import/export and top-level await work, require is not defined. Reach CommonJS packages via a dynamic import() or via createRequire from 'node:module'.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

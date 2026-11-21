@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -304,5 +305,147 @@ func TestUEStartAndRestartSucceedOnARunningEditor(t *testing.T) {
 		if err := json.Unmarshal([]byte(res.Text), &st); err != nil || !st.Running {
 			t.Fatalf("%s on a running editor: text %q is not a running snapshot (%v)", tool, res.Text, err)
 		}
+	}
+}
+
+// --- k74: truncation markers ---------------------------------------------
+
+// printLinesScript is a sh script printing line-1 … line-n, one per line.
+func printLinesScript(n int) string {
+	return fmt.Sprintf(`i=1; while [ "$i" -le %d ]; do echo "line-$i"; i=$((i+1)); done`, n)
+}
+
+// lineRange is line-from … line-to joined by newlines, the way a tool
+// returns them.
+func lineRange(from, to int) string {
+	lines := make([]string, 0, to-from+1)
+	for i := from; i <= to; i++ {
+		lines = append(lines, fmt.Sprintf("line-%d", i))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// k74: run_command returned exit 0 and the last 300 lines, and nothing said
+// that the lines above — often the first compile errors — were gone. A cut
+// output must start with a marker naming how many lines were left out; an
+// output that fits must come back as it was, without one.
+func TestRunCommandMarksCutOutput(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH — skipping")
+	}
+	sup := supervisor.New(nil)
+	for _, n := range []int{300, 301, 400} {
+		sup.AddCommand(fmt.Sprint(n), supervisor.CommandSpec{Command: "sh", Args: []string{"-c", printLinesScript(n)}})
+	}
+	srv := toolsServerOn(t, sup, config.Permissions{}, func(string) {})
+
+	for _, tc := range []struct {
+		name, want string
+	}{
+		{"300", "exit 0\n\n" + lineRange(1, 300)},
+		{"301", "exit 0\n\n[... 1 line omitted]\n" + lineRange(2, 301)},
+		{"400", "exit 0\n\n[... 100 lines omitted]\n" + lineRange(101, 400)},
+	} {
+		t.Run(tc.name+" lines", func(t *testing.T) {
+			res := callTool(t, srv, "run_command", map[string]interface{}{"name": tc.name})
+			if res.IsError || res.Text != tc.want {
+				t.Fatalf("run_command %s (IsError %v):\n got  %.200q…\n want %.200q…", tc.name, res.IsError, res.Text, tc.want)
+			}
+		})
+	}
+}
+
+// k74: past 2 MiB the supervisor keeps only the first and the last MiB of a
+// command's output, so counting the lines of what it kept undercounts a long
+// build log by everything in between. The marker must count the lines the
+// command printed: 30000 lines of 101 bytes, 300 shown, 29700 omitted.
+func TestRunCommandCountsLinesTheOutputBufferDropped(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH — skipping")
+	}
+	const total = 30000
+	sup := supervisor.New(nil)
+	sup.AddCommand("flood", supervisor.CommandSpec{Command: "sh", Args: []string{"-c",
+		fmt.Sprintf(`i=1; while [ "$i" -le %d ]; do printf 'line-%%095d\n' "$i"; i=$((i+1)); done`, total)}})
+	srv := toolsServerOn(t, sup, config.Permissions{}, func(string) {})
+
+	shown := make([]string, 0, 300)
+	for i := total - 299; i <= total; i++ {
+		shown = append(shown, fmt.Sprintf("line-%095d", i))
+	}
+	const head = "exit 0\n\n[... 29700 lines omitted]\n"
+	res := callTool(t, srv, "run_command", map[string]interface{}{"name": "flood"})
+	if res.IsError || res.Text != head+strings.Join(shown, "\n") {
+		got, _, _ := strings.Cut(res.Text, "\nline-")
+		t.Fatalf("run_command flood (IsError %v): output starts %q, want %q, then the last 300 lines", res.IsError, got, head)
+	}
+}
+
+// exitedService runs a ue service that runs script once and exits, and
+// returns its supervisor once the output is in the log buffer.
+func exitedService(t *testing.T, script string) *supervisor.Supervisor {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH — skipping")
+	}
+	exited := make(chan struct{})
+	sup := supervisor.New(nil)
+	sup.AddService(supervisor.ServiceSpec{
+		Name:      "ue",
+		Command:   "sh",
+		Args:      []string{"-c", script},
+		Autostart: true,
+		Restart:   "never",
+		// OnExit fires only after the exit path has drained the output into
+		// the log buffer.
+		OnExit: func(supervisor.Exit) { close(exited) },
+	})
+	startedSupervisor(t, sup)
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the ue service did not exit")
+	}
+	return sup
+}
+
+// k74: the log buffer keeps 500 lines, and logs lines=1000 on a 600-line
+// producer returned 500 lines with no sign of the 100 dropped before them.
+// A request reaching past what the buffer holds, once it has dropped lines,
+// must say so; one the buffer can answer whole must not.
+func TestLogsMarksLinesTheBufferDropped(t *testing.T) {
+	srv := toolsServerOn(t, exitedService(t, printLinesScript(600)), config.Permissions{}, func(string) {})
+	const marker = "[... 100 lines omitted; the log keeps only the last 500]\n"
+	for _, tc := range []struct {
+		lines interface{}
+		want  string
+	}{
+		{1000, marker + lineRange(101, 600)},
+		{501, marker + lineRange(101, 600)},
+		{0, marker + lineRange(101, 600)}, // 0 asks for the whole buffer
+		{500, lineRange(101, 600)},
+		{10, lineRange(591, 600)},
+	} {
+		t.Run(fmt.Sprint(tc.lines), func(t *testing.T) {
+			res := callTool(t, srv, "logs", map[string]interface{}{"service": "ue", "lines": tc.lines})
+			if res.IsError || res.Text != tc.want {
+				t.Fatalf("logs lines=%v (IsError %v):\n got  %.120q…\n want %.120q…", tc.lines, res.IsError, res.Text, tc.want)
+			}
+		})
+	}
+}
+
+// k74, the control: a buffer that has never dropped a line holds the whole
+// log, so asking for more than it has, even more than 500, gets no marker —
+// also when it holds exactly 500 lines.
+func TestLogsNoMarkerWhenNothingWasDropped(t *testing.T) {
+	for _, printed := range []int{300, 500} {
+		t.Run(fmt.Sprint(printed), func(t *testing.T) {
+			srv := toolsServerOn(t, exitedService(t, printLinesScript(printed)), config.Permissions{}, func(string) {})
+			res := callTool(t, srv, "logs", map[string]interface{}{"service": "ue", "lines": 1000})
+			if want := lineRange(1, printed); res.IsError || res.Text != want {
+				t.Fatalf("logs lines=1000 on %d lines (IsError %v):\n got  %.120q…\n want %.120q…", printed, res.IsError, res.Text, want)
+			}
+		})
 	}
 }

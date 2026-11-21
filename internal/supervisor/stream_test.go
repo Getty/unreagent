@@ -137,7 +137,7 @@ func runHelper(t *testing.T, mode string, perLine time.Duration) []string {
 	case <-time.After(30 * time.Second):
 		t.Fatal("helper process did not finish — a stalled reader blocks it on a full pipe")
 	}
-	lines, err := sup.Logs("x", 0)
+	lines, _, err := sup.Logs("x", 0)
 	if err != nil {
 		t.Fatalf("Logs: %v", err)
 	}

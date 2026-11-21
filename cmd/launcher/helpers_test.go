@@ -114,8 +114,8 @@ func TestWarnIfMissingAppliesPathExtOnWindows(t *testing.T) {
 
 // k130, the other platforms: exec adds no extension outside Windows, so a
 // path without .exe names nothing exec can start even when its .exe sibling
-// exists. The Windows lookup must not reach these platforms: that path still
-// warns, with the message it had before.
+// exists. No extension may be added here either: that path still warns, with
+// the message it had before.
 func TestWarnIfMissingAddsNoExtensionElsewhere(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("covered by TestWarnIfMissingAppliesPathExtOnWindows")
@@ -159,6 +159,10 @@ func TestGetIntRefusesNonIntegralAndOutOfRange(t *testing.T) {
 		want string
 	}{
 		{"non-integral", 1.5, "'offset' must be an integer, got 1.5"},
+		// Trunc rounds toward zero, so v-Trunc(v) is negative here: a check
+		// for "v-Trunc(v) > 0" lets -1.5 through as -1.
+		{"negative non-integral", -1.5, "'offset' must be an integer, got -1.5"},
+		{"NaN", math.NaN(), "'offset' must be an integer, got NaN"},
 		{"too large", 1e20, rangeErr("1e+20")},
 		{"first value past MaxInt", pastMax, rangeErr(fmt.Sprint(pastMax))},
 		{"too small", -1e20, rangeErr("-1e+20")},

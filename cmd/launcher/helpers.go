@@ -12,11 +12,13 @@ import (
 	"strings"
 
 	"github.com/conflict-industries/unreagent/internal/mcp"
+	"github.com/conflict-industries/unreagent/internal/supervisor"
 )
 
-// warnIfMissing warns when path names nothing that could be started. A bare
-// name is looked up on PATH, by the rule exec.Command applies when the
-// service starts; anything else must exist as given (see pathFound).
+// warnIfMissing warns when path names nothing that could be started, by the
+// rules exec.Command applies when the service starts: a bare name is looked
+// up on PATH, anything else is checked by pathFound — as given, and on
+// Windows also with a PATHEXT extension added.
 func warnIfMissing(logger func(string), label, path string) {
 	if filepath.Base(path) == path {
 		found, err := exec.LookPath(path)
@@ -65,6 +67,35 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// toolOutputLines is how many lines of a command's output run_command,
+// run_python and run_node return.
+const toolOutputLines = 300
+
+// commandTail is tailLines for a one-shot tool's reply: the last n lines of
+// the command's output, led by an omittedMarker line when it printed more.
+func commandTail(res supervisor.CommandResult, n int) string {
+	text := tailLines(res.Output, n)
+	if k := res.LinesBefore(n); k > 0 {
+		return omittedMarker(k, "") + "\n" + text
+	}
+	return text
+}
+
+// omittedMarker is the line a tool reply puts where k lines are left out,
+// with why after a semicolon when given: "[... 100 lines omitted]". It
+// matches the supervisor's "[... N bytes omitted]".
+func omittedMarker(k int, why string) string {
+	unit := "lines"
+	if k == 1 {
+		unit = "line"
+	}
+	s := fmt.Sprintf("[... %d %s omitted", k, unit)
+	if why != "" {
+		s += "; " + why
+	}
+	return s + "]"
 }
 
 func getString(args map[string]interface{}, key, def string) string {
