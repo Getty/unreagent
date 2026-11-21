@@ -1,0 +1,36 @@
+---
+class: standard
+completed: 2026-11-21T16:08:15Z
+created: 2026-11-21T13:22:03Z
+id: 173
+priority: low
+started: 2026-11-21T14:18:23Z
+status: done
+tags:
+- mcp
+- tools
+title: read_file allows 256 KiB per call, above the 96 KiB reply cap
+updated: 2026-11-21T16:08:57Z
+---
+
+From k149. k149 caps run_* and logs replies at 96 KiB (toolReplyBytes, about what Claude Code takes from one tool by default), but the read_file tool allows up to 256 KiB per call. Done when read_file's per-call maximum and its default agree with the reply cap (or the difference is argued in the tool description), with a test. Lane: unreagent-worker; after k149 lands (cmd/launcher/filetools.go, helpers.go).
+
+Decision 2026-11-21 (main agent): read_file's per-call maximum and its default follow toolReplyBytes (48 KiB) including the reply framing, and the tool description takes the number from the constant. Bundled with k175 in one worker.
+
+Worker result (tree commit-ready, not committed; bundled with k175).
+
+Choice: readFileLimit = toolReplyBytes - 1<<10 = 48128 bytes (47 KiB), a const in cmd/launcher/filetools.go. The longest possible trailer, with int64-max values, is 113 bytes. I picked a whole KiB below the cap over the exact 49039 so the description reads in KiB. The description and the limit schema are built from readFileLimit with fmt.Sprintf: "At most 47 KiB per call", "offset=-48128 is the last 47 KiB", "default and maximum 48128". Paging is unchanged: the trailer "continue with offset=Y". A larger limit is still clamped, as before. A reply is at most 49152 bytes; an invalid byte becomes one U+FFFD character in the JSON, so characters stay at or below bytes.
+
+Test: TestReadFileReplyFitsTheCap checks three things: the bound with the int64-max trailer; that the limit schema names 48128; and that a 250,000-byte file with 3-byte runes, read by following the trailer offsets (default limit and limit=10 MiB), comes back in 6 calls, each reply at most 49152 bytes, joining to the file. It is red with readFileLimit back at 256 KiB (go test -overlay). Three existing tests pinned 256 KiB; their claims are kept and only the numbers change: TestReadFileLargeFileReturnsHeadWithTotal, TestReadFileNegativeOffsetReadsTail (-65536 becomes -48128, the description example), and TestReadFileLimitIsClampedTo256KiB renamed TestReadFileLimitIsClampedTo47KiB.
+
+Docs, not edited. Note: an offset of -65536 now returns the 47 KiB starting 64 KiB before the end, not the end of the log. For unreagent-skill-author: skills/unreagent-files/SKILL.md:165 (256 KiB), 174 (-65536 / 64 KiB), 177 (262144 / 256 KiB), 224 (example offset -65536), 230 (-262144), 301 (262144); skills/unreagent-iterate/SKILL.md:319-321 (256 KiB, -65536 / 64 KiB). For unreagent-doc-writer: README.md:1134 (offset=-65536 is the last 64 KiB; limit capped at 256 KiB).
+
+Check: same run as k175, all green; make windows built (compiled, not run).
+
+To review: read_file default/max is now toolReplyBytes - 1 KiB (47 KiB), description derived from the constant, paging test. Bundled with k175, one tree.
+
+Skill-author result (worktree agent-a8b82ae6eae275f57, uncommitted). Checked against filetools.go readFileLimit (= toolReplyBytes - 1 KiB = 48128), readFileRange and the read_file description. skills/unreagent-files/SKILL.md: tools table 47 KiB per call; offset example -48128 = last 47 KiB; limit default and maximum 48128 (47 KiB), 'so a reply with its trailer line stays within 48 KiB'; the end-of-log example is -48128, and the following paragraph (also line 227, '64 KiB', missed by the worker's list) now says that is the most one call returns and that a larger negative offset such as -65536 does not reach the end: 47 KiB from there plus a continue trailer, page on with offset=Y; error-table default 48128. skills/unreagent-iterate/SKILL.md:319-321: 47 KiB, offset -48128. .claude/skills/unreagent-mcp-tools/SKILL.md: one sentence that readFileLimit derives from toolReplyBytes and the description and limit schema are built from it. Left on purpose: unreagent-files line 180, the integer-string example "65536" (still a valid string form, not a size claim). Grep for 256 KiB / 262144 / -65536 / 64 KiB across skills/ and .claude/skills/: only that example and the new -65536 warning remain. Check: go test -count=1 ./internal/skills ok.
+
+Review 2026-11-21 (unreagent-reviewer): k173 has no findings. read_file's default and maximum are 48128 bytes, and a reply with its trailer is at most 49,152 bytes. The continue offsets are right for -48128, -65536 and -2^40, and the description and limit schema are built from readFileLimit. Invalid UTF-8 grows only the wire size, not the character count. The tree is shared with k175, which needs changes (see the k175 note), so it goes back to unreagent-worker as one tree. The Changes wording is in the k175 note.
+
+Committed as dae0492 (k173+k175 one commit; rebased on 9c8c567 without conflicts)
