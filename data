@@ -1,0 +1,135 @@
+---
+claimed_at: 2026-11-21T03:29:23Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T03:31:50Z
+created: 2026-11-21T00:50:03Z
+id: 96
+priority: low
+started: 2026-11-21T02:17:14Z
+status: done
+tags:
+- hermes
+title: hermes-setup drops comments and key order of the user's Hermes config
+updated: 2026-11-21T03:32:04Z
+---
+
+Found during k39: the merge goes through a Go map, so comments are dropped and keys re-sorted; only the first .bak keeps them (later runs do not back up again). A merge on yaml.v3 nodes would keep them. Also: hermesConfigMarker writes "do not edit" at the top of the whole user config, not just the unreagent block, which is misleading. Minor: a generated token is persisted to unreagent.local.yaml before the Hermes config is checked, so it stays when the merge refuses (harmless, the next run reuses it). Lane: unreagent-worker. Size M.
+
+
+**Note 2026-11-21** (k39 review): also persistGeneratedToken (cmd/launcher/hermes.go) rewrites unreagent.local.yaml non-atomically and drops its comments, and runs before the Hermes config is checked. Once a .bak exists, later runs rewrite the Hermes config with no byte copy, so comments/key order added after the first run are lost (keys and values survive; pre-existing behaviour).
+
+**From the k97 review (2026-11-21):** (1) hermesSetup creates mcp.token and writes it to unreagent.local.yaml (hermes.go:67-87) before it resolves and merges the Hermes config, so a refused merge (non-mapping mcp_servers) or an unparsable Hermes config still leaves a changed local.yaml — consider generating/persisting the token only after the merge succeeds; no test covers it (TestHermesSetupRefusesUnmergeableServers uses a user-set token). (2) persisting the token rewrites unreagent.local.yaml (hermes.go:184-208), losing its comments — same family as this card.
+
+Worker done (worktree-agent-aa419bf757ea9233a, uncommitted, base c563b81; hermes.go, hermes_test.go): node-based merge of the Hermes config and unreagent.local.yaml (comments, key order, quoting, other servers survive; only mcp_servers.<name> replaced); marker is a head comment on the unreagent entry, the old top-of-file line removed; token kept in memory until the merge succeeds, then local.yaml written atomically before the Hermes config (a failed Hermes write leaves the token saved, re-run finishes); CRLF normalised before parsing; new refusals: alias / merge-key mcp_servers. Output now 2-space indented; local.yaml ends up 0600. Windows rename-over unverified. README + example yaml follow-up goes into the same commit after review. Not done: replacing the entry still drops keys the user added inside it (e.g. Hermes timeout); only the first YAML document is kept (as before).
+
+**Review (unreagent-reviewer, 2026-11-21): CHANGES REQUESTED.** Reviewed: cmd/launcher/hermes.go and cmd/launcher/hermes_test.go (uncommitted, worktree base c563b81), against k39 (07e0218). Checks I ran in the worktree, all green: gofmt -l cmd internal (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -race -count=3 ./cmd/launcher; make linux; make windows. No test skipped on Linux uid 1000.
+
+**Blocking**
+1. hermes.go:464 (`servers.Content[i+1] = entry`): replacing the entry drops any anchor defined inside the old entry. Aliases elsewhere are left dangling, and the written Hermes config is unparsable: PyYAML says "found undefined alias", yaml.v3 says "unknown anchor". Hermes cannot load it, and the next hermes-setup refuses it as not parseable. The aliased values survive only in .bak, and only if this run created the .bak. This is a regression: k39 expanded the aliases and wrote valid YAML. Reproducer (a filtered second view of the server):
+```
+mcp_servers:
+  unreagent: &unreagent
+    url: http://127.0.0.1:8765/mcp
+    headers: {Authorization: Bearer old}
+  unreagent-logs:
+    <<: *unreagent
+    tools: {include: [logs, status]}
+```
+Run 1 writes `!!merge <<: *unreagent` with no anchor left. It also happens with an anchor on a sub-node of the entry (`headers: &h` used by another server). Fix: refuse when the old entry's subtree carries an anchor, like the alias refusal does. Also decode hermesOut and localOut before any write, and refuse if the decode fails or the result differs from the expected data. Add a regression test with this layout.
+
+**Should fix**
+2. hermes.go:351/447: an anchored mcp_servers (`mcp_servers: &srv` plus `backup_servers: *srv`) is extended in place, so every alias gains the unreagent entry too. That is the reason the alias case is refused (:361), so refuse this mirror case the same way, or document it. k39 changed only mcp_servers.
+3. hermes.go:310-312: yaml.v3 v3.0.1 rewrites every merge key in the file as `!!merge <<:`, on lines outside the entry. The output is still valid YAML for PyYAML and yaml.v3, but it contradicts "the rest of the config stays as written". Clearing Tag "!!merge" on scalar nodes before encoding gives a plain `<<:` again (checked in a scratch copy).
+4. hermes.go:142 + 494-513: writeFileAtomic is new for local.yaml. Fix or document each part. (a) A symlinked unreagent.local.yaml becomes a regular file, and the shared target does not get the token. k39 followed the symlink. For the Hermes config this predates k96 (k39 and 0.0.9 did the same). filepath.EvalSymlinks before temp+rename would fix both files. (b) An existing 0644 local.yaml ends up 0600 (k39 kept the mode). Arguably better for a file holding a token, but document it. (c) A read-only project directory with a writable local.yaml is now refused (fail-closed, nothing written; k39 succeeded).
+
+**Nits**
+- No fsync before the rename (:506-509); optional tmp.Sync().
+- A `unreagent.local.yaml.tmp-*` left by a kill mid-write holds the token and is not covered by the README .gitignore advice.
+- A comment-only file holding the legacy marker keeps that marker on the first run (prefix path, :279-283).
+- In flow style with a comment inside the braces, the comma moves to the next line. Valid YAML, but don't promise verbatim flow style.
+- An emoji in a plain value is re-quoted as "\U0001F680…" (same value).
+- The card note does not name the conditional skip of TestHermesSetupHermesWriteFailureKeepsSavedToken (Windows, root).
+
+**Verified OK**
+- Probes: 42 configs, run twice each: nested comments, flow style (with comments inside the braces), anchors elsewhere, multi-line, `---`/`...`, BOM, empty, whitespace-only, comments-only, CRLF, 400-char lines, non-ASCII, quoted keys, YAML 1.1 bools, tags, 4-space indent, a Hermes-like config. PyYAML 6.0.2 reads every output except the anchor cases above, and each equals its input plus the entry. Every comment survives except the ones inside the replaced entry.
+- Normalisation: 2-space indent; blank lines between nodes dropped; `---`, `...` and BOM dropped; CRLF becomes LF; foot comments move to the deepest preceding node; multi-line scalars joined. No line wrapping. Run 2 equals run 1.
+- Refusals hold, and each leaves the config untouched with no .bak: list, non-string key, duplicate, alias, merge key, unparsable input, undefined alias in the input. The new alias and merge-key refusals cannot hit a config that 0.0.9 or k39 wrote (yaml.Marshal never emits anchors), only hand-written ones; refusing them fails closed and is justified.
+- Marker: only an exact legacy line in the document head, the root head or the first key's head is removed. Comments that resemble it are kept, and a legacy line deeper in the file is kept. One marker per entry across runs. The marker string has not changed since a6ce28d.
+- Token order: backup, mkdir, local.yaml, Hermes, checked by reading and by mutation. Nothing is written before both outputs are encoded. Only the run's own temp file and its own O_EXCL .bak are ever removed, and no user file is truncated.
+- Tests: 8 mutations, all killed: no legacy removal; Hermes written before local; token written before the merge; no CRLF normalisation; no foot-comment move; no comment-only prefix; marker appended every run; no merge-key check. The k39 test file, run verbatim against the new code, passes. In the diff, the k39 assertions are unchanged.
+- The skip is honest, and it runs here and in CI (ubuntu-latest, non-root).
+- Scope: both files are unreagent-worker's per OWNERS. No German.
+
+Windows: compiled only (make windows, GOOS=windows go vet). MoveFileEx rename-over is UNVERIFIED.
+
+Pre-existing, not k96 (candidate follow-ups): user keys inside the unreagent entry (timeout, tools) are dropped on a re-run; only the first YAML document is kept (PyYAML rejects multi-document files anyway).
+
+Back to unreagent-worker for 1-4; README/example (unreagent-doc-writer) after the fix.
+
+**Back to the worker (2026-11-21), review requested changes:** (1) blocking — replacing the entry drops anchors defined inside it, aliases elsewhere dangle, Hermes cannot load the file: refuse an old entry that holds an anchor, re-decode both outputs before writing; (2) an anchored mcp_servers changes its aliases too — refuse like the alias case; (3) yaml.v3 rewrites every merge key as '!!merge <<:' — clear the tag before encoding; (4) writeFileAtomic replaces a symlinked local.yaml / Hermes config with a regular file and turns 0644 into 0600. **Main-agent choices (mine, not the maintainer's):** resolve symlinks and write the target; keep an existing file's mode, new files 0600; a read-only project directory stays refused, no fallback (UE needs the project directory writable anyway), documented. Nits taken: fsync before rename, comment-only file keeps the old marker. Doc follow-up (README hermes-setup + example yaml) after the fix, in the same worktree, incl. the temp-file name for the .gitignore advice and the normalisation list. User keys inside the entry dropped on re-run = k116.
+
+**Fix round 2 done (2026-11-21), worktree agent-aa419bf757ea9233a:** anchors in the old entry and an anchored mcp_servers are refused; checkEdit decodes both outputs before any write; merge keys round-trip as '<<:'; writeFileAtomic follows a symlinked file (not a symlinked directory — worker's choice, so the error names the directory the user knows), keeps the mode (new files 0600), fsyncs, names the directory on a read-only project dir. Dangling symlinks are replaced by a regular file (documented in the code, untested). Temp-file pattern: <basename>.tmp-<digits>. Worktree fast-forwarded to main 4b71fea by the main agent (hermes files untouched on main). Doc follow-up (README hermes-setup + example yaml) now in the same worktree, then one review for code and docs.
+
+Code fix round 2 + docs done (2026-11-21), worktree agent-aa419bf757ea9233a on main 4b71fea: hermes.go/hermes_test.go (worker), README hermes-setup section + .gitignore advice (unreagent.local.yaml.tmp-*) + unreagent.example.yaml 152-158 (doc-writer). Doc-writer corrections to the worker's account: a refused local.yaml edit leaves no .bak, a failed local.yaml write may leave one; duplicate keys are refused at parse. One review for code and docs.
+
+**Review round 2 (unreagent-reviewer, 2026-11-21): CHANGES REQUESTED, for the docs only. The code is ready apart from nits.** Reviewed in the worktree on main 4b71fea: cmd/launcher/hermes.go and hermes_test.go (worker), README.md and unreagent.example.yaml (doc-writer). Checks I ran there, all green: gofmt -l cmd internal skills (empty); go vet ./... for linux and windows; go test -count=1 ./... (launcher, config, mcp, skills, supervisor ok); go test -race -count=3 ./cmd/launcher; make windows; make linux. No skips on Linux uid 1000. The worker's k96-checks.txt predates the fast-forward (it has no internal/skills line); my run covers that package.
+
+**Round-1 findings: all fixed.**
+- (1) The five anchor cases, including the filtered-view reproducer, are refused. Nothing is written: config byte-identical, no .bak, no local.yaml, no temp file.
+- (2) An anchored mcp_servers is refused.
+- (3) No `!!merge` appears in any output.
+- (4) Symlinks are kept, a relative chain is followed, an existing mode is kept (0444 included), new files get 0600, the temp file is fsynced, and a read-only directory is named in the error.
+- Nits: the old marker is now removed from a comment-only file, and the temp-file .gitignore line is documented.
+- Corpus: 49 configs, run twice each. Every non-refused output reads in PyYAML 6.0.2 and equals its input plus the entry; run 2 equals run 1. checkEdit also catches `mcp_servers: &x ~` aliased elsewhere, which no explicit check covers.
+
+**Docs (unreagent-doc-writer)**
+- D1 README.md:659-669: the normalisation list misses two changes that hit typical hand-written configs. (a) The spaces before an inline comment collapse to one (`model: x   # m` becomes `model: x # m`), so aligned comments lose their alignment. (b) A flow collection written over several lines goes onto one line (`layout: {` / `p: 1,` / `q: 2` / `}` becomes `layout: {p: 1, q: 2}`). Also, a flow mcp_servers loses its own line layout, and a comma after an inner comment moves to the next line. Line 668 only mentions the marker.
+- D2 README.md:665-667: emoji (anything outside the BMP) are re-quoted as `\U…` escapes everywhere, including single-quoted values and keys, not only plain values. A folded `>` block also gains a trailing blank line.
+- D3 README.md:673-674: the quoted `Hermes config <path> left untouched: ...` is the message for the mcp_servers, anchor and safety-check bullets only. A duplicate key or an unparsable file stops with `Hermes config <path> not parseable: ...`. README.md:689: an unparsable local.yaml, or an mcp that is not a mapping, is already refused by the config load in step 1, with that load's own error. Only an aliased or anchored mcp reaches `add the token to ... (nothing written)`. The stated effect (nothing written, no .bak) is right.
+- Nits: README.md:635: a whitespace-only file does get a .bak (behaviour predates k96). README.md:698: a read-only project directory matters only when a token is generated. A BOM is kept in a comment-only file on the first run.
+- Verified OK: every listed normalisation happens. The old claims are gone. The .bak statements match the code, checked by probe: a refused merge or a refused local.yaml edit leaves no .bak, and a failed local.yaml write can leave one. The temp-file name and the .gitignore line match CreateTemp (`<name>.tmp-<digits>`). k118 exists. unreagent.example.yaml 152-163 is accurate. No German.
+
+**Code (unreagent-worker): nits only**
+- C1 hermes.go:609-615: a dangling symlink is replaced by a regular file. For the Hermes config this means a fresh config holding only the unreagent entry, and no .bak (nothing was read). It is not data loss: the target is untouched, and k39 replaced every symlink. But a dangling link usually means the real config sits somewhere unavailable, and refusing with "<path> is a symlink to <target>, which does not exist" would fail loudly. The behaviour is untested and not in the README. Main agent's call; if it stays, add a test and a README sentence.
+- C2 hermes.go:549-553: because of reflect.DeepEqual, a `.nan` anywhere in the file makes checkEdit refuse with the misleading "would change more than mcp_servers.unreagent". It fails closed and is very unlikely in a Hermes config.
+- C3 hermes_test.go:302-324: the anchor subtests assert only "refused and untouched". With anchorIn or the anchored-mapping check disabled, checkEdit still refuses, so those checks and their clearer messages are not pinned by any test. Asserting the message would pin them.
+- Symlinked-directory choice: sound. A path through a linked directory still renames atomically inside the real directory (probe: link kept, real file replaced), and the error names the directory as the user gave it (tested).
+- Mutations, 11 tried. Killed: checkEdit returning nil; no plainMergeKeys; no symlink follow; mode always 0600; prefix keeps the legacy marker; no compare outside the edited key; no directory in the error; all three anchor guards off together. Survived: anchorIn off and the anchored-mapping check off (both masked by checkEdit, see C3), and the empty-parent drop in withoutPath (equivalent mutant). The k39 test file, run verbatim, passes. The skips are honest: Windows permission bits and directory permissions, root, a failed symlink creation.
+
+Windows: compile-only (make windows, GOOS=windows go vet). Rename-replace via MoveFileEx is UNVERIFIED, and so is a kept read-only mode followed by a rename onto a read-only target. Go's Windows os.Remove clears the read-only attribute, so temp cleanup holds (from reading the source, not running it).
+
+D1-D3 go to unreagent-doc-writer; C1 is the main agent's decision; C2 and C3 are optional for the worker. After the doc fix, the code needs no further review round.
+
+**Round 2 verdict handled (2026-11-21):** code ready but nits; docs need D1–D3. **Main-agent choice (mine):** C1 — a dangling symlink at either path is refused with nothing written (the louder failure; the real config is likely somewhere unavailable), instead of being replaced by a fresh regular file. C2 (.nan trips checkEdit with a wrong message) and C3 (assert the anchor refusal messages) taken by the worker; D1–D3 + doc nits to the doc-writer, in parallel, disjoint files. Then a short re-review of exactly these.
+
+Round 3 done (2026-11-21), same worktree: C1 dangling symlink at either path refused before any write (writeTarget; message names link and target; local.yaml only checked when a token is generated); C2 checkEdit compares NaN as equal (sameValue); C3 every explicit refusal asserts its own message, mutations M9–M12 red. Docs: D1–D3 + nits, dangling-symlink message quoted, symlink sentence consistent. Back to the same reviewer for a short pass over round 3 + docs.
+
+Review round 3 (unreagent-reviewer), covering code and docs: READY, approve with nits. None of the nits blocks the commit.
+
+Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go (unreagent-worker); README.md, unreagent.example.yaml (unreagent-doc-writer). No edits outside these four. No German in the diff.
+
+Check, run by the reviewer:
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: all packages ok, and -v shows no skips.
+- go test -race -count=3 ./cmd/launcher: ok.
+- make windows: dist/unreagent.exe built.
+
+Verified:
+- C1, dangling symlink: refused with nothing written, for the Hermes config always and for local.yaml when a token is generated. When a token is given, local.yaml is not needed and the run succeeds. Extra probes: a relative target, a chain, a loop and a missing directory are all refused with no file, .bak, temp file or directory created. A live link is still written through to its target. With the binary, the message, the "Error:" prefix and exit 1 match README.md:704 exactly.
+- M7, the dangling case returning the link path: red in TestHermesSetupRefusesDanglingSymlinks, both subtests, and nowhere else. Restored, and cmp-identical to the worktree.
+- C2, NaN: .nan now merges and is idempotent. A NaN that turns into 0 is still caught.
+- C3: the refusal table asserts each message.
+- Corpus, 49 cases: outputs are byte-identical to round 2 except n1 (.nan), which now merges. The 6 refusals write nothing: no change, no .bak, no local.yaml, no temp file. No !!merge anywhere. Every merged output reads in PyYAML 6.0.2. The only output that is not idempotent is the BOM comment-only file: the BOM is kept on run 1 and dropped on run 2, as README.md:667-668 says.
+- Docs, D1-D3 and the nits: checked against real output. Inline-comment collapse, flow collections put on one line, the flow mcp_servers comma move, emoji in plain and single-quoted values and in keys, the folded-block blank line, "not parseable" for duplicate keys at any level, local.yaml refused at load (int, list, string, unparsable, duplicate key), the zero-byte rule and the read-only directory rule all hold.
+
+Nits:
+- N1, README.md:672 and :676-678 (doc-writer): a literal | block holding a character outside the BMP is NOT kept. It becomes one double-quoted line with \U escapes, e.g. lit: "line \U0001F600\ntwo\n". A double-quoted value gets the escape too. The value is preserved. Suggestion: say that any string holding one is written double-quoted with a \U escape, a literal | block included.
+- N2, README.md:708-710 (doc-writer): the unrequested hint holds as examples. Both causes do produce exactly this refusal. But "usually" is an unverified frequency claim, and the most mundane cause is missing: the target was moved, renamed or deleted, or the link has a typo. Deleting the link is also a fix, since hermes-setup then writes a new file. Suggestion: "for example", and name "moved or deleted".
+- N3, hermes.go:673-674 (worker): the default branch passes on the bare EvalSymlinks error. A symlink loop at unreagent.local.yaml prints "Error: EvalSymlinks: too many links (nothing written)" right after "Hermes config: <path>", which points the user at the wrong file. It is safe, since nothing is written. Suggestion: wrap the error with the path.
+- N4, hermes.go:670-672 (worker, cosmetic): in a chain (link -> link2 -> missing), the message says the first hop "does not exist", though it exists as a link. This matches README.md:705-706 ("the target as the link stores it").
+
+Windows: compile-only. The rename-replace and the dangling-link detection (Lstat ModeSymlink, EvalSymlinks with IsNotExist) are unverified there. The new symlink test skips where symlinks cannot be created.
+
+Committed as 8f24738 on main (ff from worktree). Review nits k122 open.
