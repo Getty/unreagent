@@ -1,0 +1,155 @@
+---
+claimed_at: 2026-11-21T07:46:36Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:47:43Z
+created: 2026-08-21T23:23:32Z
+depends_on:
+- 8
+id: 21
+priority: medium
+started: 2026-11-21T06:17:03Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: Animation (Class A)'
+updated: 2026-11-21T07:47:55Z
+---
+
+- ue-anim-blueprint -- anim_blueprint_modify, blueprint_query
+- ue-anim-montage -- montage_modify
+- ue-anim-sequence -- anim_edit
+- ue-blend-space -- blend_space
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size M. k19 first.
+
+Written from the toolkit's C++ source only. There is no VibeUE text, so no attribution line is needed. None of it was run against a live editor, and each skill says so.
+
+Files:
+- skills/ue-blend-space/SKILL.md (300 lines): blend_space, all 10 operations.
+- skills/ue-anim-montage/: SKILL.md 266, notifies.md 106, curves.md 52. montage_modify, all 24 operations.
+- skills/ue-anim-sequence/: SKILL.md 214, sequences.md 168, meshes.md 167. anim_edit, all 11 dispatched operations.
+- skills/ue-anim-blueprint/: SKILL.md 255, state-machines.md 246, transitions.md 271, anim-nodes.md 256, layers.md 139. All 39 anim_blueprint_modify operations, plus the AnimBP parts of blueprint_query. Its parameters are handed off to ue-blueprints section query.
+
+Hedged as engine behaviour:
+- montage length after segment edits;
+- which notify the `properties` land on;
+- curve tangent semantics;
+- resample's effect on play length;
+- what extract_range's trim does to notifies and curves;
+- replace_skeleton track mapping;
+- whether a bone rename and ref-pose changes propagate;
+- dirty marking with save=false;
+- undo entries;
+- the real state machine name after create_state_machine;
+- transition priority order and default duration;
+- which skeletons count as compatible;
+- whether the schema silently refuses pin values;
+- property text formats;
+- 2D blend space pin names.
+
+Left out on purpose:
+- anim_edit advertises get_curves, add_curve, remove_curve and set_curve_keys, but the code never dispatches them. The skill says so rather than documenting them.
+- RemoveLayerInterface exists in the code but is not dispatched; the skill says so.
+- Coordinate space of inspect_track values.
+- Order of transform_vertices' scale, rotation and translation.
+
+Where the header or plugin docs disagree with the code, the skills follow the code. Examples: the schema defaults, batch "atomic", resample "fixes metadata", GetVariable, add_transition duration. The toolkit bugs are noted on k132.
+
+Checks:
+- go test -count=1 ./internal/skills: ok.
+- gofmt -l cmd internal skills: empty.
+- go vet ./...: clean.
+- Every quoted error string was traced to the toolkit source; the remaining misses are Printf templates and bridge-built strings.
+
+Four animation skills ready for review: skills/ue-anim-blueprint, ue-anim-montage, ue-anim-sequence, ue-blend-space (12 files, untracked in the k21 worktree). Checks green: go test ./internal/skills, gofmt, go vet. Toolkit bugs on k132. Not committed.
+
+**Review 2026-11-21** (unreagent-reviewer): CHANGES NEEDED (minor). Files: skills/ue-anim-blueprint/{SKILL,state-machines,transitions,anim-nodes,layers}.md, skills/ue-anim-montage/{SKILL,notifies,curves}.md, skills/ue-anim-sequence/{SKILL,sequences,meshes}.md, skills/ue-blend-space/SKILL.md (12 files, untracked, k21 worktree, base 9e624eb). Owner per ack-team: unreagent-skill-author for all; no edits outside skills/.
+
+Check run in the worktree: gofmt -l cmd internal skills (clean), go vet ./... (clean), go test -count=1 ./... (all ok), make windows (rc 0). Also go test ./internal/skills, vet and gofmt against main HEAD e66eb98 plus the four new dirs in a scratch copy: ok, no skips. Skill text only, no Windows-path code involved.
+
+Verified against the toolkit source: operations, aliases, defaults and error strings of all four tools, including all 39 anim_blueprint_modify operations and the layers section (AnimLayerEditor.cpp, handlers MCPTool_AnimBlueprintModify.cpp:1458-1631, :1768-1795). Frontmatter: toolkit_tools hand-checked against MCPToolRegistry.cpp (k18 lint not landed), no unreal_classes, correct. Consistent with main: ue-tasks (300 s, no unknown-parameter warning on queued calls), ue-assets (save_asset), the ue-blueprints hand-off restates no parameters. No skill recommends a long direct call (k140 clean). English only. ue-blend-space: no findings. The proposed Changes entry is accurate.
+
+Required (minor):
+1. skills/ue-anim-blueprint/SKILL.md:46 lists `Blueprint path cannot be empty`, which cannot be reached: ExtractRequiredString (MCPTool_AnimBlueprintModify.cpp:33) returns `Missing required parameter: blueprint_path` first, as :41-43 say. Drop the bullet.
+2. skills/ue-anim-sequence/SKILL.md:133-134 says each batch entry has `message` or `error`. Successful replace_skeleton entries carry path, success, old_skeleton, new_skeleton and no message (AnimTrackEditor ReplaceSkeleton); sequences.md:166-167 is right.
+3. skills/ue-anim-sequence/SKILL.md:76-77 "A component you leave out is 0" contradicts meshes.md:149-153: transform_vertices `scale` defaults a missing component to 1 and accepts a bare number. Name the exception.
+4. skills/ue-anim-blueprint/transitions.md:167-174: when the source is boolean and the comparison is not Equal/NotEqual, RecreateComparisonNodeWithType removes the old node (AnimTransitionConditionFactory.cpp:995-1003), CreateComparisonNode fails, and ConnectTransitionNodes only logs a warning, links to the removed node and returns success (:184-213). The comparison node is gone though the call succeeded. Document it.
+5. skills/ue-anim-blueprint/transitions.md:192-221: a failed add_comparison_chain (unknown comparison_type, a boolean with Greater/Less) returns an error after the getter node was already added to the transition graph, without compile or save. Say the stray getter stays and how to remove it (delete_condition_node).
+
+Optional nits:
+6. skills/ue-anim-montage/SKILL.md:54 and :92: create takes no montage_path, but MCPTool_MontageModify.h:58 declares montage_path required, so the bridge schema marks it required. Say so.
+7. skills/ue-anim-blueprint/layers.md:34-36 dismisses the domain note "recompile before list_layers" with an inference about engine behaviour; hedge it, or keep the note's advice.
+8. skills/ue-anim-blueprint/state-machines.md:224: entries for "Invalid operation format" carry no `type`.
+9. skills/ue-anim-blueprint/transitions.md:9-11: for setup_transition_conditions a wrong state machine name surfaces as `No transitions found in state machine '<n>'` inside a success.
+10. skills/ue-anim-blueprint/transitions.md:252-256: `Unknown error setting up transition conditions` also appears when only the compile failed.
+11. skills/ue-anim-blueprint/transitions.md:180-182: connect_to_result's pin-not-found error (BuildAvailablePinsError) is not listed.
+12. skills/ue-anim-blueprint/anim-nodes.md:219-220: "(default false: skip nodes whose position is not 0, 0)" reads as if false skips; describe true.
+13. skills/ue-anim-blueprint/SKILL.md:186-189 says "parent class name"; the ParentClass tag is a class path, as ue-blueprints query.md:36-37 says.
+14. skills/ue-anim-sequence/meshes.md: the possible inspect_mesh crash on a null skin weight buffer (MCPTool_AnimEdit.cpp:1108-1115, unverified, k132) is not mentioned.
+
+Review fixes (all 14 points), each checked against the toolkit source first. Line numbers are after the edit.
+1. ue-anim-blueprint/SKILL.md:45-46 dropped the unreachable `Blueprint path cannot be empty` (ExtractRequiredString, MCPToolBase.h:64, rejects an empty value first).
+2. ue-anim-sequence/SKILL.md:136-143 batch entries: `error` on failure, `message` and `asset_path` on a succeeded adjust_track/resample entry, `path` plus `old_skeleton`/`new_skeleton` on replace_skeleton (AnimTrackEditor.cpp:540-551).
+3. ue-anim-sequence/SKILL.md:79-80 names the exception: transform_vertices `scale` defaults a missing component to 1 and takes a bare number (MCPTool_AnimEdit.cpp:928-943).
+4. ue-anim-blueprint/transitions.md:177-183 new bullet: a boolean source on a non-Equal/NotEqual comparison deletes the comparison node and still succeeds (AnimTransitionConditionFactory.cpp:184-213, :995-1003, :549-561).
+5. ue-anim-blueprint/transitions.md:228-236 new bullet: a failed add_comparison_chain leaves the unconnected GetVar_ getter, with no compile or save; remove it with delete_condition_node. Also inside batch and setup_transition_conditions, where the final compile saves it (AnimTransitionConditionFactory.cpp:313-364, MCPTool_AnimBlueprintModify.cpp:1208-1217).
+6. ue-anim-montage/SKILL.md:58-62 and :98: the schema marks montage_path required (MCPTool_MontageModify.h:58), create never reads it (cpp:48-51), neither the bridge nor the plugin enforces it. :63 now says "checked before the operation runs" (operation is read first).
+7. ue-anim-blueprint/layers.md:33-39 keeps the notes' advice (compile before list_layers) and hedges whether add_layer_interface's own compile is enough.
+8. ue-anim-blueprint/state-machines.md:223-226, :228-232: an `Invalid operation format` entry has only success and error, no type; results are in operation order (AnimationBlueprintUtils.cpp:836-843).
+9. ue-anim-blueprint/transitions.md:10-13: in setup_transition_conditions a wrong state machine name surfaces as `No transitions found in state machine '<n>'` inside a success (AnimStateMachineEditor.cpp:257-258, AnimationBlueprintUtils.cpp:1533-1538).
+10. ue-anim-blueprint/transitions.md:275-278: `Unknown error setting up transition conditions` also when only the final compile failed (AnimationBlueprintUtils.cpp:1827-1840, MCPTool_AnimBlueprintModify.cpp:1431-1439).
+11. ue-anim-blueprint/transitions.md:193-197: connect_to_result's pin errors `Cannot find output pin. Available output pins: [..] ` / `... No output pins available on node.` (AnimNodePinUtils.cpp:111-149).
+12. ue-anim-blueprint/anim-nodes.md:218-221: preserve_existing now describes what true does (GraphLayoutHelper.cpp:33-43).
+13. ue-anim-blueprint/SKILL.md:185-192: type_filter matches the parent class path, as on main's ue-blueprints query.md.
+14. ue-anim-sequence/meshes.md:44-48: hedged note on the possible inspect_mesh crash when LOD 0 has no skin weight buffer (MCPTool_AnimEdit.cpp:1108-1115, unverified, k132 item 20).
+Checks: go test -count=1 ./internal/skills ok; gofmt -l cmd internal skills empty. Two new quote-check misses are BuildAvailablePinsError templates with Context "pin" filled in. Nothing outside the k21 skill dirs touched; not committed.
+
+Review fixes done: all 14 points addressed in the k21 skill dirs, each checked against the toolkit source; changed lines are in the note above. go test ./internal/skills ok, gofmt clean. Not committed.
+
+**Review round 2, 2026-11-21** (unreagent-reviewer): READY. Files: skills/ue-anim-blueprint/{SKILL,state-machines,transitions,anim-nodes,layers}.md, skills/ue-anim-montage/SKILL.md, skills/ue-anim-sequence/{SKILL,meshes}.md changed in this round; ue-blend-space/SKILL.md, ue-anim-sequence/sequences.md, ue-anim-montage/{notifies,curves}.md unchanged (diffed against the round-1 text). Untracked, k21 worktree, base 9e624eb. Owner per ack-team: unreagent-skill-author; nothing outside the four skill dirs.
+
+Check run in the worktree: gofmt -l cmd internal skills (clean), go vet ./... (clean), go test -count=1 ./... (all ok), make windows (rc 0). Against main b26bbb1 (k10-k12) plus the four dirs in a scratch copy: gofmt clean, vet clean, go test -count=1 ./... all ok, including internal/skills (12 tests) and the shipped-set tests in cmd/launcher (TestMaterializeWritesEverySkill, TestCheckSkillDirsRejectsCollisions, TestSkillsTool*), no skips. Skill text only, no Windows-path code involved.
+
+Main b26bbb1: k10-k12 changed nothing under skills/. No name collides with the 19 skills there, case ignored, prefixed or not; no section is named skill or after a Windows device; every name: is a plain one-line value. Every cross-reference (ue-assets, ue-blueprints and its sections query/modify, ue-tasks, ue-context with category animation, unreagent-iterate, the four k21 skills) resolves, and refers by the shipped name. No main skill refers to the anim domain, so nothing contradicts.
+
+Each round-1 point checked against the toolkit source:
+1. ue-anim-blueprint/SKILL.md:45: the unreachable bullet is gone (MCPToolBase.h:64).
+2. ue-anim-sequence/SKILL.md:136-143 matches AnimTrackEditor.cpp:166-182, :338-360, :541-557.
+3. ue-anim-sequence/SKILL.md:79-80 matches MCPTool_AnimEdit.cpp:928-943.
+4. ue-anim-blueprint/transitions.md:177-183 matches AnimTransitionConditionFactory.cpp:184-213, :548-562, :995-1003 (IsComparisonNode maps to Equal/NotEqual names, so only the other four fail).
+5. ue-anim-blueprint/transitions.md:228-236 matches factory :313-364 (GetVar_ ID set before the comparison), handler MCPTool_AnimBlueprintModify.cpp:1204-1217, batch AnimationBlueprintUtils.cpp:984, setup :1724-1746; delete_condition_node removes any node but the result (:452-498).
+6. ue-anim-montage/SKILL.md:58-66, :98: create is dispatched before montage_path is read (MCPTool_MontageModify.cpp:48-62); neither MCPToolRegistry nor the bridge (lib.js:120-145 only builds the schema) enforces required.
+7. ue-anim-blueprint/layers.md:33-39: hedged, follows the domain note.
+8. ue-anim-blueprint/state-machines.md:223-232 matches AnimationBlueprintUtils.cpp:832-844.
+9. ue-anim-blueprint/transitions.md:10-13 matches AnimStateMachineEditor.cpp:250-262 and AnimationBlueprintUtils.cpp:1530-1539.
+10. ue-anim-blueprint/transitions.md:273-278 matches AnimationBlueprintUtils.cpp:1827-1840 and handler :1428-1439.
+11. ue-anim-blueprint/transitions.md:193-197: confirmed reading of the two new quote misses. FindPinWithFallbacks passes Context TEXT("pin") (AnimNodePinUtils.cpp:113), and BuildAvailablePinsError (:119-149) yields exactly `Cannot find output pin. Available output pins: [<a>] [<b>] ` and `Cannot find output pin. No output pins available on node.`
+12. ue-anim-blueprint/anim-nodes.md:218-221 matches GraphLayoutHelper.cpp:33-43 and skipped_nodes (handler :2262).
+13. ue-anim-blueprint/SKILL.md:185-192 matches MCPTool_BlueprintQuery.cpp:147-161 and main's ue-blueprints query.md:36-40.
+14. ue-anim-sequence/meshes.md:44-48: hedged, unverified, no repeated call advised.
+ue-anim-montage/SKILL.md:63 "checked before the operation runs" is right: operation is read first (cpp:32-46).
+
+Optional nit, not blocking:
+- ue-anim-sequence/SKILL.md:137-139 ties `asset_path` to a succeeded adjust_track/resample entry. Every entry, failed ones too, carries `asset_path` (AnimTrackEditor.cpp:167, :338), as every replace_skeleton entry carries `path` (:541). Could read "Every adjust_track or resample entry has the path under asset_path; a succeeded one also a message.
+
+**Decision 2026-11-21 (main agent):** committed as reviewed in round 2. The optional nit (ue-anim-sequence/SKILL.md:137-139 reads as if only a successful adjust_track or resample entry carries asset_path; every entry has it, failed ones too: AnimTrackEditor.cpp:167, :338) goes to the skill-author follow-up that adds the k140 timeout hand-off to the animation skills once k140 has landed.
+
+Committed as d535e87 (rebased onto 6a6f8b5, ff-merged to main); full check green.
