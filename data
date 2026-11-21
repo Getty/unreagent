@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-11-21T02:09:15Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:09:28Z
+created: 2026-11-14T04:58:02Z
+id: 92
+priority: low
+started: 2026-11-21T01:42:32Z
+status: done
+tags:
+- release
+- ci
+title: Use the Changes section as the GitHub release notes in release.yml
+updated: 2026-11-21T02:09:28Z
+---
+
+release.yml creates the release with --generate-notes, which yields only a compare link (no PRs in this repo). For v0.0.9 the notes were replaced by hand with the 0.0.9 section of Changes. Make the workflow do it: extract the section for ${GITHUB_REF_NAME#v} from Changes (lines after the version line up to the next version line), strip the two-space indent, append the "Full Changelog" compare link, and pass it via --notes-file. Fail the release when the section is missing or empty, so a tag without a stamped Changes section cannot publish. No dry run exists for the tag push, so test the extraction as a script locally against the current Changes.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: release.yml still uses gh release create --generate-notes. The Changes format supports extraction (version line, two-space bullets). Extract the section for ${GITHUB_REF_NAME#v}, fail on an empty section or {{$NEXT}}; test the extraction locally as a script, since the tag push has no dry run. Size S.
+
+Worker done (worktree-agent-abb6f0e0e37d0b229, uncommitted): new scripts/changes-section.sh (bash+awk, string compare so 0.1 != 0.10, strips CR and the 2-space indent, fails on missing/empty section or {{$NEXT}}); release.yml runs it as the first step, adds a Full Changelog compare link via git describe (needs checkout fetch-depth: 0), gh release create --notes-file instead of --generate-notes. 18 local cases pass under mawk and busybox awk; the step and package blocks were run in a simulation. Runner awk (gawk?), checkout tags and gh behaviour untested — only a tag push runs them.
+
+Review (unreagent-reviewer, worktree-agent-abb6f0e0e37d0b229 on 2e72af4): APPROVE WITH NITS. Files: .github/workflows/release.yml, scripts/changes-section.sh (new; 775 on disk, core.fileMode=true). Check in the worktree: gofmt -l cmd internal (empty), go vet ./... ok, go test -count=1 ./... ok (4 pkgs), make windows ok (PE32+). Nothing Go or Windows-path changed.
+Script: real Changes 0.0.9/0.0.8/0.0.7 byte-identical to an independent sed reference under mawk 1.3.4, busybox awk, gawk 5.1.0 and gawk 5.4.1 (offline containers); 0.0.10, 0.0.6, 0.1, {{$NEXT}}, empty and v0.0.9 exit 1 with empty stdout. 17 own synthetic cases pass on all four awks (0.1 before/after 0.10, 1 vs 1.0/1e0/1.00, CRLF with CR-only blanks, regex-metachar/prefix/indented/duplicate version lines, version as last line without LF, edge trimming, col-0 line ends the section). Worker's 18 cases pass; its numeric and CR mutants are caught on all four awks. set -euo pipefail + '|| status=$?' reaches the case branch (messages printed, rc 1).
+Workflow: YAML parses (PyYAML); order checkout, notes, setup-go, test, build, package, release. Notes step run from the YAML text under bash --noprofile --norc -eo pipefail: v0.0.9 links v0.0.8...v0.0.9, v0.0.7 (first tag) no link and exit 0, v0.0.10 exit 1 before build. Synthetic repo: root-commit first tag no link exit 0; annotated tag after lightweight gets the link; depth-1 clone drops the link silently, exit 0. The Full Changelog link is in the card text, so fetch-depth: 0 is in scope. .gitattributes: script eol=lf, not LFS; NOTICE/Changes carry no attributes. Actions match ci.yml (checkout@v6, setup-go@v6, go 1.27.x).
+Nits: (1) .claude/agents/unreagent-release-manager.md:53-55 still says release notes are --generate-notes until k92; stale once this lands, and audit item 8 should say the tagged commit must carry the stamped version section or the release fails (owner: main). (2) No regression guard in the repo: the cases live only in a session scratchpad and ci.yml never runs the script, so a break first shows on a tag push; suggest a follow-up card for a ci.yml step that extracts the newest stamped version. (3) release.yml:28-32: if fetch-depth: 0 is ever dropped the link vanishes without a warning; an else-branch ::warning:: would surface it (optional). (4) At commit: confirm git ls-files -s scripts/changes-section.sh shows 100755; 100644 fails the step with 126. shellcheck not installed, not run.
+Untestable before a real tag push: checkout@v6 fetching tags with fetch-depth: 0 + lfs on a tag event; the runner's actual awk (bracketed by the four tested); exec bit after checkout; RUNNER_TEMP across steps; gh release create --notes-file and GitHub's Markdown rendering.
+
+Committed as 9846014
