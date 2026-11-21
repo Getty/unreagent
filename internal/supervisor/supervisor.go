@@ -106,6 +106,10 @@ type ServiceStatus struct {
 	// Unresponsive is set when the service's control loop did not answer in
 	// time. The other fields are then unknown — not "stopped".
 	Unresponsive bool `json:"unresponsive,omitempty"`
+	// Busy says, next to Unresponsive, what kept the loop from answering:
+	// "pre-start" while it runs the service's PreStart (the editor's
+	// crash-reporter kill and crash cleanup). It is empty otherwise.
+	Busy string `json:"busy,omitempty"`
 	// LastError is why the last start attempt failed (the program is missing,
 	// cannot be executed, …). A successful start clears it.
 	LastError string `json:"lastError,omitempty"`
@@ -129,10 +133,10 @@ type CommandResult struct {
 // are dropped, and Logs says how many.
 const LogLines = 500
 
-// defaultCtrlTimeout is how long a control call waits for the service's loop
-// to take its message and answer it, both together, before the service counts
-// as unresponsive.
-const defaultCtrlTimeout = 10 * time.Second
+// CtrlTimeout is how long a control call waits for the service's loop to take
+// its message and answer it, both together, before the service counts as
+// unresponsive. It is exported so the launcher's tool descriptions can name it.
+const CtrlTimeout = 10 * time.Second
 
 // FastFailWindow and fastFailLimit define a service that keeps failing right
 // after it starts: fastFailLimit failed runs in a row (non-zero exit or failed
@@ -172,7 +176,7 @@ func New(log Logger) *Supervisor {
 	}
 	return &Supervisor{
 		log:            log,
-		ctrlTimeout:    defaultCtrlTimeout,
+		ctrlTimeout:    CtrlTimeout,
 		drainTimeout:   streamDrainTimeout,
 		fastFailWindow: FastFailWindow,
 		services:       map[string]*service{},
@@ -276,17 +280,30 @@ func (s *Supervisor) send(name string, kind ctrlKind) (ServiceStatus, error) {
 // the loop, and the editor's shells out.
 func (svc *service) timeoutError(taken bool, d time.Duration) error {
 	name, busy := svc.spec.Name, svc.preStarting.Load()
+	e := &ctrlTimeoutError{preStart: busy}
 	switch {
 	case !taken && busy:
-		return fmt.Errorf("service %q is busy with its pre-start step and did not take the request within %s; nothing was done, try again shortly", name, d)
+		e.msg = fmt.Sprintf("service %q is busy with its pre-start step and did not take the request within %s; nothing was done, try again shortly", name, d)
 	case !taken:
-		return fmt.Errorf("service %q is not responding: it did not take the request within %s; nothing was done", name, d)
+		e.msg = fmt.Sprintf("service %q is not responding: it did not take the request within %s; nothing was done", name, d)
 	case busy:
-		return fmt.Errorf("service %q took the request and is still carrying it out after %s (busy with its pre-start step); do not repeat it, check status for the outcome", name, d)
+		e.msg = fmt.Sprintf("service %q took the request and is still carrying it out after %s (busy with its pre-start step); do not repeat it, check status for the outcome", name, d)
 	default:
-		return fmt.Errorf("service %q took the request and is still carrying it out after %s; do not repeat it, check status for the outcome", name, d)
+		e.msg = fmt.Sprintf("service %q took the request and is still carrying it out after %s; do not repeat it, check status for the outcome", name, d)
 	}
+	return e
 }
+
+// ctrlTimeoutError is the error of a control call that ran out of time
+// (timeoutError). preStart is the one reading of preStarting its text was
+// built from, so Status reports the state the error names, not a second
+// reading that PreStart may have ended in between.
+type ctrlTimeoutError struct {
+	msg      string
+	preStart bool
+}
+
+func (e *ctrlTimeoutError) Error() string { return e.msg }
 
 // StartService starts a (stopped) service.
 func (s *Supervisor) StartService(name string) (ServiceStatus, error) {
@@ -307,8 +324,9 @@ func (s *Supervisor) RestartService(name string) (ServiceStatus, error) {
 //
 // A service whose control loop does not answer is reported as unresponsive
 // rather than dropped: the caller has to be able to tell "no such service" from
-// "the loop is blocked". The services are queried concurrently, so one blocked
-// loop does not add its timeout to every other one.
+// "the loop is blocked". One busy with PreStart says so (Busy). The services
+// are queried concurrently, so one blocked loop does not add its timeout to
+// every other one.
 func (s *Supervisor) Status() []ServiceStatus {
 	s.mu.Lock()
 	names := append([]string(nil), s.order...)
@@ -323,6 +341,10 @@ func (s *Supervisor) Status() []ServiceStatus {
 			if err != nil {
 				s.logf("[%s] status: %v", name, err)
 				st = ServiceStatus{Name: name, Unresponsive: true}
+				var te *ctrlTimeoutError
+				if errors.As(err, &te) && te.preStart {
+					st.Busy = "pre-start"
+				}
 			}
 			out[i] = st
 		}(i, name)

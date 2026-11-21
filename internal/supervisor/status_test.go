@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -185,5 +186,89 @@ func TestPolicyRestartKeepsLastExit(t *testing.T) {
 	st := pollStatus(t, sup, "the policy's restart running", func(st ServiceStatus) bool { return st.Running && st.Restarts == 1 })
 	if st.LastExit != "exit 1" {
 		t.Fatalf("status while the restarted run is up = %+v, want lastExit \"exit 1\" kept from the run before", st)
+	}
+}
+
+// statusJSON is the only service's Status entry as the status tool sends it:
+// marshaled, so a field left out (omitempty) is absent, not its zero value.
+func statusJSON(t *testing.T, sup *Supervisor) map[string]interface{} {
+	t.Helper()
+	st := sup.Status()
+	if len(st) != 1 {
+		t.Fatalf("Status = %+v, want one service", st)
+	}
+	b, err := json.Marshal(st[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("Unmarshal %s: %v", b, err)
+	}
+	return m
+}
+
+// k180: status said only unresponsive: true for a loop busy with its
+// pre-start step, though send() knows that state (k37), so an agent polling
+// status after a "took the request" reply could not tell a slow pre-start
+// from a hung loop. The entry has to say busy: "pre-start" next to it.
+func TestStatusNamesABusyPreStart(t *testing.T) {
+	sup, _ := startBlockedInPreStart(t, true)
+	if st := statusJSON(t, sup); st["unresponsive"] != true || st["busy"] != "pre-start" {
+		t.Fatalf("status of a loop blocked in PreStart = %v, want unresponsive true and busy \"pre-start\"", st)
+	}
+}
+
+// k180: busy names the pre-start and nothing else. A loop that does not answer
+// for another reason — held right after it took a run's exit, the PreStart of
+// that run long done — is unresponsive with no busy.
+func TestStatusNamesNoBusyForALoopBlockedElsewhere(t *testing.T) {
+	sup := New(nil)
+	sup.ctrlTimeout = 500 * time.Millisecond
+	spec, _ := runsSpec(t, "f", 0) // exits 1 at once
+	spec.Restart = "never"
+	spec.PreStart = func(Start) {}
+	if err := sup.AddService(spec); err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	held, release := make(chan struct{}, 1), make(chan struct{})
+	sup.exitTaken = func() {
+		held <- struct{}{}
+		<-release
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg)
+	t.Cleanup(func() { close(release); cancel(); wg.Wait() })
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop never took the run's exit")
+	}
+
+	st := statusJSON(t, sup)
+	if st["unresponsive"] != true {
+		t.Fatalf("status of a loop held after an exit = %v, want unresponsive true", st)
+	}
+	if busy, ok := st["busy"]; ok {
+		t.Fatalf("status of a loop held after an exit has busy %v, want none: it is not in PreStart", busy)
+	}
+}
+
+// k180: a service whose loop answers carries neither field, after a PreStart
+// that ran and returned: the agent reads their presence, not only their value.
+func TestStatusOfAResponsiveServiceHasNeitherField(t *testing.T) {
+	sup := New(nil)
+	spec, _ := runsSpec(t, "s", time.Minute) // runs a minute
+	spec.Restart = "never"
+	spec.PreStart = func(Start) {}
+	startService(t, sup, spec)
+	pollStatus(t, sup, "the service running", func(st ServiceStatus) bool { return st.Running })
+
+	st := statusJSON(t, sup)
+	for _, key := range []string{"unresponsive", "busy"} {
+		if v, ok := st[key]; ok {
+			t.Fatalf("status of a responsive service has %s %v, want it absent: %v", key, v, st)
+		}
 	}
 }

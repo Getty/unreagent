@@ -134,6 +134,14 @@ description and `limit` schema are built from that constant (k173).
 `tailLines` alone, without a marker, is for log excerpts (`bridge.go`,
 `lifecycle.go`), not tool replies.
 
+`status` sends `sup.Status()` as it is. A service whose loop misses
+`supervisor.CtrlTimeout` comes back as `"unresponsive": true`, plus
+`"busy": "pre-start"` when the loop was in `PreStart` as the wait ran out.
+`Status` reads that from the call's `ctrlTimeoutError`, which carries the one
+`preStarting` reading its message was built from, so the logged error and the
+field cannot disagree; otherwise `busy` is absent (`omitempty`). `takenNote`,
+the lifecycle tools' timeout clause, renders the same constant.
+
 Commands are one-shot and blocking (`RunCommand` / `RunOnce`); a UE `compile`
 takes minutes and the agent's MCP client is waiting the whole time. If you add
 anything slower, return a handle and let the agent poll `logs`, rather than

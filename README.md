@@ -1219,7 +1219,7 @@ are materialized the launcher logs
 
 | Tool | Function |
 |---|---|
-| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds); `lastExit` is how the last run that ended on its own ended, e.g. `exit 1` (absent until one ends; `ue_start` / `ue_restart` clear it) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list |
+| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds); `lastExit` is how the last run that ended on its own ended, e.g. `exit 1` (absent until one ends; `ue_start` / `ue_restart` clear it) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list, with `"busy": "pre-start"` next to it while that loop is still running the editor's pre-start step (crash-reporter kill, crash cleanup) — a slow start, not a hung loop |
 | `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle. If the editor is not running after `ue_start` / `ue_restart`, the result is an error, `Error: service "ue" did not start: <lastError>`, followed by the status JSON (e.g. a missing `unreal.editor` program). Running only means the editor was spawned: for one that dies at once, check `status` after a few seconds (`lastExit`) |
 | `run_command` | run a preconfigured command (compile, package) |
 | `logs` | last output lines of a service |

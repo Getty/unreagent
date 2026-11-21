@@ -54,6 +54,7 @@ Three facts shape everything below:
 | `lastError` | present only while the last start attempt failed: why no process was spawned (the executable is missing, cannot be run, …). A start that spawns a process removes it |
 | `lastExit` | how the last run that ended on its own ended, such as `"exit 1"`. Absent until one ends. `ue_start` and `ue_restart` remove it, the kill of `ue_stop` or `ue_restart` does not set it, and automatic restarts keep it |
 | `unresponsive` | present, as `true`, only when the service's control loop did not answer within 10 s. `running` and `pid` are then unknown and sent as `false` / `0` |
+| `busy` | present, as `"pre-start"`, only next to `unresponsive`: the loop is running the pre-start hooks (crash-reporter kill, crash cleanup; see Automatic restarts). A slow pre-start, not a hung loop: call `status` again |
 
 `agent` is listed only when the launcher runs its own agent. `commands` holds
 names only, in no stable order. The command descriptions from the config are

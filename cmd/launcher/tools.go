@@ -21,7 +21,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "status",
-		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, \"lastError\": why the last start failed (absent once a start succeeds), and \"lastExit\": how its last run that ended on its own ended, e.g. \"exit 1\" (absent until one ends; ue_start and ue_restart clear it). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
+		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, \"lastError\": why the last start failed (absent once a start succeeds), and \"lastExit\": how its last run that ended on its own ended, e.g. \"exit 1\" (absent until one ends; ue_start and ue_restart clear it). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0; \"busy\": \"pre-start\" next to it means the loop is still running the editor's pre-start step, not hung. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
 		InputSchema: noArgs,
 		Handler: func(map[string]interface{}) mcp.ToolResult {
 			payload := map[string]interface{}{
@@ -35,7 +35,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	// takenNote tells the lifecycle tools' callers how the supervisor's control
 	// timeout shows (supervisor.timeoutError).
-	const takenNote = " Gives up after 10s: an error saying the request was taken means it is still being carried out, so check status instead of repeating the call."
+	takenNote := fmt.Sprintf(" Gives up after %s: an error saying the request was taken means it is still being carried out, so check status instead of repeating the call.", supervisor.CtrlTimeout)
 
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_start",
