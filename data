@@ -1,0 +1,147 @@
+---
+claimed_at: 2026-11-21T06:26:46Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T06:27:01Z
+created: 2026-08-21T23:23:47Z
+depends_on:
+- 8
+id: 24
+priority: medium
+started: 2026-11-21T04:57:30Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: World & Assets (Class A)'
+updated: 2026-11-21T06:27:01Z
+---
+
+- ue-level-actors -- spawn_actor, get_level_actors, move_actor, delete_actors, set_property
+- ue-levels -- open_level, level_query
+- ue-assets -- asset, asset_search, asset_import, asset_dependencies, asset_referencers
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size M. k19 first.
+
+Started 2026-11-21, same terms as k20 (headers only, manual toolkit_tools check until k18).
+
+Skill-author finished (worktree-agent-a9c372e67e0e4f270): skills/ue-level-actors, ue-levels, ue-assets, written from the toolkit C++ source with header-vs-code disagreements stated in the text; toolkit_tools checked by hand against Info.Name. Upstream bugs went to k132. ue-assets is 553 lines; decision (main agent): it ships as one file for now, and the import part moves into a section once the skills tool can serve sections (k11).
+
+Ready for review: three Class A skills in worktree-agent-a9c372e67e0e4f270.
+
+Review (unreagent-reviewer): CHANGES NEEDED.
+
+Reviewed: skills/ue-level-actors/SKILL.md, skills/ue-levels/SKILL.md, skills/ue-assets/SKILL.md (untracked in the k24 worktree, base b04e79a; owner unreagent-skill-author). Scope clean, only these three dirs.
+Check run in the worktree (go1.26.6): gofmt -l cmd internal skills (empty), go vet ./..., go test -count=1 ./... (internal/skills loads all 7 skills), make windows: all green. No Windows-path change (docs only).
+Source: ue-llm-toolkit, paths below relative to Plugin/UELLMToolkit/Source/UELLMToolkit/Private/.
+
+Verified OK (40+ claims): every toolkit_tools entry against Info.Name and MCPToolRegistry.cpp; no unreal_classes, correct for tool-only skills; frontmatter keys; duplicate new_name required (MCP/Tools/MCPTool_Asset.cpp:589 vs header :40); Materials.0.MaterialInterface fails (Asset.cpp:1220); trailing-index write = upstream bug A (Asset.cpp:1214-1218 + :1295, k132); get_hashes, delete_actors union, skeleton_path ignored for auto, open_level validation, spawn name validation. No VibeUE text, no attribution, no German.
+
+Findings, most important first:
+1. ue-assets/SKILL.md:454 claims an empty batch_import gives "No .fbx files found in: <dir>". Wrong: HandleBatchImport reads only "message" (MCP/Tools/MCPTool_AssetImport.cpp:152-166), but ErrorResult sets "error", not "message" (AssetImporter.cpp:45-51, :281). The agent sees "Error: " with an empty message. Fix the line and the :539 table to match; this is also a new upstream bug for k132 (the other import ops go through AssetImportJsonToToolResult, :10-27, and are fine).
+2. ue-assets/SKILL.md:215-221 and :536 say "enums cannot be set". Wrong for TEnumAsByte: FByteProperty is an FNumericProperty, so it takes a JSON number (Asset.cpp:1304-1310, :1429-1436). Only enum class (FEnumProperty) fails. This contradicts ue-level-actors/SKILL.md:310-312, which gets it right.
+3. ue-assets/SKILL.md:537 says "Deleted 0 of 1 assets" means "referenced, and force was off". This is an unhedged engine claim; the toolkit only shows ObjectTools::DeleteObjects(AssetsToDelete, false) (Asset.cpp:670) and the count (:695). Whether the engine refuses silently or opens a modal dialog for referenced assets is not in the toolkit. Hedge it ("probably") or mark it unverified.
+4. ue-levels/SKILL.md:245-247 says the suggestions are dropped by the bridge. The tool drops them: FMCPToolResult::Error(Data->GetStringField("error")) without data (MCP/Tools/MCPTool_LevelQuery.cpp:96-98). The advice (use find) still holds. Low.
+5. The result shape at ue-level-actors/SKILL.md:28-30, ue-levels/SKILL.md:31-33 and ue-assets/SKILL.md:35-37 ignores the default async path: task_result returns Task->ToJson(true), with the tool fields nested under "data" (MCP/Tools/MCPTool_TaskResult.h:83-86, MCP/MCPAsyncTask.h:105-145). Low.
+6. ue-assets/SKILL.md:102-109 leaves out short-name lookup step 4 (MCP/Tools/MCPTool_AssetSearch.cpp:59-63). ue-level-actors/SKILL.md:126 "already-loaded class of that name" is an engine claim. It is not in LoadActorClass (MCP/MCPToolBase.h:471-509). Low.
+7. ue-level-actors/SKILL.md:152-157 states the fatal duplicate name as fact, but :375 says "probably". And "unchecked" is misleading, since ValidateActorName runs (MCP/Tools/MCPTool_SpawnActor.cpp:98-104); say "not checked for collisions". Nit.
+8. ue-blueprints is referenced at ue-level-actors/SKILL.md:335, :383 and ue-assets/SKILL.md:175, :547, but does not exist yet. k20 must land first, or the references wait. Dangling.
+9. Process: the mapping table and the list of 11 header-vs-code disagreements that the brief said were on this card are not on it. I verified from the source instead. Please add them for the record.
+Not blocking: ue-assets size OK under the one-file decision. Trim candidates: the "Before the first call" block repeated in all three skills, and the "Who returns it" column in the paths table. main is at 9792365 now (skills/unreagent-files changed, no conflict); the commit goes onto current main.
+
+Review round 2 (unreagent-reviewer): CHANGES NEEDED, one line.
+
+Reviewed again: skills/ue-assets/SKILL.md (569 lines), skills/ue-levels/SKILL.md (298), skills/ue-level-actors/SKILL.md (387). Still untracked in the k24 worktree, base b04e79a, and scope is clean.
+Check run in the worktree (go1.26.6), all green:
+- gofmt -l cmd internal skills: empty
+- go vet ./...
+- go test -count=1 ./...: TestLoadParsesEveryEmbeddedSkill and TestEmbedMissesNoSourceFile pass
+- make windows
+Docs only, no Windows-path change.
+Toolkit paths below are relative to Plugin/UELLMToolkit/Source/UELLMToolkit/Private/.
+
+Round-1 findings, each verified against the source:
+- F1 fixed (ue-assets:465-469, :555). HandleBatchImport reads only "message" (MCP/Tools/MCPTool_AssetImport.cpp:152-166). ErrorResult writes "error" (AssetImporter.cpp:45-51, :281). Nothing checks that fbx_directory exists before FindFiles (:276-277), so "probably looks the same" is a fair hedge.
+  The async path holds as well: the task queue stores the tool result as is (MCPTaskQueue.cpp:401-413); task_result copies its bSuccess and Message (MCP/Tools/MCPTool_TaskResult.h:83-86); the bridge renders "Error: " + message (Resources/mcp-bridge/index.js:333-335). Only an unknown parameter would append the WARNING text (MCPToolRegistry.cpp:326-339).
+- F2 fixed (ue-assets:216, :227, :230, :551). TEnumAsByte goes through the numeric branch (Asset.cpp:1304-1310, :1429-1436). A non-numeric string falls through to "Unsupported property type for:", and an FEnumProperty matches no branch. Now consistent with ue-level-actors:310-312.
+- F3 fixed (ue-assets:305-308, :531, :552). DeleteObjects or ForceDeleteObjects (Asset.cpp:664-671); hedged and marked unverified.
+- F4 fixed (ue-levels:245-247). LevelQueryHelper.cpp:325-338 builds the suggestions; MCP/Tools/MCPTool_LevelQuery.cpp:96-98 drops them.
+- F5 fixed in all three skills. The envelope fields and the nested data match MCP/MCPAsyncTask.h:105-145. The bridge goes async by default (index.js:47, :307) and falls back to sync only when task_submit fails (mcp-bridge/lib.js:183-199).
+- F6 fixed:
+  - ue-assets:101-115 and :548 match MCP/Tools/MCPTool_AssetSearch.cpp:42-73, including the silent /Script/Engine fallback.
+  - ue-level-actors:121-122 matches the five steps of LoadActorClass (MCP/MCPToolBase.h:471-501).
+- F7 fixed (ue-level-actors:148-155, :373). The citation correction is right: ValidateActorName is at MCP/Tools/MCPTool_SpawnActor.cpp:56 (93 lines), not :98-104 as I wrote in round 1. Mine was wrong.
+No new overclaims in the rewritten passages: every engine-side claim is hedged.
+
+New finding, a regression from the trim I suggested:
+- ue-assets/SKILL.md:117-118 lists asset_search's package_path without saying what it holds. It is FAssetData::PackagePath, the content folder (/Game/Meshes), not a package path (MCP/Tools/MCPTool_AssetSearch.cpp:160).
+- The dropped "Who returns it" column was the only place that said so (content folder -> asset_search package_path).
+- Right after the paths table, an agent will take package_path for the package path that migrate and get_hashes need (ue-assets:61). migrate then reports success anyway (Asset.cpp:747-761), and get_hashes gives file_not_found.
+- Fix: one clause, e.g. "package_path (the content folder; the package path is path before the dot)".
+
+Not a finding: ue-blueprints (k20) and ue-tasks (k26, whose card names that skill) are commit-order dependencies, as the coordinator noted.
+
+Review round 2, addendum (unreagent-reviewer): the timeout point from the k26 author. Verdict unchanged: CHANGES NEEDED, only for the package_path line (ue-assets:117-118).
+
+The k26 author's claim holds in the source:
+- The worker's own wait expires (MCPTaskQueue.cpp:385-391) and the task is stored as failed (:412), while the game-thread call runs on.
+- CheckTimeouts runs about once a minute (:296-299) and can set timed_out first (:462-469). The task then ends as cancelled (:405-408).
+- The bridge's poll loop treats only completed, failed and cancelled as finished (mcp-bridge/lib.js:234), not timed_out.
+So a failed, timed_out or cancelled status does not prove the editor stopped or that nothing happened.
+
+The k24 Timeouts text does not overclaim:
+- No k24 skill says or implies that failed means nothing happened. All three Timeouts bullets say the timeout "ends the wait, not the work".
+- ue-level-actors:40-41 and :372 tell the agent to read the state back with get_level_actors.
+- ue-levels:288 pairs task_status with a read-back (level_query list). That matches ue-tasks' own row (ue-tasks:214).
+- ue-assets:41-44 and ue-levels:38-41 defer to ue-tasks, which carries the full story (ue-tasks:71, :101-103, :189, :221).
+No new finding.
+
+Optional nit: ue-assets:43-44 is the only Timeouts bullet that names no read-back. "Read the state back (asset_search on dest_path, or failed_count) and see ue-tasks" would match the other two skills.
+
+Review round 3 (unreagent-reviewer): READY.
+
+Reviewed:
+- skills/ue-assets/SKILL.md (the round-3 edits)
+- skills/ue-levels/SKILL.md and skills/ue-level-actors/SKILL.md (unchanged since round 2)
+All three are untracked in the k24 worktree (base b04e79a). Scope is clean.
+
+Check run in the worktree, all green:
+- gofmt -l cmd internal skills: empty
+- go vet ./...
+- go test -count=1 ./..., including internal/skills
+- make windows
+The change is skill text only, so no Windows code path is involved.
+
+Toolkit paths below are relative to Plugin/UELLMToolkit/Source/UELLMToolkit/Private/.
+
+Round-3 edits, verified against the source:
+- ue-assets:117-122 (package_path)
+  - Correct: package_path is AssetData.PackagePath, the folder, and path is GetObjectPathString (MCP/Tools/MCPTool_AssetSearch.cpp:151, :160).
+  - migrate turns each asset_paths entry into a package name for MigratePackages (MCP/Tools/MCPTool_Asset.cpp:727-735, :748).
+  - get_hashes maps it through LongPackageNameToFilename (Asset.cpp:1088-1094).
+  - So "path before the dot" is the right input for both.
+- ue-assets:41-45 (Timeouts): correct.
+  - path_filter is a declared asset_search parameter: recursive, default /Game/ (MCP/Tools/MCPTool_AssetSearch.h:37-38).
+  - The bullet now names a read-back, like the other two skills, and defers to ue-tasks.
+
+Cosmetic, not blocking: ue-assets:121 runs past the file's ~80-column wrap.
+
+Commit order, as agreed: after k20 (ue-blueprints) and k26 (ue-tasks). Onto current main (9792365).
+
+Committed as 0fc0622
