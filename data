@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-11-21T17:22:26Z
+created: 2026-11-21T09:23:46Z
+id: 151
+priority: low
+started: 2026-11-21T16:38:36Z
+status: done
+tags:
+- console
+- logging
+title: In window mode the supervisor's own lines never reach the console
+updated: 2026-11-21T17:22:26Z
+---
+
+Found during k120. In window mode the launcher console now answers on the console, but the supervisor's own lines (started, stopped, restarted) and the onExit: leave / shutdown messages still go only to unreagent.log. A successful `start ue` typed at the console therefore gets no confirmation there. Related: k150 (startup lines before the log switch).
+
+Done when: a console command's outcome (started/stopped/restarted, leave, shutdown) shows on the console in window mode as well as in the log, with a test that pins it.
+
+2026-11-21 17:01 Done in the k150 bundle (full report on k150). commandLoop's act shows a lifecycle command that went through on the console in window mode, via console.show (console only: the log already has the supervisor's own line): 'ue is running (pid N)', 'ue restarted (pid N)', 'ue stopped'. The onExit leave/shutdown lines go through con.reply (console plus log). Test: TestConsoleShowsTheOutcomeInWindowMode (console_test.go). 5 overlay mutations killed. Windows console unverified. Not covered (on k150): automatic editor lines while the launcher console is open, and how the agent ended, under leave/shutdown.
+
+2026-11-21 17:01 Ready for review, together with k150 (report there): window-mode console confirms start/stop/restart and shows the onExit leave/shutdown lines.
+
+2026-11-21 18:20 Reviewer (verdict on k150): code ready. In window mode start/stop/r/restart show on the console only (console.show) and onExit leave/shutdown go to console and log; non-window is unchanged. Finding: README.md:1515 says the log has the supervisor's line, which does not hold for 'start' of an already running service (supervisor.go:760 logs nothing then). Doc fix, see k150 finding 1. Windows unverified.
+
+Committed as 7036a88 (bundle k150/k151/k152).
