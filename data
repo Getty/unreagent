@@ -1,0 +1,59 @@
+---
+claimed_at: 2026-11-21T09:54:50Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T09:54:50Z
+created: 2026-11-13T04:21:45Z
+id: 88
+priority: low
+started: 2026-11-21T08:20:58Z
+status: done
+tags:
+- config
+title: Warn when the .uproject EngineAssociation names an engine that is not installed
+updated: 2026-11-21T09:55:02Z
+---
+
+After k84, autodetection falls back to the highest installed version silently when the association (e.g. "5.7") is not found, so the editor may open the project in a newer engine and prompt for conversion. The config package has no warning channel; needs a field on config.Info plus one log line in cmd/launcher/main.go.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: config.Info has no warning field; chooseEngine falls back silently to the highest engine. Linux test via chooseEngine with a fake hasEditor. Size S.
+
+2026-11-21 08:42 Done, not committed (worktree on base 114237c). config.Info has a new field, Warnings []string: complete messages that Load noticed without failing. run() logs each one as 'WARN <msg>' right after the Engine line. chooseEngine (internal/config/engine.go) now returns (root, warning). The warning is set when the EngineAssociation (a version or a build id) names no usable engine and the highest-installed fallback picks one. With nothing found, the existing 'engine not found' WARN is enough. UE_ROOT and engineRoot never trigger a warning. highestEngine returns the candidate, so the warning can name the version. The autodetect seam is now func(string) (string, string), and noEngine was adapted. Text: 'WARN the .uproject's EngineAssociation "5.7" names no installed engine — using the highest installed one instead, 5.9 at C:/Program Files/Epic Games/UE_5.9, and the editor may offer to convert the project; install the associated engine, or pin one with engineRoot in unreagent.local.yaml (or env UE_ROOT)'. The real pin is top-level engineRoot (or env UE_ROOT); there is no unreal.engine option. Tests: TestChooseEngine (fake hasEditor) now checks the warning for every case, both that it appears and that it does not. TestRunWarnsWhenTheEngineAssociationIsNotInstalled is a real launcher run: off Windows the Epic default paths are relative, so a fake UE_5.9 under the launcher's working directory is found, and the log has the WARN for association 5.7 and none for 5.9 (red before the fix). Full check green, see the k123 handoff note. Also found: hermes-setup also calls config.Load but does not print Info.Warnings. Left as is, since the engine does not matter there. The Windows registry/default-path detection itself is unverified.
+
+Docs (worktree): README.md:199 (${ENGINE} row mentions the WARN on fallback), unreagent.example.yaml:14-16 (${ENGINE} order).
+
+Project skill updated for k88 (skill-author, worktree, uncommitted): .claude/skills/unreagent-config/SKILL.md:63-71 step 6: autodetect returns (root, warning), chooseEngine's fallback warning, Load appends it to Info.Warnings, run() logs each as a WARN after the Engine: line, hermes-setup does not, UE_ROOT/engineRoot never warn; :102 the ${ENGINE} row notes the fallback WARN; :178-182 checklist item 4: a workable but likely wrong value goes into Info.Warnings, internal/config never logs; :193-197 checklist item 8 gives the seam's signature func(project string) (root, warning string). Shipped skills/unreagent-* say nothing about the engine fallback (grep), unchanged. Check: gofmt -l cmd internal skills empty, go test -count=1 ./internal/skills ok.
+
+2026-11-21 09:02 Review (unreagent-reviewer): CHANGES NEEDED, one test. Files: internal/config/config.go, internal/config/engine.go, internal/config/engine_test.go, internal/config/load_test.go, cmd/launcher/main.go:82-84, cmd/launcher/main_test.go:116-168, README.md:199, unreagent.example.yaml:14-16, .claude/skills/unreagent-config/SKILL.md:63-71,102,178-182,193-197. Check run (worktree and diff on main 4f2661d): gofmt -l cmd internal skills, go vet ./... and GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./cmd/launcher ./internal/..., make linux, make windows, all green; TestRunWarnsWhenTheEngineAssociationIsNotInstalled passes 40/40. Windows registry/default-path detection UNVERIFIED.
+Code is right. The warning fires only on a real fallback (engine.go:102: an association set and the fallback found one). It does not fire for no association, for nothing found (the launcher's own WARN covers that) or for UE_ROOT/engineRoot (config.go:747). The text names the real pins, engineRoot or UE_ROOT; there is no unreal.engine option.
+Mutations: the condition without kind, or without best.Dir, or always false -> TestChooseEngine red; best.ID swapped for the association -> red; Load dropping the warning, or run() not logging it -> the launcher test red.
+1. Should fix: the claim "UE_ROOT and engineRoot never warn" (on this card, the resolveEngine doc comment, unreagent-config SKILL.md:70-71) is not pinned. A resolveEngine that passes autodetect's warning through on the UE_ROOT/engineRoot path passes every test. Also, Load's append to Info.Warnings (config.go:302) is pinned only by the launcher end-to-end test; internal/config alone stays green without it. Add a load_test.go case with the autodetect seam returning ("<root>", "w"): without UE_ROOT, Info.Warnings == ["w"]; with UE_ROOT set, and with engineRoot set, Info.Warnings is empty.
+2. Nit (optional): engine.go:103 says "names no installed engine" also when the associated engine is installed but lacks UnrealEditor.exe (the TestChooseEngine case "association without editor"). The doc comment's "no usable engine" would be exact.
+The end-to-end test's reliance on relative Epic paths is acceptable. startLauncherIn skips on Windows (lifecycle_test.go:82-84) and regQuery is off there. A later Windows-only guard on globEngines would fail the test loudly ("auto-detection did not pick the test's engine"), never pass it silently. Optional: say in its comment that it relies on that skip.
+Skill text :178-182 (the author's own addition): accurate (internal/config has no logging), and it gives the next field the right channel. Accepted. Docs and skills match the code, English, no ticket ids.
+Not this card, for a ticket: in window mode every startup line before the log switch (main.go:73-91: Config, Engine, this WARN, Project, skipped commands) goes only to the console, never to unreagent.log. The agent's screen takes over after startDelaySeconds, so this WARN is easy to miss.
+Changes, final wording:
+  - A .uproject EngineAssociation that names no installed engine logs a WARN
+    naming the association, the engine used instead and how to pin one
+    (engineRoot or UE_ROOT), instead of falling back to the highest installed
+    engine silently.
+Commit: separate from the MCP commit (split checked, see k123).
+
+**Review round 1:** needs a load_test.go case proving UE_ROOT/engineRoot never warn (autodetect hook swapped, covers config.go:302); engine.go:103 wording changes to cover an installed engine without an editor binary ("no usable engine"). Both sent to the worker.
+
+2026-11-21 09:17 Fix round, not committed. Item 2: TestEngineWarningOnlyFromAutodetection (internal/config/load_test.go) swaps the autodetect hook for one that records its calls and returns a warning. For UE_ROOT, for engineRoot, and for both, it asserts that the hook is never called and that Info.Warnings is empty. When the engine is auto-detected, it asserts one call for the project and that the hook's warning is in Info.Warnings exactly once. That covers config.go:302. Red checks: a resolveEngine that consults the hook for a given engine failed all three given cases, and dropping the append at :302 failed the auto-detected case. Both mutations were restored. Item 4: the warning (engine.go:103) now reads '... EngineAssociation "5.7" names no usable engine (not installed, or installed without an editor binary) — using the highest usable one instead, 5.9 at <dir>, and the editor may offer to convert the project; install or build the associated engine, or pin one with engineRoot in unreagent.local.yaml (or env UE_ROOT)'. TestChooseEngine now pins '"<assoc>" names no usable engine' for every warning case, including the one without an editor. The Info.Warnings comment (config.go) and the comment on the run() test (main_test.go) are reworded to match. Full check green, see the k123 note. Docs that quote the old wording go to the doc writer (in my report).
+
+2026-11-21 09:30 Re-review (unreagent-reviewer), fix round: READY. Files: internal/config/config.go, internal/config/engine.go, internal/config/engine_test.go, internal/config/load_test.go, cmd/launcher/main.go:83-85, cmd/launcher/main_test.go (the k88 test), README.md:199, unreagent.example.yaml:14-16, .claude/skills/unreagent-config/SKILL.md. Check green in the worktree and with the diff on main 4f2661d (gofmt -l, go vet ./... linux + windows, go test -count=1 ./..., go test -race, make linux, make windows). TestEngineWarningOnlyFromAutodetection and TestChooseEngine 40/40, the launcher test 40/40. Windows registry/default-path detection UNVERIFIED.
+The earlier finding is resolved: TestEngineWarningOnlyFromAutodetection (load_test.go) now pins it. UE_ROOT/engineRoot passing the hook's warning through: red. Consulting the hook without using it: red. Load dropping the warning: red. Appending it twice: red. The condition without kind: red. The wording "no usable engine (not installed, or installed without an editor binary)" (engine.go:103) matches README.md:199.
+Nit (optional, doc-writer): unreagent.example.yaml:15-16 still says "names no installed engine"; the code and README now say "no usable engine".
+Changes, final wording:
+  - A .uproject EngineAssociation that names no usable engine (not installed,
+    or installed without an editor binary) logs a WARN naming the association,
+    the engine used instead and how to pin one (engineRoot or UE_ROOT), instead
+    of falling back to the highest installed engine silently.
+Commit: separate from the MCP commit; the split still works, see k123.
+
+Review round 3 (unreagent-reviewer): READY. Files: internal/config/engine.go :69-104 (chooseEngine returns a warning only when an association is set, no usable engine matches it, and the fallback finds one), internal/config/config.go (resolveEngine returns the warning; Info.Warnings), internal/config/engine_test.go TestChooseEngine warning cases, internal/config/load_test.go TestEngineWarningOnlyFromAutodetection (engineRoot and UE_ROOT give no warning), cmd/launcher/main.go :83-85 (WARN per Info.Warnings), cmd/launcher/main_test.go TestRunWarnsWhenTheEngineAssociationIsNotInstalled, README.md :199, unreagent.example.yaml :11-17, .claude/skills/unreagent-config/SKILL.md :63-71, :102, :178-182, :193-197. Check run on the worktree diff (base 114237c) and again applied onto main 4f2661d: gofmt -l empty; go vet ./... for linux and GOOS=windows green; go test -count=1 ./... green; -race green; make windows green; internal/config x40 green. The MCP half alone (k45/k123/k141) also builds and passes without this card's hunks, so the two-commit split holds. Windows: the decision is a pure function and tested; the registry lookups (reg query for Launcher installs and source builds) are untouched and Windows-only, so the warning end to end on Windows is UNVERIFIED.
+
+Committed in ce31def (on main, not pushed).
