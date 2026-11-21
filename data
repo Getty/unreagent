@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-11-21T16:52:11Z
+created: 2026-11-21T16:28:17Z
+id: 186
+priority: low
+started: 2026-11-21T16:38:58Z
+status: done
+tags:
+- tests
+- lifecycle
+title: No test pins that an agent restart finds its MCP config file again
+updated: 2026-11-21T16:52:24Z
+---
+
+Found by the k181 review (finding 2), main agent 2026-11-21.
+
+Since k181, the agent's --mcp-config points at a file in a MkdirTemp directory that run() removes when it returns. The file must survive agent restarts (restart: always, ue_restart-style restarts of the agent, fast-fail restarts).
+
+**The gap:** the reviewer's mutant 'rmonexit' deletes the directory in the agent's OnExit, and every test stays green. A hand run showed 3 restarts finding the same file, so the code is right today; only the pin is missing.
+
+**Done looks like:** a run()-level test where the agent exits and is restarted at least once and finds the config file each time, and the directory is gone after run() returns. The test must fail under the rmonexit mutant; show that with go test -overlay.
+
+Lane: unreagent-test-writer. It touches main_test.go/mcpconfig_test.go only, so it can run after k181 lands.
+
+Test-only: TestRunRestartedAgentFindsTheSameMCPConfigFile in cmd/launcher/mcpconfig_test.go (only file touched, no production change; adds helper startLauncherWithStdin, a startLauncherIn copy with a stdin pipe). Agent exits 0 (restart: on-failure, onExit: leave) so the supervisor fires OnExit (it does not for automatic restarts, so those would not catch rmonexit); 'start agent' typed on the console restarts it twice. Asserts each of 3 starts finds the file at the same mcp-config.json path (handshake: waits for the 'agent.onExit=leave' log line, which follows OnExit) and that the temp dir is empty after run() returns. Mutation: go test -overlay with rmonexit built from this worktree's main.go FAILS (starts 2 and 3 'missing'); unmutated passes. Checks: gofmt clean, vet and GOOS=windows vet ok, go test ./... green, -race -count=20 green. Subject: Pin that an agent restart finds its MCP config file again (k186). No Changes entry needed.
+
+Test-only: TestRunRestartedAgentFindsTheSameMCPConfigFile in cmd/launcher/mcpconfig_test.go (only file touched, no production change; adds helper startLauncherWithStdin, a startLauncherIn copy with a stdin pipe). Agent exits 0 (restart: on-failure, onExit: leave) so the supervisor fires OnExit (it does not for automatic restarts, so those would not catch rmonexit); 'start agent' typed on the console restarts it twice. Asserts each of 3 starts finds the file at the same mcp-config.json path (handshake: waits for the 'agent.onExit=leave' log line, which follows OnExit) and that the temp dir is empty after run() returns. Mutation: go test -overlay with rmonexit built from this worktree's main.go FAILS (starts 2 and 3 'missing'); unmutated passes. Checks: gofmt clean, vet and GOOS=windows vet ok, go test ./... green, -race -count=20 green. Subject: Pin that an agent restart finds its MCP config file again (k186). No Changes entry needed.
+
+Review (unreagent-reviewer): READY. File: cmd/launcher/mcpconfig_test.go only (worktree agent-a1c48707903773f41 on 3fea8a6), test-only, inside OWNERS (cmd/ -> unreagent-worker; tests there are the test-writer's per OWNERS). Checks run by the reviewer: gofmt -l cmd internal skills clean; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... green; make linux and make windows ok (Windows: compiles only; the test skips itself on Windows). Mutation: rmonexit rebuilt from this worktree's main.go via go test -overlay -> FAILS (starts 2 and 3 "missing"); unmutated passes. Stability: -race -count=20 -timeout 300s -run TestRunRestartedAgentFindsTheSameMCPConfigFile green (42 s). Claim verified: supervisor.go:845-860 fires OnExit only in the no-automatic-restart branch, and the doc at :48-56 says so. A restart: always test would therefore pass under rmonexit, so the console restart is the right choice. 3 starts asserted, each with the same mcp-config.json path, and the temp dir is empty after run() returns. Nit, not blocking: mcpconfig_test.go:775-776 "logs this once OnExit has run" is not quite right. OnExit logs the line itself, as its last step (main.go:304 onAgentExit -> lifecycle.go:268), so the line does not come after OnExit returns. The sync holds for rmonexit, which removes the dir before onAgentExit. Reword next time it is touched: "OnExit logs this as its last step, so a directory removed earlier in OnExit is gone by then." Helper: startLauncherWithStdin (mcpconfig_test.go:689) is a ~50-line copy of startLauncherIn (lifecycle_test.go:86). Accepted for this card, since k150-k152 may be editing lifecycle_test.go. Recommend a low-priority follow-up after those land: give startLauncherIn an optional stdin pipe (for example a launcherRun.stdin field) and drop the copy.
+
+Review nit fixed: the comment now says OnExit logs the agent.onExit=leave line as its last step (comment only; gofmt clean, test green).
+
+Committed as 62ed8a8 (test-only, no Changes entry)
