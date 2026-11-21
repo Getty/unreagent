@@ -1,0 +1,133 @@
+---
+claimed_at: 2026-11-21T12:57:19Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:59:08Z
+created: 2026-08-21T23:23:15Z
+depends_on:
+- 9
+id: 18
+priority: high
+started: 2026-11-21T10:07:10Z
+status: done
+tags:
+- skills
+- tests
+title: 'Test: toolkit-registry lint for toolkit_tools'
+updated: 2026-11-21T12:59:20Z
+---
+
+A Go test, not a separate binary: every tool named in any skill's toolkit_tools must exist in the plugin's MCPToolRegistry.cpp. This is what catches upstream drift when the toolkit is updated.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 8.
+Agent: unreagent-test-writer.
+
+Toolkit checkout: ../ue-llm-toolkit (Plugin/UELLMToolkit/Source/UELLMToolkit/Private/MCP/MCPToolRegistry.cpp), overridable via the UE_LLM_TOOLKIT environment variable.
+
+Acceptance:
+- resolves the checkout via UE_LLM_TOOLKIT, falling back to the sibling path
+- t.Skip with a clear reason when the checkout is absent, so CI without it stays green
+- failure message names the offending skill AND the unknown tool
+- passes against the current 43-tool registry
+
+Depends on #9.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID but unverifiable until a toolkit checkout exists; must t.Skip without it. Depends on k9. Size S.
+
+From k26 (skill-author): get_ue_context (and status) are defined by the bridge itself (Resources/mcp-bridge/index.js:119/:151), not in MCPToolRegistry.cpp. ue-context lists get_ue_context in toolkit_tools as the spec §7 asks, so the lint must accept bridge-defined tools too, or it rejects that skill.
+
+**Decision 2026-11-21** (main agent, from the k26 review): ue-context keeps get_ue_context in toolkit_tools (spec §7, card k26). The lint accepts the bridge's own tools (Resources/mcp-bridge/index.js:118-140: get_ue_context, status) next to MCPToolRegistry.cpp. With this card, the rule text in .claude/skills/unreagent-skill-authoring/SKILL.md (:70-71, :144-149; skill-author) and spec §8 (doc-writer) gets amended to say so. Not earlier, because both files are in flight in the k10–k12 worktree.
+
+**Handed out 2026-11-21 — main-agent decision on the lane:** OWNERS puts internal/skills/ with unreagent-skill-author, so the skill-author writes the lint test (new file) instead of the test-writer named in the body. The rule-text amendment in .claude/skills/unreagent-skill-authoring and spec §8 follow once the k137/k139/k143 bundle (which edits unreagent-skill-authoring nearby) has landed.
+
+2026-11-21 10:18 **Lint written 2026-11-21** (unreagent-skill-author). New: internal/skills/toolkit_lint_test.go. Touched: internal/skills/skills.go (frontmatter comment no longer says "planned in k18").
+
+Found in the toolkit checkout (ue-llm-toolkit 9f6a0f7):
+- MCPToolRegistry.cpp registers classes, not names: RegisterTool(MakeShared<FMCPTool_X>()), 43 times (FMCPTool_MetaSound only under #if UE >= 5.7; skill ue-metasounds already says so). The name is the Info.Name = TEXT("...") in Tools/MCPTool_X.h, or in Tools/MCPTool_X.cpp for niagara, lighting, asset, material. The lint reads the classes from the registry and the name from the class files, and demands exactly one name per class.
+- Bridge (Plugin/UELLMToolkit/Resources/mcp-bridge/index.js): name: "unreal_status" (:82, :104) and "unreal_get_ue_context" (:119) are literals; registry tools appear there only as the template unreal_${tool.name}. The lint takes the literal unreal_* names minus the prefix, so toolkit_tools stays bare names.
+- Count: 43 registered + 2 bridge (get_ue_context, status). Every toolkit_tools entry of the 19 skills that carry one resolves; an independent grep agrees.
+
+Decisions (mine, not the maintainer):
+- Comments are stripped before matching (// and /* */; double-quoted, single-quoted and template literals pass through untouched; a C++14 digit separator is not a literal), so a commented-out registration does not count. A registration under #if counts.
+- What the parse cannot place (no registration, a class without exactly one Info.Name, no bridge tool, missing file) is t.Fatalf, not a skip: an upstream syntax change must stop the lint, not thin it.
+- Checkout: UE_LLM_TOOLKIT wins (a relative value is taken from the repo root); else ue-llm-toolkit next to the repo root, then next to the main checkout when the root is a linked worktree (followed through the worktree pointer file and its commondir, read from disk, nothing executed). From .claude/worktrees/<name> the sibling is found without the env var.
+- Stand-in tests that run in CI without the checkout: the parse over an fstest.MapFS with traps (#if, name in the .cpp, commented-out registration and bridge tool, unregistered header, comment openers inside literals, digit separator), its seven error cases, and mainCheckout over temp dirs (clone, worktree, relative pointer, submodule, none).
+
+2026-11-21 10:18 **Proposed text amendments, not applied** (held back until the k137/k139/k143 bundle lands). Line numbers are main ce31def; the card cited :70-71 and :144-149, which are the same passages in the older revision 639f42a.
+
+.claude/skills/unreagent-skill-authoring/SKILL.md (skill-author):
+
+(1) :104-105, the `toolkit_tools` bullet, replace with:
+> - `toolkit_tools` — a list of the plugin MCP tools this skill covers, by
+>   their bare names (`material`, not `unreal_material`): tools the toolkit
+>   registers in `MCPToolRegistry.cpp`, or the bridge tools `get_ue_context`
+>   and `status`. Lint-checked (see the lint below).
+
+(2) :182-187, the "Not written yet (k18)" paragraph, replace with:
+> `TestToolkitToolsExistInToolkit` (`internal/skills/toolkit_lint_test.go`)
+> asserts that every name in `toolkit_tools` is a tool the toolkit provides:
+> registered in `MCPToolRegistry.cpp` (the registry names classes,
+> `FMCPTool_X`; the name is its `Info.Name` in `Tools/MCPTool_X.h` or `.cpp`;
+> a registration under `#if` counts), or defined by the bridge itself in
+> `Resources/mcp-bridge/index.js` (`get_ue_context`, `status`). It needs the
+> toolkit checkout and **skips cleanly when it is absent**, so CI without it
+> stays green; `go test -v ./internal/skills` shows whether it ran. This is
+> the drift alarm for upstream tool renames; when it names a skill and a
+> tool, the skill is wrong, not the lint. When it cannot place what it reads
+> (no registration, a class without exactly one name, no bridge tool), it
+> fails instead: the upstream syntax changed, and the lint is what to adapt.
+
+(3) :165-166, replace with:
+> Set the toolkit location via `UE_LLM_TOOLKIT` when the checkout is not the
+> sibling `../ue-llm-toolkit` (a relative value is taken from the repository
+> root). A linked worktree, such as `.claude/worktrees/<name>`, also finds
+> the sibling of its main checkout.
+
+(4) :158, optional precision: "2. **`MCPToolRegistry.cpp`** — the definitive list of registered tools; it registers classes, and each name is the class `Info.Name`. The bridge adds `get_ue_context` and `status`."
+
+Spec docs/superpowers/specs/2026-08-21-skill-subsystem-design.md (doc-writer):
+
+(5) §8 :391-395, replace with:
+> **Skill content lint** (k18; a test, not a separate binary:
+> `internal/skills/toolkit_lint_test.go`): every tool named in
+> `toolkit_tools` must exist in the toolkit, either registered in the
+> plugin `MCPToolRegistry.cpp` or defined by the mcp-bridge itself
+> (`Resources/mcp-bridge/index.js`: `get_ue_context`, `status`; see §7).
+> This catches drift when the toolkit checkout is updated. It finds the
+> checkout through `UE_LLM_TOOLKIT`, else the sibling `../ue-llm-toolkit`,
+> and skips cleanly when there is none, so CI without it stays green.
+
+(This also drops "submodule": the toolkit is a sibling checkout, not a submodule.) Optional, §4 :129: "which of the plugin 43 MCP tools" could read "which of the toolkit tools (43 registered, plus the bridge get_ue_context)". Also seen: §8 "Planned" still lists k16/k17/k10/k15 items as planned; I did not check whether those cards are done, so that is for the doc-writer.
+
+2026-11-21 10:19 Done, commit-ready, not committed (worktree on main ce31def): new internal/skills/toolkit_lint_test.go, one comment line in internal/skills/skills.go. Verified: gofmt -l cmd internal skills empty; go vet ./... clean; GOOS=windows go vet ./internal/skills clean; go test -count=1 ./internal/skills ./... all ok with the checkout (lint ran from the worktree via the main-checkout sibling fallback, UE_LLM_TOOLKIT unset: "43 tools registered in MCPToolRegistry.cpp, 2 defined by the mcp-bridge (get_ue_context, status)"); go test -count=1 -race ./internal/skills ./... all ok with UE_LLM_TOOLKIT at an empty dir (lint SKIP: "UE_LLM_TOOLKIT=<dir> holds no Plugin/.../MCPToolRegistry.cpp; point it at a UE LLM Toolkit checkout ..."); compiled test binary run from a layout without a sibling and without the env var: SKIP "no UE LLM Toolkit checkout at <dir>/ue-llm-toolkit; set UE_LLM_TOOLKIT ...". make windows ok. Red proof: materal_bogus added to ue-materials toolkit_tools -> FAIL `skill "ue-materials": toolkit_tools names "materal_bogus", which the UE LLM Toolkit neither registers in MCPToolRegistry.cpp nor defines in its mcp-bridge` plus the list of known tools; file restored, skills/ unchanged. Stripper mutations (no stripping, no literal handling, no digit-separator rule, no template literals) each turn TestToolkitToolNamesParsesRegistryAndBridge red. Not done by design: rule text and spec §8, wording is in the note above.
+
+Spec §8 amended by doc-writer (worktree agent-a0f0fd45, uncommitted): lint paragraph per the test (toolkit_lint_test.go, bridge tools, UE_LLM_TOOLKIT/sibling, skip vs fail, no submodule); Planned list for k10/k15/k16/k17 moved to Written (code and tests exist on main); §4/§5 'planned k18' references updated.
+
+**Rule text amended 2026-11-21** (unreagent-skill-author, worktree agent-a0f0fd45 on main 7f1d0c5, uncommitted): .claude/skills/unreagent-skill-authoring/SKILL.md, items (1)-(4) from the note above, each checked against internal/skills/toolkit_lint_test.go. (1) toolkit_tools bullet: bare names, registry tools or the bridge's get_ue_context/status. (2) the lint paragraph: TestToolkitToolsExistInToolkit, #if counts / commented-out does not, bridge tools from Resources/mcp-bridge/index.js, skip without a checkout (go test -v shows it), failure names skill and tool, fail (not skip) when the parse cannot place what it reads (no registration, a class without exactly one name, a missing bridge file or one defining no tool), stand-in parse tests TestToolkitToolNames* run in CI. (3) location: UE_LLM_TOOLKIT, relative from the repo root, when set the only place looked (a path without MCPToolRegistry.cpp skips), linked worktree finds its main checkout's sibling. (4) registry bullet: registers classes, name is Info.Name in Tools/MCPTool_X.h or, for a few, .cpp (asset, lighting, material, niagara in toolkit 9f6a0f7), bridge adds get_ue_context and status. Also, per coordinator: rewrapped the name: bullet in Delivery (its 26-char line); line breaks only, one 53-char line stays because a code span cannot break. Verified: gofmt -l cmd internal skills empty; go test -count=1 ./internal/skills ok; lint ran (43 registered + 2 bridge) and SKIPs with UE_LLM_TOOLKIT at an empty dir. Not touched: source item 1 still says each header declares its Info.Name; (4) now qualifies it.
+
+2026-11-21 (unreagent-skill-author): source bullet 1 fixed to match (4): headers enumerate operations and usually hold Info.Name; for Asset, Lighting, Material, Niagara the name sits in MCPTool_X.cpp (checked in toolkit 9f6a0f7); re-checked: gofmt -l cmd internal skills empty, go test -count=1 ./internal/skills ok.
+
+**Review 2026-11-21** (unreagent-reviewer, worktree agent-a0f0fd45 on main 7f1d0c5, uncommitted): **ready**, one optional fix (doc nit), nothing blocking.
+
+Files: new internal/skills/toolkit_lint_test.go; internal/skills/skills.go:39 (comment); docs/superpowers/specs/2026-08-21-skill-subsystem-design.md §4 :129-131, §4.1 :150, §8 :416-438; .claude/skills/unreagent-skill-authoring/SKILL.md :69-72 (rewrap), :110-113, :162-172, :179-183, :199-212. Owners per ack-team: skill-author (test, skills.go, SKILL.md), doc-writer (spec). Nothing outside those paths.
+
+Check run (in the worktree, UE_LLM_TOOLKIT unset): gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... all ok; go test -race ./internal/skills ok; -v shows the lint ran via the main-checkout sibling fallback: 43 registered + 2 bridge (get_ue_context, status). make linux and make windows ok, built in a byte-identical scratch copy so dist/ here stays untouched. Windows: test-only change, no Windows-path code; vet and cross-compile only.
+
+Acceptance, checked myself:
+- Red: in a scratch copy, materal_bogus added to ue-materials toolkit_tools gives FAIL 'skill "ue-materials": toolkit_tools names "materal_bogus", which the UE LLM Toolkit neither registers ... nor defines in its mcp-bridge' plus the known list. Skill and tool are both named. The worktree's skills/ was never edited.
+- Skip: UE_LLM_TOOLKIT at an empty dir gives SKIP with a clear reason (also under -race). With no env var and no sibling (scratch copy), SKIP names the path it tried.
+- Without a checkout, all parser tests (skills_test.go, TestToolkitToolNames*, TestMainCheckoutFollowsLinkedWorktree) still run and pass.
+- A relative UE_LLM_TOOLKIT resolves from the repo root, as documented.
+- Mutations in the copy, each caught by the stand-in tests: no comment stripping, no digit-separator rule, no template literals, no literal handling, no single-quote literals, accept >1 name per class, keep the unreal_ prefix, ignore .cpp, mainCheckout always root.
+- Independent grep cross-check (toolkit 9f6a0f7): the 37 distinct toolkit_tools names over the 19 skills all resolve against 43 Info.Name values + 2 bridge tools; .cpp-named tools are exactly Asset, Lighting, Material, Niagara; there are no commented-out registrations upstream. The toolkit checkout is unmodified.
+- The SKILL.md and spec claims (bare names, #if counts / commented-out does not, the bridge's literal unreal_* names, a set UE_LLM_TOOLKIT is the only place looked, the worktree fallback, fail-not-skip cases, go test -v) all match the code.
+- No German in the touched text. The rewrap at SKILL.md :69-72 only moves line breaks; the words are the same.
+
+Finding (low, optional, doc-writer): spec :416-417 puts the config tests (k10, k15) in internal/config/skills_test.go, but the --no-skills-mcp override listed at :424 is tested in cmd/launcher/skills_test.go (TestApplyNoSkillsMCP :833, TestRunNoSkillsMCPWinsOverTheLocalOverlay :856). Possible wording: '... and internal/config/skills_test.go (config defaults and validation, k10, k15; the flag override is in cmd/launcher)'.
+
+Note (not a finding): moving §8's k10-k17 list from Planned to Written goes beyond k18's own claim. It stays within §8 and the card records it, and the tests it names exist.
+
+Proposed commit subject: Lint each skill's toolkit_tools against the UE LLM Toolkit's registry and mcp-bridge (k18)
+
+Committed c332502 on main (release-manager). No Changes entry: developer-side test, skipped without a toolkit checkout, no user-visible change.
