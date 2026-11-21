@@ -1,0 +1,42 @@
+---
+claimed_at: 2026-11-21T01:11:18Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T01:11:29Z
+created: 2026-08-24T23:44:40Z
+id: 81
+priority: high
+started: 2026-11-21T00:37:54Z
+status: done
+tags:
+- windows
+- release
+title: Windows smoke-test checklist before the v0.0.9 tag
+updated: 2026-11-21T01:11:29Z
+---
+
+Everything since v0.0.8 was verified on Linux only; these are the Windows-specific claims that need one real run on the Windows box before tagging. 1) #29: run_python/run_node write the script into the UE project directory -- check a project under Defender/Perforce/network share does not reject the temp file. 2) #31: supervisor streams via parent-owned os.Pipe ends; confirm the editor's last log lines before a forced exit land in logs/unreagent.log and that a >1 MiB line does not stall the editor. 3) #33: NewJob failure path only compile-checked. 4) #50: confirm Claude Code's HTTP client sends no Origin (or a loopback one) -- otherwise every MCP call is 403 and the launcher log says 'rejected request from disallowed Origin'. 5) UE log encoding: 'logs service=ue' after start and read_file Saved/Logs/<Project>.log (expect UTF-8 with a 3-byte BOM, readable while the editor holds it). 6) Ctrl-C inside Claude Code in window mode must not tear down UE. 7) The documented claude.cmd shim in unreagent.local.yaml passes --mcp-config JSON through intact. 8) read_file path=CON must be rejected (see the reserved-device ticket). 9) The signed exe shows publisher and version 0.0.9 in the properties dialog.
+Acceptance: each item ticked with a one-line result in this ticket; failures become their own tickets before the tag is pushed.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): STALE as a v0.0.9 gate (0.0.9 released at b4107a8). The repeating checks (items 2, 4, 5, 6, 7, 9) belong in a standing Windows smoke-test checklist for the release-manager audit; item 8 is k76. Proposal: close once the checklist has moved.
+
+
+**Decision 2026-11-21** (maintainer): move the repeating checks (items 2, 4, 5, 6, 7, 9) into a standing Windows smoke-test checklist in the release-manager audit (doc-writer), then close this card. Item 8 becomes part of k76's acceptance.
+
+Main agent done, main working tree, uncommitted, based on c013f77. .claude/agents/unreagent-release-manager.md checklist item 10 'Windows smoke test' carries the repeating checks (items 2, 4, 5, 6, 7, 9 plus the CON check from item 8, which k76 implements); the release-manager lists them as open unless the maintainer reports a result and never ticks them itself. Items 1 and 3 dropped (one-off checks for k29/k33). Close this card once committed.
+
+2026-11-21 01:07 Review (unreagent-reviewer): CHANGES NEEDED (one wrong path). .claude/agents/unreagent-release-manager.md item 10 (lines 58-75) carries card items 2, 4, 5, 6, 7 and 9 plus the CON check. Owner per OWNERS: main.
+1) Line 62: 'logs/unreagent.log' does not exist. The launcher writes unreagent.log next to the .uproject (cmd/launcher/main.go:106-114, README.md:399 and :613), and only when the agent runs in window mode; otherwise the log goes to the console. The card's wording was copied over. The check should name the real file and say it needs window mode.
+Faithful: item 4 at lines 64-66 (the log text matches internal/mcp/mcp.go:167), item 5 at 67-69, item 6 at 70, item 7 at 71-72, item 9 at 74-75 (generalised from 0.0.9 to the release version, fine), and item 8 at 73 (matches the maintainer's k76 decision, other reserved names included). Dropping items 1 and 3 follows the decision. 'Never tick one yourself' (61) is clear.
+Minor: (a) lines 60-61 'unless the maintainer has reported a result (recorded on a karr card)' does not tie the result to this release candidate, so a result from an earlier tag would satisfy the wording. Say 'for this release's build (version/commit)'. (b) It does not say whether an open smoke check blocks 'ready' (line 77). Make an open item a listed blocker.
+Check at f7581b3: gofmt/vet/test/make windows all green.
+
+2026-11-21 01:09 Re-review (unreagent-reviewer): APPROVE. .claude/agents/unreagent-release-manager.md item 10 (lines 58-79).
+(1) Lines 65-67, the log path, now match the code. Supervisor emit (internal/supervisor/supervisor.go:703-706) writes every editor line into the 'ue' ring buffer, which logs service=ue serves, and also passes it to the launcher logger. The launcher logger writes to logOut (main.go:61-64): unreagent.log next to the .uproject when the agent runs interactively in window mode (main.go:99-120), stdout otherwise. Edge case not worth listing: if os.Create fails, the log stays on the console.
+(2) Lines 60-62: a result must be for this release's build, and one from an earlier tag does not count. Clear.
+(3) Lines 62-64, the 'ready on Linux, Windows smoke test open' verdict, does not conflict with the house rules. It applies them: engineering discipline 11 says a skipped check is not a pass, and the unreagent-rules hazard says to label Windows paths unverified. It authorizes nothing, so the publish gate is untouched.
+Nit, not blocking: line 81 still reads 'Report: ready, or a concise list of what blocks the release. File blockers as karr tickets.' It offers only two outcomes and does not say whether an open smoke check gets a ticket. Point it at the item 10 verdict so a reader who stops at the last line does not report a plain 'ready'.
+Check at f7581b3 with the prose diff: gofmt -l cmd internal empty, go vet ok, go test -count=1 ./... ok, make windows ok.
+
+Committed as 077439a
