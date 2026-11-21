@@ -428,6 +428,12 @@ Revision history for unreagent
     naming mcp__unreagent__approve gets a log line saying so; one naming
     another tool gets the "permissions are not enforced" WARN, also with
     claudeIntegration: false.
+  - The shipped skills unreagent-build, unreagent-iterate and unreagent-files
+    no longer state as fact that -waitmutex makes a second build wait, that
+    UnrealBuildTool refuses to build under Live Coding with a fixed message,
+    or that -unattended suppresses the package recovery prompt. They keep the
+    guidance (stop the editor before a compile, do not retry a build that does
+    not come back) and say what to look for instead.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

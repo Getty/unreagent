@@ -91,8 +91,8 @@ Only their skeleton is.
 |---|---|---|---|
 | `Build.bat <Target> <Platform> <Configuration> … -WaitMutex -FromMsBuild` is a form Epic prints | the `compile` default in `applyDefaults` | [sanitizers] (one example, for a Linux game target) | doc for the form |
 | The editor target is `<ProjectName>Editor` | same: `${PROJECT_NAME}Editor` | none; nothing read here ties a target's name to the project's, or says every project has an editor target | unverified |
-| What `-WaitMutex` waits for | none in Go; `skills/unreagent-build` tells the agent a second build waits for the first | [sanitizers] shows the flag and explains nothing | unverified; U7 |
-| UnrealBuildTool refuses to build while Live Coding is active, and the text of its message | the `run_command` description in `cmd/launcher/tools.go`; `skills/unreagent-build` and `skills/unreagent-iterate` quote the message | R§5 [live57] documents Live Coding, not the refusal | unverified; U7 |
+| What `-WaitMutex` waits for | none in Go; `skills/unreagent-build` says only that `compile` passes the flag, and treats a compile that does not come back as possibly waiting on another UnrealBuildTool | [sanitizers] shows the flag and explains nothing | unverified; U7 |
+| UnrealBuildTool refuses to build while Live Coding is active, and the text of its message | none; the `run_command` description in `cmd/launcher/tools.go` and `skills/unreagent-build`, `-iterate` and `-files` give the stop-before-compile order for a reason that does not depend on it (the editor has the modules loaded), and call the outcome, fail or wait, unverified | R§5 [live57] documents Live Coding, not the refusal | unverified; U7 |
 | `RunUAT.bat BuildCookRun -project=… -clientconfig=…` builds, cooks and packages | the `package` default | R§5 [bcr57] | research; `-noP4 -build -cook -stage -pak -archive -archivedirectory=` were not checked by anyone |
 
 ## Toolkit server and node bridge

@@ -155,8 +155,12 @@ kills whatever it left behind. What follows from this:
 
 - **Unsaved changes are lost.** Save through the in-editor plugin before you
   stop or restart. These tools cannot save.
-- **Nothing offers to recover them later.** `-unattended`, on by default, also
-  suppresses the recovery prompt on the next start.
+- **Do not count on recovering them later.** The editor runs with
+  `-unattended`, on by default, which Epic documents as disabling pop-ups and
+  dialogs. Whether that covers the package recovery prompt is not verified
+  against an editor, so do not assume the start after a crash or a kill is
+  free of one either: if the editor is running but the in-editor plugin stays
+  unreachable, a dialog on the host may be waiting for the user.
 - **Work in flight inside the editor is cut off mid-way**: shader compiles,
   saves, imports, anything it was running.
 - **Nothing is left behind as an orphan, as long as the job exists.** No stray
@@ -371,10 +375,12 @@ For C++:
 
 Stop the editor before you compile, not after. The `run_command` tool
 description gives the same order: `ue_stop` before `compile`, then `ue_start`
-to load the new modules. UE 5 enables Live Coding by default, and
-UnrealBuildTool refuses to build while a Live Coding session is active. It
-says so in its output: `Unable to build while Live Coding is active`. Stopping
-first rules that conflict out.
+to load the new modules. A running editor has the module binaries loaded and
+may have a Live Coding session open. What UnrealBuildTool does then is not
+verified against an editor: expect the build to fail or to wait. If a
+`compile` with the editor up fails on something other than your code, look in
+its output for Live Coding, the running editor or a binary it cannot write
+(the exact wording is not confirmed), then stop the editor and compile again.
 
 ### Waiting for the in-editor plugin
 

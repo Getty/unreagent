@@ -329,7 +329,8 @@ Editing C++ or config does not change the running editor. Through unreagent's
 tools, a C++ change takes effect in a new editor process: stop the editor
 (`ue_stop`), compile (`run_command` with the project's `compile` command),
 then start it (`ue_start`) to load the new modules. Stop it before the
-compile, because UnrealBuildTool refuses to build while Live Coding is active.
+compile: with the editor up, expect the build to fail or to wait (which of the
+two is not verified against an editor).
 A config change (`Config/*.ini`, `.uproject`, `.uplugin`) needs an editor
 restart (`ue_restart`); a C++ plugin newly enabled there needs the C++ steps
 instead. The `unreagent-build` and `unreagent-iterate` skills cover that loop.

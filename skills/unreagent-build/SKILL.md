@@ -194,10 +194,13 @@ in which stage.
   call. A run that takes longer still finishes, but its reply can no longer be
   sent: the connection drops at that point, and no result arrives.
 - **A repeated call starts a second run beside the first.** Nothing in the
-  launcher serializes runs, and `status` does not show runs in progress. For
-  `compile`, `-waitmutex` makes the second UnrealBuildTool wait for the first.
-  Do not retry a build whose call you lost. Do not start the editor while a
-  compile you lost track of may still be writing binaries.
+  launcher serializes runs, and `status` does not show runs in progress. The
+  `compile` command line passes `-waitmutex`, which Epic documents only as a
+  flag name: whether a second UnrealBuildTool waits for the first, fails, or
+  builds beside it is not verified. Treat a `compile` that does not come back
+  as possibly waiting on another UnrealBuildTool. Do not retry a build whose
+  call you lost. Do not start the editor while a compile you lost track of may
+  still be writing binaries.
 - **The launcher log is the only trace of a lost run.** It records
   `[cmd:<name>] done (exit N)` when the run ends. That log is `unreagent.log`
   next to the `.uproject` when the launcher runs its own agent in the
@@ -229,9 +232,10 @@ There, a run's children are not killed with it.
 
 ## The editor and the build
 
-- **Stop the editor before `compile`.** UE 5 enables Live Coding by default,
-  and UnrealBuildTool refuses to build while a Live Coding session is active:
-  `Unable to build while Live Coding is active`. Stopping first avoids that.
+- **Stop the editor before `compile`.** A running editor has the project's
+  modules loaded, and it may have a Live Coding session open. What
+  UnrealBuildTool does then is not verified against an editor: expect the
+  build to fail or to wait. Stopping first rules both out.
   `unreagent-iterate` has the full stop → compile → start loop, including what
   a stop does to unsaved work.
 - **A new build takes effect only in a newly started editor.** After a
@@ -247,14 +251,14 @@ There, a run's children are not killed with it.
 | `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
 | `Error: unknown command "compile"`, and `status` lists neither `compile` nor `package` | the launcher found no engine root or no `.uproject` at start and left the built-in commands out | the user sets `UE_ROOT` or `engineRoot`, or `unreal.project`, then restarts the launcher |
 | `Error: start failed: fork/exec …/Engine/…: …` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
-| `exit` non-zero, with `Unable to build while Live Coding is active` | the editor is running with Live Coding | `ue_stop`, then compile again |
+| `exit` non-zero while the editor is running, and the output names Live Coding, the running editor or a module binary it cannot write, not your code (the exact wording is not confirmed) | the open editor is in the build's way | `ue_stop`, then compile again |
 | `exit` non-zero, an omitted marker, and the errors look like follow-ons | their cause is among the omitted lines or bytes | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
 | `exit` non-zero, `[... N lines omitted]` between the first lines and the last | the output was more than a failing reply's 10,000 bytes; the N lines between its first 4 KiB and its end were cut (past 2 MiB, N includes the dropped middle) | they are gone, and a rerun of the same state cuts the same way. Fix what is visible and compile again; for the whole output, the user adds a command that writes it to a file, read with `read_file` |
 | `[... B bytes omitted; a failing call's reply holds at most 10 KB]` | a single line was longer than its share of a failing reply: a first line over 4 KiB is cut to its start, a last line that does not fit to its end | as for the lines marker above |
 | `exit 0`, then `[... N lines omitted]` | the first N lines of a successful run's output were cut | they are gone. Rerun only if you must |
 | `exit 0`, then `[... B bytes omitted; a reply holds at most 48 KiB]`, alone or below the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut (past 2 MiB, B can include the dropped middle); the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
-| the call never returns, or the client times out | no timeout exists, and the run continues on the host | do not retry. Watch the launcher log for `[cmd:<name>] done` |
+| the call never returns, or the client times out | no timeout exists, and the run continues on the host. A `compile` may also be waiting on an earlier UnrealBuildTool run | do not retry. Watch the launcher log for `[cmd:<name>] done` |
 | a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
 
 ## See also
