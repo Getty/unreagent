@@ -1,0 +1,65 @@
+---
+claimed_at: 2026-11-21T03:18:08Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T03:18:08Z
+created: 2026-11-21T02:29:30Z
+depends_on:
+- 9
+id: 115
+priority: medium
+started: 2026-11-21T02:58:18Z
+status: done
+tags:
+- docs
+- skills
+title: Docs and skills after k9 lands
+updated: 2026-11-21T03:18:21Z
+---
+
+Follow-ups listed by the k9/k14 skill-author:
+- main agent: CLAUDE.md layout table gets skills/ (embedded skill documents + embed.go) and internal/skills/ (parser).
+- skill-author: unreagent-core layer table gets internal/skills; unreagent-skill-authoring documents the parser rules (name equals directory, closed frontmatter key set, non-empty body, only <name>/*.md, no auxiliary files — a skills/README.md would fail TestEmbedMissesNoSourceFile on purpose).
+- doc-writer: skill-subsystem spec §6.1 records the embed split (skills/embed.go holds the directive, internal/skills parses), §4 the name-equals-directory rule and the closed key set.
+
+**Also (from k112):** .claude/skills/unreagent-core/SKILL.md:99 says CI fails on 'gofmt -l cmd internal' non-empty — since k112 it is 'gofmt -l cmd internal skills' (skill-author). The reviewer agent's check line was updated by the main agent in the k112 commit.
+
+**From the k9 review:** spec §6.1 says DescribeAll renders a 'table' — it renders a '- name: description' list; spec §3.1 names auxiliary files as something materialized skills can carry, while the loader now only accepts <name>/*.md — record that decision (or revisit it with k12).
+
+**Handed out (2026-11-21), k9/k14 landed as 4b71fea:** spec (docs/superpowers/specs/2026-08-21-skill-subsystem-design.md) → unreagent-doc-writer; .claude/skills/unreagent-core + unreagent-skill-authoring → unreagent-skill-author; CLAUDE.md layout table → main agent. Main tree, disjoint files. Parser rules to document include the fix-round ones: dot/underscore names rejected, empty section names and empty sub-documents rejected, frontmatter exactly one YAML document, BOM / trailing whitespace on '---' named as errors.
+
+Done in the main tree, uncommitted (2026-11-21): CLAUDE.md layout table gets internal/skills/ and skills/ (main agent); spec §3.1 auxiliary-file decision, §4/§4.1 parser rules, §6.1 embed split + DescribeAll list format, §8 tests (doc-writer); unreagent-core layer table + CI step list (gofmt -l cmd internal skills, Changes check, -race), unreagent-skill-authoring 'What the loader rejects' + delivery/lint/test claims corrected to what exists today (skill-author). k12 open questions untouched.
+
+2026-11-21 03:09 **Review 2026-11-21 (unreagent-reviewer)**: main working tree, uncommitted; exactly four files changed: CLAUDE.md, docs/superpowers/specs/2026-08-21-skill-subsystem-design.md, .claude/skills/unreagent-core/SKILL.md, .claude/skills/unreagent-skill-authoring/SKILL.md. Check run: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test ./... && make windows -> green (go1.26.6; 5 packages ok, skills [no test files], dist/unreagent.exe built). No Go changed, no Windows claim made. ack-team owners match the card's split (CLAUDE.md main, spec doc-writer, both skills skill-author; who typed what is taken from the card). English only, no machine paths, both frontmatters parse (name + description), wrap width within each file's existing range. CLAUDE.md and unreagent-core: every statement checked and accurate (CI steps vs ci.yml, the import graph via go list -deps, the test-coverage claim).
+
+Verdict: CHANGES NEEDED. One statement is false against the code (doc-writer); the rest are small.
+
+1. spec:98-100 (§3.1) and spec:146-148 (§4.1) are false: an auxiliary file (script, image), a nested directory or a top-level file under skills/ does NOT fail Load. The */*.md pattern leaves them out of the embed, so Load never sees them; only TestEmbedMissesNoSourceFile fails. Probe on a scratch copy with skills/unreagent-build/helper.py, skills/unreagent-build/img/a.md and skills/README.md: TestLoadParsesEveryEmbeddedSkill PASS, TestEmbedMissesNoSourceFile FAIL naming all three. load()'s layout check is the backstop for a changed pattern (skills_test.go:176-177). skill-authoring:81-84 gets it right; align the spec with it. Owner: unreagent-doc-writer.
+2. spec:143-144 and skill-authoring:95-96: "a --- line followed by content" reads as the closing delimiter followed by the body, which is the normal case. A bare --- always closes the frontmatter (skills.go:197-205). The error is a line starting "--- " that carries content on the same line ("--- {bogus: 1}", skills_test.go:148), as skills.go:146 says. Owners: doc-writer, skill-author.
+3. spec:140-141 (new text) "cannot slip past the registry lint" and spec:318-329 (§8): the lint is k18 and is not written. §8 now lists landed tests (313-317) next to planned ones (skills tool k16, materialization k12/k17, config k10/k15, lint k18), with nothing to tell them apart. Mark the planned ones with their cards, as skill-authoring:138-151 does. Owner: doc-writer.
+4. spec:201 "once at startup" and spec:208-209 "used as the MCP tool description": nothing calls Load today (go list -deps ./cmd/launcher has no skills package; unreagent-core:30-32 says so). That is k11/k12 wiring, inside a section that otherwise describes landed code; mark it. Owner: doc-writer.
+5. skill-authoring:26-27 "materialized ... when skills.mcp: false": the skills: config does not exist yet (k10), and per spec §5 the switch is skills.materialize: true (or --no-skills-mcp, which sets both); mcp: false on its own is a config error. Name k10 and the right switch. Owner: skill-author.
+
+Nits (not blocking): spec:134-135 "names the skill and the file" (a bad skill-dir name names no file, a stray top-level file names no skill). spec:129-130 "plain Markdown without frontmatter" is a convention the loader does not check (a sub-document is served verbatim). spec:194-210: two bullet lists separated only by a blank line render as one list. skill-authoring:150-151: the materialization tests are k17.
+
+k12 open questions: skill-authoring:43-45 states the prefix question as open (k12) and decides nothing. The Skills/ directory (k1) is mentioned and decided nowhere, which is fine. Spec §6.3 (outside this card) still states the unreagent-<name> rule without the open question; it is worth a marker when k12 is worked.
+
+Also found (outside k115, owner unreagent-skill-author): the internal/skills/skills.go:224 doc comment still says "selection table" though the code renders a list (the k9 review flagged the same word in the spec), and skills.go:37 cites "the registry lint", which is k18.
+
+**Back for fixes (2026-11-21), review requested changes:** spec — stray files are left out of the embed (only TestEmbedMissesNoSourceFile fails, not Load), ambiguous second-YAML-document wording, planned tests/wiring marked with their cards (k10/k11/k12/k15/k16/k17/k18), minor wording (error naming, sub-doc frontmatter unchecked, list rendering) → doc-writer; skill-authoring — second-document wording, config switch is skills.materialize (k10), materialization tests are k17; plus skills.go:224 'selection table' and :37 registry lint (k18) comments → skill-author.
+
+Review fixes done (2026-11-21), main tree, uncommitted: spec — stray files kept out of the embed (only TestEmbedMissesNoSourceFile fails), second-document rule exact, planned tests/wiring marked (k10/k11/k12/k15/k16/k17/k18), error-naming and sub-doc frontmatter wording, list split (doc-writer); §3 diagram switch now skills.materialize: true (main agent). Skills — skill-authoring config switch planned (k10) with §5's switches, second-document wording, k17 for the materialization tests (skill-author); internal/skills/skills.go comment-only: 'selection list', lint planned in k18 (skill-author). Back to the same reviewer.
+
+2026-11-21 03:16 **Re-review 2026-11-21 (unreagent-reviewer)**: main working tree, uncommitted; five files changed: CLAUDE.md, docs/superpowers/specs/2026-08-21-skill-subsystem-design.md, .claude/skills/unreagent-core/SKILL.md, .claude/skills/unreagent-skill-authoring/SKILL.md, internal/skills/skills.go (comment-only; ack-team owner unreagent-skill-author, the card records it was bundled in). CLAUDE.md and unreagent-core are unchanged since the first review. Check run: test -z "$(gofmt -l cmd internal skills)" && go vet ./... && go test -count=1 ./... && make windows -> green (go1.26.6; 5 packages ok, skills [no test files], dist/unreagent.exe built). No Windows claim. English only, no machine paths, the skill-authoring frontmatter is unchanged.
+
+All five findings are fixed and accurate against the code:
+1. spec:97-102 and :150-156 now say stray files stay out of the embed and only TestEmbedMissesNoSourceFile fails. This matches the earlier probe.
+2. spec:145-148 and skill-authoring:99-103: the document-end rule is exact. Probe on a scratch copy: a bare "..." line is accepted, "..." followed by content is an error, a "--- {bogus: 1}" line is an error, and a bare "---" followed by the body is fine. Each case behaves as both texts now say.
+3. and 4. spec §8 :323-345 splits written from planned tests, with k10/k11/k12/k15/k16/k17/k18 matching the board. spec:143, :211-212 and :218-219 mark the lint and the wiring as planned.
+5. skill-authoring:25-34 names k10 and the §5 switches correctly. The §3 diagram (spec:72) now reads skills.materialize: true. The nits are fixed too: spec:135-137 error naming, :129-131 sub-document frontmatter, :209 the list split, skill-authoring:157 k17. The skills.go:37-38 and :225 comments are accurate.
+
+Verdict: CHANGES NEEDED, reflow only (doc-writer). The fix round broke the spec's wrap width. Its prose wraps at about 80 columns, but spec:143 is 97 columns, :212 is 126, :219 is 115 and :341 is 90. Reflow those paragraphs; no wording change needed. The skill-authoring wrap is fine.
+
+Nits (not blocking; best folded into the reflow): spec:124 still says "Lint-checked against the registry (§8)" in the present tense, while §4.1 and §8 now say k18 is planned. spec:213 "fails loudly at build/test time": go build never runs Load, only the tests do. spec:211-212 names only k11 as the card that wires Load in, but materialization (k12) calls it too.
+
+Committed as 639f42a (docs, skills, comment-only Go; no Changes entry, no user-visible change). Check green: gofmt, vet, test -count=1, make windows.
