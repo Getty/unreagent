@@ -1,0 +1,32 @@
+---
+class: standard
+completed: 2026-11-21T14:21:29Z
+created: 2026-11-21T06:26:49Z
+id: 138
+priority: low
+started: 2026-11-21T14:21:29Z
+status: done
+tags:
+- skills
+- bug
+title: Two launchers on one project can leave a partial materialized skill set
+updated: 2026-11-21T14:21:29Z
+---
+
+Found in the k10–k12 review (mutation and stress run): materializeSkills removes every unreagent-* directory in skills.dir and then rewrites them. Two launchers started on the same project at once raced in 5 of 300 runs and left a partial set, once while the winning launcher logged 'materialized'. No foreign data was lost. Options: write into a temp dir per skill and rename into place, or a lock file in skills.dir. Done: concurrent runs never end with a partial set without a WARN; a test pins it. Lane: unreagent-worker. Depends on the k10–k12 commit.
+
+**Triage 2026-11-21 (scout, main agent closes):** fixed by 9bd5b84 (the k137+k139+k143 bundle). k164 (22bee2b) is not what fixes it.
+
+**Why the race is gone:** each skill is written whole into a fresh work directory (`tryInstallSkillDir`), and the old copy is moved aside before the new one is renamed in. So a skill is only ever missing for a moment or complete, never partial.
+- A failed rename-in puts the previous copy back.
+- An install makes up to 3 attempts (`installSkillDir`, `skillRetryPauses`).
+- The sweep builds its keep set from the whole shipped set before the first install, and renames each leftover before `RemoveAll`.
+- If every attempt fails, the error is returned as a WARN. The card allows that.
+
+**Tests:**
+- Existing: `TestMaterializeWithASecondRunInEveryGap` and `TestMaterializeTwoRunsAtOnce` (40 rounds).
+- Scout stress run, 300 rounds with two concurrent `materializeSkills` on one directory: 0 incomplete or mismatched trees.
+- The same under `-race`: 0 incomplete trees. One loud error in 300 rounds, which the card allows.
+- Windows (rename and locks) is untested.
+
+Closed as fixed by 9bd5b84.
