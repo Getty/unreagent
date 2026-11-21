@@ -1,0 +1,85 @@
+---
+claimed_at: 2026-11-21T07:17:02Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:17:28Z
+created: 2026-08-21T23:23:37Z
+depends_on:
+- 8
+id: 22
+priority: medium
+started: 2026-11-21T06:17:16Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: Materials & Niagara (Class A)'
+updated: 2026-11-21T07:17:28Z
+---
+
+- ue-materials -- material
+- ue-niagara -- niagara
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size M. k19 first.
+
+Skill-author: wrote skills/ue-materials/SKILL.md (282 lines, toolkit_tools [material]) and skills/ue-niagara/SKILL.md (292 lines, [niagara]). Single SKILL.md each, no sections, no unreal_classes (neither works through execute_script). Written from the toolkit's C++ source only, with no VibeUE text, so there is no attribution line. Sources read: MCPTool_Material.h/.cpp and MCPTool_Niagara.h/.cpp (GetInfo and the parameter schema are in the .cpp for both), MCPToolRegistry.cpp:124 and :156, the MCPToolBase.h and UnrealClaudeUtils.h helpers, mcp-bridge/contexts/material.md, domains/tooling.md. toolkit_tools hand-checked against the registry, since the k18 lint has not landed. Hedged: material: what the engine does with a parameter name the parent does not define; that get_material_info shows only an instance's stored overrides; whether numeric strings convert (material_slot is advertised as a string by the bridge). Niagara: which actor owns the component spawn_system creates (probably World Settings, so label renames it), whether the effect persists, removal under auto_destroy; missing vector components in set_parameter; whether placed effects pick up a new default. Left out: the unused GetMaterialParameters helper; Dynamic material instances (the header claims them, but the code creates Constant only); static mesh slots (not reachable). Sibling skills referenced: ue-assets, ue-level-actors, ue-blueprints, ue-tasks, ue-context, unreagent-iterate. Checks: go test -count=1 ./internal/skills ok; gofmt -l cmd internal skills clean; go vet ./... clean. Upstream bugs noted on k132 (M1-M7, N1-N4, B1). Not committed.
+
+Ready for review: skills/ue-materials/SKILL.md and skills/ue-niagara/SKILL.md, uncommitted, in the skill-author worktree on branch worktree-agent-adf1ec83f1cf92b0a. go test ./internal/skills, gofmt and go vet are green. Details in the note above.
+
+**Review 2026-11-21** (unreagent-reviewer): CHANGES NEEDED (minor). Files: skills/ue-materials/SKILL.md, skills/ue-niagara/SKILL.md (untracked, skill-author worktree, base 9e624eb). Owner per ack-team: unreagent-skill-author for both; no edits outside those paths.
+
+Check run in the worktree: gofmt -l cmd internal skills (clean), go vet ./... (clean), go test -count=1 ./... (all ok), make windows (rc 0). Also ran go test ./internal/skills against main HEAD plus all four new skill dirs in a scratch copy: ok. No Windows-path code involved.
+
+Verified against the toolkit source: every operation, alias, default and error string; frontmatter (toolkit_tools [material] / [niagara], both in MCPToolRegistry; no unreal_classes, correct since neither uses execute_script); the author's claims (Constant-only instances, get_material_info cannot list parent params, GetMaterialParameters unused, material_slot as a string through the bridge, no path check in niagara, case-insensitive emitter/parameter matching, spawn_system owner hedged). Save guidance matches ue-assets; actor addressing hands off to ue-level-actors. English only. The k18 lint has not landed, so toolkit_tools was hand-checked. No proposed Changes entry is on the card, so none could be checked.
+
+Findings:
+1. skills/ue-materials/SKILL.md:162-164: "The values applied before the error stay applied" is wrong. ApplyParametersFromJson (MCPTool_Material.cpp:567ff) collects errors and keeps going: every scalar and vector and every other texture that loads is applied in memory, not just what came "before". It should say that.
+2. skills/ue-niagara/SKILL.md:76-78: says set_parameter changes /Engine/ systems in memory but does not say such a change cannot be saved (save_asset rejects /Engine/, save_all skips it, see ue-assets). Add that, and tell the agent to duplicate the system into /Game/ first.
+3. skills/ue-niagara/SKILL.md:278: "rename it in the World Outliner" clashes with the hedge that the owner is probably World Settings, which the Outliner does not rename like a normal actor. Hedge the remedy, or drop it and keep "spawn without label".
+4. skills/ue-materials/SKILL.md:51: the heading "No static mesh slots" reads as if a static mesh can never be reached, but set_actor_material does reach a placed static mesh component's slots. Say "No static mesh asset slots".
+
+Optional:
+5. skills/ue-materials/SKILL.md:142-144: "exactly that package_path": the default folder is written with a trailing slash (/Game/Materials/) but asset_search reports package_path without one (ue-assets). Say "without the trailing slash".
+6. skills/ue-materials/SKILL.md:180-182: an engine statement given without a hedge (only overrides are stored). It is accurate; hedge it for consistency, or leave it.
+
+Back to unreagent-skill-author for 1-4.
+
+**Review correction** (unreagent-reviewer): in finding 2, drop the suggestion to "duplicate the system into /Game/ first". `asset duplicate` checks asset_path and rejects /Engine/ as well (skills/ue-assets/SKILL.md:68-73), so the tool cannot copy an engine system. The remedy should be: do not set_parameter on an /Engine/ or plugin system, because the change cannot be saved; tell the user, who can duplicate it in the Content Browser. The verdict and the other findings are unchanged.
+
+Review correction 2 (unreagent-reviewer): narrowing my correction above. The rejection by save_asset and save_all is verified for /Engine/ only. Plugin content (e.g. /Niagara/) is not covered by that check, so whether it saves is unverified, and it is not the project's content either way. The skill should state the /Engine/ case as fact and hedge the plugin case.
+
+Review fixes, each checked against the toolkit source (MCPTool_Material.cpp 567-645, MCPTool_Asset.cpp 319/581/889-901, MCPTool_AssetSearch.cpp 20-80). skills/ue-materials/SKILL.md: 51-55 heading now 'No static mesh asset slots'; 146-147 asset_search writes package_path without the trailing slash; 165-171 partial apply rewritten: all scalars, all vectors and every texture that loads are applied, only the textures in the error are missing, no dirty mark on that path. skills/ue-niagara/SKILL.md: 80-86 new paragraph: set_parameter outside /Game/ cannot be saved for /Engine/ (save_asset rejects, save_all skips), plugin content unverified, tell the user to duplicate into /Game/ in the Content Browser, asset duplicate rejects /Engine/ too; 286 World Outliner advice dropped, renaming back is hedged as unverified. Checks: go test -count=1 ./internal/skills ok; gofmt -l cmd internal skills clean.
+
+Review findings addressed (required 1-4 and the optional trailing-slash item); changed lines are in the previous note. Skill tests and gofmt green. Uncommitted in the worktree for the release-manager.
+
+**Review round 2, 2026-11-21** (unreagent-reviewer): READY. Files: skills/ue-materials/SKILL.md, skills/ue-niagara/SKILL.md (untracked, skill-author worktree). Owner per ack-team: unreagent-skill-author; nothing else changed.
+
+Check run in the worktree: gofmt -l cmd internal skills (clean), go vet ./... (clean), go test -count=1 ./... (all ok), make windows (rc 0). Also ran go test -count=1 ./internal/skills against main HEAD plus all four revised skill dirs in a scratch copy: ok.
+
+Changed lines checked against the toolkit source:
+- ue-materials:51-55 (static mesh asset slots): matches set_actor_material, which takes the actor's first UMeshComponent (MCPTool_Material.cpp:446).
+- ue-materials:146-147: matches ue-assets (no trailing slash).
+- ue-materials:165-171: matches ApplyParametersFromJson (MCPTool_Material.cpp:567-648), which collects errors and goes on, and the early return before PostEditChange/MarkPackageDirty (:299-306). Only texture loads can fail there.
+- ue-niagara:80-86: the /Engine/ rejection by save_asset, save_all and asset duplicate matches ue-assets:68-73 and :260; the plugin-content hedge is correct.
+- ue-niagara:286: the remedy is hedged and the Outliner advice is gone.
+All round-1 findings are resolved.
+
+Optional, not blocking: ue-niagara:80 "outside /Game/" is broader than its reason, since a project's own plugin content (/<Plugin>/) is project content. "outside the project's content" would be exact.
+
+Committed as 3bcd6f1
