@@ -1,0 +1,91 @@
+---
+claimed_at: 2026-11-21T16:32:51Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T16:33:03Z
+created: 2026-11-21T13:51:40Z
+id: 180
+priority: low
+started: 2026-11-21T16:10:13Z
+status: done
+tags:
+- mcp
+- supervisor
+title: 'status gives no reason for unresponsive: true'
+updated: 2026-11-21T16:33:03Z
+---
+
+Found by the k37 worker, outside that card's scope.
+
+The `status` MCP tool reports `unresponsive: true` for a service whose control loop did not answer in time, but gives no reason. Since k37, `send()` knows when the loop is busy with the editor's pre-start step (crash reporter kill, recovery cleanup) and says so in the error and the log. `status` does not show it.
+
+**Done looks like:** `status` carries the reason, for example `busy: "pre-start"` next to `unresponsive`, or a reason string. That way an agent polling status after a "took the request — check status" reply can tell a slow pre-start from a hung loop. The tool description and the unreagent-mcp-tools skill should mention the field.
+
+Lanes: unreagent-worker (supervisor and the status tool), with unreagent-skill-author for the skill line. Low priority.
+
+Nit from the k37 re-review, fits here: cmd/launcher/tools.go:38 (takenNote) hard-codes "10s" instead of using supervisor's defaultCtrlTimeout (supervisor.go:132); the neighbouring descriptions take their numbers from the constants.
+
+Main agent's decision 2026-11-21:
+- **Field.** status gets a field busy: "pre-start" next to unresponsive: true, while the control loop is running the editor's pre-start step, the same state that send() already reports. The field is left out otherwise; there is no generic reason string.
+- **Nit.** The k37 nit goes in: takenNote takes its number from defaultCtrlTimeout.
+- **Lanes.** unreagent-worker does supervisor.go, tools.go and the tests. The unreagent-mcp-tools skill line follows by unreagent-skill-author in the same worktree.
+
+unreagent-worker started (worktree agent-abdabb5933ebd9de0, base dae0492). Plan: ServiceStatus gains Busy (json busy, omitempty); timeoutError returns a typed error carrying its single preStarting.Load(), and Status takes Busy from that same reading, so the logged error and the field cannot disagree. Nit: defaultCtrlTimeout exported as CtrlTimeout, named like FastFailWindow (its exact sibling: an exported default of a field tests shorten) - my naming choice. Tests at supervisor level (ctrlTimeout is unexported, a launcher-level test would wait the full 10s), asserting on the marshaled JSON the status tool sends.
+
+unreagent-worker report (worktree .claude/worktrees/agent-abdabb5933ebd9de0, branch worktree-agent-abdabb5933ebd9de0, base dae0492, uncommitted).
+
+Files:
+- internal/supervisor/supervisor.go: ServiceStatus.Busy (json "busy", omitempty). timeoutError keeps its single preStarting.Load() and now returns *ctrlTimeoutError carrying that reading; Status sets Busy "pre-start" from it via errors.As, so the logged error and the field never disagree (no second read). This also covers a status taken at a due restart and then held in that start's PreStart (taken && busy). defaultCtrlTimeout renamed to exported CtrlTimeout, named like its sibling FastFailWindow (both are exported defaults of a field tests shorten). The name is my choice.
+- cmd/launcher/tools.go: the status description gains one clause: "busy": "pre-start" next to it means the loop is still running the editor's pre-start step, not hung. takenNote is now fmt.Sprintf over supervisor.CtrlTimeout (it still renders "10s").
+- internal/supervisor/status_test.go: statusJSON helper (marshals the entry the way the status tool sends it) + TestStatusNamesABusyPreStart, TestStatusNamesNoBusyForALoopBlockedElsewhere (loop held in the exitTaken seam after its PreStart ran and returned), TestStatusOfAResponsiveServiceHasNeitherField. The tests are supervisor-level: ctrlTimeout is unexported, so a launcher-level test would wait the full 10s.
+
+Mutations (go test -overlay with mutated copies in the scratchpad, tree never edited):
+- field-removed (struct field + assignment): FAILS ABusyPreStart; the other two pass, as they must, because they assert absence.
+- Busy set on every unresponsive entry: FAILS LoopBlockedElsewhere.
+- preStarting never cleared: FAILS LoopBlockedElsewhere.
+- omitempty dropped: FAILS LoopBlockedElsewhere + ResponsiveServiceHasNeitherField.
+- Busy in every loop snapshot: FAILS ResponsiveServiceHasNeitherField.
+Every test fails under at least one mutation.
+
+Check (all green): gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./... (all ok); go test -race ./internal/supervisor ./cmd/launcher (ok); make linux; make windows. Linux only: no platform-guarded code was touched, and the change was not run on Windows.
+
+Side effect: the launcher console's status command marshals sup.Status() too, so it shows busy as well.
+
+For unreagent-skill-author (unreagent-mcp-tools SKILL.md, "Long-running work", after the sentence ending "with `IsError` on a non-zero exit."): "`status` sends `sup.Status()` as it is: a service whose control loop misses `supervisor.CtrlTimeout` comes back as `\"unresponsive\": true`, with `\"busy\": \"pre-start\"` next to it while that loop runs `PreStart`, taken from the same `preStarting` reading as the control call's error (`ctrlTimeoutError`), and absent (`omitempty`) in every other case."
+
+Drift for unreagent-doc-writer (this board): README.md:1222, the status row of the tool table, names "unresponsive": true but not busy.
+
+Proposed subject: Show busy: pre-start next to unresponsive in status (k180)
+Changes: status says why a service is unresponsive when the editor's pre-start step (crash-reporter kill, crash cleanup) holds its control loop: "busy": "pre-start" next to "unresponsive": true, so a slow pre-start no longer looks like a hung loop. The launcher console's status shows it too.
+
+Ready for review: Busy field + status description + CtrlTimeout nit + 3 tests, each killed by a mutation (see report note). Full check green on Linux plus the Windows cross-compile. Uncommitted in worktree-agent-abdabb5933ebd9de0. The skill line for unreagent-skill-author is in the report note.
+
+2026-11-21 16:24 unreagent-skill-author (same worktree, uncommitted):
+- .claude/skills/unreagent-mcp-tools/SKILL.md lines 137-144: new paragraph in 'Long-running work', right after the adapter paragraph (the worker's spot would have split the commandReply explanation that follows it; placement is my choice). Tightened worker sentence: status sends sup.Status() as it is; a loop that misses supervisor.CtrlTimeout gives unresponsive: true, plus busy: pre-start when the loop was in PreStart as the wait ran out; Status reads it from the call's ctrlTimeoutError (the one preStarting reading its message was built from), so error and field cannot disagree; otherwise busy is absent (omitempty); takenNote renders the same constant. Checked against supervisor.go (send, timeoutError, ctrlTimeoutError, Status, the PreStart Store pair) and tools.go (status handler, description, takenNote).
+- skills/unreagent-iterate/SKILL.md line 57: one row in the status field table under unresponsive: busy is present as pre-start only next to unresponsive, the loop is running the pre-start hooks (crash-reporter kill, crash cleanup), a slow pre-start and not a hung loop, call status again.
+- defaultCtrlTimeout: no skill under .claude/skills/unreagent-* or skills/ names it, so nothing to rename. unreagent-iterate still says 10 s / 10s as a value (lines 56, 123, 134, 136, 379-383); the value is unchanged, so left alone.
+Check: go test -count=1 ./internal/skills ./cmd/launcher ok (both); TestToolkitToolsExistInToolkit ran and passed (toolkit checkout present).
+
+2026-11-21 16:24 Correction to my note: the unreagent-iterate '10 s' lines are, after my insert, 56, 124, 135, 137 and 380-384 (I gave the pre-insert numbers).
+
+unreagent-reviewer 2026-11-21: READY.
+
+Files reviewed (worktree agent-abdabb5933ebd9de0, base dae0492, uncommitted): internal/supervisor/supervisor.go, internal/supervisor/status_test.go, cmd/launcher/tools.go, .claude/skills/unreagent-mcp-tools/SKILL.md, skills/unreagent-iterate/SKILL.md, README.md.
+
+Check, run by me, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./... (5 packages ok); go test -race ./internal/supervisor ./cmd/launcher (ok); make linux; make windows. go test -race -count=10 on the 3 new tests + TestControlCallNamesABusyPreStart + TestStatusReportsUnresponsiveServicesConcurrently: 50/50 pass, no race reported. Windows: windows vet + cross-compile only, not run on Windows. No platform-guarded code touched; unverified there, as the report says.
+
+Mutations via go test -overlay (tree untouched): Busy on every unresponsive entry -> FAILS LoopBlockedElsewhere; omitempty dropped -> FAILS LoopBlockedElsewhere + ResponsiveServiceHasNeitherField; preStart filled from 'taken' instead of preStarting (mine) -> FAILS ABusyPreStart.
+
+Verified: busy comes from the one preStarting.Load() in timeoutError (supervisor.go:282-283) and is set only in Status's error branch via errors.As (supervisor.go:344-347); snapshot() never sets it, so it is absent otherwise. Error texts unchanged (same formats, Sprintf, no %w). CtrlTimeout mirrors FastFailWindow (exported const, comment says why, New seeds the field); takenNote still renders 10s. Tests hold the loop by channel handshake (PreStart entered / exitTaken seam), no sleep on the asserted path; the blocked-elsewhere test holds the loop in exitTaken after its PreStart returned. Console status (lifecycle.go:391) marshals sup.Status(), so it shows busy too. Prose in tools.go:24, both skills and README.md:1222 matches the code.
+
+Changes entry: user-facing, no ticket ids. 'no longer' is right: 0.0.9 already reported unresponsive (Changes, 0.0.9 section) and ran PreStart on the loop, so a slow pre-start showed as a bare unresponsive. Subject is 58 chars and matches the log style.
+
+Non-blocking notes: (1) Scope: OWNERS gives README.md to unreagent-doc-writer. The main agent wrote the row, which the delegation rule's prose-docs lane allows. No fix needed. (2) 'not hung' in tools.go:24, README.md:1222 and skills/unreagent-iterate/SKILL.md:57 claims a little more than the field knows. busy only says the loop is inside PreStart, and those hooks (killCrashReporter's exec Run) have no timeout. Optional rewording: 'not a stuck control loop'. (3) The taken && busy path (a status taken at a due restart, then held in that start's PreStart, supervisor.go:771-799) is checked by reading only, with no test. Acceptable for a low-priority card.
+
+Main agent 2026-11-21: the review's notes are accepted.
+- **'not hung'** stays. It means the control loop is not stuck outside the pre-start step. A pre-start hook that hangs is a separate case, which k37 already surfaces through send()'s error.
+- **The untested path**, a status request taken during a due restart's pre-start, is accepted as read-only for a low-priority card.
+
+Next: unreagent-release-manager.
+
+Committed as cf77ca8 on main (ff-merge), Changes entry added. Full check green: gofmt, vet, windows vet, tests, race, make linux/windows.
