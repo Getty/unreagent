@@ -173,6 +173,24 @@ func TestHermesSetupKeepsExistingConfig(t *testing.T) {
 	}
 }
 
+// k57: an mcp.address on every interface (":8765") went into the Hermes entry
+// and the printed url as http://:8765/mcp. Both carry the client URL now.
+func TestHermesSetupWritesTheClientURL(t *testing.T) {
+	const token = "user-token-0123456789"
+	f := newHermesFixture(t, token, userHermesConfig)
+	cfg := readFile(t, f.cfgPath)
+	writeFile(t, f.cfgPath, strings.Replace(cfg, "address: 127.0.0.1:8765", `address: ":8765"`, 1))
+
+	out, err := f.run(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnreagentEntry(t, readYAMLMap(t, f.hermesPath), token)
+	if !strings.Contains(out, "  url:    http://127.0.0.1:8765/mcp\n") {
+		t.Errorf("hermes-setup does not print the client URL http://127.0.0.1:8765/mcp:\n%s", out)
+	}
+}
+
 // k39: a second run still starts from the user's config, refreshes the
 // unreagent entry, and keeps the first run's backup (the untouched original)
 // instead of overwriting it.

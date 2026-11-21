@@ -101,7 +101,8 @@ was split by concern.
    Silent failure is the one unacceptable outcome — see the bridge smoke tests in
    `prepareMCPBridges` / `smokeTestMCP` for the house pattern: check, log loudly,
    name the usual suspects, keep going. One deliberate exception, the MCP bind:
-   `run()` binds `mcp.address` (`listenMCP`) right after config load, and a
+   `run()` binds `mcp.address` (`listenMCP`) right after config load (which
+   already refuses an address that is not host:port with a port 1–65535), and a
    bind failure ends the launcher with exit 1 before it writes any file —
    keeping going there *is* the silent failure: an agent without the MCP server
    loses its tools and permission prompts, or talks to whoever holds the port.

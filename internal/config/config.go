@@ -23,10 +23,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -168,7 +170,10 @@ type CommandSpec struct {
 // handed to the agent (e.g. an in-editor plugin like UE LLM Toolkit, through
 // which Claude Code works INSIDE the engine).
 type MCPConfig struct {
-	Enabled bool   `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// Address is the host:port the server listens on, a Go listen address:
+	// an empty or wildcard host listens on every interface. Clients get
+	// ClientURL, not the address as written.
 	Address string `yaml:"address"`
 	// Strict passes --strict-mcp-config to the agent: only the servers defined
 	// here / by the launcher are used (the project's own .mcp.json is ignored).
@@ -186,6 +191,27 @@ type MCPConfig struct {
 	// WriteConfig additionally writes the assembled MCP config to disk as file(s),
 	// so external clients (a separate Claude session, Cursor, VS Code) can use it.
 	WriteConfig []MCPOutput `yaml:"writeConfig"`
+}
+
+// ClientURL is the URL clients reach the MCP server at: the agent's
+// --mcp-config, every mcp.writeConfig file and the Hermes entry. An empty or
+// wildcard host (":8765", "0.0.0.0:8765", "[::]:8765") listens on every
+// interface but is no address to connect to, so it becomes the loopback of
+// its family, 127.0.0.1 or ::1. Any other host stays as written, an IPv6
+// literal in brackets. Address is one validate accepted; one that does not
+// split into host and port goes into the URL as written.
+func (m MCPConfig) ClientURL() string {
+	host, port, err := net.SplitHostPort(m.Address)
+	if err != nil {
+		return "http://" + m.Address + "/mcp"
+	}
+	if ip := net.ParseIP(host); host == "" || ip.IsUnspecified() {
+		host = "127.0.0.1"
+		if ip != nil && ip.To4() == nil {
+			host = "::1"
+		}
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/mcp"
 }
 
 // MCPOutput is a file target for the written MCP config.
@@ -668,6 +694,13 @@ func (c *Config) validate() error {
 			return fmt.Errorf("commands.%s.command is missing", name)
 		}
 	}
+	// hermes-setup writes the client URL into the Hermes entry whether the
+	// MCP server is on or not.
+	if c.MCP.Enabled || c.Agent.Hermes.Enabled {
+		if err := validMCPAddress(c.MCP.Address); err != nil {
+			return err
+		}
+	}
 	for i, out := range c.MCP.WriteConfig {
 		switch out.Format {
 		case "", "mcp_json", "vscode":
@@ -712,6 +745,25 @@ func validHermesServerName(name string) error {
 	}
 	if out, err := yaml.Marshal(name); err != nil || string(out) != name+"\n" {
 		return fmt.Errorf("agent.hermes.serverName invalid: %q (YAML may read it as a boolean or null rather than a name)", name)
+	}
+	return nil
+}
+
+// validMCPAddress refuses an mcp.address that is not host:port, or whose port
+// is not a number from 1 to 65535. net.Listen would take port 0 or a service
+// name ("http"), but the client URL names the port as written: port 0 binds a
+// random one no client is told, and a name is no URL port.
+func validMCPAddress(address string) error {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		var ae *net.AddrError
+		if errors.As(err, &ae) {
+			err = errors.New(ae.Err)
+		}
+		return fmt.Errorf("mcp.address invalid: %q (%v; want host:port, e.g. 127.0.0.1:8765)", address, err)
+	}
+	if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+		return fmt.Errorf("mcp.address invalid: %q (port must be a number from 1 to 65535; want host:port, e.g. 127.0.0.1:8765)", address)
 	}
 	return nil
 }

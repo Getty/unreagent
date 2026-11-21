@@ -141,9 +141,12 @@ files:
 
 mcp:
   enabled: true
-  # Default 127.0.0.1:8765. If it cannot be bound (port taken, e.g. by a second
-  # unreagent), the launcher exits 1 before writing any file; a per-machine
-  # port belongs in unreagent.local.yaml.
+  # Default 127.0.0.1:8765. host:port with a port 1-65535 (anything else is a
+  # load error). An empty or wildcard host (:8765, 0.0.0.0:8765) listens on
+  # every interface; the agent, mcp.writeConfig and hermes-setup then get
+  # http://127.0.0.1:<port>/mcp. If it cannot be bound (port taken, e.g. by a
+  # second unreagent), the launcher exits 1 before writing any file; a
+  # per-machine port belongs in unreagent.local.yaml.
   address: 127.0.0.1:8765
   # Optional bearer token: when set, the MCP server requires an
   # "Authorization: Bearer <token>" header on every request. Default empty

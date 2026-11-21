@@ -220,7 +220,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	mcpURL := "http://" + cfg.MCP.Address + "/mcp"
+	mcpURL := cfg.MCP.ClientURL()
 	var mcpServers map[string]interface{}
 	if cfg.MCP.Enabled {
 		mcpServers = buildMCPServers(cfg, mcpURL)
@@ -346,8 +346,9 @@ func run() error {
 		mcpServing.Store(true)
 		go serveMCP(httpSrv, mcpLn, &mcpServing, logger, alert)
 		// The port is bound since listenMCP, so a client acting on this line
-		// connects (k141).
-		logger("MCP server listening on " + mcpURL)
+		// connects (k141). The address names the interfaces, the URL is what
+		// clients got; they differ for a wildcard host (k57).
+		logger("MCP server listening on " + cfg.MCP.Address + " — clients connect to " + mcpURL)
 	}
 
 	con := newConsole(os.Stdin, os.Stdout, logOut)

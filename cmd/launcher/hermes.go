@@ -101,7 +101,7 @@ func hermesSetup(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := mergeHermesServer(doc, cfg.Agent.Hermes.ServerName, cfg.MCP.Address, token); err != nil {
+	if err := mergeHermesServer(doc, cfg.Agent.Hermes.ServerName, cfg.MCP.ClientURL(), token); err != nil {
 		return fmt.Errorf("Hermes config %s left untouched: %w", hermesPath, err)
 	}
 	hermesOut, err := doc.encode()
@@ -110,7 +110,7 @@ func hermesSetup(args []string, out io.Writer) error {
 		// it was, with only the keys unreagent owns refreshed.
 		name := cfg.Agent.Hermes.ServerName
 		servers, _ := doc.data["mcp_servers"].(map[string]interface{})
-		entry := hermesEntryWant(servers[name], "http://"+cfg.MCP.Address+"/mcp", "Bearer "+token)
+		entry := hermesEntryWant(servers[name], cfg.MCP.ClientURL(), "Bearer "+token)
 		err = checkEdit(doc.data, hermesOut, entry, "mcp_servers", name)
 	}
 	if err != nil {
@@ -166,7 +166,7 @@ func hermesSetup(args []string, out io.Writer) error {
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Hermes MCP server registered under mcp_servers."+cfg.Agent.Hermes.ServerName)
-	fmt.Fprintln(out, "  url:    http://"+cfg.MCP.Address+"/mcp")
+	fmt.Fprintln(out, "  url:    "+cfg.MCP.ClientURL())
 	fmt.Fprintln(out, "  bearer: "+bearerSummary(token, tokenGenerated))
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Restart Hermes so it re-reads the config. The unreagent tools")
@@ -539,7 +539,7 @@ func backupHermesConfig(path string, raw []byte) (bak string, created bool, err 
 // keys (a list, or a key YAML reads as a number), an alias, one that carries
 // an anchor (a mapping or a null), or one that comes in through a merge key
 // (<<); and an entry, or its headers, that checkHermesEntry refuses.
-func mergeHermesServer(doc *yamlFile, name, address, token string) error {
+func mergeHermesServer(doc *yamlFile, name, url, token string) error {
 	switch doc.data["mcp_servers"].(type) {
 	case nil, map[string]interface{}:
 	default:
@@ -577,7 +577,7 @@ func mergeHermesServer(doc *yamlFile, name, address, token string) error {
 	if mappingEntry(entry, "url") < 0 { // a new url goes first
 		entry.Content = append([]*yaml.Node{strNode("url"), strNode("")}, entry.Content...)
 	}
-	setString(entry, "url", "http://"+address+"/mcp")
+	setString(entry, "url", url)
 	headers, err := childMapping(entry, "headers")
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -118,7 +119,7 @@ func TestRunExitsWhenTheMCPAddressCannotBeBound(t *testing.T) {
 		cause      string
 	}{
 		{"port taken", taken.Addr().String(), "address already in use"},
-		{"no port", "127.0.0.1", "missing port"},
+		{"no port", "127.0.0.1", "missing port"}, // config.Load refuses it since k57
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -189,11 +190,100 @@ agent:
 func TestRunLogsMCPListeningOnlyOnceAConnectSucceeds(t *testing.T) {
 	addr := freeLoopbackAddr(t)
 	l := startLauncher(t, withMCP(launcherYAML("sleep", "  enabled: false\n"), addr))
-	l.waitLine(t, "MCP server listening on http://"+addr+"/mcp")
+	l.waitLine(t, "MCP server listening on "+addr+" ")
 
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("connect right after the listening line: %v\n%s", err, l.stdout)
+	}
+	_ = conn.Close()
+
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+}
+
+// afterMarker returns what follows marker on the first line of out that has
+// it, and whether there was one.
+func afterMarker(out, marker string) (string, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		if _, rest, ok := strings.Cut(line, marker); ok {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+// k57: with mcp.address on every interface (":<port>", an ordinary Go listen
+// address), the agent's --mcp-config and the mcp.writeConfig file pointed at
+// http://:<port>/mcp. Both carry the loopback now, which a client connects to,
+// and the listening line names the address bound as well as that URL.
+func TestRunHandsOutALoopbackURLForAWildcardMCPAddress(t *testing.T) {
+	_, port, err := net.SplitHostPort(freeLoopbackAddr(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "http://127.0.0.1:" + port + "/mcp"
+	dir := t.TempDir()
+	agent := filepath.Join(dir, "agent.sh")
+	// Each argument on a line of its own, which the launcher logs as
+	// "[agent] arg: …".
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nfor a; do printf 'arg: %s\\n' \"$a\"; done\nexec sleep 20\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l := startLauncherIn(t, dir, `unreal:
+  editor: sleep
+  args: ["20"]
+  unattended: false
+  killCrashReporter: false
+mcp:
+  enabled: true
+  address: ":`+port+`"
+  writeConfig:
+    - path: .mcp.json
+permissions:
+  enabled: false
+runtimes:
+  python: { enabled: false }
+  node: { enabled: false }
+agent:
+  enabled: true
+  command: `+agent+`
+  window: false
+  claudeIntegration: true
+  startDelaySeconds: 1
+`)
+	l.waitLine(t, "[agent] arg: {")
+	out := l.stdout.String()
+
+	type mcpServers struct {
+		MCPServers map[string]struct {
+			URL string `json:"url"`
+		} `json:"mcpServers"`
+	}
+	urlOf := func(what, js string) string {
+		var v mcpServers
+		if err := json.Unmarshal([]byte(js), &v); err != nil {
+			t.Fatalf("%s is not an MCP config: %v\n%s", what, err, js)
+		}
+		return v.MCPServers[config.MCPServerName].URL
+	}
+	arg, _ := afterMarker(out, "[agent] arg: {")
+	if got := urlOf("--mcp-config", "{"+arg); got != want {
+		t.Errorf("--mcp-config hands the agent %q; want %q", got, want)
+	}
+	if got := urlOf(".mcp.json", mustReadFile(t, filepath.Join(dir, ".mcp.json"))); got != want {
+		t.Errorf("mcp.writeConfig wrote %q; want %q", got, want)
+	}
+	if line, _ := afterMarker(out, "MCP server listening on "); line != ":"+port+" — clients connect to "+want {
+		t.Errorf("listening line %q; want it to name %q and %q", line, ":"+port, want)
+	}
+	conn, err := net.Dial("tcp", strings.TrimSuffix(strings.TrimPrefix(want, "http://"), "/mcp"))
+	if err != nil {
+		t.Fatalf("connect to the client URL's host:port: %v\n%s", err, out)
 	}
 	_ = conn.Close()
 

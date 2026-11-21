@@ -83,10 +83,25 @@ placeholder system exists.
    is not a plain YAML key (`validHermesServerName`: a character allowlist
    starting with a letter, which already rules out every YAML number and
    date, then anything YAML would read as a boolean or null; an empty name is
-   already `unreagent` from step 4). The `agent.*` checks run only
+   already `unreagent` from step 4), an `mcp.address` that is not host:port
+   or whose port is not a number from 1 to 65535 (`validMCPAddress`:
+   `net.Listen` would take port 0 or a service name, but the client URL
+   names the port as written; an empty address is already `127.0.0.1:8765`
+   from step 4). The `agent.*` checks run only
    when `agent.enabled`, except serverName, which runs on
    `agent.hermes.enabled` alone — the only flag `hermes-setup` checks; the
-   skills check only when `skills.enabled`.
+   address check when `mcp.enabled` or `agent.hermes.enabled` (`hermes-setup`
+   writes the client URL with the server off, too); the skills check only
+   when `skills.enabled`.
+
+   Clients never get `mcp.address` as written: only the listener does.
+   `MCPConfig.ClientURL()` is the one builder of the client URL — the
+   agent's `--mcp-config`, every `mcp.writeConfig` file, the Hermes entry and
+   the url `hermes-setup` prints all take it, and nothing else builds the URL
+   (no `"http://" + address`). An empty or wildcard host (`:8765`,
+   `0.0.0.0:8765`, `[::]:8765`) listens on every interface but is nothing to
+   connect to, so it becomes the loopback of its family, `127.0.0.1` or
+   `[::1]`; any other host stays as written (pinned by `TestMCPClientURL`).
 
 `unreal.*` always counts as used and `unreal.editor` defaults to
 `${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe`, so without a resolvable

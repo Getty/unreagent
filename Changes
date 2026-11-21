@@ -37,6 +37,15 @@ Revision history for unreagent
     formats and negative delays are rejected at load time. Without an engine
     and with the default unreal.editor, the launcher (and hermes-setup) now
     stops at load with an error instead of starting a non-existent editor.
+  - A wildcard mcp.address (":8765", "0.0.0.0:8765", "[::]:8765") no longer
+    hands clients an unusable URL such as http://:8765/mcp: the agent's
+    --mcp-config, the mcp.writeConfig files and hermes-setup get the loopback
+    (http://127.0.0.1:8765/mcp, [::1] for ::), and the startup line names the
+    bound address and that URL. Re-running hermes-setup rewrites an entry an
+    earlier release wrote with the wildcard.
+  - An mcp.address that is not host:port with a port from 1 to 65535 (no
+    port, port 0, a service name) is a load error naming the value, checked
+    when mcp.enabled or agent.hermes.enabled is on.
   - -files with an unresolved files.root is refused, and the file-tools
     startup line only appears when the MCP server is enabled.
   - The approve permission tool denies a request it cannot read (no tool
