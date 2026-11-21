@@ -1,0 +1,61 @@
+---
+claimed_at: 2026-11-21T05:18:43Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:18:55Z
+created: 2026-08-24T23:44:09Z
+id: 76
+priority: medium
+started: 2026-11-21T00:36:15Z
+status: done
+tags:
+- mcp
+- windows
+- security
+title: resolve() accepts Windows reserved device names (CON, NUL, AUX, COM1) under
+  files.root
+updated: 2026-11-21T05:18:55Z
+---
+
+main.go:583-595: lexical containment holds, but C:\proj\CON, NUL, AUX, PRN, COM1 (and aux.h-style names on Win10) are device paths; CreateFileW opens them regardless of the directory prefix and Go's os package does nothing about them. read_file path=CON blocks on console input and steals the agent's keystrokes in window mode; write_file path=NUL 'succeeds' and writes nothing; write_file path=Source/aux.h targets a serial device. Windows-only, unverified from Linux. Related: #49 (symlinks).
+Acceptance: reject !filepath.IsLocal(rel) before joining (Go >= 1.20, CI uses 1.22) -- it also covers .. and absolute paths in one place; settle by trying read_file path=CON on Windows; test on both platforms.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID (Windows behaviour unverified): resolve joins, makes absolute and prefix-checks; no filepath.IsLocal, no device-name check. Merge with k49. Absorbs k81 item 8 (read_file path=CON) as acceptance. Size S.
+
+
+**Decision 2026-11-21** (maintainer): absorbs k81 item 8: read_file path=CON (and the other reserved device names) must be rejected under files.root.
+
+Worker done, same worktree branch worktree-agent-a6cd84d12aec8e039 (.claude/worktrees/agent-a6cd84d12aec8e039), uncommitted, based on c013f77. reservedDeviceName rejects CON, PRN, AUX, NUL, COM1-9, LPT1-9, COM/LPT superscript 1-3, CONIN$, CONOUT$ in any component, either separator, case-insensitive, with extension or trailing spaces, on every platform (such files break a Windows checkout). filepath.IsLocal rejects .. and absolute paths. Reserved-name tests for all four tools red->green with real fixture files; lookalike test pins no over-rejection. Acceptance read_file path=CON on Windows: not run, needs the Windows box.
+
+**Review 2026-11-21** (unreagent-reviewer): CHANGES NEEDED. A doc fix is required and the Windows acceptance is still open. The Go diff is approved.
+Same check and red/green run as the k49 note, all green: gofmt -l ., go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./cmd/launcher, make linux, make windows. The 4 reserved-name tests fail on c013f77 with real fixture files and pass now.
+reservedDeviceName (filetools.go:216-254) matches Go's isReservedBaseName set: CON, PRN, AUX, NUL, COM/LPT 1-9 and the superscript digits, CONIN$ and CONOUT$. The name is cut at the first '.' or ':' and trailing spaces are trimmed. It deliberately skips the Win11 extension exemption. Both separators split components. No over-rejection: CONTRIBUTING.md, console.h, COM10.txt, CON_, CONIN and LPTX all pass. Removing the backslash split fails 2 tests.
+Findings:
+1 (blocking; owner unreagent-skill-author) skills/unreagent-files/SKILL.md:77-83 says absolute paths are joined onto the root. They are now refused. SKILL.md:165, the failure table, lacks the new "path component \"X\" is a reserved Windows device name" error and the symlink "path escapes from parent" error. Update it in the same commit.
+2 (medium; decision, follow-up for unreagent-worker) filetools.go:38-40: root-relative paths with a leading separator used to work and are now refused. The old code served read_file "/Source/Foo.cpp" and list_dir "/" (probed on Linux; Windows "\Source\Foo.cpp" joins the same way, unverified). The new error, "path outside the allowed root", is wrong for a path inside the root. Full absolute paths never worked: on Linux a read failed with "<root><root>/...: no such file" and a write created a nested tree; on Windows "C:\proj\C:\..." is an invalid name. Suggestion: map absolute or leading-separator paths under the root to relative ones before confine (os.Root still enforces the root), or return a distinct "path must be relative to the project root" error.
+3 (nit) COM0 and LPT0 are allowed, matching Go, but no test pins that: accepting "0" leaves the suite green. Add COM0.txt to the lookalike list.
+4 (unverified) The acceptance step "settle by trying read_file path=CON on Windows; test on both platforms" is not done. There was no Windows run, CI is ubuntu-only, and the GOOS==windows arms in filetools_confine_test.go (:213, :242, :259, :268, :281) have never executed. k76 should not go to done until that run happens on the Windows box, or until the maintainer splits it into a follow-up card.
+
+Decisions after review (2026-11-21, main agent, not the maintainer): (a) an absolute path that lies under the root is made relative before confine — the os.Root still enforces the boundary; any other absolute or rooted path (/Source/Foo.cpp, \Source\Foo.cpp) is refused with a clear 'must be relative to the project root' error instead of 'outside the allowed root'. (b) The Windows acceptance check (read_file CON) already sits in the release-manager's Windows smoke checklist (item 10, from k81); I added the OneDrive-placeholder / junction check there. So k76 can close on commit with Windows labelled unverified; the smoke run happens before the next tag. Also: pin list_dir sorting and COM0/LPT0 acceptance (worker, same pass). Shipped skill skills/unreagent-files goes to the skill-author after the code settles; the worktree was fast-forwarded to main 3ab0142.
+
+Review fixes done (2026-11-21): an absolute path under the root (configured or symlink-resolved spelling, case-folded on Windows) is made relative and gets the same checks incl. reserved names; any other absolute/rooted/drive-relative path → 'must be relative to the project root'. The old claim in TestWriteFileRejectsAbsolutePath was replaced by TestRootedPathIsRefused. list_dir sort and format pinned; COM0/LPT0 pinned as accepted. Windows arms never ran.
+
+Back to review (2026-11-21): code fixes by the worker (see the earlier note); skills/unreagent-files rewritten by the skill-author (every error text run against the real code on Linux); README file-tools row + new 'File-tool confinement' section + files row in the config table + example files.root comment by the doc-writer; main agent tightened the plugin workaround (a wider root reaches the plugin at its real path, the link itself stays refused). Release-manager checklist item 10 gained the OneDrive/junction check (main tree, .claude/agents).
+
+**Re-review 2026-11-21** (unreagent-reviewer): READY. Windows is unverified, and closing this card depends on the Windows smoke item being committed.
+Same check as the k49 re-review note, all green: gofmt, vet on both targets, go test ./..., race, make linux, make windows.
+F2 (absolute paths) is fixed in confine and relToRoot (filetools.go:37-66, :248-260):
+- an absolute path under the root, in the configured or the resolved spelling, becomes relative and gets the reserved-name, IsLocal and os.Root checks;
+- any other absolute path gets "path \"<given>\" must be relative to the project root \"<root>\"; an absolute path is accepted only under it". I ran /etc/passwd, a sibling with the same prefix, root/../evil.txt and /Source/Foo.cpp.
+Mutations, each caught by the suite:
+- relToRoot never mapping: 4 tests fail;
+- dropping the ../ guard: 3 fail;
+- dropping the resolved-root spelling: TestAbsolutePathUnderSymlinkedRootIsAccepted fails;
+- skipping the reserved check for absolute paths: TestAbsolutePathUnderRootStillChecksReservedNames fails;
+- treating COM0/LPT0 as reserved: TestReservedNameLookalikesAreAllowed fails (F5 is pinned).
+Finding (unverified): filetools.go:55-58, the branch for rooted (\Source) and drive-relative (C:Source) paths, runs only on Windows. Removing it leaves the Linux suite green, and only the GOOS==windows arm of TestRootedPathIsRefused (filetools_confine_test.go:395-397) would catch it. That arm has never run, and CI is ubuntu-only.
+Docs: the README table row, the File-tool confinement section and the files row in the config table, plus the files.root comment in the example config, all match the code, including the exact error texts. Doc nits are in the k49 note.
+Closing condition: the smoke checklist item for read_file CON, OneDrive placeholders and junctions sits in .claude/agents/unreagent-release-manager.md:80-83. That change is uncommitted in the main tree, not in this worktree. Commit it as well, or the deferral of the Windows check is lost. Not run: CI's Go 1.27.x.
+
+Committed as 9792365 (with k49): Windows reserved device names rejected in any path component. Windows acceptance check (read_file path=CON, OneDrive placeholders, junction refusal) sits in release-manager checklist item 10.
