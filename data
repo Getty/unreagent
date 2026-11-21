@@ -1,0 +1,34 @@
+---
+claimed_at: 2026-11-21T05:48:21Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:48:32Z
+created: 2026-11-21T04:21:04Z
+id: 125
+priority: low
+started: 2026-11-21T05:23:08Z
+status: done
+tags:
+- hermes
+- test
+title: 'hermes-setup: the checkEdit safety net in hermesSetup is not pinned by a test'
+updated: 2026-11-21T05:48:32Z
+---
+
+Found in the k116 review: removing the checkEdit call in hermesSetup (cmd/launcher/hermes.go) leaves the suite green; it did at 8f24738 too. Only TestCheckEdit covers the function itself. Done: a test that fails when hermesSetup stops calling checkEdit, without a seam that exists only for the test if that can be avoided. Lane: unreagent-test-writer.
+
+Also from the k116 re-review (2026-11-21): the worker's rule that 'command: ~' counts as a stdio entry has no test — a mutation that treats a null command as absent survives. Pin it in the same pass.
+
+Tests added in cmd/launcher/hermes_test.go: TestHermesSetupChecksTheEditBeforeWriting (serverName '<<' is refused only by checkEdit; red without the call) and two 'command: ~' / empty command cases in TestHermesSetupRefusesUnmergeableServers (red with null-as-absent). Both mutations verified red and reverted; gofmt, vet (linux+windows), tests, race green. No seam. Finding: serverName is not validated in config, '<<' reaches the merge.
+
+Test-only; two tests pinned, mutations verified, checks green. Not committed.
+
+Review (unreagent-reviewer, 2026-11-21): CHANGES NEEDED. Reviewed cmd/launcher/hermes_test.go, the only changed file, in worktree agent-a828002d18050d1fe on top of 9792365. The scope is fine: OWNERS lets the test-writer add *_test.go files under cmd/. No German. Check green: gofmt -l cmd internal skills is empty; go vet ./... and GOOS=windows go vet ./... pass; go test -count=1 ./... passes; go test -race ./cmd/launcher passes; make windows builds (in a scratch copy). The tests ran on Linux only, and the change touches no Windows-path code. Mutations, run in a scratch copy: removing the checkEdit call at hermes.go:127 turns TestHermesSetupChecksTheEditBeforeWriting red. Treating a null command as absent at hermes.go:634 turns both new stdio cases red. Findings for unreagent-test-writer: (1) hermes_test.go:1500-1529 reaches checkEdit only through serverName '<<'. That works only because serverName is not validated yet, and k131 will close that gap. A sturdier input stays reachable after k131: the Hermes config 'mcp_servers: &m' + newline + 'other: *m' with the default server name. childMapping (hermes.go:438-445) replaces the anchored null and drops &m. Today only checkEdit refuses this ('the result would not parse: yaml: unknown anchor m referenced'); the file stays byte-identical and no .bak or local.yaml is created. With the checkEdit call removed, hermes-setup returns nil, writes a Hermes config that does not parse, creates the .bak and saves the token. This is the 'alias left without its anchor' case that checkEdit's own doc comment (hermes.go:717-720) names. Switch the test to this input, and say in the test comment which gap it relies on. (2) hermes_test.go:439, 'stdio entry with an empty command', uses 'command:' with no value. YAML reads that as null, so it repeats the ~ case on line 438, and command: "" is never tested. The mutation 'stdio && c != ""' at hermes.go:634 leaves the suite green. The k116 rule is key presence (hermes.go:625-629, 634), so refusing command: "" matches it. Make line 439 command: "". (3) Minor: the comment at hermes_test.go:1500-1501 says '<<' is THE input only checkEdit refuses. It is one such input, and after k131 it will be none.
+
+Review rework: checkEdit test now uses 'mcp_servers: &m / other: *m' with the default server name (comment cites k134); empty-command case is command: ""; comment no longer claims 'the only' input. Mutations: no checkEdit call -> red; null-as-absent -> null case red; c != "" -> empty case red. Checks green.
+
+Review findings 1-3 addressed, test file only, not committed.
+
+Re-review round 2 (unreagent-reviewer, 2026-11-21): READY. The only changed file is cmd/launcher/hermes_test.go (worktree agent-a828002d18050d1fe, on 9792365). All three round-1 findings are fixed. hermes_test.go:1500-1528: the test now uses the anchored null mcp_servers input with the default server name, asserts 'the result would not parse', keeps the unchanged-file, no-.bak and no-local.yaml checks, and its comment names the childMapping gap and k134. Line 439 now uses command: "". Line 437's comment matches the key-presence rule at hermes.go:625-629 and 634. Mutations, run in a scratch copy: removing the checkEdit call at hermes.go:127 turns only TestHermesSetupChecksTheEditBeforeWriting red. 'stdio && c != nil' at hermes.go:634 turns only the null-command subtest red. 'stdio && c != ""' turns only the empty-command subtest red. Check green: gofmt -l cmd internal skills is empty; go vet ./... and GOOS=windows go vet ./... pass; go test -count=1 ./... passes; go test -race -count=1 ./cmd/launcher passes; make windows builds (in a scratch copy). Tests ran on Linux only, and the change touches no Windows-path code. Scope is fine under OWNERS, which lets the test-writer add *_test.go files under cmd/. No German. Not a k125 finding: the body of k131 still says this test uses '<<' and must be swapped. That is stale now; k134 is the card that carries the swap obligation.
+
+Committed as 7c975bf (test-only, hermes_test.go), landed on main by fast-forward. Checks green: gofmt, vet linux+windows, test, race, make linux/windows, go mod verify.
