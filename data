@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-11-21T01:21:27Z
+created: 2026-08-22T04:38:52Z
+id: 47
+priority: low
+started: 2026-11-21T00:36:59Z
+status: done
+tags:
+- config
+- docs
+title: 'Config validation and overlay documentation: seven smaller findings'
+updated: 2026-11-21T01:21:50Z
+---
+
+1) The house rules say a list or map in unreagent.local.yaml replaces the base one. Verified: lists do replace and map VALUES replace -- overriding commands.compile with only a command key silently drops its description and args -- but map KEYS merge, so agent.env and mcp.extraServers accumulate. Bools are fine, a false in the overlay does turn a base true off. The doc sentence needs splitting, the code is right.
+2) config.go:280,298,301: a zero restartDelaySeconds or startDelaySeconds cannot be expressed, it is coerced to the default and this is documented nowhere. 3) config.go:274: unreal.args set to null in the overlay restores the built-in default instead of clearing; an empty list works. 4) config.go:406-434: mcp.writeConfig format is unvalidated, a typo falls through to mcp_json and the log then reports the typo as the format.
+5) config.go:479: engine autodetect sorts lexicographically, so once UE_5.10 exists it sorts below UE_5.9 and the 'highest version first' comment becomes false. 6) config.go:494: registryEngine hardcodes 5.7 down to 5.4, so a 5.8 install is missed. Both Windows-only, unverified from Linux. 7) config.go:520-539: an explicit unreal.project is never checked for existence, so a stale path loads cleanly and fails later as a UE startup error.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): PARTLY FIXED, per item: (1) overlay doc fixed by 78a2553, nit left: the README table does not state that agent.env merges by key; (2) a zero restart/start delay cannot be set and is undocumented, valid; (3) unreal.args: null in the overlay restores the default, valid; (4) mcp.writeConfig format not validated, valid; (5) STALE, fixed by edce144 (numeric engine version compare); (6) STALE, the hardcoded registry version list is gone (registryLauncherInstalls); (7) an explicit unreal.project is never stat'ed, valid. Items 2/3/4/7 fold into the config unit with k41-k43. Size M.
+
+Worker done (items 2, 3, 4, 7), worktree branch worktree-agent-a34fb3202df96dbbc (.claude/worktrees/agent-a34fb3202df96dbbc), uncommitted, based on c013f77; tests in internal/config/load_test.go, red captured before the fix. Item 2: documented limitation, 0 means the default; negative delays (acted as zero) now rejected; a real fix would be *int fields. Item 3: documented limitation, args: ~ restores the default, [] clears (pinned by a test). Item 4: writeConfig format validated. Item 7: an explicit unreal.project is stat'ed and must be a file. Item 1 nit (README agent.env merge) is on the docs follow-up card.
+
+2026-11-21 01:04 Review (unreagent-reviewer), same tree: APPROVE for items 2, 3, 4 and 7. Like k41, it lands only with the k42/k43 fixes. Item 2: validDelay rejects negatives (internal/config/config.go validate), and 0 = default is documented in the struct comments and applyDefaults. Item 3 is pinned by TestUnrealArgsNullVersusEmptyInOverlay, which pins existing behaviour and so passes on HEAD too. Item 4: the format enum is '', mcp_json, vscode, case-sensitive, matching cmd/launcher/mcpconfig.go. Item 7: stat plus a not-a-directory check. TestDelays, TestWriteConfigFormat and TestExplicitProjectMustExist fail on HEAD code for their stated reasons. Items 5 and 6 are stale per triage; the item 1 doc nit and the README rows are on k101. Check run as on k42, all green.
+
+2026-11-21 01:17 Re-review (unreagent-reviewer), same tree after the k42/k43 fixes: APPROVE for items 2, 3, 4 and 7. Unchanged since the first review, the tests are still green, and the check run as on k42 is all green. The tree is ready for the release-manager to commit. The branch diff applies cleanly onto main 077439a. Items 5 and 6 are stale, and item 1 plus the README rows are on k101.
+
+Committed as 2e72af4 on main (one commit with k41, k42, k43, k47)
