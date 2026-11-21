@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-11-21T12:41:13Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:43:03Z
+created: 2026-11-21T10:25:20Z
+id: 158
+priority: low
+started: 2026-11-21T12:33:53Z
+status: done
+tags:
+- skills
+- docs
+title: 'unreagent-config skill: Secrets section names helpers that no longer exist'
+updated: 2026-11-21T12:43:14Z
+---
+
+Found during k124. The Secrets section of .claude/skills/unreagent-config/SKILL.md says hermes-setup writes mcp.token via persistGeneratedToken and that writeYAMLAtomic (temp + rename) is the house pattern for user config. Neither function exists since k96 (8f24738): the token goes through localConfigWithToken (node edit of unreagent.local.yaml via parseYAMLFile) and writeFileAtomic in cmd/launcher/hermes.go. Done: the section names the real helpers, checked against hermes.go after k134/k145 land (both touch hermes.go). Lane: unreagent-skill-author.
+
+Rewrote the Secrets section of .claude/skills/unreagent-config/SKILL.md (lines 234-253), checked against cmd/launcher/hermes.go on a582135. Dropped persistGeneratedToken and writeYAMLAtomic. It now names localConfigWithToken (:218): a node edit via parseYAMLFile that keeps comments, key order and other keys, writes nothing, refuses quoted !!merge keys (checkMergeKeys) and an mcp/token key written as an alias or with a tag (checkPlainKeys), then runs checkEdit. It also names writeFileAtomic (:977-984): temp file in the same directory, sync, rename; follows symlinks and refuses dangling ones; a new file gets 0600. Added one sentence on runHermesSetup's order (:128, :156, :161): every edit is built before any write, and the token is saved before the Hermes config. Kept the shape: the secret goes to the git-ignored local file, never the committed one, and future secrets take the same path. Step 8 and the stays-literal list (k60) are untouched. Not committed.
+
+Secrets section now names localConfigWithToken and writeFileAtomic as hermes.go has them on a582135; only lines 234-253 of .claude/skills/unreagent-config/SKILL.md changed, uncommitted in worktree agent-a0ca2e1553b9815a7.
+
+Review (unreagent-reviewer): CHANGES NEEDED. File: .claude/skills/unreagent-config/SKILL.md (worktree agent-a0ca2e1553b9815a7, on a582135). Check run: gofmt -l cmd internal skills (empty) + go test ./internal/skills (ok), on that tree and on main 5757daa with the patch applied; git apply --check -3 against 5757daa applies cleanly (hermes.go unchanged a582135..5757daa). Note: go test ./internal/skills covers skills/, not .claude/skills, so it cannot fail on this change; the claims were checked by hand against cmd/launcher/hermes.go.
+1 (blocking) SKILL.md:251 names `runHermesSetup`, which does not exist: k48 (90c07ae) removed it; the sub-command entry point is `hermesSetup` (hermes.go:53). This is the same bug the card fixes, a helper name that is gone. Fix: `hermesSetup`.
+2 (should fix) SKILL.md:237-239 "Any future secret follows the same path, through the two helpers": localConfigWithToken only sets mcp.token (signature (path, token string); checkPlainKeys pinned to mcp/token at :235; checkEdit at "mcp","token" at :254), so another secret cannot go through it as it is. Say it follows the same pattern (a node edit like localConfigWithToken, checked by checkEdit, written by writeFileAtomic), or say the helper needs generalizing first.
+3 (nit, optional) SKILL.md:249 "creates a new file as 0600" is right, but a replaced file keeps its permission bits (hermes.go:981, :989-992), so a token added to an existing 0644 unreagent.local.yaml stays 0644. Worth a clause in a Secrets section.
+Verified correct: localConfigWithToken node edit via parseYAMLFile, keeps comments/keys/order, writes nothing (:218-257); checkMergeKeys (:232, :616) and checkPlainKeys for mcp/token (:235, :637) run before the edit; checkEdit confirms it parses and only mcp.token changed (:254, :774). writeFileAtomic: temp in the same dir, sync, rename (:994-1014); follows a symlink, refuses a dangling one (writeTarget :969); new file 0600 (:989). Ordering: both edits built (:108-131) before the first write (backup :136, token :156, Hermes :161); token saved before the Hermes config. persistGeneratedToken and writeYAMLAtomic appear nowhere in the repo outside .git. Scope: one hunk, Secrets section only; step 8 and the stays-literal list (k60) untouched. English, matches the skill style.
+
+**Main agent 2026-11-21:** finding 1 was the main agent's brief (runHermesSetup → hermesSetup since k48). All three findings back to the skill-author; the permission behaviour itself is filed as its own card.
+
+Review round 1 addressed (.claude/skills/unreagent-config/SKILL.md, Secrets section, now lines 234-259). (1) runHermesSetup -> hermesSetup (hermes.go:53), line 252. I checked every identifier in the section against hermes.go: localConfigWithToken :221, parseYAMLFile :297, checkEdit :774, writeFileAtomic :984, hermesSetup :53 all exist; mcp/token are YAML keys. (2) Dropped 'any future secret follows the same path, through the two helpers'. Lines 237-238 now say only that mcp.token goes through two helpers. A new closing paragraph (256-259) says a future secret follows the same pattern (git-ignored local file, node edit checked by checkEdit, writeFileAtomic) and that localConfigWithToken only sets mcp.token, with its key checks and checkEdit pinned to mcp/token (:235, :254), so it must be generalized first. (3) Lines 248-250: a new file is 0600, but an existing one keeps its permission bits (:981, :989-992), so a token added to a 0644 unreagent.local.yaml stays readable by others. States today's behaviour only. Still one hunk, Secrets section only; k60's parts untouched. Not committed.
+
+Round 1 fixed: hermesSetup (not runHermesSetup), future-secret sentence narrowed to the pattern plus generalizing localConfigWithToken first, existing-file permission clause added. Secrets section is lines 234-259, uncommitted in worktree agent-a0ca2e1553b9815a7.
+
+Committed as 7f1d0c5 on main (ff from worktree). gofmt, vet, test, make linux and make windows green.
