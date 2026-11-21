@@ -1,0 +1,36 @@
+---
+class: standard
+completed: 2026-11-21T15:27:49Z
+created: 2026-08-24T23:44:29Z
+id: 79
+priority: low
+started: 2026-11-21T14:22:29Z
+status: done
+tags:
+- bug
+title: 'Dropped errors: prepareRuntimes discards uv sync / npm install failures, commandLoop
+  drops r/stop/start errors'
+updated: 2026-11-21T15:28:37Z
+---
+
+main.go:832, :839: prepareRuntimes discards error and output of uv sync / npm install -- a missing uv yields only '[prepare:python] starte: uv [sync]' and nothing else; a failing sync only 'fertig (exit 1)' with stderr thrown away. Fix: WARN with err and tailLines(res.Output, 20). main.go:1128-1143: commandLoop ignores the errors returned by r/stop/start, so a typo like 'stop eu' is silent. Fix: log the returned error.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, both items: (1) prepareRuntimes discards uv sync / npm install errors; (2) commandLoop ignores RestartService/StopService/StartService errors. Item 1 goes with k56 item 1. Size S.
+
+Decision 2026-11-21 (main agent), bundled with k56: (1) a failed uv sync / npm install (or a missing uv/npm) gets a WARN with the error and the last 20 lines of output, to the log and to alert. (2) commandLoop prints the errors returned by r/stop/start on the console and in the log, so 'stop eu' no longer goes silent.
+
+Worker started (worktree on 21555d2). Item 2 already in main: commandLoop's act replies r/stop/start errors on console and log (k126, b8e300c; TestConsoleNamesAFailedStart covers 'stop nosuch'/'start nosuch'). Working item 1.
+
+Worker result (worktree on 21555d2, uncommitted; bundled with k56).
+(1) prepareRuntimes (scripts.go) now runs uv sync / npm install through prepareRuntime, both at once, and returns when both are done; run() calls it with go (before: goroutines inside, results discarded). A failure - err from RunOnce (missing tool: 'start failed: fork/exec <path>: no such file or directory' / 'exec: "uv": executable file not found in $PATH') or a non-zero exit - logs 'WARN Runtime: preparing <Python|Node> failed — <command> <sync|install> in <dir>: <cause>' plus tailLines(res.Output, 20) (existing helper, helpers.go untouched). Success adds nothing beyond the supervisor's 'done (exit 0)'. The logger is k56's alertWarnings, so in window mode the WARN also goes to stderr - mid-session, since runtime prep runs after the agent starts. Still on RunOnce (no ctx), per the k75 note in the mcp-tools skill.
+(2) already done in main by k126 (b8e300c): commandLoop's act replies the r/stop/start error on console and log; TestConsoleNamesAFailedStart covers 'start nosuch'/'stop nosuch'. No change.
+Tests: TestPrepareRuntimesWarnsOnFailure (new cmd/launcher/runtimes_test.go; fake tool as shell script: exit 1 with 25 lines -> exact WARN with lines 6-25, missing tool -> start failed naming the path, success -> no WARN; Python and Node both). TestRunAlertsPreparationWarnings (main_test.go) covers the stderr mirror through run(). Red without the fix via go test -overlay with HEAD's scripts.go: 0 WARN lines; run() test never saw the runtime WARN.
+Checks green: see k56 (same tree). Windows unverified: uv/npm error texts and npm.cmd resolution are Windows-side and not run.
+Stale docs (for skill-author): skills/unreagent-runtimes/SKILL.md:203-207 ('fire-and-forget in the background') and :239-241 (Node) - a failed preparation is now a WARN with error and output tail in the launcher log (window mode: also stderr). For doc-writer: unreagent.example.yaml:120 (prepareOnStart comment) could say a failure is a warning.
+
+Ready for review with k56 (same worktree, one commit). Item 1 implemented, item 2 already in main (k126, b8e300c). Checks green on Linux; Windows compiled only.
+
+Review 2026-11-21 (unreagent-reviewer): verdict and findings for the shared worktree are on k56. k79's parts are fine. Item 1 (prepareRuntime WARN + 20-line tail) is tested and goes red without the fix. Item 2 was already fixed on main by b8e300c (k126), pinned by TestConsoleNamesAFailedStart. Low note for k75: a Ctrl-C while uv sync or npm install runs gives a spurious 'preparing ... failed' WARN at shutdown (scripts.go:176-191). Card not moved.
+
+Committed as 84bec97 (Parse the smoke test's reply, surface preparation failures; k56+k79 together). Checks green on the worktree after apply: gofmt, vet both GOOS, test, -race ./cmd/launcher, make linux, make windows. Windows unverified.
