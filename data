@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-11-21T17:23:17Z
+created: 2026-11-21T09:24:00Z
+id: 152
+priority: low
+started: 2026-11-21T16:38:47Z
+status: done
+tags:
+- console
+- agent
+title: A failed agent start stays silent on the console while the restart policy retries
+updated: 2026-11-21T17:23:17Z
+---
+
+Found during k126. The agent exit prompt now names a failed start ("Agent did not start: <lastError>"), but only once the restart policy gives up. While the policy retries, the console says nothing about the failed starts, so a user sees no hint until the retries end.
+
+Done when: each failed agent start that is retried leaves one console line naming the error and that a retry follows (without flooding: one line per attempt), with a test.
+
+2026-11-21 17:01 Done in the k150 bundle (full report on k150). New supervisor hook ServiceSpec.OnStartRetry(Retry{Err, Restart, MaxRestarts, Delay}), called on the loop for each failed Start that the policy retries, never for the start it gives up on and never after an exit. The supervisor also logs '[name] restart N/M in D' on that path. run() writes 'unreagent: Agent did not start: <err> — retry N[/M] in D' to alert (stderr in window mode). The exit prompt is unchanged (k126). maxRestarts and the fast-fail give-up (k70) decide how many retries there are; there is one line per retry, none for the last attempt. Tests: TestRunNamesEachRetriedAgentStartOnTheConsole (lifecycle_test.go, maxRestarts 2 and 0) and TestOnStartRetryReportsEachRetriedStartError (fastfail_test.go). 8 overlay mutation runs killed. Windows unverified. Not covered (on k150): a quick exit that is retried.
+
+2026-11-21 17:02 Ready for review, together with k150 (report there): one console line per retried failed agent start via the new supervisor hook OnStartRetry; the exit prompt is unchanged.
+
+2026-11-21 18:20 Reviewer (verdict on k150): code ready. OnStartRetry fires once per retried failed start, never for the give-up, program-not-found or a restart after an exit. It behaves right with fast-fail (k70) and maxRestarts, runs on the loop and never calls the supervisor. The new '[name] restart N[/M] in D' line is no duplicate. Nits: README.md:372 'in Ds', README.md:374 'the prompt' (onExit: ask only), and the Changes line without (k152), see k150. Windows unverified.
+
+Committed as 7036a88 (bundle k150/k151/k152).
