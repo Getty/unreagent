@@ -1,0 +1,43 @@
+---
+claimed_at: 2026-11-21T04:48:31Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T04:48:43Z
+created: 2026-11-21T03:30:21Z
+depends_on:
+- 96
+id: 122
+priority: low
+started: 2026-11-21T03:33:29Z
+status: done
+tags:
+- hermes
+- ux
+title: 'hermes-setup: name the file in symlink-resolution errors'
+updated: 2026-11-21T04:48:43Z
+---
+
+From the k96 final review (2026-11-21), non-blocking:
+
+1. cmd/launcher/hermes.go writeTarget (~673-674): a symlink loop at unreagent.local.yaml prints "Error: EvalSymlinks: too many links (nothing written)" right after the "Hermes config: <path>" line, so it points the user at the wrong file. Nothing is written, so it is safe. Wrap the error with the path.
+2. hermes.go ~670-672 (cosmetic): in a chain of links the message says the first hop "does not exist", though that hop exists as a link — name the final missing target, or say "points (via links) to … which does not exist". Keep README.md (hermes-setup, "When it refuses") in step.
+
+Done when: both errors name the path the user gave and the missing target, with tests. Lane: unreagent-worker; README line → unreagent-doc-writer. Depends on k96.
+
+Worker done (2026-11-21): a symlink loop names the path ('<path> is a symlink that cannot be resolved: … (nothing written)'); a dangling chain names the first hop and the missing end, relative targets read against their own link's folder; the single-hop message is unchanged. Tests skip where symlinks cannot be made. Windows: the loop error may carry the path twice — unverified. README follow-up by the doc-writer before review.
+
+Ready for review (2026-11-21): code + tests by the worker (worktree-agent-aa1f2e2fa22aeac6a, hermes.go, hermes_test.go); README hermes-setup section by the doc-writer, with main-agent prose fixes (the k96 entry marker never shipped in a release — v0.0.9 predates 8f24738 — so the README no longer mentions it; the multi-document rule now matches the test table: '--- ~' and '--- # note' are refused, a bare trailing '---' or '...' with comment lines after it is accepted).
+
+2026-11-21 04:17 Review (unreagent-reviewer, 2026-11-21): CHANGES NEEDED (small). Files: cmd/launcher/hermes.go (writeTarget, danglingEnd), cmd/launcher/hermes_test.go, README.md (hermes-setup, "When it refuses") in worktree-agent-aa1f2e2fa22aeac6a, base 8f24738. The check is the same green run as on k116 (gofmt -l, go vet linux+windows, go test -count=1 ./..., -race -count=3 ./cmd/launcher, make linux, make windows, go mod verify). Mutations: dropping the relative join fails TestHermesSetupNamesEndOfDanglingChain (both files); always reporting a chain fails TestHermesSetupRefusesDanglingSymlinks; an unwrapped loop error fails TestHermesSetupRefusesSymlinkLoop.
+(1) hermes.go:817-819 joins a relative target to filepath.Dir(cur) by hand, which resolves '..' against the directory as written, while the kernel (and EvalSymlinks) resolves it against the directory's real location. Input (dotfiles layout): home/.hermes -> dotfiles/hermes (a linked directory), dotfiles/hermes/config.yaml -> ../shared/hop.yaml, dotfiles/shared/hop.yaml -> gone.yaml (dangling). danglingEnd looks at home/shared/hop.yaml, finds nothing, and the error falls back to "<path> is a symlink to ../shared/hop.yaml, which does not exist" — though hop.yaml exists as a link. That is the item-2 message this card set out to fix. Resolve the link's directory first (e.g. EvalSymlinks(filepath.Dir(cur)), which exists since Lstat(cur) succeeded) and pin the case with a test.
+Windows (unverified, compile and vet only): a loop goes through the same walkSymlinks, so it should read "<path> is a symlink that cannot be resolved: EvalSymlinks: too many links (nothing written)", with the path once. The path comes twice only if os.Readlink/Lstat fails with a PathError (e.g. an unsupported reparse point). danglingEnd's 'missing' is filepath.Join output with backslashes, next to the forward-slash link path; and a root-relative target such as \x is not IsAbs on Windows, so it would be joined to the link's directory. The tests skip where symlinks cannot be made.
+README: the chain and loop sentences match the code.
+
+Back to the worker after review (2026-11-21): the relative join resolves '..' against the path as written, not the directory's real location (dotfiles layout: .hermes -> dotfiles/hermes, config.yaml -> ../shared/hop.yaml -> gone.yaml gives the single-hop fallback). Fix: resolve the link's directory with EvalSymlinks before joining; handle a Windows root-relative target if that stays simple (unverified there).
+
+Review fixes done (2026-11-21): a relative target is resolved against the link's real directory (EvalSymlinks of the dir), pinned by TestHermesSetupNamesEndOfDanglingChainThroughLinkedDir; the chain message now names the resolved path. A root-relative Windows target (\x) is taken as written, like EvalSymlinks does — unverified on Windows.
+
+2026-11-21 04:43 Re-review (unreagent-reviewer, 2026-11-21): APPROVE. Files: cmd/launcher/hermes.go (danglingEnd), cmd/launcher/hermes_test.go, README.md in worktree-agent-aa1f2e2fa22aeac6a, base 8f24738. The check is the same green run as on k116 (gofmt -l, go vet linux+windows, go test -count=1 ./..., -race -count=3 ./cmd/launcher, make linux, make windows, go mod verify). F3 fixed: my dotfiles probe (.hermes -> dotfiles/hermes, config.yaml -> ../shared/hop.yaml -> gone.yaml) now names dotfiles/shared/gone.yaml as the missing end. Mutation: going back to the lexical join fails TestHermesSetupNamesEndOfDanglingChainThroughLinkedDir. realTempDir keeps the chain tests right where the temp directory is itself a link (CI tests on ubuntu only).
+Windows (unverified, compile and vet only): the root-relative branch (\x taken as written) cannot be reached on Linux — dropping it leaves the suite green here. The loop message goes through the same walkSymlinks as on Linux. README's chain and loop sentences match the code. No German.
+
+Committed as b04e79a on main (rebased onto 3ab0142, full check green after the rebase).
