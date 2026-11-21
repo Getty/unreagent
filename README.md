@@ -398,11 +398,11 @@ as after an exit; `/M` only with an explicit `maxRestarts`).
 
 | Exit | When |
 |---|---|
-| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0 |
+| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup`, which prints the usage and starts nothing |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
 | `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 (checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up |
-| `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included). The launcher checks the command line first, so nothing is started or written |
+| `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
 
 An agent that fails and **is** restarted produces no exit code until it stops
 failing or gives up. With the default `restart: on-failure`, a headless agent
@@ -1415,10 +1415,15 @@ gone once the list is set), or a different extension id. Uppercase is fine.
 
 The sub-command is the first argument that is neither a flag nor a flag's
 value. Flags may stand before or after it and all go to the sub-command.
-`hermes-setup` takes only `-config`; any other launcher flag (such as
-`-no-agent`) is refused by it with exit 1, on either side of the word. A flag
-the launcher does not know at all exits 2 before the word and 1 after it. Any
-other word is a usage error (exit 2) that names it and lists the sub-commands:
+`hermes-setup` takes only `-config` and `-h`. Any other flag, a launcher flag
+such as `-no-agent` included, is a usage error (exit 2) on either side of the
+word, printed with `hermes-setup`'s usage; a flag the launcher does not know at
+all, put before the word, is refused by the launcher instead, with its own
+usage. A word after the sub-command is a usage error too, printed as one line:
+`hermes-setup takes flags only, not "<word>"`. `unreagent -h` prints the
+launcher's usage with one line per sub-command, `unreagent hermes-setup -h`
+that of `hermes-setup`; both exit 0. A first word that names no sub-command
+is a usage error (exit 2) that names it and lists the sub-commands:
 `unknown sub-command "<word>" (sub-commands: hermes-setup)`. If
 the word is an existing path, as for a file dropped onto the .exe, the message
 says instead that unreagent does not open files passed to it and reads

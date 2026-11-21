@@ -38,13 +38,19 @@ var version = "dev"
 var now = time.Now
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		if errors.As(err, new(usageError)) {
-			os.Exit(2)
-		}
-		os.Exit(1)
+	err := run()
+	if err == nil {
+		return
 	}
+	var usage usageError
+	isUsage := errors.As(err, &usage)
+	if !usage.printed {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+	}
+	if isUsage {
+		os.Exit(2)
+	}
+	os.Exit(1)
 }
 
 func run() error {
@@ -54,15 +60,16 @@ func run() error {
 	writeMcp := flag.String("write-mcp-config", "", "Also write the MCP config as a .mcp.json to this path")
 	noSkillsMCP := flag.Bool("no-skills-mcp", false, "Deliver the skills as files in skills.dir instead of through the skills MCP tool (skills.mcp: false, skills.materialize: true)")
 	// The launcher's flag set parses up to the first positional argument
-	// (a bad flag exits 2); that word, if any, must name a sub-command.
-	// Define every launcher flag above this call: one defined below it is
-	// unknown here, and exits 2.
+	// (a bad flag exits 2, -h exits 0); that word, if any, must name a
+	// sub-command. Define every launcher flag above this call: one defined
+	// below it is unknown here, and exits 2.
+	flag.Usage = func() { printUsage(flag.CommandLine) }
 	sub, subArgs, err := extractSubcommand(flag.CommandLine, os.Args[1:])
 	if err != nil {
 		return err
 	}
 	if sub != "" {
-		return subcommands[sub](subArgs)
+		return subcommands[sub].run(subArgs)
 	}
 
 	logOut := io.Writer(os.Stdout)
@@ -641,16 +648,50 @@ func strictWord(strict bool) string {
 	return ""
 }
 
-// subcommands are the words the launcher takes as its first positional
-// argument. Each runs instead of a launch and gets the arguments around the
-// word, see extractSubcommand.
-var subcommands = map[string]func(args []string) error{
-	"hermes-setup": func(args []string) error { return hermesSetup(args, os.Stdout) },
+// subcommand is a word the launcher takes as its first positional argument.
+// run runs instead of a launch and gets the arguments around the word, see
+// extractSubcommand; summary is the word's line in the launcher's -h.
+type subcommand struct {
+	run     func(args []string) error
+	summary string
+}
+
+var subcommands = map[string]subcommand{
+	"hermes-setup": {
+		run:     func(args []string) error { return hermesSetup(args, os.Stdout) },
+		summary: "merge the unreagent MCP server into Hermes Agent's config.yaml (needs agent.hermes.enabled)",
+	},
+}
+
+// printUsage is the launcher's -h, which the flag package also prints after
+// a bad flag: how to call the launcher, one line per sub-command, then the
+// flags of fs, the launcher's flag set. It writes to fs.Output().
+func printUsage(fs *flag.FlagSet) {
+	w := fs.Output()
+	names := slices.Sorted(maps.Keys(subcommands))
+	width := 0
+	for _, name := range names {
+		width = max(width, len(name))
+	}
+	fmt.Fprint(w, "Usage:\n"+
+		"  unreagent [flags]                          start the editor and the agent\n"+
+		"  unreagent [flags] <sub-command> [flags]    run the sub-command instead, then exit\n"+
+		"\nSub-commands (unreagent <sub-command> -h lists its flags):\n")
+	for _, name := range names {
+		fmt.Fprintf(w, "  %-*s  %s\n", width, name, subcommands[name].summary)
+	}
+	fmt.Fprint(w, "\nFlags:\n")
+	fs.PrintDefaults()
 }
 
 // usageError is a command line the launcher cannot run. main exits 2 for it,
-// the code the flag package gives a bad flag.
-type usageError struct{ msg string }
+// the code the flag package gives a bad flag, and prints msg unless printed
+// is set: a sub-command's flag set has printed its error and its usage
+// itself.
+type usageError struct {
+	msg     string
+	printed bool
+}
 
 func (e usageError) Error() string { return e.msg }
 
@@ -713,9 +754,9 @@ func endsWithTerminator(fs *flag.FlagSet, flags []string) bool {
 func unknownSubcommand(word string) error {
 	known := "sub-commands: " + strings.Join(slices.Sorted(maps.Keys(subcommands)), ", ")
 	if _, err := os.Stat(word); err == nil {
-		return usageError{`"` + word + `" is not a sub-command: unreagent does not open files passed to it ` +
+		return usageError{msg: `"` + word + `" is not a sub-command: unreagent does not open files passed to it ` +
 			`(such as one dropped onto the .exe); it reads unreagent.yaml next to the .exe, or the file ` +
 			`given with -config <path> (` + known + `)`}
 	}
-	return usageError{`unknown sub-command "` + word + `" (` + known + `)`}
+	return usageError{msg: `unknown sub-command "` + word + `" (` + known + `)`}
 }

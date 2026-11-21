@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,6 +87,33 @@ func (f hermesFixture) run(t *testing.T) (string, error) {
 	}()
 	err := hermesSetup([]string{"-config", f.cfgPath}, &out)
 	return out.String(), err
+}
+
+// k159: hermes-setup refuses a word among its arguments, and a bad flag,
+// before it reads anything. With -config naming a file that does not exist,
+// the result is the usage error, not the load error that a check after
+// config.Load gives.
+func TestHermesSetupUsageErrorBeforeLoad(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing", "unreagent.yaml")
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string // in the usage error
+	}{
+		{"a word", []string{"-config", missing, "extra"}, `hermes-setup takes flags only, not "extra"`},
+		{"a bad flag", []string{"-config", missing, "-nosuch"}, "flag provided but not defined: -nosuch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := hermesSetup(tc.args, &out)
+			if !errors.As(err, new(usageError)) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want a usage error containing %q, before the config is read", err, tc.want)
+			}
+			if out.Len() > 0 {
+				t.Errorf("hermes-setup ran, output:\n%s", out.String())
+			}
+		})
+	}
 }
 
 func writeFile(t *testing.T, path, content string) {

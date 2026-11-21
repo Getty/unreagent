@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -1053,8 +1054,8 @@ func TestRunFindsTheSubcommandAfterAnyFlag(t *testing.T) {
 		// that ended the launcher's flags. hermes-setup names the file it read.
 		{"-- before the word, -config after it", []string{"--", "hermes-setup", "-config", "OTHER"}, 0, "Hint: this file — OTHER"},
 		// hermes-setup runs and refuses the launcher flag, as it does after
-		// the word.
-		{"bool flag before", []string{"-no-agent", "hermes-setup"}, 1, "Usage of hermes-setup"},
+		// the word: a usage error since k159.
+		{"bool flag before", []string{"-no-agent", "hermes-setup"}, 2, "Usage of hermes-setup"},
 		{"unknown word after a bool flag", []string{"-no-agent", "bogus"}, 2, `unknown sub-command "bogus" (sub-commands: hermes-setup)`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1175,5 +1176,125 @@ func TestExtractSubcommandBadFlag(t *testing.T) {
 	_, _, err := extractSubcommand(set, []string{"-nosuch", "hermes-setup"})
 	if err == nil || errors.As(err, new(usageError)) {
 		t.Fatalf("err = %v, want the flag package's error", err)
+	}
+}
+
+// runCommandLine runs the launcher with args after the harness's -config, on
+// a config whose editor is a markerScript, for a command line that ends on
+// its own. It fails the test if the editor started or anything in the project
+// changed, and returns the exit code, stdout and stderr.
+func runCommandLine(t *testing.T, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	dir := t.TempDir()
+	editor := filepath.Join(dir, "editor.sh")
+	if err := os.WriteFile(editor, []byte(markerScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := launcherYAML(editor, "  enabled: false\n")
+	before := dirState(t, dir)
+	before["unreagent.yaml"] = yaml // startLauncherIn writes it
+	l := startLauncherIn(t, dir, yaml, args...)
+	code = l.exitCode(t)
+	stdout, stderr = l.stdout.String(), l.stderr.String()
+	if _, err := os.Stat(editor + ".ran"); err == nil {
+		t.Errorf("the editor was started:\n%s%s", stdout, stderr)
+	}
+	if diff := stateDiff(before, dirState(t, dir)); len(diff) > 0 {
+		t.Errorf("wrote into the project: %s\n%s%s", strings.Join(diff, ", "), stdout, stderr)
+	}
+	return code, stdout, stderr
+}
+
+// k159: a bad flag for hermes-setup, or a word among its arguments, is a
+// usage error like a bad launcher flag or an unknown sub-command: exit 2, the
+// message on stderr once, and nothing read or written. A bad flag used to be
+// printed by hermes-setup's flag set and again by main, with exit 1; a word
+// was ignored and hermes-setup ran. The harness's -config comes first.
+func TestRunHermesSetupUsageErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		once  string // on stderr exactly once
+		usage bool   // hermes-setup's usage follows it, as after a bad launcher flag
+	}{
+		{"unknown flag after the word", []string{"hermes-setup", "-nosuch"}, "flag provided but not defined: -nosuch", true},
+		{"launcher flag before the word", []string{"-no-agent", "hermes-setup"}, "flag provided but not defined: -no-agent", true},
+		{"flag without its value", []string{"hermes-setup", "-config"}, "flag needs an argument: -config", true},
+		{"a word after its flags", []string{"hermes-setup", "extra"}, `hermes-setup takes flags only, not "extra" (unreagent hermes-setup -h lists them)`, false},
+		{"a word before a flag", []string{"hermes-setup", "extra", "-config", "x"}, `hermes-setup takes flags only, not "extra"`, false},
+		{"a flag after --", []string{"hermes-setup", "--", "-config", "x"}, `hermes-setup takes flags only, not "-config"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := runCommandLine(t, tc.args...)
+			if code != 2 {
+				t.Errorf("exit code %d, want 2:\n%s%s", code, stdout, stderr)
+			}
+			if n := strings.Count(stderr, tc.once); n != 1 {
+				t.Errorf("stderr holds %q %d times, want once:\n%s", tc.once, n, stderr)
+			}
+			if got := strings.Contains(stderr, "Usage of hermes-setup:"); got != tc.usage {
+				t.Errorf("hermes-setup's usage on stderr: %v, want %v:\n%s", got, tc.usage, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("hermes-setup ran, stdout:\n%s", stdout)
+			}
+		})
+	}
+}
+
+// k159: -h asks for the usage; it is no error. The launcher's and
+// hermes-setup's print it on stderr and exit 0; hermes-setup's used to exit 1
+// with "Error: flag: help requested". The launcher's names the sub-commands.
+func TestRunHelpExitsZero(t *testing.T) {
+	sub := regexp.MustCompile(`(?m)^  hermes-setup +` + regexp.QuoteMeta(subcommands["hermes-setup"].summary) + `$`)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string // on stderr
+	}{
+		{"launcher -h", []string{"-h"}, "\nFlags:\n"},
+		{"launcher --help after a flag", []string{"-no-agent", "--help"}, "\nFlags:\n"},
+		{"hermes-setup -h", []string{"hermes-setup", "-h"}, "Usage of hermes-setup:\n  -config string\n"},
+		{"hermes-setup --help", []string{"hermes-setup", "--help"}, "Usage of hermes-setup:\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := runCommandLine(t, tc.args...)
+			if code != 0 {
+				t.Errorf("exit code %d, want 0:\n%s%s", code, stdout, stderr)
+			}
+			if !strings.Contains(stderr, tc.want) || strings.Contains(stderr, "Error:") {
+				t.Errorf("stderr does not hold %q, or holds an error:\n%s", tc.want, stderr)
+			}
+			if launcher := tc.args[0] != "hermes-setup"; launcher != sub.MatchString(stderr) {
+				t.Errorf("hermes-setup's line in the launcher's usage: %v, want %v:\n%s", !launcher, launcher, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout:\n%s", stdout)
+			}
+		})
+	}
+}
+
+// k159: the launcher's -h names every sub-command on a line of its own with
+// its one-line summary, after the call forms and before the flags.
+func TestPrintUsageNamesTheSubcommands(t *testing.T) {
+	set := flag.NewFlagSet("unreagent", flag.ContinueOnError)
+	var buf bytes.Buffer
+	set.SetOutput(&buf)
+	set.Bool("no-agent", false, "Don't start the agent")
+	printUsage(set)
+	out := buf.String()
+	subs, flags := strings.Index(out, "\nSub-commands"), strings.Index(out, "\nFlags:\n")
+	if !strings.HasPrefix(out, "Usage:\n") || subs < 0 || flags < subs || !strings.Contains(out[flags:], "  -no-agent\n") {
+		t.Fatalf("want the call forms, the sub-commands, then the flags:\n%s", out)
+	}
+	for name, sc := range subcommands {
+		if sc.summary == "" || strings.Contains(sc.summary, "\n") {
+			t.Errorf("%s: summary %q, want one line", name, sc.summary)
+		}
+		line := regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(name) + ` +` + regexp.QuoteMeta(sc.summary) + `$`)
+		if !line.MatchString(out[subs:flags]) {
+			t.Errorf("no line %q among the sub-commands:\n%s", "  "+name+"  "+sc.summary, out)
+		}
 	}
 }

@@ -269,11 +269,18 @@ Revision history for unreagent
   - hermes-setup is found after any launcher flag, and after "--".
     "unreagent -config=<path> hermes-setup" and "unreagent -no-agent
     hermes-setup" used to start the editor and the agent instead; now the
-    first runs hermes-setup and the second gets its refusal of -no-agent
-    (exit 1), as when the flag follows the word. Any other word on the
-    command line, a file dropped onto the .exe included, is a usage error
-    (exit 2) that names it and the sub-commands, instead of a launch that
-    ignored it.
+    first runs hermes-setup and the second gets its refusal of -no-agent,
+    a usage error (exit 2), as when the flag follows the word. Any other
+    word on the command line, a file dropped onto the .exe included, is a
+    usage error (exit 2) that names it and the sub-commands, instead of a
+    launch that ignored it.
+  - hermes-setup treats a flag it does not know, a flag missing its value
+    and any word among its arguments as a usage error: exit 2, the message
+    printed once, before any file is read. It used to print a bad flag's
+    message twice and exit 1, and it ignored the word. "unreagent
+    hermes-setup -h" prints its usage and exits 0, where it exited 1 with
+    "Error: flag: help requested". "unreagent -h" lists the sub-commands,
+    one line each, before the flags.
   - An HTTP / SSE entry in mcp.extraServers (such as Unreal MCP) is now
     watched for reachability like UNREAL_MCP_URL: the launcher logs once its
     host and port accept a TCP connection, or warns after 5 minutes with the
