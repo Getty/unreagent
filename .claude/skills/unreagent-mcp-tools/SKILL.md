@@ -85,6 +85,16 @@ takes minutes and the agent's MCP client is waiting the whole time. If you add
 anything slower, return a handle and let the agent poll `logs`, rather than
 holding the request open.
 
+`Supervisor.RunOnceContext(ctx, …)` is `RunOnce` bounded by a context: a ctx
+already done starts nothing; a cancel mid-run closes the job, kills the child,
+drains as on a normal exit and returns the partial output — either way the
+error wraps `ctx.Err()`. Only bridge preparation (`npm install` in
+`cmd/launcher/bridge.go`) uses it today. The tool handlers and
+`prepareRuntimes` stay on `RunOnce` / `RunCommand` until k75, which adds a ctx
+to `ToolHandler` for every handler at once — do not convert one ad hoc. The
+console `c <name>` command (`commandLoop`, `cmd/launcher/lifecycle.go`) also
+calls `RunCommand` and is not part of k75.
+
 ## Auth
 
 `Server.SetToken` enables `Authorization: Bearer <token>` on every POST,

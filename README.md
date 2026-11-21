@@ -73,7 +73,9 @@ the config), so the agent does not have to wire anything up itself. Stdio
 bridges are fully checked before the agent starts, with each step logged
 loudly, instead of letting the agent run into a meaningless `-32000`
 connect error: binary on PATH? bridge script present? `node_modules` there
-(or run `npm install`)? does the bridge answer a real `initialize` handshake
+(or run `npm install`, cut off after 5 minutes; a failed install is logged as
+a warning and skips the smoke test, but the bridge stays in the agent's
+config)? does the bridge answer a real `initialize` handshake
 (smoke test)? And once the in-editor server (`UNREAL_MCP_URL`) is reachable,
 that's logged too — or a warning with the usual suspects if it isn't. These
 checks run only for stdio entries (those with a `command`); an HTTP entry such
@@ -412,7 +414,9 @@ Things to know:
 
 What the launcher does **automatically** on startup (see above): install
 bridge `node_modules`, check binary / script, `initialize` smoke test, wait
-for port 3000 — every step with a clear message in `unreagent.log`.
+for port 3000 — every step with a clear message in `unreagent.log`. Ctrl-C
+while the bridges are being prepared (a running `npm install` included) exits
+at once; the editor is not started.
 
 ### Access from another machine
 
@@ -444,8 +448,17 @@ suspects, in this order:
 1. **Bridge path wrong** (`Cannot find module ...`) — check the path in
    `extraServers` against the real plugin layout.
 2. **Node missing** or not on PATH in the agent's session.
-3. **`node_modules` missing** — this no longer happens, the launcher installs
-   them.
+3. **`node_modules` missing, or the install was cut short.** The launcher
+   runs `npm install` itself, but gives up after 5 minutes (the whole install,
+   not a single request) — slow link, unreachable registry or proxy. The
+   launcher then logs a warning (in `unreagent.log` in window mode, on the
+   console otherwise) and skips the smoke test, but the bridge stays in the
+   agent's config and the editor still starts, so Claude Code reports the
+   server as failed. An install cut short (the timeout, or Ctrl-C) can leave
+   a partial `node_modules`, and because the directory exists the next start
+   skips the install. Delete the bridge's `node_modules` (the log names the
+   directory) and start again once the network works, or run `npm install`
+   there by hand.
 4. **Editor (not yet) reachable** — port 3000 only appears once the editor
    is fully up; the launcher logs once it is.
 
@@ -558,9 +571,22 @@ POSIX-shaped; there is no PowerShell-specific tokenizer yet.
 
 > Note: the exact **input** schema of `--permission-prompt-tool` is not
 > officially documented by Anthropic. The `approve` handler reads the tool
-> fields defensively (`tool_name` / `toolName` / `name`,
-> `tool_input` / `input` / `arguments`). If a Claude Code update changes the
-> format, only that one handler in `cmd/launcher/tools.go` needs adapting.
+> fields defensively (`tool_name` / `toolName` / `name` / `tool`,
+> `tool_input` / `input` / `arguments` / `parameters`). If a Claude Code update
+> changes the format, only that one handler in `cmd/launcher/tools.go` needs
+> adapting.
+>
+> A request the handler cannot read is **denied**, not handed to the policy —
+> so not even `allow_all` lets it through. Unreadable means: none of the name
+> fields holds a non-empty string, or none of the input fields holds an
+> object. The denial message names the fields it looked for and the keys it
+> got (or the name field that holds something other than a string), and the
+> launcher logs it as an `[approve]` line on its console (the
+> permission tool runs only in headless mode, where the launcher logs to the
+> console, not to `unreagent.log`). If every prompt suddenly ends in
+> "unreadable permission request", a Claude Code update most likely changed
+> the format: the logged keys show the new field names to add to the alias
+> lists in that handler.
 
 ### Hermes Agent (alternative agent)
 

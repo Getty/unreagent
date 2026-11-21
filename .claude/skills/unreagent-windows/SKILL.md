@@ -55,9 +55,15 @@ silent memory corruption, not a compile error.
 
 `NewJob` creates the job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; `Assign`
 attaches a PID; closing the handle makes the OS terminate the entire tree.
-Every service and every one-shot command goes through it. This is the mechanism
-behind the README's "no process zombies" promise and it must survive any
-refactor of the supervisor.
+Every service and every one-shot command goes through it, and so does the bridge
+smoke test (`smokeTestMCP`, `cmd/launcher/bridge.go`) via `supervisor.NewJob()`,
+closing the job before it kills the child. Only the short-lived `taskkill`
+(`pkill` elsewhere) and `reg query` helpers run without one. This is the
+mechanism behind the README's "no process zombies" promise and it must survive
+any refactor of the supervisor.
+
+`Assign` runs after `Start` at every spawn site, so whatever the child spawns in
+that gap escapes the job — tracked on k37.
 
 ## The .exe resource
 

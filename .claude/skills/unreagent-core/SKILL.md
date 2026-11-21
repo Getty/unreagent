@@ -69,10 +69,14 @@ was split by concern.
    `os/exec`, `syscall` before considering a library.
 2. **`vendor/` is checked in** and `go.mod` runs in vendor mode. Never `go get`
    during a build; never edit `vendor/` by hand.
-3. **Job Objects are load-bearing.** Every spawned process on Windows is attached
-   to a Job Object with `KILL_ON_JOB_CLOSE` (`internal/supervisor/job_windows.go`).
-   This is what makes "no zombie ShaderCompileWorker" an OS guarantee rather than a
-   hope. Removing or bypassing it silently breaks the product's core promise.
+3. **Job Objects are load-bearing.** On Windows every service, every one-shot
+   command and the bridge smoke test is attached to a Job Object with
+   `KILL_ON_JOB_CLOSE` (`internal/supervisor/job_windows.go`); only the
+   short-lived `taskkill` and `reg query` helpers run without one. Off Windows
+   the job is a no-op (`job_other.go`), the supervisor kills only the direct
+   child, and the crash-reporter kill runs `pkill` instead of `taskkill`. This is
+   what makes "no zombie ShaderCompileWorker" an OS guarantee rather than a hope.
+   Removing or bypassing it silently breaks the product's core promise.
 4. **No machine-specific paths in shipped config.** `unreagent.example.yaml` uses
    `${ENGINE}` / `${PROJECT}` / `${PROJECT_DIR}` / `${PROJECT_NAME}` only. Machine
    overrides belong in the git-ignored `unreagent.local.yaml` overlay.
