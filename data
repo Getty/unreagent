@@ -1,0 +1,175 @@
+---
+class: standard
+completed: 2026-11-21T17:34:52Z
+created: 2026-11-21T13:46:18Z
+id: 177
+priority: low
+started: 2026-11-21T16:33:45Z
+status: done
+tags:
+- mcp
+- skills
+title: Claude Code trims long error replies to their first and last 5,000 characters
+updated: 2026-11-21T17:35:15Z
+---
+
+Found by the k149 review (finding 5); predates k149.
+
+According to the current Claude Code MCP docs ("MCP output limits and warnings"), Claude Code shortens an error reply (`isError`) longer than about 11,000 characters to its first and last 5,000 characters. A failing `run_build` or `run_*` with long compiler output therefore loses its middle in the agent's view, even under unreagent's own cap (k149).
+
+The exit line and both omission markers sit at the top and survive. The compiler errors in the middle may not.
+
+**To do:**
+- Verify the limit against the current docs first.
+- Then decide: either document it in the skills (unreagent-build, unreagent-iterate) so an agent knows to fetch the full output via `logs` or a narrower re-run, or shape error replies so that the part that matters (the first error lines) falls inside the kept head.
+- No skill mentions this today.
+
+Lanes: unreagent-worker if the reply is shaped differently, unreagent-skill-author for the skill text.
+
+**Triage 2026-11-21 (unreagent-scout) and the main agent's decision**
+
+**Verified.** The claim holds. https://code.claude.com/docs/en/mcp, "MCP output limits and warnings", says: error text over about 11,000 characters keeps only its first 5,000 and last 5,000 characters, with a marker for what was removed. This applies to error results only, and MAX_MCP_OUTPUT_TOKENS does not change it.
+
+**The problem.** A failing run_command/run_python/run_node reply (IsError: tools.go:124, scripts.go:74) can be about 49 KB under our 48 KiB cap. Claude Code then drops about 39 KB from its middle, where the first compiler errors usually are. Nothing can fetch that text afterwards. The skills (unreagent-build :121-131, :200-203) and the run_command description (tools.go:96-108) do not mention the trim.
+
+**Decision (main agent): option (b), shape error replies ourselves.**
+- A reply with IsError keeps its whole text, exit line and markers included, under 10,000 bytes. Bytes, not characters, so multibyte output stays under Claude Code's character limit too.
+- Of the output, it keeps a head of about 4 KiB (the first errors) and the tail (the summary). Between them goes our own "[... N lines omitted]" marker, which counts the lines dropped, including any middle the supervisor already dropped (k175's Gap/dropped).
+- Lines are cut whole, as capReply does. A single line longer than the budget is cut with the existing byte marker.
+- A successful reply keeps the 48 KiB cap.
+- The run_command description and the run_python/run_node descriptions state the shape in one clause.
+
+**Order and lanes.**
+- unreagent-worker: helpers.go, tools.go, scripts.go and tests.
+- Then unreagent-skill-author: unreagent-build and unreagent-runtimes, on the reply shape and what to do (a narrower re-run, or a user command that writes a file plus read_file).
+- It runs after k180, because both touch tools.go.
+
+unreagent-worker: started on cf77ca8 (worktree branch worktree-agent-a4a7d126a33bcf2f3). Readings I am taking, mine, not the scope's: (1) the head is the start of the whole output, not of the 300-line window. One marker between head and tail can only count every dropped line if nothing is dropped above the head, so the 300-line window does not apply to a failing reply; the 10,000 bytes bound it, and a failing output that fits shows whole even past 300 lines. (2) capReply does not cut whole lines only: it also cuts into the oldest line it keeps. The scope says whole lines, so the new cut drops whole lines and cuts bytes only from a single line longer than its share (the first line for the head, the last for the tail). (3) Where a line is cut, the text left out starts or ends inside a line, so a line count would be wrong; the marker then counts that span's bytes with the existing byte marker, its own reason ('a failing call's reply holds at most 10 KB'), never both markers. Plain lines keep '[... N lines omitted]' with no reason, as the spec writes it. (4) 'Under 10,000 bytes' implemented as at most 10,000 (the test item's 'never exceeds').
+
+**unreagent-worker report (k177).** Based on cf77ca8, not committed, worktree branch worktree-agent-a4a7d126a33bcf2f3. main.go and mcpconfig.go are untouched (k181).
+
+**Files**
+- cmd/launcher/helpers.go: adds failedReplyBytes (10000), failedHeadBytes (4 KiB), failedCutReason, and:
+  - commandResult: exit 0 gives commandReply as before, anything else failedReply with IsError;
+  - failedReply: works on the whole Output, with Gap over all lines and LinesBefore(0) as the whole output's line count;
+  - capFailed: the shaping.
+  The toolOutputLines and toolReplyBytes comments now say they apply to successful run_* replies.
+- cmd/launcher/tools.go: run_command returns commandResult(res). cutNote, shared by run_command, run_python and run_node, gains the clause "A failing call's reply instead keeps the first and last part of the output within 10 KB."
+- cmd/launcher/scripts.go: scriptAction returns commandResult(res).
+- cmd/launcher/failedreply_test.go: new.
+
+**Shape**
+- If the exit line plus the output fit in 10,000 bytes, the output comes back whole, even past 300 lines.
+- Otherwise the reply is: exit line; head (the first whole lines within 4,096 bytes); "[... N lines omitted]"; tail (as many whole last lines as fit). The whole reply stays at or under 10,000 bytes, with the marker's space reserved at its longest.
+- A first line over 4 KiB is cut to its start, and a last line that does not fit is cut to its end (both cuts hit the same line if it is the only one). The marker then counts bytes: "[... N bytes omitted; a failing call's reply holds at most 10 KB]". No cut splits UTF-8.
+- When the supervisor dropped the middle (k175), the counts include the middle's lines (LinesBefore(0)) or bytes (dropped), and never the gap line or the line breaks around it. The tail keeps the gap line together with the partial lines on both sides, or starts below them, as Window does. If that leaves no whole line, the tail is the last line alone, under the byte marker. If the kept tail is line breaks only, the reply ends with the supervisor's own "[... D bytes omitted]" line.
+
+**Tests** (failedreply_test.go)
+- TestCapFailedSweep: 840 cases. 21 shapes (1 to 20,000 lines; 7 B to 300 KiB per line; long first, last or both; empty lines) × 1- to 4-byte runes at every alignment × 4 exit-line lengths. The checker is independent of the code: at most 10,000 bytes; unchanged when it fits; head = the first lines within 4 KiB, or the start of the first line; tail = as much of the end as fits; exact marker in the right unit; no UTF-8 split.
+- TestCapFailedLeavesAReplyThatFits: exactly at the cap and one byte over, for one line and for many; 500 short lines come back whole.
+- TestCapFailedKeepsTheFirstAndLastLines: one reply written out in full (1000×99 B gives the first 40 lines, "[... 901 lines omitted]", the last 59).
+- TestRunCommandFailedCountsTheDroppedMiddle: 7 outputs past 2 MiB, run through run_command with exit 1:
+  - 3 checked against the output's own lines: line count including the middle's lines; a cut 3 MiB first line; a cut 1.5 MiB last line;
+  - 3 written out in full: kept tail is one short line; two short lines; line breaks only;
+  - 1 where the tail keeps the gap line whole.
+- TestFailedReplyLeavesSuccessAlone: 30 KB of output through run_command and through scriptAction. Exit 0 comes back whole with IsError false; exit 1 comes back capped with IsError true.
+- TestRunToolsDescribeTheFailedReply: the clause appears in all three descriptions.
+
+**Mutations** (go test -overlay, tree never edited): 22 of 22 killed.
+- Caps and fitting: cap raised to 11000; no marker reservation; < instead of <= in the fit check; head share 2 KiB; tail gets half the room; head taken from the 300-line window.
+- Counts: line count without the middle; byte count without the middle; the line break before, or after, the gap line counted; the line break before a tail that is the gap line counted; total taken from Output.
+- Cutting: tail allowed to start on the gap line or the line below it; head cut splitting UTF-8; tail cut splitting UTF-8; byte marker always; line marker always; tail cut keeping half; head cutting into the next line.
+- Wiring: success shaped as failure; failure shaped as success; description clause dropped.
+Each mutant of the dropped-middle logic fails in the subtest written for it.
+
+**Check:** all green.
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok.
+- go test -race ./cmd/launcher: ok.
+- make linux, make windows: ok; a CGO_ENABLED=0 Windows build also ok.
+No platform code changed. On Windows this is the same pure-Go path; it was compiled, not run.
+
+**Proposed subject:** Cap a failing run_* reply at 10 KB, keeping its start and end (k177)
+
+**Changes:**
+  - A failing run_command, run_python or run_node call now replies within
+    10 KB: the first 4 KiB of the output, where the first errors are, a
+    marker counting what is left out, then as much of the end as fits.
+    Claude Code cut longer error replies to their first and last 5,000
+    characters, dropping the middle of a failing build's output unmarked.
+    Successful calls still return the last 300 lines within 48 KiB.
+
+**Follow-ups for the dispatching agent** (out of scope here; nothing touched):
+- unreagent-skill-author, unreagent-build skill (:64-131, :200-203). Should say:
+  - a failing run_command reply is at most 10 KB, shorter than a success reply;
+  - it holds the exit line, the first ~4 KiB (the first errors), a marker counting every line left out (the dropped >2 MiB middle included), then the end (the summary);
+  - a failing output that fits comes back whole, even past 300 lines;
+  - what is left out is still gone: re-run narrower, or use a user-added command that writes a file, plus read_file.
+- unreagent-skill-author, unreagent-runtimes skill: the same for run_python/run_node. On failure, print the error that decides it early or last, and write long diagnostics to a file and read it with read_file.
+- unreagent-doc-writer, README: wherever run_* output is described (last 300 lines, 48 KiB), add the failing-call shape and the reason for it (Claude Code trims error replies over about 11,000 characters).
+- Left as is: run_command's description still says "What was cut, which can hold the first compile errors, is gone". That stays true (the head is only 4 KiB), but for a failing call the first errors are now usually in the head; the skill or doc pass may want to reword it.
+
+Done, ready for review. A failing run_command/run_python/run_node reply is now at most 10,000 bytes: the first ~4 KiB, a counted marker, then the end. Success replies are unchanged. Not committed; worktree branch worktree-agent-a4a7d126a33bcf2f3, based on cf77ca8. Full check green; 22/22 overlay mutants killed. The report note above has the files, tests, proposed subject, Changes line, and skill/README follow-ups.
+
+2026-11-21 17:11 unreagent-skill-author: skill text for k177 done in the worktree (worktree-agent-a4a7d126a33bcf2f3), not committed. Checked against cmd/launcher/helpers.go (commandResult, failedReply, capFailed), tools.go (cutNote, run_command) and scripts.go (scriptAction).
+
+Files and lines:
+- skills/unreagent-build/SKILL.md: :11-14 the intro no longer says only the tail comes back. :66-99 'Calling it' now shows both shapes: exit 0 (last 300 lines within 48 KiB), and non-zero (an error result of at most 10,000 bytes: the first lines up to 4 KiB, [... N lines omitted], the last lines that fit; whole when it fits, even past 300 lines), plus why (Claude Code cuts an error result over about 11,000 characters to its first and last 5,000). :111-149 'Reading the result': the 300-line and 48 KiB bullets are now about a successful reply; new bullets for the failing head/marker/tail, for the byte marker when a single line is cut ('a failing call's reply holds at most 10 KB'), and for the dropped middle past 2 MiB in a failing reply. :157-174 the compile paragraph: the head holds the first 4 KiB, which takes in the first errors when they come that early; what is left out is not kept anywhere; the way out stays a user command that writes to a file plus read_file. package: a failing run shows its first 4 KiB and its end. :239-245 failure table: two rows for the failing reply's line and byte markers; the old 'lines omitted after the exit line' and 48 KiB rows now say exit 0.
+- skills/unreagent-runtimes/SKILL.md: :79-138 both shapes for run_python/run_node, as in unreagent-build. New guidance: a script that can fail puts the deciding error at the start or the end of its output, writes long diagnostics to a file read back with read_file, and keeps the deciding line on one stream or uses flush=True, since Python buffers stdout to a pipe.
+- .claude/skills/unreagent-mcp-tools/SKILL.md: :103-105 a one-shot tool returns commandResult(res): commandReply on exit 0, failedReply with IsError otherwise. :138-160 new paragraph: failedReply takes the whole Output; capFailed, failedReplyBytes (10,000), failedHeadBytes (4 KiB), failedCutReason, the counts (total = LinesBefore(0), dropped), the gap-line rule, cutNote.
+- skills/unreagent-iterate/SKILL.md: unchanged. It does not describe the run reply's size or shape (only that run_command output lives in the call's result, :247, still true).
+
+Verified by me: Python 3.13 and Node 24 on Linux, through one shared pipe as newCombinedStreamSet uses. An uncaught exception's traceback or stack prints last, also after 20,000 buffered stdout lines. A Python stderr line printed between two stdout lines lands above both. Not run on Windows. The Python docs state the buffering rule for every platform.
+
+Check: go test -count=1 ./internal/skills ./cmd/launcher in the worktree: ok, ok. TestToolkitToolsExistInToolkit ran (PASS, not skipped).
+
+Left for unreagent-worker (tools.go, not my lane): run_command's description still says 'What was cut, which can hold the first compile errors, is gone'. That is still true, but for a failing call the first errors are now usually in the head. It may want rewording.
+
+Main agent 2026-11-21:
+- **Worker's decisions accepted:** the head is taken from the whole output, lines are cut whole, the marker counts bytes when a line is cut, and the limit is at most 10,000 bytes.
+- **README:** I added the failing-reply shape to the run_command row and pointed the run_python/run_node row at it.
+- **run_command description:** 'which can hold the first compile errors' stays. It is still true, and the new clause right after it says a failing reply keeps the start.
+- **Changes line:** drop 'unmarked'. Claude Code's own cut does insert a marker with the removed character count (docs: 'with a marker between them that says how many characters were removed'). What it drops is the first errors, not the marking.
+
+Next: unreagent-reviewer.
+
+unreagent-reviewer 2026-11-21: verdict READY (no blocking findings). Windows: compiled only, not run (pure-Go path, no platform code) — unverified on Windows, not tested.
+
+Reviewed: cmd/launcher/helpers.go, tools.go, scripts.go, failedreply_test.go (new), README.md (run_command, run_python/run_node rows), skills/unreagent-build, skills/unreagent-runtimes, .claude/skills/unreagent-mcp-tools. Tree left unchanged.
+
+Check, run by me in the worktree (base cf77ca8): gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -race ./cmd/launcher ok; make linux, make windows ok (PE32+ x86-64).
+Onto main: plain git apply --check passes on 62ed8a8 and FAILS on current main 7036a88 (k150-k152 added a sentence in the same unreagent-mcp-tools paragraph, :100). git apply --3way applies cleanly. On 7036a88 + the 3-way diff + the test file: gofmt, vet (linux and windows), go test ./..., a CGO_ENABLED=0 windows build all green. On 62ed8a8 + the diff, -race ./cmd/launcher was green as well. The release-manager should rebase, or 3-way apply, before the commit.
+
+Own sweep (go test -overlay, an exported headTailBuffer probe, a checker written from the spec): 3,166 failing outputs. 3,000 random ones (0-3,000 lines, line lengths up to 40 KB, mixed 1-4 byte runes, CRLF, leading/trailing blank lines, six exit codes including 3221225477; many past 2 MiB). Plus the edges at 9,991-10,002 bytes, "", "\n", 20,000 line breaks, CRLF-only, and 90 outputs past 2 MiB: lines that end exactly on the 1 MiB boundary, one 3 MiB line, long first/last lines, tails of line breaks only, "x"/"ab\ncd" before them, and the together case.
+- Size: never over 10,000; the longest reply is exactly 10,000.
+- Head and tail: the first whole lines within 4 KiB, or a cut start of the first line. The tail is maximal, beyond the marker reserve.
+- Counts: N exact, the dropped middle included (2,541 line markers, 240 byte markers). The byte marker appears only when a line is cut.
+- UTF-8 and markers: no cut splits UTF-8, and there is exactly one of our markers.
+- The only misses are 6 degenerate "z + 3 MiB of line breaks" outputs (below).
+
+Success replies: 408 outputs (random, 49,152-byte cap hits, dropped middles). commandReply on main 62ed8a8 and commandResult in the tree are byte-identical, IsError false.
+
+Mutants: M8 (bytes without the middle), M11 (gap-line break counted) and M15 (tail cut splits UTF-8), re-run from the stored overlays: all 3 killed, in the subtest named for each. The stored mutant files predate the comment edits at helpers.go:74-84, so they revert those comments too. That is harmless, since the code change is the only behavioral delta.
+
+Prose matches the code: the cutNote clause in all three descriptions, the README rows, the build/runtimes/mcp-tools text.
+- The Python sentence (unreagent-runtimes :133-138) is correct. The Python docs make stdout block-buffered when it is not interactive and stderr line-buffered, with no platform exception. CPython flushes stdout before it prints the traceback: run locally on 3.13 through one pipe, the traceback came last after 20,000 lines.
+- For Node, the docs say pipe writes are synchronous on Windows, so "the stack prints last" holds there too. The sentence claims no Windows run, so it does not overclaim.
+
+Non-blocking findings, most important first:
+1. Changes. The unreleased k149 entry (Changes:304-310, "run_command, run_python, run_node and logs hold a reply to 48 KiB") is no longer true for a failing run_*. The fix direction is to fold k177 into it rather than add a new entry: "A successful run_* call and logs hold a reply to 48 KiB ... A failing run_command, run_python or run_node call replies within 10 KB instead: the first 4 KiB of the output, where the first errors are, a marker counting what is left out, then as much of the end as fits. Claude Code cuts an error reply over about 11,000 characters to its first and last 5,000, which dropped a failing build's first errors." Also drop "unmarked" (agreed), and use the present tense: Claude Code still cuts. Changes:245-248 ("leads the last 300 lines") now holds for success only; one word there ("A successful ...") would do. Subject: 68 chars, ok.
+2. skills/unreagent-build/SKILL.md:147-148. "only when the output's last MiB is nearly all blank lines" is imprecise. It is true only when all but the last ~5.8 KB of the last MiB is line breaks at the very END: blank lines followed by text do not reach the gap line. A fix direction: "ends in nearly a MiB of line breaks". Wording only.
+3. The worker's edge case: the kept tail is line breaks only. The reply ends "[... N bytes omitted; a failing call's reply holds at most 10 KB]" and then the supervisor's "[... D bytes omitted]". I judge this acceptable: one of our markers, and N + D are exactly what is left out. The success path already shows the supervisor line next to ours. An optional cleanup (helpers.go:309/321) would fold D into our marker and drop the supervisor line.
+4. Degenerate input, observation only: past 2 MiB of nothing but line breaks (or "z" plus them), the reply is ≤10,000 bytes with one of our markers, but it is ~9,900 blank lines and a count of lines that LinesBefore(0) treats as trailing (whole output = 1 line). The cause is the supervisor's head keeping newlines that are not trailing in Output; it is not in capFailed. No action.
+5. Scope: README.md is unreagent-doc-writer's in OWNERS and was edited by the main agent. The delegation rule allows the main agent to edit plain prose docs; noted for the record.
+No German in the touched text.
+
+Main agent 2026-11-21 on the review:
+- **Finding 1, Changes.** For the release-manager. Fold this into the unreleased k149 entry (Changes:304-310), which still says every run_* reply holds 48 KiB. Drop 'unmarked', and write 'cuts' in the present tense. Make the 'last 300 lines' entry (:245-248) say it applies to successful calls.
+- **Finding 2, unreagent-build:147-148.** The skill-author is rewording it in this worktree.
+- **Findings 3-5.** Accepted, no action.
+- **Next.** unreagent-release-manager, with a 3-way apply onto 7036a88: the unreagent-mcp-tools paragraph at :100 overlaps k150-k152.
+
+2026-11-21 17:30 unreagent-skill-author: review fix in skills/unreagent-build/SKILL.md:147-149. A failing reply shows the supervisor's [... D bytes omitted] line only when the output ends in nearly a MiB of line breaks, with no text after them. Checked against ringbuffer.go (kept tail = last 1 MiB, keptLines without trailing line breaks) and capFailed's tail room of about 5.8 KB. go test -count=1 ./internal/skills: ok.
+
+Committed as f0c7132 on main (rebased onto 7036a88, git apply -3 clean, no conflicts; full check green).
