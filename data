@@ -1,0 +1,24 @@
+---
+class: standard
+completed: 2026-11-21T14:33:13Z
+created: 2026-11-21T07:35:16Z
+id: 144
+priority: low
+started: 2026-11-21T14:18:35Z
+status: done
+tags:
+- test
+- hermes
+title: Pin the checkEdit call in localConfigWithToken
+updated: 2026-11-21T14:33:34Z
+---
+
+Found by the k134 worker. In cmd/launcher/hermes.go, localConfigWithToken calls checkEdit before it writes unreagent.local.yaml, but no test pins that call: dropping it leaves the suite green, on HEAD too. Done: a test whose input passes the early checks but would change more than the mcp entry fails when the checkEdit call is dropped. Input idea: the yaml.v3 encoder quirk the k134 test uses (a folded block scalar with a more-indented line). Lane: unreagent-test-writer.
+
+Added TestLocalConfigWithTokenChecksTheEdit in cmd/launcher/hermes_test.go: local config with a folded block scalar (more-indented line) under another key passes the early checks; asserts the 'would change more than mcp.token' refusal naming notes, and an untouched file. Verified: with checkEdit dropped from localConfigWithToken (go test -overlay, scratch copy) only this test fails; passes on the real file. gofmt, vet, test, -race, GOOS=windows vet clean.
+
+Review (unreagent-reviewer): READY. File: cmd/launcher/hermes_test.go, TestLocalConfigWithTokenChecksTheEdit (+26 lines, nothing else changed). Mutant check rerun independently (my own overlay, checkEdit call dropped from localConfigWithToken): only this test fails, and the returned file shows the yaml.v3 v3.0.1 extra blank line after 'Rules:' in notes, so the input clears every early check for the right reason. On the real file the refusal is 'the result would change more than mcp.token: the value at notes would change ...'. Check, run on the worktree: gofmt -l cmd internal skills clean; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -race -count=1 ./cmd/launcher ok; the make windows build (same go build, output to scratch) produced a PE32+ x86-64 binary. On 21555d2: git apply --check clean; hermes.go and hermes_test.go unchanged since ce9ef4a; vet and go test ./cmd/launcher pass there with the test overlaid. No Windows-path change; the test is pure YAML and platform-neutral (ran on Linux only). Non-blocking nits for the owner: (1) hermes_test.go:1752-1754, the unchanged-file assertion cannot fail, because localConfigWithToken only reads (hermesSetup writes). (2) hermes_test.go:1731-1736, unlike the k125 comment, this one does not say that a yaml.v3 which writes the scalar back unchanged, or a workaround in the edit, needs a new input. The test goes red then (it does not go vacuous), but the comment gives no next step. (3) hermes_test.go:1749, matching the bare 'notes' is loose; 'the value at notes' would pin changedPath. Commit subject: Pin the checkEdit call in localConfigWithToken (k144). No Changes entry (test-only).
+
+Review findings taken in hermes_test.go: dropped the unchanged-file assertion, added the encoder next-step comment, match 'the value at notes'. gofmt, vet, test, -race green; overlay without checkEdit still fails the test.
+
+Committed as 0eac3d5 (test only, no Changes entry); landed on main.
