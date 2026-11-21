@@ -1,0 +1,49 @@
+---
+claimed_at: 2026-11-21T12:13:18Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T12:13:18Z
+created: 2026-11-13T04:21:31Z
+id: 87
+priority: medium
+started: 2026-11-21T11:44:46Z
+status: done
+tags:
+- mcp
+title: HTTP extraServers (Unreal MCP, UE 5.8+) get no readiness check; the agent can
+  start before the editor's server is up
+updated: 2026-11-21T12:13:18Z
+---
+
+prepareMCPBridges only checks stdio entries; an http entry like Unreal MCP (http://127.0.0.1:8000/mcp) is passed through silently. Epic docs say to start the agent after the editor server is up; unreagent starts editor and agent together, so Claude Code may mark the server failed and the user must /mcp reconnect. Options: log reachability for http entries like waitForEndpoint does for UNREAL_MCP_URL (cheap); optionally delay the agent start until a configured http entry answers initialize (with timeout). README documents the /mcp workaround (k86).
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: prepareMCPBridges skips entries without command (http/sse); waitForEndpoint runs only for stdio entries with UNREAL_MCP_URL. Size S (log) / M (delay the agent start).
+
+**Decision (main agent) 2026-11-21:** log variant only, matching waitForEndpoint for UNREAL_MCP_URL: for each http/sse extraServers entry, report asynchronously when its URL answers (or that it never did within the window, with the /mcp reconnect hint). No delay of the agent start — the editor loads for minutes and blocking the agent is a separate UX decision (new card if wanted). bridge.go only; parallel to k60.
+
+Worker started in isolation worktree (base 00bde37). Scope: cmd/launcher/bridge.go + bridge tests; log-only reachability for http/sse extraServers, reusing waitForEndpoint.
+
+Progress: implemented in cmd/launcher/bridge.go — http/sse entries collected in the loop, watched after it via waitForEndpoint (now ctx-aware, window/pause package vars, https default port 443, URLs logged as scheme://host/path only). 4 tests added to bridge_test.go, green. Next: red-proofs, full check.
+
+Worker done, tree commit-ready (no commit), card stays in-progress for docs routing. Files: cmd/launcher/bridge.go, cmd/launcher/bridge_test.go. waitForEndpoint now takes ctx (both callers): ends silently on shutdown; dial + pause bounded by the window. Also: https without port probes 443 (was :80); log lines show scheme://host/path only (user info/query can carry a token); the parse warning no longer echoes the value. Changed UNREAL_MCP_URL wording: 'not reachable after 5m0s' (was '5 minutes'), parse warning 'UNREAL_MCP_URL is not a URL with a host — its reachability is not checked.' 4 tests, each shown red by a code break (8 breaks). Full check green: gofmt, vet linux+windows, go test ./..., -race, make linux, make windows. Windows: compile only, not run. Docs drift for unreagent-doc-writer: README lines 82-85, 436-439, 549-551; unreagent.example.yaml 179-181 still say http entries get no check. Drift for this board (not fixed): the UNREAL_MCP_URL watcher starts right after its own bridge's smoke test, so a later bridge's npm install (up to 5m) can use up its window before the editor starts; http watchers start after the loop for that reason.
+
+Docs done (README.md, unreagent.example.yaml, worktree agent-aa8fa883b3a73275d): README ~82-87 (intro now points to Option A), ~436-454 (Option A 'Reachability watch only' bullet: log lines, limits), ~565-570 (troubleshooting no longer says 'no check'); example yaml ~179-186 (reachability watch, limits). No UNREAL_MCP_URL log lines were quoted in README, nothing to update. Overlay note already present in both places.
+
+Review (unreagent-reviewer) 2026-11-21, worktree agent-aa8fa883b3a73275d on base 00bde37, files cmd/launcher/bridge.go, cmd/launcher/bridge_test.go, README.md, unreagent.example.yaml. VERDICT: changes needed (one small doc fix; the code is ready).
+Check run by the reviewer in the worktree, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -race -count=1 ./...; make linux; make windows. The 4 new tests plus TestPrepareMCPBridgesStopsOnCancel pass 10x under -race. git apply --check -3 of the full diff on main 29a605c applies cleanly; applied in a scratch worktree, gofmt, vet and go test -race ./cmd/launcher are green there too.
+Red-proofs, re-run on a scratch copy (the worktree was not touched): (B) warn on cancel -> TestWaitForEndpointEndsWithContext fails; (C) log the raw URL -> TestPrepareMCPBridgesReportsRemoteAnswer fails; (A) no return after 'is reachable' -> logged 11 times, fails; (D) stdio entries watched too -> TestPrepareMCPBridgesStdioEntryUnchanged fails.
+Behaviour checked by reading the code and probing: one go waitForEndpoint per command-less entry, after the loop (bridge.go:122-130, and the loop and post-loop ctx checks mean no watch starts after a cancel); bare DialContext plus Close, no request (the test asserts 0 HTTP requests); https without a port -> 443 (bridge.go:431-437, read only, see 2); cancel -> silent return (bridge.go:450-455); log shows scheme://host/path only. Probed: user info, query and fragment dropped; the bad-URL line never echoes the value; IPv6 is bracketed correctly. UNREAL_MCP_URL caller: line wording unchanged except '5m0s' and the parse warning, as the worker noted; empty-path URLs print the same as before. Leaks/races: every watcher in the tests ends on its line or on the deferred cancel; the package vars are read before the first log line, so Cleanup after waitForLine is ordered by the syncLog mutex.
+FINDINGS:
+1 (must, unreagent-doc-writer) README.md:452-454 quotes the bad-URL line without its prefix. bridge.go:428 writes "WARN MCP server '<name>': url is not a URL with a host — its reachability is not checked." Add WARN and call it a warning, as line 444 does for the other one.
+2 (should, unreagent-worker) The https->443 default (bridge.go:432-436) fixes a bug (it was :80) and is claimed in README.md:449, but no test pins it. Only a code read shows it (port 443 cannot be bound here). A tiny seam (the host:port from the url) would make it testable without binding 443. Non-blocking if the main agent accepts it.
+3 (note) Ordering 'after the loop' and the editorEndpoint wording ('in-editor server ...') are not pinned by a test; read only.
+4 (note) A secret in the url PATH (some hosted MCP URLs carry one) is still logged. The docs claim only user info and query, so they are accurate. The watch also dials hosted or remote http entries at every start, as the card decision ('each http/sse entry') says.
+Windows: compile only (GOOS=windows vet plus make windows); behaviour unverified. Smoke items: the reachable line once the UE 5.8 server binds 8000; the 5-minute warning with the plugin off; Ctrl-C mid-window gives no WARN and a prompt exit (a dial to a closed loopback port takes about 2 s on Windows, and the cancel must cut it); localhost vs 127.0.0.1 binding; the toolkit UNREAL_MCP_URL :3000 line unchanged. Tests 1-3 are not skipped on Windows and have never run there.
+Subject 'Watch http/sse extraServers for reachability like UNREAL_MCP_URL (k87)' confirmed. The card carries no worker Changes bullet; the reviewer proposes one in the report.
+
+**Decision (main agent) 2026-11-21 on the review:** finding 1 fixed by the main agent (README:452-454 now quotes the WARN prefix and calls it a warning). Finding 2 back to the worker: host:port helper with a table test for http→80 / https→443. Findings 3-4 are notes, no change. Changes: the reviewer's bullet.
+
+Finding 2 (worker) addressed: the host:port calculation moved to dialAddr(u *url.URL) string in cmd/launcher/bridge.go (waitForEndpoint calls it); TestDialAddr in cmd/launcher/bridge_test.go is a table test: http no port -> :80, https no port -> :443, explicit port (http and https), IPv6 bracketed (with and without port), uppercase scheme. Red-proofs: 443->80 in dialAddr -> 3 https rows red; JoinHostPort replaced by Hostname()+":"+port -> 2 IPv6 rows red; restored (cmp identical). Caveat: url.Parse lowercases the scheme, so the uppercase row pins the user-visible result (HTTPS:// -> 443), not the EqualFold in dialAddr. Only bridge.go and bridge_test.go touched; README/example yaml untouched by me. Full check green: gofmt -l cmd internal skills (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -race -count=1 ./..., make linux, make windows. Windows: compile only. No commit.
+
+Committed as 095bcc4 on main (ff-merged from the worktree, rebased onto 29a605c; full check green on the commit: gofmt, vet linux+windows, test, -race, make linux/windows, mod verify; Windows compile-only, unverified). Changes bullet added. Windows smoke items from the review stay open: reachable line once the UE 5.8 server binds 8000; 5-minute warning with plugin off; Ctrl-C mid-window gives no WARN and exits promptly; localhost vs 127.0.0.1 binding; UNREAL_MCP_URL :3000 line unchanged.
