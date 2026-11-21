@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-11-21T08:15:03Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T08:16:31Z
+created: 2026-11-21T07:57:18Z
+id: 148
+priority: low
+started: 2026-11-21T07:58:53Z
+status: done
+tags:
+- skills
+title: Point the animation skills to the ue-tasks timeout section, and two small skill
+  fixes
+updated: 2026-11-21T08:16:56Z
+---
+
+Follow-up to k21 and k140. Lane: unreagent-skill-author. Start after k140 is on main.
+
+1. skills/ue-anim-sequence/SKILL.md:157-160 (from k21) names long calls (resample over many sequences, set_ref_pose on a large mesh) but does not point to the ue-tasks section "A 30 s timeout can crash the editor". Add the hand-off in the same hedged form k140 uses ("may crash"); check the other three animation skills (ue-anim-blueprint, ue-anim-montage, ue-blend-space) for long calls too (from the k140 round-2 review).
+2. skills/ue-anim-sequence/SKILL.md:137-139 reads as if only a successful adjust_track or resample entry carries asset_path; every entry has it, failed ones too (AnimTrackEditor.cpp:167, :338) (optional nit from the k21 round-2 review).
+3. Optional: skills/ue-viewport/SKILL.md failure table (~:258-264) has no row for the capture sketch's own 60 s urllib timeout exception, the game-thread case described at ~:218-220 (from the k140 round-2 review).
+
+Verify each against the toolkit source; go test ./internal/skills green.
+
+2026-11-21 08:05 Done, uncommitted in worktree branch worktree-agent-af6cc1861842b47ee (base main 82d67e9). (1) skills/ue-anim-sequence/SKILL.md:162-165 - Timeouts bullet: such a resample or set_ref_pose runs as one call, can hold the editor >30 s, a request waiting 30 s behind it may crash the editor; hand-off to ue-tasks 'A 30 s timeout can crash the editor' in the ue-assets/ue-blueprints form. Verified: FAnimTrackEditor::Resample loops all asset_paths in one Execute; HandleSetRefPose retransforms every LOD, PostEditChange, saves in one Execute. skills/ue-anim-blueprint/SKILL.md:179-183 - same hand-off for find_animations with a skeleton filter (FAnimAssetManager::FindAnimationAssets calls AssetData.GetAsset() per candidate in one request). No hand-off in ue-anim-montage or ue-blend-space: every op works on one asset, save writes one package, blend_space list reads the registry only; anim_blueprint compiles are one AnimBP per call, not claimed as long. (2) skills/ue-anim-sequence/SKILL.md:138-143 - every batch entry, failed too, has its path (asset_path for adjust_track/resample, AnimTrackEditor.cpp:167/:338; path for replace_skeleton, :541). (3) skills/ue-viewport/SKILL.md:265 - failure row for the sketch's own 60 s TimeoutError (game-thread case, UnrealClaudeMCPServer.cpp IsInGameThread branch has no limit). Exception text checked with local Python 3.13 (read timeout gives 'TimeoutError: timed out'), not on Windows. Checks: gofmt -l cmd internal skills empty, go vet ./... clean, go test -count=1 ./... green (one pre-existing SKIP: TestWarnIfMissingAppliesPathExtOnWindows).
+
+Review (unreagent-reviewer): READY. Files: skills/ue-anim-sequence/SKILL.md, skills/ue-anim-blueprint/SKILL.md, skills/ue-viewport/SKILL.md (uncommitted in worktree branch worktree-agent-af6cc1861842b47ee, base 82d67e9; owner unreagent-skill-author per ack-team, nothing outside skills/). Check run in the worktree: gofmt -l cmd internal skills empty, go vet ./... clean, go test -count=1 ./... exit 0 (one pre-existing SKIP: TestWarnIfMissingAppliesPathExtOnWindows), make windows builds dist/unreagent.exe. Docs-only change, no Windows code path touched. Verified against the toolkit: batch entries set asset_path/path before the success branch (AnimTrackEditor.cpp:167, :338, :541), so failed entries carry it too; Resample loops all asset_paths in one Execute (:330); set_ref_pose retransforms every LOD and calls PostEditChange in one call (MCPTool_AnimEdit.cpp:635-676); FindAnimationAssets calls AssetData.GetAsset() per pattern-matched candidate when a skeleton is set (AnimAssetManager.cpp:368-371), matching anim-nodes.md. The hedging matches main: 'may crash' as in ue-context:85, the hand-off form as in ue-assets/ue-blueprints/ue-levels. Leaving out montage and blend space is justified: one asset per op, and blend_space list reads only the registry (BlendSpaceReader.cpp:211-252). The ue-viewport:265 row fits the table and agrees with the prose at :218-220. The game-thread branch has no limit (UnrealClaudeMCPServer.cpp:254-257), run_python has no timeout, and a localhost read timeout in urllib raises TimeoutError unwrapped. Python caveat: not needed. run_python uses the host Python uv provisions, and every Python from 3.10 on prints TimeoutError: timed out; only the EOL 3.9 and older say socket.timeout. Optional nit, not blocking: ue-anim-sequence/SKILL.md:162-165 names only resample and set_ref_pose, but adjust_track and replace_skeleton also loop over asset_paths in one call (AnimTrackEditor.cpp:159, :533), and transform_vertices retransforms every LOD like set_ref_pose (MCPTool_AnimEdit.cpp:892ff). Wording could widen to any batch over many sequences or mesh edit on a large mesh. No German, no ticket ids.
+
+2026-11-21 08:13 Review nit addressed: skills/ue-anim-sequence/SKILL.md:162-167 now names a batch over many sequences (adjust_track, resample, replace_skeleton; loops at AnimTrackEditor.cpp:159, :312, :533) and a vertex edit on a large mesh (set_ref_pose, transform_vertices, each over every LOD; MCPTool_AnimEdit.cpp:635ff, :955ff), keeping the 'may crash' form. sync_mesh_bones and rename_bone left out: they rework no LOD vertices, so the source does not show them as long. gofmt -l cmd internal skills empty, go test -count=1 ./internal/skills ok. Card stays in review.
+
+2026-11-21 08:13 Correction to the previous note: the resample loop is AnimTrackEditor.cpp:330, not :312.
+
+Re-review of the nit fix (unreagent-reviewer): READY, final. skills/ue-anim-sequence/SKILL.md:162-167 holds against the toolkit. adjust_track, resample and replace_skeleton each loop over asset_paths in one call (AnimTrackEditor.cpp:159, :330, :533). transform_vertices retransforms each LOD with a mesh description, then PostEditChange (MCPTool_AnimEdit.cpp:952-979). set_ref_pose does the same by default (retransform_vertices defaults true; :600, :632-676). The text still says 'may crash'. Leaving out sync_mesh_bones and rename_bone is right: in the toolkit source they add or rename bones through the skeleton modifier and call PostEditChange, with no vertex or LOD loop (:277-414, :415-530). Check: gofmt -l cmd internal skills empty, go vet ./... clean, go test -count=1 ./... exit 0 (pre-existing SKIP TestWarnIfMissingAppliesPathExtOnWindows). Tree still only the three skill files; no German, no ticket ids.
+
+Committed as 23002a0 on main (ff-merge). Check: gofmt, vet (linux+windows), go test -count=1 ./..., make linux/windows, go mod verify all green.
