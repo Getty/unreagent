@@ -19,7 +19,8 @@ go.mod	unreagent-worker
 go.sum	unreagent-worker
 .gitattributes	unreagent-worker
 
-# Shipped UE skills and the subsystem that embeds, serves and materializes them
+# Shipped UE skills and the parser that embeds them (serving and materializing them is
+# launcher wiring in cmd/launcher/skills.go, owned by unreagent-worker)
 skills/	unreagent-skill-author
 internal/skills/	unreagent-skill-author
 

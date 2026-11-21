@@ -84,7 +84,7 @@ in `.claude/rules/unreagent-rules.md`.
 |---|---|
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
 | Write/extend tests | `unreagent-test-writer` |
-| Shipped UE skill documents + the skills subsystem | `unreagent-skill-author` |
+| Shipped UE skill documents + their parser (`internal/skills`) | `unreagent-skill-author` |
 | README / example config / docs | `unreagent-doc-writer` |
 | Read-only research, audit, card triage | `unreagent-scout` |
 | Review of a finished card before its commit | `unreagent-reviewer` |

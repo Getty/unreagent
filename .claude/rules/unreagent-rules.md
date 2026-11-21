@@ -23,7 +23,7 @@ handing out or reviewing a card, resolve its touched or planned paths with
 |---|---|
 | Implement / refactor / debug Go code | `unreagent-worker` (default) |
 | Write/extend tests, a bug as a failing test | `unreagent-test-writer` |
-| Shipped UE skill documents + the skills subsystem; the project's `unreagent-*` skills | `unreagent-skill-author` |
+| Shipped UE skill documents + their parser (`internal/skills`); the project's `unreagent-*` skills — serving and materializing them (`cmd/launcher/skills.go`) is Go wiring for `unreagent-worker` | `unreagent-skill-author` |
 | README / example config / docs | `unreagent-doc-writer` |
 | Read-only research, audit, gap analysis, card triage | `unreagent-scout` |
 | Review of a finished card before its commit (runs the check itself) | `unreagent-reviewer` |
