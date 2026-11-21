@@ -1,0 +1,63 @@
+---
+claimed_at: 2026-11-21T05:58:42Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T05:58:55Z
+created: 2026-11-21T02:43:17Z
+id: 117
+priority: low
+started: 2026-11-21T04:41:06Z
+status: done
+tags:
+- ci
+- release
+title: 'CI guard for the Changes release-notes check: test it on a fixture, fix the
+  no-{{$NEXT}} message'
+updated: 2026-11-21T05:58:55Z
+---
+
+From the k112 review (2026-11-21), non-blocking nits:
+
+1. `.github/workflows/ci.yml:49-52`: the check that `scripts/changes-section.sh` refuses `{{$NEXT}}` only proves the guard while `{{$NEXT}}` in the real `Changes` has entries. Right after a release is stamped (`{{$NEXT}}` empty) the script fails anyway on the empty section, so a removed guard (`scripts/changes-section.sh:22-25`) would go unnoticed. Run the check against a small fixture with an entry under `{{$NEXT}}`, so it does not depend on the state of `Changes`.
+2. `.github/workflows/ci.yml:37-40`: a `Changes` without a `{{$NEXT}}` line fails with "No version line after {{$NEXT}}", which names the wrong cause. Failing is right (stamping keeps `{{$NEXT}}`); only the message is off.
+
+Done when: the guard check fails if the `{{$NEXT}}` refusal is removed from the script, whatever `Changes` holds; the missing-`{{$NEXT}}` case names that cause. Lane: unreagent-worker (ci.yml, scripts/).
+
+Worker done (2026-11-21, ci.yml only): a missing {{$NEXT}} line fails as 'No {{$NEXT}} line in Changes'; the refusal check runs against an inline fixture with an entry under {{$NEXT}}. Six CI scenarios run locally with bash -e; removing the refusal turns the step red with the real and with an empty {{$NEXT}}. No Changes entry (CI-only, like k112).
+
+Ready for review (2026-11-21, worktree-agent-a39460cfbed68205d): code + tests by the worker; k106 README + unreagent.example.yaml by the doc-writer. One commit per card (k106 bridge.go/bridge_test.go + docs, k117 ci.yml, k119 helpers.go/helpers_test.go).
+
+Review (unreagent-reviewer, 2026-11-21): READY. Tree: worktree-agent-a39460cfbed68205d on 3ab0142. File: .github/workflows/ci.yml (only that; scripts/ unchanged, inside the worker's lane). Check: same full run as noted on k106 (gofmt -l empty, vet linux + windows, go test -count=1 ./..., go test -race ./cmd/launcher, make linux + windows, go mod verify, all green).
+
+The step was extracted from ci.yml with a YAML parser and run with bash -e in throwaway copies of scripts/ and Changes, for the new and the old (HEAD) step:
+- real Changes: new green, old green
+- real Changes, refusal removed from changes-section.sh: new red ("accepted {{$NEXT}}"), old red
+- empty {{$NEXT}}, refusal kept: new green, old green
+- empty {{$NEXT}}, refusal removed: new red, old GREEN (the gap the card names)
+- no {{$NEXT}} line: new red "No {{$NEXT}} line in Changes", old red with the wrong cause "No version line after {{$NEXT}}"
+- CRLF Changes: green; with the refusal removed: red
+- {{$NEXT}} but no version line: red "No version line after {{$NEXT}} in Changes"
+Both done-when criteria met.
+
+Nit (non-blocking): the fixture check asserts only that the script fails, not why. With two faults (refusal removed and the FILE argument ignored), an empty {{$NEXT}} in the real Changes turns it green. A positive control on the fixture (changes-section.sh 0.0.1 "$fixture" prints "- A released entry.") or a match on the refusal's stderr would close that. The mktemp fixture is not removed (harmless on a runner). The CI pins Go 1.27.x; the local run used Go 1.26.6.
+
+Re-review round 2 (unreagent-reviewer, 2026-11-21): READY, the round-1 nit is closed. File: .github/workflows/ci.yml (lines 55-74). Check: the same full run as noted on k106, all green.
+
+The step was extracted with a YAML parser and run with bash -e in throwaway copies of scripts/ and Changes:
+- real Changes: green; with the refusal removed: red
+- empty {{$NEXT}}: green; with the refusal removed: red
+- no {{$NEXT}} line: red, "No {{$NEXT}} line in Changes"
+- CRLF Changes: green; with the refusal removed: red
+- {{$NEXT}} but no version line: red
+
+The positive control now catches what round 1 could not:
+- refusal removed plus the FILE argument ignored, with an empty {{$NEXT}} (green in round 1): red, "does not print the fixture section, so the {{$NEXT}} check proves nothing"
+- the same two faults with the real Changes: red
+- the FILE argument ignored alone: red
+- bullet indent no longer stripped: red
+- the refusal exits 0: red
+- only the refusal's message changed (it still refuses): green, which is correct
+
+The mktemp fixture is still not removed; that is harmless on a runner.
+
+Committed as eb5eb3e on main (reviewed; Windows behaviour unverified, compile-only)
