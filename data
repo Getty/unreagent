@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-11-21T11:37:59Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T11:38:35Z
+created: 2026-11-21T05:39:11Z
+id: 134
+priority: low
+started: 2026-11-21T07:19:56Z
+status: done
+tags:
+- hermes
+- bug
+title: 'hermes-setup: an anchored null mcp_servers reaches only the checkEdit safety
+  net'
+updated: 2026-11-21T11:38:35Z
+---
+
+Found in the k125 review. A Hermes config with "mcp_servers: &m" (an anchored null) and a later "other: *m" passes every early check: childMapping (cmd/launcher/hermes.go around 438-445) replaces the anchored null with a fresh mapping and drops the anchor; only anchored mappings are refused (around 434). checkEdit then refuses with "the result would not parse: yaml: unknown anchor 'm' referenced", which does not tell the user what to change. Fix: refuse an anchored node of any kind in childMapping with the same kind of message as the anchored-mapping refusal. Note: k125's TestHermesSetupChecksTheEditBeforeWriting uses this input to reach checkEdit; whoever fixes this must give that test another input only checkEdit refuses (or argue that none is left and the safety net is pinned otherwise).
+
+Fix (worker, 2026-11-21): childMapping (cmd/launcher/hermes.go) refuses any value that carries an anchor; before, it refused only an anchored mapping. The message is the one the anchored mapping already had: "mcp_servers carries the anchor &m; adding to it would change its aliases too; refusing to change it". The same function serves unreagent.local.yaml, so an anchored null mcp there now fails with "add the token to <path>: mcp carries the anchor &m; adding to it would change its aliases too (nothing written)". Doc comments of childMapping and mergeHermesServer updated. mappingEntry is untouched.
+
+Tests (hermes_test.go): a new case "anchored null mcp_servers" in TestHermesSetupRefusesUnmergeableServers, and a new TestHermesSetupRefusesAnchoredNullLocalMCP. Both were red before the fix, on checkEdit's "the result would not parse: yaml: unknown anchor 'm' referenced". Both are green after it.
+
+k125 obligation: TestHermesSetupChecksTheEditBeforeWriting now uses "system_prompt: >" with an indented list (a folded block scalar with more-indented lines), outside the entry. The node edit leaves it alone, but the vendored yaml.v3 v3.0.1 encoder writes it back with an extra blank line before the indented lines. Only checkEdit refuses it: "the result would change more than mcp_servers.unreagent". I chose an encoder round-trip bug over the other gaps I found, which sit in hermes.go itself (listed below) and are cards someone may close. The test comment says it rests on the encoder: a yaml.v3 upgrade, or a workaround, needs a new input there.
+
+Mutations, on the final tree: dropping the checkEdit call in hermesSetup turns only TestHermesSetupChecksTheEditBeforeWriting red; hermes-setup then writes the changed prompt. Reverting the fix (anchor check on mappings only) turns only the two new tests red. The k125 test stays green, so it no longer depends on k134.
+
+Check green: gofmt -l cmd internal skills is empty; go vet ./... and GOOS=windows go vet ./... pass; go test -count=1 ./... passes; go test -race -count=1 ./cmd/launcher passes; make linux and make windows build. Tests ran on Linux only. The change is platform-neutral YAML logic, and Windows was only cross-compiled, not run.
+
+Drift for the dispatcher to file, all on this board:
+(1) localConfigWithToken's own checkEdit call is not pinned. Dropping it leaves the suite green, at HEAD too (mutation-run). Lane: test-writer.
+(2) hermes-setup refuses a Hermes config that holds, anywhere, a folded block scalar with a more-indented line, or a literal block scalar whose text starts with a blank line ("|" followed by an empty line). yaml.v3 v3.0.1 does not write either back as read. checkEdit catches it, but its message does not name the key or the cause. This is a user-visible limitation. Fixing it means TestHermesSetupChecksTheEditBeforeWriting needs another input.
+(3) plainMergeKeys clears the !!merge tag of a quoted merge key (!!merge "<<"), so it is written back as a string key "<<". Only checkEdit catches it ("would change more than"). Contrived; low.
+(4) An entry key spelled with a non-str tag (e.g. "!!binary dXJs" for url) is missed by mappingEntry. A second url is added, and the old one wins on decode. Only checkEdit catches it ("would not hold the new"). Contrived; low.
+
+childMapping refuses any anchored value; k125 test moved to an encoder round-trip input; mutations verified; check green (Linux tests, Windows cross-compile only). Not committed. Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go.
+
+Review (unreagent-reviewer, 2026-11-21): READY. Files: cmd/launcher/hermes.go, cmd/launcher/hermes_test.go (owner unreagent-worker per OWNERS). Check run by the reviewer, in the worktree (base c0a5178) and on a scratch copy of main 90c07ae with the diff applied: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... pass; go test -count=1 ./... and go test -race -count=1 ./... pass; make linux and make windows build. Windows: cross-compiled only, not run (platform-neutral YAML logic). The diff applies to 90c07ae cleanly (git apply, offsets -13, no fuzz). Mutations confirmed in clean copies: dropping checkEdit in hermesSetup turns only TestHermesSetupChecksTheEditBeforeWriting red (it then writes the prompt with the extra blank line); reverting the fix turns only TestHermesSetupRefusesAnchoredNullLocalMCP and the 'anchored null mcp_servers' case of TestHermesSetupRefusesUnmergeableServers red. Findings, none blocking: (1) hermes.go:435 (422 on main) also refuses an anchored null that no alias uses ('mcp_servers: &m' alone, or 'mcp: &m' in unreagent.local.yaml); hermes-setup accepted and wrote both before (probed on both trees). This matches the anchored-mapping rule, which does not look for aliases either, and README's list ('carries an anchor (&name)'), so it is fine, but the commit text should not claim that only alias-using configs change. Never released: childMapping is not in v0.0.9. (2) hermes.go:436: for an unused anchor 'would change its aliases too' is not quite true, and the message gives no next step; checkHermesEntry's 'which other parts of the config may use' (hermes.go:661) fits better. Wording only, and the card asked for the anchored-mapping message. (3) hermes_test.go:1527-1550 now rests on the yaml.v3 v3.0.1 folded-scalar quirk; k145 (1) records that fixing it needs a new input. Landing: k134 and k57 conflict in one hunk (mergeHermesServer doc comment vs its signature; keep both changes); k124 is disjoint from both. Drift (1) is k144; (2)-(4) are k145.
+
+Committed 7e0c39e on main (ff). Check green on the commit: gofmt, vet, GOOS=windows vet, test, test -race, make linux/windows, go mod verify. Windows cross-compiled only, unverified. Changes: existing hermes-setup bullet widened, no new entry.
