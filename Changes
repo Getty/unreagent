@@ -137,6 +137,12 @@ Revision history for unreagent
     mesh slots or level actors with material) and ue-niagara (inspect Niagara
     systems and their emitters, set user parameter defaults, and spawn a
     system as an editor preview with niagara).
+  - New shipped skills ue-audio (inspect and list sound assets, create Sound
+    Cues and attenuation assets, and add or edit audio components and ambient
+    sounds with audio, including the undeclared target_path that
+    set_audio_properties requires) and ue-metasounds (build and edit MetaSound
+    Source graphs, set input defaults, add graph inputs and outputs, and
+    preview them with metasound; needs UE 5.7 or a later 5.x).
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
