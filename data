@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-11-21T01:10:55Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T01:11:07Z
+created: 2026-11-21T00:27:41Z
+depends_on:
+- 93
+id: 95
+priority: medium
+started: 2026-11-21T00:37:32Z
+status: done
+tags:
+- docs
+- skills
+- drift
+title: Update main.go references after the k93 split
+updated: 2026-11-21T01:11:07Z
+---
+
+After k93 split cmd/launcher/main.go into tools.go, filetools.go, scripts.go, bridge.go, lifecycle.go, mcpconfig.go, helpers.go and hermes.go, several texts still point at main.go:
+- README.md (approve handler note, "only that one handler in cmd/launcher/main.go"): now tools.go. Lane: unreagent-doc-writer.
+- .claude/skills/unreagent-core (layout table, "main.go is ~1650 lines"), unreagent-mcp-tools (registerFileTools location, arg helpers "in main.go"), unreagent-config (use site), unreagent-windows (killCrashReporter location). Lane: unreagent-skill-author.
+- .claude/agents/unreagent-worker.md and .claude/rules/unreagent-rules.md: the "main.go ~1650 lines / cards that edit it run serially" hazard now applies per file, and run() in main.go is still the shared hotspot. Lane: main agent.
+Done when grep -rn "main.go" over these files finds only references that are still true.
+
+All three lanes done, main working tree, uncommitted, based on c013f77. README (doc-writer): the approve-handler note now says tools.go, no other stale main.go reference in README. Skills (skill-author): unreagent-core, -mcp-tools, -config, -windows point at the split files, each location grep-checked; remaining main.go mentions are true; the k42 'all string values' sentence left alone; the skills are repo-owned, not skilletor-managed. Agents/rules (main agent): unreagent-worker.md wiring-layer bullet and unreagent-rules.md hazard now describe the split, run() as the hotspot, and separate worktrees for parallel Go workers.
+
+2026-11-21 01:07 Review (unreagent-reviewer): APPROVE. Grepped every main.go mention and every named function in README.md, .claude/skills/unreagent-core, -mcp-tools, -config, -windows, .claude/agents/unreagent-worker.md and .claude/rules/unreagent-rules.md, then checked each against grep -n '^func ' cmd/launcher/*.go at c013f77 and again at f7581b3 (k39/k53, k94 and k32 landed during review; none moves a referenced function, and the removed perm() is not referenced). All true: core:36-44 file table and :53-57 helper locations; mcp-tools:6-7, :20-21, :61; config:68 and :91-92 (persistGeneratedToken and writeYAMLAtomic, still temp+rename, in hermes.go); windows:97-98 (killCrashReporter in lifecycle.go); README:498 (approve handler at tools.go:144-169); worker.md:36-41; rules:58-63. The tool descriptions in tools.go and filetools.go contain no German, so mcp-tools:51-52 holds. The 'all string values' sentence (config:63) was left alone as agreed. No German in the diff. Owners match OWNERS. Check at f7581b3: gofmt -l . empty, go vet ok, go test -count=1 ./... ok, make windows ok.
+Also found, outside this card: unreagent-core 'Testing reality' says 'Only two test files exist'; 13 exist now. docs/superpowers/specs/2026-08-21-skill-subsystem-design.md:12,163,290 still cite main.go (a dated design record; :290 also says the tool descriptions are German). The rules edit (58-63) adds a policy, separate worktrees for parallel Go workers, beyond the reference update. It is in the main lane, so this is noted for the maintainer's awareness only.
+
+Committed as c213feb
