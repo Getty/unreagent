@@ -1,0 +1,83 @@
+---
+class: standard
+completed: 2026-11-21T14:42:57Z
+created: 2026-08-24T23:26:11Z
+id: 59
+priority: low
+started: 2026-11-21T01:41:52Z
+status: done
+tags:
+- config
+- security
+title: 'Permission matcher follow-ups: redirections, tool-native escapes, Windows
+  path case, README guard-rail note'
+updated: 2026-11-21T14:42:57Z
+---
+
+Follow-up to #40, left open deliberately by the worker. 1) Redirection is not a segment break, so under allowlist + Bash(git *) a git log > /etc/cron.d/x is allowed; splitting on > would deny ordinary git log > out.txt -- policy call. 2) Tool-native escapes such as git -c core.pager=/bin/sh log cannot be seen by any command-line matcher; document or accept. 3) globEqual compares paths case-sensitively, so Write(C:\Proj\*) does not match c:\proj\... on Windows -- pre-existing. 4) README should state that a prefix-glob deny list under allow_all is a guard rail, not a security boundary, and that allowlist mode is the only mode that fails closed by construction (the matchCommand doc comment says this; the README does not). Also: variable indirection, data piped into an interpreter and python -c remain unmatchable by design.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): PARTLY FIXED: item 4 (README guard-rail note) done. Items 1-3 remain: redirection is not a segment break; tool-native escapes (git -c) undocumented; globEqual is case-sensitive (matters on Windows). Items 1 and 3 are policy calls. internal/config/permission.go + README. Size S.
+
+
+**Note 2026-11-21** (k42 re-review): the matcher treats //server/share and a drive-rooted \\server\\share as the same path (pre-existing). See also the new card on relative rules cleaning to *.
+
+Worker done (same worktree as k104). Item 1 (main agent's call, commented as such): an unquoted file-writing redirection (>, >>, >|, 2>, &>, &>>, >&file, <>, PowerShell *>) is only covered by a rule whose text before the trailing * contains it; fd duplication/closing, input redirections, here-docs not counted; worker's addition: the null device (/dev/null, NUL, $null) does not count either, else 'git log 2>/dev/null' could never be allowed. Item 3: pure helper pathMatches(pattern, value, windows), case fold on Windows, fold to UPPER case (lower made C:\Gİt equal C:\Git). UNC note was a deny bypass (\\server\share\..\secret climbed above the share): fixed for Windows semantics. Item 2 is docs only (list in the worker report, filed as a doc card). All Windows behaviour unverified at runtime.
+
+**Review 2026-11-21** (unreagent-reviewer, same worktree as k104, internal/config/permission.go + permission_test.go): CHANGES REQUESTED. The worker's null-device exemption opens a bypass of the new redirection guard, demonstrated below. Checks: same green run as on k104. Policy, operators and fd handling are otherwise sound. Probes that fail closed: >, >>, 2>, &>, &>>, >&file, >&$fd, 2>&1-, {fd}>, <>, *>, x>/f, x>>f, quoted or escaped > (allowed as literal), $(..)/backtick/${..} bodies, line continuations, >(..), leading redirection, /dev/null/../../etc/passwd, /dev/nullx, NUL.txt, nul:.
+
+Blocking (new code):
+1. permission.go:728-729 isNullDevice: $null (and $NULL, via EqualFold) is a shell variable in bash. With allow [Bash(printf *)], the command `printf -v null %s /etc/passwd; printf pwned > $null` is ALLOWED, and bash writes the file (verified in a scratch dir).
+2. Same function: NUL/nul is a regular file under bash. With allow [Bash(cd *), Bash(echo *)], the command `cd /etc/cron.d && echo '* * * * * root id' > NUL` is ALLOWED, and bash creates a file named NUL (verified). Git Bash on Windows is the same as far as I know; unverified. The test at permission_test.go:701, "cmd null device" for tool Bash, pins this wrong claim. Fix: for Bash count only /dev/null; allow $null (and possibly NUL) only for the PowerShell tool, or drop them.
+
+Pre-existing, demonstrated on HEAD 2e72af4 too. Not caused by this card, but it defeats the k59 guard. Needs its own high/security card:
+3. $'...' ANSI-C quoting desyncs every tokenizer (splitSegments, outputRedirections, redirection, shellTokens, readDelimited). With allow [Bash(echo *)]: `echo $'\'' > /etc/passwd` is ALLOWED, and `echo $'\'' ; touch /tmp/pwned` is ALLOWED. That second one is a full allowlist bypass; bash runs both commands, verified.
+4. Windows, PowerShell tool (the default with claudeIntegration). The tokenizers treat \ as an escape, which PowerShell does not. With allow [PowerShell(echo *)]: `echo x \> C:\Windows\x` and `echo x \; Remove-Item -Recurse C:\x` are ALLOWED (HEAD allows the second as well). Separately, with [PowerShell(*)], "echo `'x > C:\Windows\x" is ALLOWED. Unverified at runtime (no pwsh here).
+
+Nits:
+5. The branches for >| (permission.go:685) and <> (:663/:683) are not pinned: removing either leaves the tests green. "clobber" (permission_test.go:675) passes only because isSegmentBreak splits >| at the |, so `echo x >| f` becomes the segments "echo x >" and "f". As a result Bash(echo x >| *) can never grant. <> is reported at the '<', so Bash(sort <*) covers `sort <>/etc/passwd`, which opens the file read-write and creates it (verified).
+6. Case fold (permission.go:338-346): the claim holds. strings.ToLower('İ') is 'i', while ToUpper keeps İ, the Kelvin sign, ß/ẞ and the ﬀ ligature distinct from their ASCII look-alikes. The upper fold does merge ſ into S and ı into I, so Write(C:\Proj\Source\*) grants C:\Proj\ſource\x. If the volume's $UpCase does not fold them (unverified), that is a sibling directory, not an escape from the parent. Low.
+7. UNC (permission.go:355-388): \\server, \\server\, //server/share and mixed separators are parsed correctly; \\?\ and \\.\ parse with the drive as the share, so .. stops there. New: on Windows \\\server\share\x is treated as the rooted path /server/share/x, so deny \\server\share\* no longer matches it (HEAD matched). Whether Win32 resolves it to \\server\share is unverified. Add to k109.
+8. The two changed "no drive letter" cases (permission_test.go:565/570) assert exactly the same as before on Linux (allow true for deny, false for allow). The claim is kept for Linux and replaced for Windows by design. TestPathMatchesPerOS pins both directions.
+
+Mutation spot-checks: these turn the tests red: removing namesRedirections, isNullDevice, dup handling, the double-quote skip, the UNC root, or the Windows fold, and folding to lower case. These survive: >|, <>, and the Windows prefix=="//" root.
+
+Unverified at runtime (Windows-only): windowsPaths=true case folding and UNC roots (tested only through the pure helper), the PowerShell findings, Git Bash `> nul`, and NTFS $UpCase versus Go's ToUpper.
+
+**Back to the worker (2026-11-21), review requested changes:** the null-device exemption counts $null and NUL for Bash — in bash $null is a settable variable and NUL an ordinary file name, so 'printf -v null %s /etc/passwd; printf pwned > $null' and 'cd /etc/cron.d && echo … > NUL' pass the new guard (reproduced in bash). Fix: Bash counts only /dev/null; $null/NUL only for the PowerShell tool. Also: >| is split at the | (so Bash(echo x >| *) can never grant), <> is recorded at the < (Bash(sort <*) covers sort <>/etc/passwd, which opens read-write); no tests for >| and <>; on Windows \\\server\share\x now becomes a rooted path so a deny on \\server\share\* no longer matches (HEAD matched) — a deny must not regress.
+
+Review fixes done (2026-11-21): redirections count unless an allow rule names them; >| is one operator, <> recorded at its >; null device per tool (Bash: /dev/null only, NUL/$null are files; PowerShell: bare $null only) — the old 'cmd null device' test claim was wrong and is replaced; three+ leading separators on Windows have two readings (deny matches either, allow needs both → grants neither). Windows runtime behaviour unverified. 27 revert pins all red.
+
+**Re-review 2026-11-21** (unreagent-reviewer, same worktree as k104 and k113; files internal/config/permission.go and permission_test.go): APPROVED for k59's own scope. COMMIT GATED ON k113.
+
+k59's own fixes are verified and pinned. The new redirection guard is still beaten through k113's two tokenizer regressions. With allow [Bash(echo *)], both of these are ALLOWED, and bash writes the file:
+- `echo $$'\' > /etc/passwd ; echo ''`
+- `echo "${x:-{}" > /etc/passwd ; echo "}"`
+
+The fix belongs on k113. Commit k59 together with it once k113 is green.
+
+Check: the same green run as on k113 (gofmt -l, vet for both GOOS, go test -count=1 ./..., -race on internal/config, make windows).
+
+Round-1 findings, re-checked:
+1. $null under Bash: fixed. Bash counts only /dev/null. Pinned for $null and $NULL.
+2. NUL under Bash: fixed. Pinned for NUL and nul.
+   - The test claim changed from "cmd null device" (true) to "NUL is a file name in bash" (false).
+   - The new claim is correct: bash writes a file named NUL. The old claim was wrong.
+3. $'…': moved to k113, see there.
+4. PowerShell parsing: stays with k114 by design. Counting 2>NUL and 2>/dev/null as writes under PowerShell fails closed. Fine.
+5. >| is now one operator. The | stays unsplit after a lone >, but not after >>, &>, <> or \>.
+   - <> is recorded at its >. Bash(sort <*) no longer covers sort <>f, and Bash(cat <>*) does.
+   - All three behaviours are pinned.
+6. ſ/ı under the upper-case fold: unchanged. Low, accepted.
+7. \\\server\share: on Windows, three or more leading separators now have two readings. A deny rule matches either reading. An allow rule needs both readings to match, so it grants neither. Pinned both ways.
+8. Informational only, unchanged.
+
+Revert pins, all red: the per-tool null-device split, $null case, the clobber check and its context, the >| operator, the second /// reading, all-readings-for-allow.
+
+Unverified at runtime (Windows-only):
+- windowsPaths=true folding and the readings (tested only through the pure helper)
+- Git Bash `> NUL` and `> $null`
+- PowerShell `$null` and `2>NUL`
+- NTFS $UpCase
+
+Committed in 602304e on main (checks green: gofmt, vet both GOOS, test, race, make linux/windows; Windows compiled only).
