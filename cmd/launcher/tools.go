@@ -45,14 +45,14 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_restart",
-		Description: "Restarts the Unreal Editor (stop + start). Use this after a C++ build so the editor loads the new modules, or when the editor hangs.",
+		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command).",
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.RestartService),
 	})
 
 	srv.AddTool(mcp.Tool{
 		Name:        "logs",
-		Description: "Returns the last output lines (stdout+stderr) of a supervised process. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. run_command output is never in here; it comes back only in the run_command result. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured.",
+		Description: "Returns the last output lines (stdout+stderr) of a supervised process. service='ue' holds the editor's own output: startup, errors, the last lines before a crash. service='agent' exists only when the launcher runs its own agent, and stays empty while that agent runs interactively in the console (the default); only a headless agent's output is captured.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -155,7 +155,8 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 				"additionalProperties": true,
 			},
 			Handler: func(args map[string]interface{}) mcp.ToolResult {
-				toolName := firstString(args, "tool_name", "toolName", "name", "tool")
+				nameKeys := []string{"tool_name", "toolName", "name", "tool"}
+				toolName := firstString(args, nameKeys...)
 				toolInput := firstMap(args, "tool_input", "input", "arguments", "parameters")
 				// A request we cannot attribute to a tool and its input fails
 				// closed: Decide("", {}) would let allow_all (or any deny list
@@ -163,7 +164,13 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 				var dec config.Decision
 				switch {
 				case toolName == "":
-					dec.Message = fmt.Sprintf("unreadable permission request: no tool name (looked for tool_name, toolName, name, tool; got keys %q)", slices.Sorted(maps.Keys(args)))
+					dec.Message = fmt.Sprintf("unreadable permission request: no tool name (looked for %s; got keys %q)", strings.Join(nameKeys, ", "), slices.Sorted(maps.Keys(args)))
+					for _, k := range nameKeys {
+						if _, isString := args[k].(string); args[k] != nil && !isString {
+							dec.Message = fmt.Sprintf("unreadable permission request: tool name is not a string (%s is %T)", k, args[k])
+							break
+						}
+					}
 				case toolInput == nil:
 					dec.Message = fmt.Sprintf("unreadable permission request: no tool input object (looked for tool_input, input, arguments, parameters; got keys %q)", slices.Sorted(maps.Keys(args)))
 				default:
@@ -176,7 +183,11 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 					payload = map[string]interface{}{"behavior": "deny", "message": dec.Message}
 				}
 				b, _ := json.Marshal(payload)
-				logger(fmt.Sprintf("[approve] %s → %s (%s)", toolName, allowWord(dec.Allow), dec.Message))
+				logName := toolName
+				if logName == "" {
+					logName = "<unknown>"
+				}
+				logger(fmt.Sprintf("[approve] %s → %s (%s)", logName, allowWord(dec.Allow), dec.Message))
 				return mcp.ToolResult{Text: string(b)}
 			},
 		})

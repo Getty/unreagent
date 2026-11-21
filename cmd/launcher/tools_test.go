@@ -7,9 +7,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/mcp"
@@ -23,9 +27,16 @@ func newToolsServer(t *testing.T, perms config.Permissions) *mcp.Server {
 	t.Helper()
 	sup := supervisor.New(nil)
 	sup.AddService(supervisor.ServiceSpec{Name: "ue", Command: "unused"})
+	return toolsServerOn(t, sup, perms, func(string) {})
+}
+
+// toolsServerOn registers the real tool set on a fresh server backed by sup,
+// with logger as the launcher log sink registerTools writes to.
+func toolsServerOn(t *testing.T, sup *supervisor.Supervisor, perms config.Permissions, logger func(string)) *mcp.Server {
+	t.Helper()
 	cfg := &config.Config{Permissions: perms}
 	srv := mcp.NewServer("tools-test", "0", nil)
-	registerTools(srv, sup, cfg, t.TempDir(), func(string) {})
+	registerTools(srv, sup, cfg, t.TempDir(), logger)
 	return srv
 }
 
@@ -56,13 +67,16 @@ func TestApproveFailsClosedOnUnreadablePayload(t *testing.T) {
 	srv := newToolsServer(t, config.Permissions{Enabled: true, Mode: config.ModeAllowAll})
 
 	cases := []struct {
-		name    string
-		args    map[string]interface{}
-		missing string // what the deny message must name
+		name string
+		args map[string]interface{}
+		want string // what the deny message must say
 	}{
-		{"empty payload", map[string]interface{}{}, "tool name"},
-		{"input without tool name", map[string]interface{}{"input": map[string]interface{}{"command": "rm -rf /"}}, "tool name"},
-		{"tool name not a string", map[string]interface{}{"tool_name": 42, "input": map[string]interface{}{"command": "ls"}}, "tool name"},
+		{"empty payload", map[string]interface{}{}, "no tool name"},
+		{"input without tool name", map[string]interface{}{"input": map[string]interface{}{"command": "rm -rf /"}}, "no tool name"},
+		{"tool name null", map[string]interface{}{"tool_name": nil, "input": map[string]interface{}{"command": "ls"}}, "no tool name"},
+		// Present but not a string: "no tool name" would send whoever reads
+		// the message looking for a key that is right there.
+		{"tool name not a string", map[string]interface{}{"tool_name": 42, "input": map[string]interface{}{"command": "ls"}}, "tool name is not a string"},
 		{"tool name without input", map[string]interface{}{"tool_name": "Bash"}, "tool input"},
 		{"input not an object", map[string]interface{}{"tool_name": "Bash", "input": "rm -rf /"}, "tool input"},
 	}
@@ -72,8 +86,8 @@ func TestApproveFailsClosedOnUnreadablePayload(t *testing.T) {
 			if reply.Behavior != "deny" {
 				t.Fatalf("behavior = %q (updatedInput %v), want \"deny\" for an unreadable request", reply.Behavior, reply.UpdatedInput)
 			}
-			if !strings.Contains(reply.Message, tc.missing) {
-				t.Errorf("deny message = %q, want it to name the missing %s", reply.Message, tc.missing)
+			if !strings.Contains(reply.Message, tc.want) {
+				t.Errorf("deny message = %q, want it to say %q", reply.Message, tc.want)
 			}
 			if reply.UpdatedInput != nil {
 				t.Errorf("a deny must not carry updatedInput, got %v", reply.UpdatedInput)
@@ -102,6 +116,42 @@ func TestApproveAllowsWellFormedPayload(t *testing.T) {
 		want := firstMap(args, "input", "arguments")
 		if len(reply.UpdatedInput) != len(want) || (len(want) > 0 && reply.UpdatedInput["command"] != want["command"]) {
 			t.Errorf("%v: updatedInput = %v, want the input unchanged (%v)", args, reply.UpdatedInput, want)
+		}
+	}
+}
+
+// TestApproveLogNamesTheTool checks the launcher log line approve writes per
+// decision. A request without a tool name used to log "[approve]  → deny",
+// with a blank where the tool belongs; it must show a placeholder instead,
+// while a readable request still logs the tool's real name.
+func TestApproveLogNamesTheTool(t *testing.T) {
+	var logged []string
+	sup := supervisor.New(nil)
+	srv := toolsServerOn(t, sup, config.Permissions{Enabled: true, Mode: config.ModeAllowAll}, func(line string) { logged = append(logged, line) })
+
+	for _, tc := range []struct {
+		args map[string]interface{}
+		tool string // "" = any non-blank placeholder
+	}{
+		{map[string]interface{}{"input": map[string]interface{}{"command": "ls"}}, ""},
+		{map[string]interface{}{"tool_name": 42, "input": map[string]interface{}{"command": "ls"}}, ""},
+		{map[string]interface{}{"tool_name": "Bash", "input": map[string]interface{}{"command": "ls"}}, "Bash"},
+	} {
+		logged = nil
+		callApprove(t, srv, tc.args)
+		if len(logged) != 1 {
+			t.Fatalf("%v: logged %q, want exactly one [approve] line", tc.args, logged)
+		}
+		head, _, ok := strings.Cut(logged[0], " → ")
+		if !ok || !strings.HasPrefix(head, "[approve] ") {
+			t.Fatalf("%v: log line %q is not \"[approve] <tool> → <decision> (...)\"", tc.args, logged[0])
+		}
+		got := strings.TrimPrefix(head, "[approve] ")
+		switch {
+		case strings.TrimSpace(got) == "":
+			t.Errorf("%v: log line %q leaves the tool name blank, want a placeholder", tc.args, logged[0])
+		case tc.tool != "" && got != tc.tool:
+			t.Errorf("%v: log line %q names tool %q, want %q", tc.args, logged[0], got, tc.tool)
 		}
 	}
 }
@@ -143,10 +193,50 @@ func TestLogsRejectsNonNumericLines(t *testing.T) {
 		{"service": "ue"},
 		{"service": "ue", "lines": nil},
 		{"service": "ue", "lines": ""},
-		{"service": "ue", "lines": "3"},
 	} {
 		if res := callTool(t, srv, "logs", args); res.IsError {
 			t.Errorf("logs %v: unexpected error %q", args, res.Text)
+		}
+	}
+}
+
+// TestLogsLinesLimitsOutput fills the ue log buffer through the supervisor's
+// own path — a real service that prints six lines and exits — and checks that
+// lines limits what logs returns, given as a numeric string as well as a number.
+// Against an empty buffer every count returns nothing, so only a filled one
+// can tell "3" from the default 50.
+func TestLogsLinesLimitsOutput(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH — skipping")
+	}
+	exited := make(chan struct{})
+	sup := supervisor.New(nil)
+	sup.AddService(supervisor.ServiceSpec{
+		Name:      "ue",
+		Command:   "sh",
+		Args:      []string{"-c", `printf 'line-%s\n' 1 2 3 4 5 6`},
+		Autostart: true,
+		Restart:   "never",
+		// OnExit fires only after the exit path has drained the output into
+		// the log buffer, so the buffer is complete once it has fired.
+		OnExit: func(bool) { close(exited) },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg)
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the ue service did not exit")
+	}
+
+	srv := toolsServerOn(t, sup, config.Permissions{}, func(string) {})
+	const want = "line-4\nline-5\nline-6"
+	for _, lines := range []interface{}{"3", " 3 ", 3} {
+		res := callTool(t, srv, "logs", map[string]interface{}{"service": "ue", "lines": lines})
+		if res.IsError || res.Text != want {
+			t.Errorf("logs lines=%#v = %q (IsError %v), want the last three lines %q", lines, res.Text, res.IsError, want)
 		}
 	}
 }
