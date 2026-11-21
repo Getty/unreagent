@@ -69,7 +69,7 @@ Unreagent repo
         ▼                    ▼
   MCP tool `skills`     materialization
   (default)             <Project>/.claude/skills/unreagent-<name>/
-                        (skills.mcp: false)
+                        (skills.materialize: true)
 ```
 
 ### 3.1 Why the MCP tool needs the list in its description
@@ -91,8 +91,15 @@ information is then resident in context, and one `load` call suffices. This
 reduces the practical difference between the two delivery paths to a single
 round trip, which is why MCP can be the default.
 
-Two capabilities remain exclusive to materialized skills, neither decisive:
-invocation as `/skill-name`, and skills that carry auxiliary files.
+One capability remains exclusive to materialized skills, and it is not
+decisive: invocation as `/skill-name`.
+
+Auxiliary files (a script, an image) are not part of the format today. The
+embed pattern is `*/*.md` (§4.1), so such a file, a nested directory, or a
+`skills/README.md` does not ship, and `TestEmbedMissesNoSourceFile` fails on
+purpose rather than let it vanish quietly; `Load` itself never sees the file.
+This is the current decision and can be revisited together with
+materialization (k12).
 
 ## 4. Skill format
 
@@ -114,12 +121,53 @@ unreal_classes: [MaterialEditingLibrary]
 - `name`, `description` — required. `description` must state *when* to use the
   skill, since it is the whole basis for selection.
 - `toolkit_tools` — which of the plugin's 43 MCP tools the skill covers.
-  Replaces VibeUE's `vibeue_classes`. Lint-checked against the registry (§8).
+  Replaces VibeUE's `vibeue_classes`. To be lint-checked against the registry
+  (§8, planned: k18).
 - `unreal_classes` — relevant `unreal.*` Python classes, for skills that work
   through `execute_script`.
 
 Sub-documents (`<skill>/<section>.md`) are permitted for long material,
-following VibeUE's layout.
+following VibeUE's layout. By convention they are plain Markdown without
+frontmatter; the loader does not check that. The section name is the file name
+without `.md`.
+
+### 4.1 Parser rules
+
+`internal/skills` enforces the following; each violation is an error that
+names what is wrong: the skill directory where there is one, the file where
+there is one (a stray top-level file has no skill, a bad skill name no file).
+
+- The frontmatter `name` equals the skill's directory name, so names stay
+  unique and the source of a skill is obvious.
+- The key set is closed: `name`, `description`, `toolkit_tools` and
+  `unreal_classes`. An unknown key is rejected, so a misspelt `toolkit_tools`
+  cannot slip past the registry lint planned in §8 (k18). `name` and
+  `description` are required; the description is collapsed to one line.
+- The frontmatter is exactly one YAML document. A bare `---` line always
+  closes the frontmatter and the body follows. It is an error when a `...`
+  line is followed by content, or when a line starts with `---` plus a space
+  and has content on the same line (for example `--- {bogus: 1}`).
+- The body, the Markdown after the frontmatter, must not be empty.
+- Only `<name>/SKILL.md` and `<name>/<section>.md` are loaded. The embed
+  pattern is `*/*.md`, so a non-`.md` file or a nested directory inside a
+  skill, or any file directly under `skills/` (a `skills/README.md`), is left
+  out of the binary and `Load` never sees it; `TestEmbedMissesNoSourceFile`
+  fails instead. Fed such a layout directly (`load(fs.FS)`), the loader
+  rejects it as well. Every other `.md` next to `SKILL.md` ships as a
+  section: a `README.md` there becomes section `README`.
+- A skill or section name starting with `.` or `_` is rejected. The explicit
+  embed pattern matches such names, which Go would leave out of a
+  whole-directory embed as hidden or draft files, so the loader refuses them
+  instead of shipping a draft.
+- An empty section name and an empty sub-document are rejected.
+- A byte-order mark, or trailing whitespace on a `---` line, is an error that
+  names the problem. It is deliberately not tolerated: once materialized, other
+  parsers read the same file, so what ships must be the plain form.
+- CRLF line endings are tolerated; `.gitattributes` forces LF for `*.md`
+  anyway.
+- A malformed skill stops `Load`. It is never skipped, because a skill that
+  silently vanished would leave the agent without the knowledge it was meant
+  to have.
 
 Skills adapted from VibeUE carry an MIT attribution line; the repo gets a
 collected `NOTICE` entry.
@@ -148,16 +196,33 @@ time rather than silently shipping nothing.
 
 ### 6.1 `internal/skills` — the embedded collection
 
-Owns the embedded FS and is the only component that parses skill files.
+The collection is split over two packages, because a `go:embed` pattern
+cannot reach outside its package directory and the documents live in `skills/`
+at the repository root:
 
-- `Load() ([]Skill, error)` — parse all embedded skills once at startup;
-  returns an error if any frontmatter is malformed, so a broken skill fails
-  loudly at build/test time instead of silently vanishing.
-- `Skill{Name, Description, ToolkitTools, UnrealClasses, Body, Files}`.
-- `DescribeAll([]Skill) string` — renders the name/description table used as
-  the MCP tool description.
+- `skills` (`skills/embed.go`) holds only the `//go:embed */*.md` directive and
+  the resulting `FS`. The pattern matches Markdown files exactly one directory
+  deep, so the Go file, top-level files and nested directories stay out of the
+  binary.
+- `internal/skills` is its only importer and the only component that parses
+  skill files (§4.1).
 
-Depends on nothing but `embed` and the YAML parser. Testable without a
+Its API:
+
+- `Load() ([]Skill, error)` — parse all embedded skills (to be called once at
+  startup, once the launcher wires it in for the `skills` tool, k11, and for
+  materialization, k12), in directory-name order; returns an error if any
+  skill breaks a rule in §4.1, so a broken skill fails loudly in
+  `go test ./internal/skills` (and, once wired in, at startup) instead of
+  silently vanishing. `load(fs.FS)` is the same over any filesystem, which is
+  how the tests feed it malformed skills.
+- `Skill{Name, Description, ToolkitTools, UnrealClasses, Body, Files}` —
+  `Files` maps section name to sub-document and is nil when there are none.
+- `DescribeAll([]Skill) string` — renders the selection list that becomes the
+  MCP tool description once the `skills` tool exists (k11): one line per
+  skill, `- <name>: <description>`, in the order given.
+
+Depends on nothing but the embedded FS and the YAML parser. Testable without a
 launcher, an editor, or a network.
 
 ### 6.2 The `skills` MCP tool
@@ -256,22 +321,31 @@ suggests once an editor is available.
 
 ## 8. Testing
 
-Go tests in the style of `internal/supervisor/supervisor_test.go`:
+Go tests in the style of `internal/supervisor/supervisor_test.go`.
+
+Written, in `internal/skills/skills_test.go`:
 
 - every embedded skill parses; `name` and `description` present and non-empty
-- `DescribeAll` output contains every skill name
+- `DescribeAll` output contains every skill name and has the `- <name>:
+  <description>` format
+- the embed holds only `<skill>/<doc>.md` and misses no source file under
+  `skills/`; `Load` rejects each malformed case in §4.1
+
+Planned, with the card that brings each:
+
 - the `skills` tool returns a known skill, errors informatively on an unknown
-  one, and resolves sub-documents
+  one, and resolves sub-documents (k16, with the tool, k11)
 - materialization creates prefixed directories, replaces its own on rerun,
   removes prefixed directories no longer in the set, and leaves unprefixed
-  sibling directories untouched
+  sibling directories untouched (k17, with materialization, k12)
 - config: defaults, `--no-skills-mcp` override, and the both-paths-off error
+  (k10, k15)
 
-**Skill content lint** (a test, not a separate binary): every tool named in
-`toolkit_tools` must exist in the plugin's `MCPToolRegistry.cpp`. This catches
-drift when the toolkit submodule is updated. It requires the toolkit checkout
-to be present and skips cleanly when it is not, so CI without the submodule
-stays green.
+**Skill content lint** (planned, k18; a test, not a separate binary): every
+tool named in `toolkit_tools` must exist in the plugin's `MCPToolRegistry.cpp`.
+This catches drift when the toolkit submodule is updated. It requires the
+toolkit checkout to be present and skips cleanly when it is not, so CI without
+the submodule stays green.
 
 ## 9. Risks
 

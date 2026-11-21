@@ -2,10 +2,11 @@
 name: unreagent-skill-authoring
 description: >
   How to author the UE domain skills that unreagent embeds and ships to agents —
-  the SKILL.md format, the two delivery paths (MCP tool and materialization),
-  which sources are authoritative, the toolkit-registry lint, and the licensing
-  rule for text adapted from VibeUE. Use when writing or reviewing anything
-  under skills/ in this repository.
+  the SKILL.md format and the loader rules it must pass, the two delivery paths
+  (MCP tool and materialization), which sources are authoritative, the
+  toolkit-registry lint, and the licensing rule for text adapted from VibeUE.
+  Use when writing or reviewing anything under skills/ in this repository, or
+  when go test ./internal/skills fails.
 ---
 
 # unreagent — authoring shipped skills
@@ -20,20 +21,32 @@ ships UE domain knowledge with the binary so it is present without setup.
 
 ## Delivery — one source, two paths
 
-`skills/<name>/SKILL.md` is `go:embed`-ed into the `.exe` and reaches the agent
-either through the `skills` MCP tool (default) or by being materialized to
-`<Project>/.claude/skills/unreagent-<name>/` when `skills.mcp: false`.
+`skills/<name>/SKILL.md` is `go:embed`-ed by `skills/embed.go` (pattern
+`*/*.md`) and parsed by `internal/skills` (`Load`). It is to reach the agent
+through the `skills` MCP tool (default), by being materialized to
+`<Project>/.claude/skills/unreagent-<name>/`, or both. The switches belong to
+a `skills:` config section that is planned (k10) and does not exist yet:
+`skills.materialize: true` turns materialization on, `--no-skills-mcp` sets
+`mcp: false` and `materialize: true`, and `mcp: false` on its own is a config
+error, because `materialize` defaults to false and no path would be left.
+Neither path is wired yet either: `cmd/launcher` does not import
+`internal/skills` until the tool (k11) and materialization (k12) land, so
+today the tests are the only consumer.
 
 Two consequences bind the author:
 
-- **The `skills` tool description is generated from the whole set** (`DescribeAll`),
-  so every `description` is permanently in the agent's context. It must state
-  *when* to reach for the skill, in one or two lines, because that text is the
-  entire basis for selection. Long descriptions tax every request.
+- **The `skills` tool description is generated from the whole set**
+  (`DescribeAll`: one `- <name>: <description>` line per skill, the
+  description's whitespace collapsed to single spaces), so every `description`
+  is permanently in the agent's context. It must state *when* to reach for the
+  skill, in one or two lines, because that text is the entire basis for
+  selection. Long descriptions tax every request.
 - **The `unreagent-` prefix on materialized directories is load-bearing.** It is
   what lets the launcher replace its own skills on each start and remove ones no
   longer embedded, while never touching a project's own skills in the same
-  directory.
+  directory. How it combines with names that already start with `unreagent-`
+  (the shipped Class D skills) is open — k12; the loader puts no prefix rule on
+  names.
 
 ## Format
 
@@ -52,12 +65,51 @@ unreal_classes: [MaterialEditingLibrary]
 ---
 ```
 
-- `name`, `description` — required, non-empty.
-- `toolkit_tools` — the plugin MCP tools this skill covers. Lint-checked.
-- `unreal_classes` — relevant `unreal.*` Python classes, for skills that work
-  through `execute_script`.
-- Long material goes into sub-documents `<skill>/<section>.md`, reachable via
-  the tool's `section` parameter.
+- `name` — required; equals the skill's directory name.
+- `description` — required, non-blank.
+- `toolkit_tools` — a list of the plugin MCP tools this skill covers. To be
+  lint-checked (see the lint below).
+- `unreal_classes` — a list of relevant `unreal.*` Python classes, for skills
+  that work through `execute_script`.
+- Long material goes into sub-documents `<skill>/<section>.md`; the section
+  name is the file name without `.md`, and the `skills` tool is to serve it
+  through its `section` parameter (k11).
+
+### What the loader rejects
+
+`internal/skills/skills.go` is the authority; this is the checklist. Run
+`go test ./internal/skills` after every change under `skills/`:
+`TestLoadParsesEveryEmbeddedSkill` loads the real set, and
+`TestEmbedMissesNoSourceFile` catches a file that would not ship.
+
+- **Layout.** A skill directory must hold `SKILL.md`, and besides it only
+  `<section>.md` files. The embed pattern is `*/*.md`, so a sub-directory, a
+  non-`.md` file in a skill, or any file directly under `skills/` does not
+  ship — a `skills/README.md` fails `TestEmbedMissesNoSourceFile` on purpose.
+  Every other `.md` next to `SKILL.md` ships as a section: a `README.md` there
+  becomes section `README`.
+- **Names.** No skill or section name may be empty or start with `.` or `_`.
+  Go marks those as hidden or draft files, but the explicit pattern embeds them
+  anyway, so the loader refuses them rather than ship a draft. A file named just
+  `.md` is an empty section name.
+- **Delimiters.** The file's first line is exactly `---`, and so is the line
+  that closes the frontmatter (CRLF is fine). No byte-order mark, no trailing
+  blank or tab on either `---`: other parsers read the same file once it is
+  materialized.
+- **One YAML document.** A line of exactly `---` always closes the
+  frontmatter. Two things inside it are errors, because what follows would
+  escape the key check: a line starting with `--- ` that has content on the
+  same line, such as `--- {bogus: 1}` (it opens a second YAML document), and
+  content after a `...` line (it ends the first).
+- **Closed key set.** The four keys above and no others — a misspelt
+  `toolkit_tool` is an error, not an ignored key. `toolkit_tools` and
+  `unreal_classes` must be YAML lists, not scalars.
+- **Content.** The body after the frontmatter and every sub-document must hold
+  more than whitespace.
+
+A malformed skill stops `Load`: it returns no skills at all, only an error
+naming the skill and the problem. Nothing is skipped — one broken file takes
+the whole set down, by design.
 
 ## Authoritative sources, in order
 
@@ -89,16 +141,20 @@ the documented contract and stop — do not invent examples that look tested.
 
 ## The lint
 
-A Go test (not a separate binary) asserts that every name in `toolkit_tools`
-exists in `MCPToolRegistry.cpp`. It requires the toolkit checkout and **skips
-cleanly when it is absent**, so CI without it stays green. This is the drift
-alarm for upstream tool renames; when it fires, the skill is wrong, not the
-lint.
+Not written yet (k18): a Go test (not a separate binary) is to assert that
+every name in `toolkit_tools` exists in `MCPToolRegistry.cpp`. It will require
+the toolkit checkout and **skip cleanly when it is absent**, so CI without it
+stays green. This is the drift alarm for upstream tool renames; when it fires,
+the skill is wrong, not the lint. Until it lands, check every `toolkit_tools`
+entry against the registry by hand.
 
-Also covered by tests: every embedded skill parses with non-empty `name` and
-`description`, `DescribeAll` lists all of them, the tool resolves sub-documents
-and errors informatively on an unknown name, and materialization replaces its
-own prefixed directories while leaving foreign ones alone.
+Covered today, in `internal/skills/skills_test.go`: every embedded skill parses
+and comes back with its directory name, a description and a body; the embed
+holds only `<skill>/<doc>.md` and misses no source file; every rejection above
+stops the load; `DescribeAll` lists every skill in its pinned format. Section
+lookup and the unknown-name error come with the `skills` tool (k11, tests k16);
+replacing the launcher's own directories while leaving foreign ones alone
+comes with materialization (k12, tests k17).
 
 ## Licensing
 

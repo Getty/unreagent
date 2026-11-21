@@ -18,6 +18,8 @@ Layout:
 | `internal/config/` | YAML config loading + `${ENGINE}` / `${PROJECT}` resolution |
 | `internal/mcp/` | MCP server (HTTP) + tool handlers |
 | `internal/supervisor/` | process supervisor (Job Objects on Windows) |
+| `internal/skills/` | parser for the embedded skill documents (`Load`, `DescribeAll`) |
+| `skills/` | shipped UE skill documents (`<name>/SKILL.md` + sections); `embed.go` only holds the `go:embed` directive |
 | `scripts/` | build / sign helpers (`gen-codesign-cert.sh`, `sign-windows.sh`) |
 | `signing/` | self-signed code-signing cert + import script (private key NOT in repo) |
 | `example/` | runnable demo (`ping`-as-UE) |

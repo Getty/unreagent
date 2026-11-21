@@ -34,7 +34,8 @@ type Skill struct {
 }
 
 // frontmatter is the complete set of keys a SKILL.md may carry. Unknown keys
-// are rejected, so a misspelt toolkit_tools cannot slip past the registry lint.
+// are rejected, so a misspelt toolkit_tools is an error rather than an ignored
+// key — and cannot slip past the toolkit-registry lint planned in k18.
 type frontmatter struct {
 	Name          string   `yaml:"name"`
 	Description   string   `yaml:"description"`
@@ -221,7 +222,7 @@ func delimiter(line string, n int) (bool, error) {
 	return false, nil
 }
 
-// DescribeAll renders the selection table the skills MCP tool carries as its
+// DescribeAll renders the selection list the skills MCP tool carries as its
 // description: one line per skill, "- <name>: <description>", in the order
 // given. It is resident in the agent's context on every request.
 func DescribeAll(all []Skill) string {

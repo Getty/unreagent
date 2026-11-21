@@ -14,7 +14,7 @@ processes (the Unreal Editor and an agent such as Claude Code) and exposes an HT
 MCP server so the agent can drive the editor, run builds, read logs and execute
 Python/Node.
 
-## The four layers
+## The layers
 
 | Layer | Package | What it owns |
 |---|---|---|
@@ -22,10 +22,18 @@ Python/Node.
 | Config | `internal/config/` | YAML load, `unreagent.local.yaml` overlay, `${…}` substitution, defaults, validation |
 | MCP | `internal/mcp/` | minimal JSON-RPC-over-HTTP server, tool registry, bearer auth |
 | Processes | `internal/supervisor/` | services + one-shot commands, restart policy, ring-buffer logs, Windows Job Objects |
+| Skills | `internal/skills/` | `Load` parses the shipped skill documents, `DescribeAll` renders their selection list |
 
-Dependency direction is strictly downward: `main` knows all three, the three know
-nothing of each other and nothing of `main`. A supervisor that imports `mcp` is a
-design error, not a shortcut.
+The skill documents live in `skills/<name>/` at the repository root, and
+`skills/embed.go` holds only the `go:embed` directive — a pattern cannot reach
+outside its own package directory. Import `internal/skills`, never `skills`.
+`cmd/launcher` does not import `internal/skills` yet: the `skills` tool (k11)
+and materialization (k12) wire it in, so today the skills package is exercised
+by its tests alone.
+
+Dependency direction is strictly downward: `main` knows the packages below it,
+and they know nothing of each other and nothing of `main`. A supervisor that
+imports `mcp` is a design error, not a shortcut.
 
 ## The wiring package
 
@@ -56,7 +64,7 @@ anything nearby:
 | `serviceAction(sup, name, fn)` | `tools.go` | wraps a service call into a tool handler |
 | `scriptAction(sup, cmd, pre, dir, ext, label)` | `scripts.go` | the `run_python` / `run_node` handler: writes the agent's code to a script in the runtime's working directory and runs it via `RunOnce` (`run_command` calls `RunCommand` directly) |
 
-The package only *looks* orthogonal to the three packages below it. A change
+The package only *looks* orthogonal to the packages below it. A change
 that skips these helpers ends up with a second, subtly different way to do the
 same thing — that is how the wiring grew to 1650 lines in one file before it
 was split by concern.
@@ -100,10 +108,12 @@ make fmt vet    # gofmt -w . && go vet ./...
 go test ./...   # tests live next to the code they cover
 ```
 
-CI (`.github/workflows/ci.yml`) fails on: `gofmt -l cmd internal` non-empty,
-`go vet ./...`, and both cross-compiles. The Windows build there runs with
-`CGO_ENABLED=0` — the runner's gcc is Linux and rejects `-mconsole`. The project
-has no CGO code, so this is safe; do not "fix" it by enabling CGO.
+CI (`.github/workflows/ci.yml`) fails on: `gofmt -l cmd internal skills`
+non-empty, the release-notes check of `Changes` via `scripts/changes-section.sh`,
+`go vet ./...`, `go test ./... -race`, and both cross-compiles. The Windows
+build there runs with `CGO_ENABLED=0` — the runner's gcc is Linux and rejects
+`-mconsole`. The project has no CGO code, so this is safe; do not "fix" it by
+enabling CGO.
 
 Before claiming work is done: `make fmt vet && go test ./... && make windows`.
 A Linux-only build proves nothing about the actual shipping target.
@@ -111,10 +121,12 @@ A Linux-only build proves nothing about the actual shipping target.
 ## Testing reality
 
 Every package has tests next to the code it covers
-(`git ls-files '*_test.go'` lists them). There is no mock harness and no fixture
-system — tests use the stdlib `testing` package, real temp dirs, and real
-short-lived processes. New tests follow that style rather than introducing a
-framework.
+(`git ls-files '*_test.go'` lists them) — except `skills/`, which holds only the
+embed directive; its guards live in `internal/skills/skills_test.go`. There is
+no mock harness and no fixture system — tests use the stdlib `testing` package,
+real temp dirs, real short-lived processes, and `testing/fstest` for in-memory
+file trees (`internal/skills`). New tests follow that style rather than
+introducing a framework.
 
 Windows-only code paths (Job Objects, registry engine detection) cannot be
 exercised on the Linux dev box. Test the platform-independent logic and
