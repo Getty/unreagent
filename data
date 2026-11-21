@@ -1,0 +1,38 @@
+---
+claimed_at: 2026-11-21T09:53:43Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T09:53:43Z
+created: 2026-08-22T04:38:31Z
+id: 45
+priority: medium
+started: 2026-11-21T08:20:19Z
+status: done
+tags:
+- mcp
+- bug
+title: A failed MCP bind is only a log line; the agent talks to another instance
+updated: 2026-11-21T09:53:55Z
+---
+
+main.go:283-289: ListenAndServe runs in a goroutine and its error is only logged -- into the redirected log file in window mode -- while the next statement unconditionally reports that the MCP server is running on the URL. Trigger: a second unreagent instance, or anything else already on the configured port. The agent's tool calls are then routed to the other instance's editor. A malformed mcp.address behaves the same, and it survives load because that field is not substituted (see the placeholder ticket). Acceptance: net.Listen up front and return the error from run().
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: ListenAndServe runs in a goroutine and only logs its error; 'MCP server listening on' is logged regardless. Fix: net.Listen up front, then Serve. main.go run(). Size S.
+
+2026-11-21 08:41 Done together with k123/k141, not committed (worktree on base 114237c). run() calls net.Listen up front (listenMCP, cmd/launcher/main.go) and returns the error, so a taken port or an mcp.address that is not host:port ends the launcher with exit 1 before the editor or the agent start, and the agent can no longer reach another instance. Error text: 'MCP server cannot listen on <addr>: <net error> — another unreagent or another program may already hold that port, or mcp.address is not a host:port of this machine; stop the other program, or set mcp.address to a free host:port (for this machine only: in unreagent.local.yaml)'. Pinned by TestRunExitsWhenTheMCPAddressCannotBeBound (port taken, no port). Full check green, see the k123 handoff note. Windows behaviour unverified.
+
+2026-11-21 09:01 Review (unreagent-reviewer): CHANGES NEEDED. The fix is right and pinned, but the change it ships with is not ready yet; the full review is on k123. Files: cmd/launcher/main.go, cmd/launcher/main_test.go, README.md, unreagent.example.yaml, example/README.md, .claude/skills/unreagent-core/SKILL.md. Check run (worktree and diff on main 4f2661d): gofmt -l, go vet (linux + windows), go test -count=1 ./..., go test -race, make linux, make windows, all green. Windows UNVERIFIED.
+For k45: run() returns the listenMCP error (main.go:115-122, text at main.go:401), and TestRunExitsWhenTheMCPAddressCannotBeBound (main_test.go:44-92) goes red when the error is only logged, or returned after the editor start. Open, see k123: (1) "binds before it writes any file" is not pinned: moving the bind after the writes passes all tests. (2) README.md:1058 quotes the Unix cause text; Windows prints WSAEADDRINUSE's system message. (3) example/README.md:17-20 lies outside the doc-writer's OWNERS paths. Windows: the overlap case (first 0.0.0.0:8765, second 127.0.0.1:8765) may bind on Windows, because Go sets no SO_EXCLUSIVEADDRUSE, and then this bug survives for that pair. It goes on the smoke test list.
+
+**Decision (main agent) 2026-11-21:** only the bind is fatal — exit 1 before any file is written. A serve failure after a successful bind does not exit and does not kill the editor: one loud ERROR line (log + stderr), MCP marked not serving so later status lines stay truthful, launcher/editor/agent keep running so the user can save, no automatic rebind. Fix round sent to the worker: test that a bind failure writes nothing (red if the bind moves after the writes), this serve-failure change. README exit-code row and the mcp.address passages reworded by the main agent; OWNERS gets example/README.md → unreagent-doc-writer.
+
+2026-11-21 09:17 Fix round, not committed. Item 1: TestRunExitsWhenTheMCPAddressCannotBeBound (cmd/launcher/main_test.go) now proves a bind failure writes nothing. It plants the state of a running instance on the same project (window-mode unreagent.log, a stale python script, a materialized skill file, an mcp.writeConfig target), holds the port (and has a no-port case), and asserts exit 1 with the whole directory unchanged byte for byte, nothing created or removed. It goes red when the bind is moved after the writes. Details are in the k123 note. Full check green.
+
+2026-11-21 09:30 Re-review (unreagent-reviewer), fix round: READY on k45's claim. The commit is blocked by the k141 flake (an ordering fix in main.go run(), see k141); the full re-review is on k123. The bind error returns from run() before any write. TestRunExitsWhenTheMCPAddressCannotBeBound now plants a running instance's log, script, skill and .mcp.json, and goes red when the bind moves after any one of the writes. Check green in the worktree and on main 4f2661d (gofmt -l, vet linux + windows, go test, go test -race, make linux, make windows). Windows UNVERIFIED, including the overlap case (first 0.0.0.0:8765, second 127.0.0.1:8765), for the smoke test.
+
+2026-11-21 09:36 Fix round 2, not committed. Nothing changed for k45 itself: listenMCP now binds through the new seam 'var listen = net.Listen', which is net.Listen in production, and TestRunExitsWhenTheMCPAddressCannotBeBound is unchanged and green. The round's changes (signal handler before the MCP block, a run() test for the stderr choice, the ERROR wording) are in the k141 and k123 notes. Full check green.
+
+Review round 3 (unreagent-reviewer): READY. Files: cmd/launcher/main.go (listenMCP binds right after the CLI overrides, before any side effect: log rotation, stale-script sweep, skill materialization, .mcp.json; the error names the address, the OS reason and the fix; var listen = net.Listen seam), cmd/launcher/main_test.go TestRunExitsWhenTheMCPAddressCannotBeBound (port_taken, no_port: exit 1, the planted unreagent.log, stale script, materialized skill and .mcp.json are byte-for-byte unchanged), README.md :327-331, :544, :1057-1063, unreagent.example.yaml :142-144, example/README.md :17-20, OWNERS (example/README.md -> unreagent-doc-writer), .claude/skills/unreagent-core/SKILL.md :46, :103-111. Check run on the worktree diff (base 114237c) and again applied onto main 4f2661d: gofmt -l empty; go vet ./... for linux and GOOS=windows green; go test -count=1 ./... green; -race green; make windows green. x40 green. Mutation (bind moved after openLauncherLog): red. Windows: UNVERIFIED. On Windows Go sets neither SO_REUSEADDR nor SO_EXCLUSIVEADDRUSE, so whether a second bind to a taken port fails there was not run; it fails on Linux. The README's Windows error text is worded as the OS's own reason (system language), which is right.
+
+Committed in 5f10d83 (on main, not pushed).
