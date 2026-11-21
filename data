@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-11-21T08:43:32Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T08:43:43Z
+created: 2026-11-21T07:41:18Z
+id: 146
+priority: low
+started: 2026-11-21T08:05:05Z
+status: done
+tags:
+- skills
+- docs
+title: Document getInt's new refusals in the unreagent-files and unreagent-iterate
+  skills
+updated: 2026-11-21T08:43:43Z
+---
+
+Follow-up to k133 (getInt refuses non-integral floats and values outside int64). Found in the k133 review. Lane: unreagent-skill-author. Start after k133 is on main.
+
+- skills/unreagent-files/SKILL.md:179-181 and :300: the stated cause "not a number and not a numeric string" no longer covers 1.5, which now gets the same "must be an integer, got 1.5" message; the range message "'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got ..." is not documented.
+- skills/unreagent-iterate/SKILL.md:196-199: "more lines than are buffered returns the whole buffer" no longer holds past about 9.2e18 (now the range error), and a non-whole lines value is refused.
+
+Done when both skills state the refusals as the code words them (cmd/launcher/helpers.go getInt) and go test ./internal/skills is green.
+
+2026-11-21 08:11 Edits in the k74 worktree (worktree-agent-a743d92eb4f2a4854, uncommitted), checked against getInt in cmd/launcher/helpers.go there and TestGetIntRefusesNonIntegralAndOutOfRange. skills/unreagent-files/SKILL.md: :179-183 'numeric string' -> 'integer string'; 1.5 named among the values refused with "'offset' must be an integer, got …"; the range message quoted verbatim with its 1e20 example (got 1e+20); :302 row cause now 'neither a whole number nor an integer string, such as 1.5 or "end"'; :303 new row for the range message. skills/unreagent-iterate/SKILL.md: :196-201 'a negative number' -> 'a negative integer' (so -1.5 is not promised the whole buffer), 1.5 named among the refused values, the range message quoted verbatim for 'lines'. Not documented on purpose: a JSON 9223372036854775807 arrives as 2^63 and is refused by a message naming it allowed (accepted as float precision in k74).
+
+2026-11-21 08:11 Done: unreagent-files :179-183, :302-303 and unreagent-iterate :196-201 state getInt's refusals as the code words them (non-integral, out of int64 range). Lands with k74 in worktree-agent-a743d92eb4f2a4854, uncommitted. Verified there: gofmt -l cmd internal skills empty; go vet ./... ok; go test -count=1 ./... ok (internal/skills included).
+
+Review (unreagent-reviewer) 2026-11-21: READY. Files: skills/unreagent-files/SKILL.md:179-183, :302-303 and skills/unreagent-iterate/SKILL.md:196-201, in worktree-agent-a743d92eb4f2a4854 (uncommitted, lands with k74). Checked against getInt and intRangeErr (cmd/launcher/helpers.go:122-162) and its callers (filetools.go:95,99 offset/limit; tools.go:67 lines): 1.5 gives "'offset' must be an integer, got 1.5"; 1e20 gives the range message with 'got 1e+20' (fmt.Sprint), quoted verbatim, bounds math.MinInt/MaxInt on amd64; '0, a negative integer, or more than buffered' returns the whole buffer (ringBuffer.tail). Error prefix 'Error: ' from errResult matches. English, no ticket ids, paths owned by unreagent-skill-author (ack-team owner). Check, run by me in the same worktree: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... ok; go test -count=1 ./... ok (internal/skills included); go test -race ok; make linux, make windows ok. Findings: none. Changes: no line of its own; the behaviour is already in Changes ('Numeric tool arguments must be whole numbers within the int64 range: ...'), and these edits only bring the shipped skills in line with it.
+
+Committed as 4f2661d on main (rebased onto 114237c, full check green; Windows behaviour compile-only)
