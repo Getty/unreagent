@@ -1,0 +1,47 @@
+---
+claimed_at: 2026-11-21T18:16:48Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:21:41Z
+created: 2026-11-21T12:31:44Z
+id: 166
+priority: low
+started: 2026-11-21T17:47:06Z
+status: done
+tags:
+- config
+- mcp
+title: 'mcp.allowedOrigins: refuse the last few host forms no browser sends'
+updated: 2026-11-21T18:21:54Z
+---
+
+From the k60 re-review (non-blocking; such entries never match, so they grant no access). (1) internal/config/config.go:919 — a last label of 0x plus more than 16 hex digits overflows the number parser, is treated as a name, and http://a.0xffffffffffffffffffff loads; a browser reads it as IPv4 and rejects the URL. Decide 'numeric' from the characters, not from the parse error. (2) config.go:851 — Go's url.Parse accepts < and > (and other WHATWG forbidden host code points) in a host, so http://a<b.example and chrome-extension://a<b load though no browser can send them; refuse forbidden host code points. (3) internal/config/mcp_test.go:150 — the comment 'An extension's host is opaque to a browser' holds for the URL Standard, not for Chromium; say 'to the URL Standard' or give the real reason (no extension id is numeric). Lane: unreagent-worker; after k60 lands.
+
+Bundled with k162 (see the decision note there).
+
+**Worker report 2026-11-21 (unreagent-worker, bundle k162 + k166; tree on d61227a, uncommitted, in the worker's isolation worktree). The full check, subject and k162 part are in the k162 note.**
+
+Changed (k166 part, `internal/config/config.go`):
+1. `browserIPv4`: whether the last label is numeric now depends only on its characters, as in the URL Standard's ends-in-a-number check: all decimal digits, or `0x`/`0X` followed only by hex digits (a bare `0x` counts). It used to follow the `ipv4Number` parse error (k60, unreleased). `http://a.0xffffffffffffffffffff` and `http://0xffffffffffffffffffff` are now refused with "numeric host but no IPv4 address a browser accepts". Every label the old rule counted as numeric still counts, so nothing that was refused now loads.
+2. `validOrigin`: a new `forbiddenHostChars` holds the URL Standard's full forbidden host code point list. It applies to every non-bracketed host, for http(s) and for extension schemes alike: "no "<" allowed in a host, a browser refuses the URL". url.Parse (Go 1.26, probed) lets `<`, `>` and `]` through and rejects or splits on the rest. For http and https `%` is refused too, since the host is a domain and `%` is a forbidden *domain* code point: `https://a%25b.example` decodes to `a%b.example`. Bracketed hosts skip this check (they still go to `canonicalIP`, so the zone message for `[fe80::1%25eth0]` stays).
+3. `mcp_test.go` comment on `moz-extension://2130706433`: "To the URL Standard an extension's host is opaque: no IPv4 reading. Chromium parses its own extension scheme like http, but no extension id is numeric."
+
+My decision: an extension host keeps `%` (`chrome-extension://a%25b` loads), because the URL Standard keeps percent-encoding in an opaque host. I did not pin this in a test.
+
+Tests: `TestMCPAllowedOriginsRefused` adds `http://a.0xffffffffffffffffffff`, `http://0xffffffffffffffffffff`, `http://ide.example.0X1` (the last pins the uppercase prefix and was already refused), plus `http://a<b.example`, `https://a>b.example`, `http://a]b.example`, `https://a%25b.example`, `chrome-extension://a<b`, `chrome-extension://a>b` and `moz-extension://a]b`. `TestMCPAllowedOriginsAccepted` adds `http://ide.example.0xg`: 0x followed by a non-hex character is a name to a browser. Every origin the test already allowed still loads. Red before the fix: the 2 overflow cases and the 7 forbidden-character cases loaded.
+
+Mutations (`go test -overlay`, tree untouched), all killed: old parse-error rule restored; `0x` prefix case-sensitive; any `0x` label numeric (hex digits unchecked); forbidden check disabled; forbidden check for http(s) only; `%` not added for web; `<`/`>` dropped from the list; `]` dropped from the list; bracketed-host guard removed.
+
+README sentences that need a change (main agent), section "Allowing a browser-based MCP client": the "Entry form" bullet "Refused: a path (not even `/`), a query, a fragment, user info and wildcards." should also name a character the URL Standard forbids in a host (`<`, `>`, `]`, and `%` in an http/https host). The "Browser extensions" bullet "with no port, user info, path, query, fragment or wildcard" needs the same addition.
+Skill drift (lane `unreagent-skill-author`, this board): `.claude/skills/unreagent-config/SKILL.md` describes `validOrigin` (~:110-121) without the forbidden host code points.
+
+Proposed Changes: in the unreleased `{{$NEXT}}` entry "New mcp.allowedOrigins: ...", replace the last sentence with:
+    ... null, wildcards, paths, the schemes file, ftp, ws and wss, a host
+    character the URL Standard forbids (such as < or >) and a numeric host
+    that is no IPv4 address, however long its last label, are refused.
+
+Ready for review (bundle with k162): report in the worker note above; full check, subject and README list on k162. Tree uncommitted in the worker's isolation worktree; same three files.
+
+**Review 2026-11-21 (unreagent-reviewer): changes needed.** The bundle verdict is on k162. k166's part is finding 1 there: uppercase hex digits in browserIPv4's last label are not pinned by any test. Finding 3 there is a recommended pin for the empty last label.
+
+Committed as 146366f on main (bundle with k162).
