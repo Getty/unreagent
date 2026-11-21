@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-21T02:09:53Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T02:10:05Z
+created: 2026-11-21T01:09:02Z
+depends_on:
+- 19
+id: 103
+priority: medium
+started: 2026-11-21T01:42:46Z
+status: done
+tags:
+- release
+- license
+title: Ship NOTICE in the release zip
+updated: 2026-11-21T02:10:05Z
+---
+
+Found in the k19 review: release.yml packages the zip without NOTICE. Once text adapted from VibeUE is embedded in the binary (k20-k26 batches via the skills subsystem), MIT requires the full notice to travel with it, not just a per-skill attribution line. Add NOTICE to the release zip before the first adapted skill ships. Lane: unreagent-worker (.github/workflows/release.yml). Size S.
+
+Worker done (same worktree as k92): NOTICE added to the package cp, the Windows zip and the Linux tar.gz (worker's call: the Linux binary embeds the same skills). Simulated package step: NOTICE in both archives, byte-identical. NOTICE is not LFS-tracked.
+
+Review (unreagent-reviewer, worktree-agent-abb6f0e0e37d0b229 on 2e72af4): APPROVE. File: .github/workflows/release.yml:57-64 (cp, zip, tar.gz). Check: same green run as k92 (gofmt -l cmd internal empty, go vet ./..., go test -count=1 ./..., make windows). Package step run from the YAML text under bash --noprofile --norc -eo pipefail in a scratch copy of the repo root with the freshly built exe: zip and tar.gz each hold the binary, unreagent.yaml, unreagent.example.yaml, README.md and NOTICE; NOTICE in both archives byte-identical to the repo's (sha256 39c7019f...). NOTICE is not LFS-tracked (no .gitattributes match). The tar.gz goes beyond the card's 'zip', but the Linux binary embeds the same skills, so MIT applies there too: in scope by intent, same file and owner. New comment is English. Untestable before a tag push: the runner's zip/tar and the uploaded assets; list the published archives once after the next release.
+
+Committed as 9846014
