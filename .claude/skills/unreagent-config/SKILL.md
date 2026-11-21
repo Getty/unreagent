@@ -65,7 +65,9 @@ together:
    `files`, `commands`).
 2. **Default** in `applyDefaults()` — `*bool` if it defaults to true.
 3. **Validation** in `validate()` if it is an enum or a path that must exist.
-4. **Use site** — usually `cmd/launcher/main.go`.
+4. **Use site** — usually `run()` in `cmd/launcher/main.go`, plus the file that
+   owns the feature (`tools.go`, `scripts.go`, `bridge.go`, `mcpconfig.go`,
+   `lifecycle.go`, `hermes.go`).
 5. **`unreagent.example.yaml`** — commented, with the default stated.
 6. **`README.md`** — the quick-reference table under "Configuration", plus prose
    if the option changes observable behavior.

@@ -94,7 +94,8 @@ Two editor dialogs block unattended operation, and both are handled at start:
   dialog *and* both recovery systems (PackageAutoSaver, disaster recovery) in
   UE 5.7 — the unclean state is discarded rather than prompted about.
 - `killCrashReporter` (default true) kills `CrashReportClientEditor.exe` before
-  every (re)start — belt and suspenders, see `killCrashReporter()` in `main.go`.
+  every (re)start — belt and suspenders, see `killCrashReporter()` in
+  `cmd/launcher/lifecycle.go`.
 
 If a human is working in the editor in parallel, `unattended: false` is the
 documented escape hatch. Do not make these behaviors unconditional.

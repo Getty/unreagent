@@ -4,7 +4,7 @@ description: >
   How to add, change or debug an MCP tool in unreagent — the Tool shape, input
   schemas, defensive argument reading, tool descriptions as prompt surface, and
   the bearer-auth path. Use when touching internal/mcp/ or registerTools /
-  registerFileTools in cmd/launcher/main.go.
+  registerFileTools in cmd/launcher/tools.go and filetools.go.
 ---
 
 # unreagent — MCP tools
@@ -17,8 +17,8 @@ growing it speculatively.
 
 ## Adding a tool
 
-Tools are registered in `registerTools` (and `registerFileTools` for the
-file-access group) in `cmd/launcher/main.go`:
+Tools are registered in `registerTools` (`cmd/launcher/tools.go`) and, for the
+file-access group, `registerFileTools` (`cmd/launcher/filetools.go`):
 
 ```go
 srv.AddTool(mcp.Tool{
@@ -48,8 +48,8 @@ standing between the agent and a guessing spiral. This is why `run_python`
 explains the `uv` environment inline instead of assuming the agent will
 investigate. Keep it dense; every token is paid on every request.
 
-Descriptions are **English**. Some legacy descriptions in `main.go` are still
-German — translate the ones you touch.
+Descriptions are **English**, like everything that ships — every description in
+`tools.go` and `filetools.go` is by now; keep it that way.
 
 ## Handler contract
 
@@ -58,7 +58,7 @@ German — translate the ones you touch.
   tool-level failure. Use the `errResult(err)` helper for the common case.
   A tool-level failure is **not** a JSON-RPC error — protocol errors are
   reserved for unknown methods and malformed params.
-- Read arguments through the helpers in `main.go`: `getString`, `getInt`,
+- Read arguments through the helpers in `helpers.go`: `getString`, `getInt`,
   `firstString`, `firstMap`. They exist because JSON gives you
   `map[string]interface{}` with numbers as `float64`; direct type assertions
   are how this code gets a panic in production.

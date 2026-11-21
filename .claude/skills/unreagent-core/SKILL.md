@@ -18,7 +18,7 @@ Python/Node.
 
 | Layer | Package | What it owns |
 |---|---|---|
-| Wiring | `cmd/launcher/main.go` | flag parsing, subcommands, tool registration, bridge smoke tests, agent lifecycle, console loop |
+| Wiring | `cmd/launcher/` | flag parsing, subcommands, tool registration, bridge smoke tests, agent lifecycle, console loop |
 | Config | `internal/config/` | YAML load, `unreagent.local.yaml` overlay, `${…}` substitution, defaults, validation |
 | MCP | `internal/mcp/` | minimal JSON-RPC-over-HTTP server, tool registry, bearer auth |
 | Processes | `internal/supervisor/` | services + one-shot commands, restart policy, ring-buffer logs, Windows Job Objects |
@@ -27,24 +27,39 @@ Dependency direction is strictly downward: `main` knows all three, the three kno
 nothing of each other and nothing of `main`. A supervisor that imports `mcp` is a
 design error, not a shortcut.
 
-## The wiring file
+## The wiring package
 
-`cmd/launcher/main.go` is ~1650 lines and carries the wiring: flag parsing,
-sub-command dispatch, tool registration, the bridge smoke tests and the agent
-lifecycle. Five shared helpers give it its shape — read them before changing
+`cmd/launcher/` carries the wiring, one file per concern:
+
+| File | What it holds |
+|---|---|
+| `main.go` | `run()` — flag parsing, sub-command dispatch, config load, service and command registration, MCP server start, shutdown — plus small helpers (`extractSubcommand`, `hasArg`, …) |
+| `tools.go` | `registerTools` (every MCP tool except the file tools), `serviceAction` |
+| `filetools.go` | `registerFileTools` — `read_file` / `list_dir` / `write_file` / `edit_file` and their root confinement |
+| `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
+| `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
+| `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` |
+| `lifecycle.go` | agent exit handling, the stdin console loop, `killCrashReporter`, `cleanRecovery` |
+| `helpers.go` | argument readers and result helpers shared by the handlers |
+| `hermes.go` | the `hermes-setup` sub-command |
+
+`run()` is the one place everything is wired together, so a new service, tool
+group, command or flag touches it as well as the file that owns the feature.
+Five shared helpers give the handlers their shape — read them before changing
 anything nearby:
 
-| Helper | What it does |
-|---|---|
-| `getString(args, key, def)` | one string argument with a default |
-| `firstString(args, keys…)` | first present key out of several aliases |
-| `errResult(err)` | the MCP error result every handler returns |
-| `serviceAction(sup, name, fn)` | wraps a service call into a tool handler |
-| `scriptAction(sup, cmd, pre, dir, ext, label)` | wraps a one-shot command into a tool handler |
+| Helper | File | What it does |
+|---|---|---|
+| `getString(args, key, def)` | `helpers.go` | one string argument with a default |
+| `firstString(args, keys…)` | `helpers.go` | first present key out of several aliases |
+| `errResult(err)` | `helpers.go` | the MCP error result every handler returns |
+| `serviceAction(sup, name, fn)` | `tools.go` | wraps a service call into a tool handler |
+| `scriptAction(sup, cmd, pre, dir, ext, label)` | `scripts.go` | wraps a one-shot command into a tool handler |
 
-The file only *looks* orthogonal to the three packages below it. A change that
-skips these helpers ends up with a second, subtly different way to do the same
-thing — that is how the wiring grew to 1650 lines in the first place.
+The package only *looks* orthogonal to the three packages below it. A change
+that skips these helpers ends up with a second, subtly different way to do the
+same thing — that is how the wiring grew to 1650 lines in one file before it
+was split by concern.
 
 ## Non-negotiable invariants
 

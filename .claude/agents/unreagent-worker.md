@@ -33,9 +33,12 @@ Never `git commit`: leave the tree commit-ready and report what changed and why,
 - **The dev box is Linux; the product is Windows.** Every claim about Windows
   behavior is a claim about code you could not run. Say so explicitly instead of
   reporting a compile as a verification.
-- **`main.go` is ~1650 lines and is the wiring layer, not a dumping ground.**
-  New logic that has a home in `config`, `mcp` or `supervisor` goes there. New
-  wiring, tool registration and process lifecycle stay in `main.go`.
+- **`cmd/launcher` is the wiring layer, not a dumping ground.** It is split by
+  concern (k93): `main.go` (`run()`, flags, sub-command dispatch), `tools.go`,
+  `filetools.go`, `scripts.go`, `bridge.go`, `lifecycle.go`, `mcpconfig.go`,
+  `helpers.go`, `hermes.go`. New logic that has a home in `config`, `mcp` or
+  `supervisor` goes there; new wiring goes into the file of its concern, not
+  back into `main.go`.
 - **German leftovers exist** in older comments and in some MCP tool descriptions.
   Translate what you touch; do not open a translation sweep as a side quest.
 - **`example/` must keep working.** The release zip ships `example/unreagent.yaml`

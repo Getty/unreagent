@@ -55,9 +55,12 @@ Builds and tests are fine anytime. **Pushing a `v*` tag IS the release** — it 
   `syscall.NewLazyDLL`, never cgo.
 - Stdlib-only on purpose, and `vendor/` is committed with an offline build — never `go get`
   mid-task; a new dependency needs a real argument and has to be vendored.
-- `cmd/launcher/main.go` (~1650 lines) holds the MCP tool handlers, bridge preparation,
-  lifecycle wiring and sub-commands, and most open bug cards point at it. Cards that edit
-  it run one after another, never in parallel; fan out only across disjoint files.
+- `cmd/launcher` is split by concern (k93: `main.go`, `tools.go`, `filetools.go`,
+  `scripts.go`, `bridge.go`, `lifecycle.go`, `mcpconfig.go`, `helpers.go`, `hermes.go`),
+  but `run()` in `main.go` still wires everything and many cards touch it. Cards that
+  edit the same file — `run()` above all — run one after another; fan out only across
+  disjoint files, and give parallel Go workers separate worktrees, since a half-edited
+  file breaks the whole package's build for everyone else.
 
 ## Language — English in everything that ships
 

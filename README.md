@@ -495,7 +495,7 @@ POSIX-shaped; there is no PowerShell-specific tokenizer yet.
 > officially documented by Anthropic. The `approve` handler reads the tool
 > fields defensively (`tool_name` / `toolName` / `name`,
 > `tool_input` / `input` / `arguments`). If a Claude Code update changes the
-> format, only that one handler in `cmd/launcher/main.go` needs adapting.
+> format, only that one handler in `cmd/launcher/tools.go` needs adapting.
 
 ### Hermes Agent (alternative agent)
 
