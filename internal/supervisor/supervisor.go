@@ -571,13 +571,37 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	// start is only ever called while the service is desired (initial start,
 	// backoff, ctrlStart, ctrlRestart); pre says which start it is, and is
 	// passed on to PreStart with AfterGiveUp filled in.
+	//
+	// Once ctx is done it starts nothing, PreStart included (k182). A due timer
+	// or a start call can be taken in the same turn as the shutdown: select
+	// picks among ready cases at random, and a call waiting at an exit or at a
+	// due timer is taken ahead of the next turn. The process would only be
+	// killed again on that next turn, which then takes the shutdown. A
+	// shutdown that comes while PreStart runs (the editor's shells out) stops
+	// the start before the spawn, for the same reason.
 	start := func(pre Start) {
+		// shuttingDown reports a done ctx and records it as the reason the
+		// start failed, so a start or restart call says why, not a stale error.
+		shuttingDown := func() bool {
+			if ctx.Err() == nil {
+				return false
+			}
+			lastErr = "the launcher is shutting down"
+			s.logf("[%s] not started: shutting down", spec.Name)
+			return true
+		}
+		if shuttingDown() {
+			return
+		}
 		pre.AfterGiveUp = afterGiveUp
 		afterGiveUp = false
 		if spec.PreStart != nil {
 			svc.preStarting.Store(true)
 			spec.PreStart(pre)
 			svc.preStarting.Store(false)
+			if shuttingDown() {
+				return
+			}
 		}
 		// startFailed reports a start that will not be retried. The service was
 		// desired and is not coming back, which is exactly what OnExit is for —

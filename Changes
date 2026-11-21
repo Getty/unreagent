@@ -301,6 +301,11 @@ Revision history for unreagent
     handling and that restart: a stop leaves the service stopped with
     nothing started, a start or restart starts it once. A headless launcher
     keeps running through either, also when "r agent" races the agent's exit.
+    Once the launcher shuts down, a restart or start delay coming due and a
+    start or restart from these commands start nothing, and a start whose
+    pre-start step is still running then stops before the spawn: the editor is
+    no longer spawned just to be killed. ue_start and ue_restart then say it
+    did not start because the launcher is shutting down.
   - ue_start, ue_stop, ue_restart and the console's start, stop and r give up
     after 10 s in total. The error says whether the request was taken. One
     still being carried out says so, points to status and is not to be

@@ -210,13 +210,13 @@ type callResult struct {
 	err error
 }
 
-// runWithQueuedCall runs spec under sup until the test ends, with call made
-// to wait in the service's control channel the first time the loop reaches
-// seam (&sup.exitTaken or &sup.backoffTaken): the loop is held there until the
-// message sits in the channel, which is buffered for this, as in
-// TestStopWinsOverAnExitReadyWithIt. It returns the call's result once the
-// loop has answered it, and the OnExit events.
-func runWithQueuedCall(t *testing.T, sup *Supervisor, spec ServiceSpec, seam *func(), call func() (ServiceStatus, error)) (callResult, <-chan Exit) {
+// runWithQueuedCall runs spec under sup until the test ends or parent is
+// done, with call made to wait in the service's control channel the first
+// time the loop reaches seam (&sup.exitTaken or &sup.backoffTaken): the loop
+// is held there until the message sits in the channel, which is buffered for
+// this, as in TestStopWinsOverAnExitReadyWithIt. It returns the call's result
+// once the loop has answered it, and the OnExit events.
+func runWithQueuedCall(t *testing.T, parent context.Context, sup *Supervisor, spec ServiceSpec, seam *func(), call func() (ServiceStatus, error)) (callResult, <-chan Exit) {
 	t.Helper()
 	exits := make(chan Exit, 4)
 	spec.OnExit = func(e Exit) { exits <- e }
@@ -238,7 +238,7 @@ func runWithQueuedCall(t *testing.T, sup *Supervisor, spec ServiceSpec, seam *fu
 			}
 		})
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
 	sup.Start(ctx, &wg)
 	t.Cleanup(func() { cancel(); wg.Wait() })
@@ -313,7 +313,7 @@ func TestControlCallWaitingWithADueRestart(t *testing.T) {
 				spec.StartDelay = 10 * time.Millisecond
 			}
 			spec.PreStart = pre.record
-			r, _ := runWithQueuedCall(t, sup, spec, &sup.backoffTaken, controlCall(sup, c.call))
+			r, _ := runWithQueuedCall(t, context.Background(), sup, spec, &sup.backoffTaken, controlCall(sup, c.call))
 			// PreStart runs on the loop before the call is answered.
 			if got := pre.String(); got != c.automatic {
 				t.Fatalf("PreStart Automatic = %s, want %s with a %s waiting when the timer came due", got, c.automatic, c.call)
@@ -363,7 +363,7 @@ func TestStartOrRestartWinsOverAnExitReadyWithIt(t *testing.T) {
 			spec.Restart = c.restart
 			spec.RestartDelay = time.Hour
 			spec.PreStart = pre.record
-			r, exits := runWithQueuedCall(t, sup, spec, &sup.exitTaken, controlCall(sup, c.call))
+			r, exits := runWithQueuedCall(t, context.Background(), sup, spec, &sup.exitTaken, controlCall(sup, c.call))
 			if r.st.Running != c.running || !r.st.Desired || r.st.Restarts != 0 || r.st.LastExit != c.lastExit {
 				t.Fatalf("%s answered %+v, want running %v, desired, restarts 0, lastExit %q", c.call, r.st, c.running, c.lastExit)
 			}
