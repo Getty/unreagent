@@ -146,24 +146,75 @@ fixes are theirs:
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `read_file` | `path` | file content as text, truncated at 256 KiB |
+| `read_file` | `path`, `offset` (optional), `limit` (optional) | file content as text, at most 256 KiB per call; a `[bytes X-Y of Z]` line follows unless it is the whole file |
 | `list_dir` | `path` (optional) | one entry per line, directories with a trailing `/` |
 | `write_file` | `path`, `content` | `written: <path> (<n> bytes)` |
 | `edit_file` | `path`, `old_string`, `new_string` | `<n> occurrence(s) replaced in <path>` |
 
 ### read_file
 
-`path` (string, required) — relative to the root.
+- `path` (string, required) — relative to the root.
+- `offset` (integer, optional, default 0) — the first byte to read. A negative
+  offset counts from the end of the file, so `-65536` is the last 64 KiB; one
+  that reaches before the start reads from byte 0.
+- `limit` (integer, optional) — the most bytes to return. Default and maximum
+  262144 (256 KiB); a larger value is clamped to it, and 0 or less is an error.
 
-Returns the raw file content, nothing else: no line numbers, no ranges, no
-offset or limit parameter. Files larger than 256 KiB (262144 bytes) come back as
-the first 256 KiB followed by `\n…[truncated]`; the cut is by byte count and can
-split a multi-byte character. Truncation takes the head, so the end of a long
-file is unreachable through this tool.
+Both accept a numeric string such as `"65536"`; missing, `null` or `""` gives
+the default. Any other value, such as `"end"` or `true`, returns
+`Error: 'offset' must be an integer, got …` (or `'limit'`).
+
+Returns the bytes of the range as text, nothing else: no line numbers, no
+header. When the range is the whole file, that is all. Otherwise one line
+follows, after a newline that is not part of the file:
+
+```
+[bytes X-Y of Z]
+[bytes X-Y of Z; continue with offset=Y]
+```
+
+`X` is the first byte returned, `Y` the byte after the last one (exclusive), `Z`
+the file size when the call opened it. No trailer line means you have the whole
+file. The second form appears when the file goes on past `Y`; call again with
+`offset=Y` to go on. Nothing is ever repeated. For valid UTF-8 read with a
+`limit` of 4 or more, nothing is skipped either, unless a page was left with a
+cut character (see below). Otherwise a page can begin up to 3 bytes after the
+offset asked for: continuation bytes at its start are dropped, whether they are
+stray (invalid UTF-8, binary) or the rest of a character the previous page cut.
+The trailer's `X` shows where a page really begins, so an `X` larger than the
+`offset` you passed marks the gap. A log that is still being written grows
+between calls, so a later call can report a larger `Z`.
+
+Range edges move inward to UTF-8 character boundaries, by up to 3 bytes: a
+start inside a character moves forward past its continuation bytes, an end
+inside one moves back to the character's first byte. The trailer reports the
+range after the move. Neither edge moves at the start or the end of the file,
+so a file returned whole comes back byte for byte, a UTF-8 byte order mark at
+offset 0 included (it arrives as U+FEFF, the first character). A range that
+starts at offset 1 or 2 begins after it, at 3. One case leaves a character
+cut: when it begins at the range's first byte once the start has moved, the end
+stays, because moving it back would empty the range. That takes fewer than 4
+bytes left after the start moved, so a `limit` below 7, or below 4 from a
+character boundary.
+
+An offset past the end is an error that names the file size. An offset exactly
+at the end is not: it returns an empty range followed by `[bytes Z-Z of Z]`.
+
+The end of a log, where a crash is, takes one call. With the default root:
+
+```json
+{"path": "Saved/Logs/<ProjectName>.log", "offset": -65536}
+```
+
+A log longer than 64 KiB comes back as its last 64 KiB followed by
+`[bytes X-Z of Z]`; a shorter one comes back whole, without a trailer. When
+what you need starts earlier, a larger negative offset reaches further back, up
+to `-262144` for the most one call returns; beyond that, page with `offset` and
+`limit`.
 
 Text only. Binary content is returned as-is through a JSON string and arrives
-mangled. Reading a directory instead of a file fails with the operating
-system's error.
+mangled. Reading a directory fails with
+`Error: path "<given>" is a directory; use list_dir`.
 
 ### list_dir
 
@@ -227,16 +278,20 @@ back.
 | `Error: 'path' missing` | `path` absent or empty | supply it; for `list_dir`, empty means the root |
 | `Error: 'old_string' not found` | no literal match | re-read the file; check whitespace and line endings |
 | `Error: 'old_string' missing` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
-| content ends in `…[truncated]` | file exceeds 256 KiB | you have the head only; the tail is unreachable |
+| content ends in a line `[bytes X-Y of Z]` or `[bytes X-Y of Z; continue with offset=Y]` | `read_file` returned bytes `X` to `Y` (exclusive) of a `Z`-byte file, not the whole file; the line and the newline before it are not file content | to go on, call again with `offset=Y`; for the end of the file, a negative `offset` |
+| `Error: 'offset' <n> is past the end of "<given>" (<size> bytes)` | `offset` is larger than the file | use an offset up to the size named, or a negative one to count from the end |
+| `Error: 'limit' must be a positive number of bytes, got <n>` | `limit` is 0 or negative | omit it for the default of 262144, or pass a positive byte count |
+| `Error: 'offset' must be an integer, got …` (or `'limit'`) | not a number and not a numeric string | pass an integer number of bytes |
 | `Error: 'content' missing` | `content` absent or not a string — typically a misspelled parameter name | rewrite with the correct parameter name; nothing was written |
 | `Error: open <root>: no such file or directory` | the root itself does not exist; every call fails | user fixes `files.root` |
 | `Error: openat <name>: no such file or directory` | nothing at that path under the root | check with `list_dir` |
-| `Error: read <abs path>: is a directory` | `read_file` on a directory | use `list_dir` |
+| `Error: path "<given>" is a directory; use list_dir` | `read_file` on a directory | use `list_dir` |
 | `Error: readdirent <abs path>: not a directory` | `list_dir` on a file | use `read_file` |
 
-The last four rows quote a Linux host. On a Windows host the operating system's
-part of the message (`no such file or directory`, `is a directory`,
-`not a directory`) reads differently.
+The `open`, `openat` and `readdirent` rows quote a Linux host. On a Windows
+host the operating system's part of the message (`no such file or directory`,
+`not a directory`) reads differently. The directory error of `read_file` is the
+launcher's own and reads the same on every host.
 
 ## Do not hand-edit assets
 
@@ -257,8 +312,8 @@ and `unreagent-iterate` skills cover that loop.
 ## See also
 
 - `logs` — the last lines of a supervised service's output (`ue`, `agent`) from
-  the supervisor's buffer. `read_file` only sees what is already on disk, and
-  only from the top.
+  the supervisor's buffer. `read_file` only sees what is already on disk; for
+  the end of a log file, give it a negative `offset`.
 - `run_command` — compile and package, from the commands declared in the config.
 - `unreagent-runtimes` — running Python or Node on the launcher host, including
   file processing that is too involved for these four tools.

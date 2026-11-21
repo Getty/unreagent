@@ -249,10 +249,10 @@ Each line starts with a `HH:MM:SS` timestamp. Lines to look for:
 `restarted (manual)` is logged after every `ue_restart`, also when the start
 failed. Look for `start failed` just above it.
 
-`read_file` (`unreagent-files`) returns only the first 256 KiB of a file, which
-is the wrong end of a long log. To get the end of `unreagent.log` or the
-editor's log file, tail or search it from `run_python` / `run_node`
-(`unreagent-runtimes`).
+`read_file` (`unreagent-files`) returns at most 256 KiB per call, and a negative
+`offset` counts from the end of the file: `offset: -65536` returns the last
+64 KiB of `unreagent.log` or of the editor's log file, where a crash is. To
+search a long log, use `run_python` / `run_node` (`unreagent-runtimes`).
 
 ## The edit loop
 
@@ -321,5 +321,5 @@ nothing in `status` reflects this. Check the plugin itself:
 - `unreagent-build`: `run_command`, compile and package, and how to read a
   build result.
 - `unreagent-files`: `read_file` for logs and config on disk.
-- `unreagent-runtimes`: `run_python` / `run_node`, for tailing and searching
-  large log files on the host.
+- `unreagent-runtimes`: `run_python` / `run_node`, for searching large log
+  files on the host.

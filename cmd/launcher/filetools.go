@@ -3,10 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/conflict-industries/unreagent/internal/mcp"
 )
@@ -70,28 +72,62 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 	}
 
 	srv.AddTool(mcp.Tool{
-		Name:        "read_file",
-		Description: "Reads a text file from the UE project (path relative to the project root). Lets an agent read source code/config/logs without being present locally. Large files are truncated to their head (first 256 KiB), marked with …[truncated]; the tail is unreachable.",
-		InputSchema: requiredPathSchema("path", "Path to the file, relative to the project root"),
+		Name: "read_file",
+		Description: "Reads a text file from the UE project (path relative to the project root): source, config, logs. At most 256 KiB per call: " +
+			"offset (bytes) picks the start, and a negative offset counts from the end, so offset=-65536 is the last 64 KiB — the end of a log, where a crash is; " +
+			"limit (bytes) caps the size, default and maximum 262144. " +
+			"Unless the text is the whole file, a line [bytes X-Y of Z] follows it (Y exclusive, Z the file size; the newline before it is not part of the file), with '; continue with offset=Y' when more follows. " +
+			"Range edges move inward to UTF-8 character boundaries, by up to 3 bytes. An offset past the end is an error naming the size.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":   map[string]interface{}{"type": "string", "description": "Path to the file, relative to the project root"},
+				"offset": map[string]interface{}{"type": "integer", "description": "First byte to read (default 0); negative counts from the end"},
+				"limit":  map[string]interface{}{"type": "integer", "description": "Maximum number of bytes (default and maximum 262144)"},
+			},
+			"required": []string{"path"},
+		},
 		Handler: func(args map[string]interface{}) mcp.ToolResult {
 			path := getString(args, "path", "")
 			if path == "" {
 				return mcp.ToolResult{Text: "Error: 'path' missing", IsError: true}
+			}
+			offset, err := getInt(args, "offset", 0)
+			if err != nil {
+				return errResult(err)
+			}
+			limit, err := getInt(args, "limit", readFileLimit)
+			if err != nil {
+				return errResult(err)
+			}
+			if limit <= 0 {
+				return errResult(fmt.Errorf("'limit' must be a positive number of bytes, got %d", limit))
 			}
 			r, name, err := confine(path)
 			if err != nil {
 				return errResult(err)
 			}
 			defer r.Close()
-			b, err := r.ReadFile(name)
+			// Opened through the root, and read through this handle only:
+			// the range is reached by seeking, never by opening the path
+			// again.
+			f, err := r.Open(name)
 			if err != nil {
 				return fsErr(path, err)
 			}
-			const max = 256 * 1024
-			if len(b) > max {
-				return mcp.ToolResult{Text: string(b[:max]) + "\n…[truncated]"}
+			defer f.Close()
+			fi, err := f.Stat()
+			if err != nil {
+				return fsErr(path, err)
 			}
-			return mcp.ToolResult{Text: string(b)}
+			if fi.IsDir() {
+				return errResult(fmt.Errorf("path \"%s\" is a directory; use list_dir", path))
+			}
+			text, err := readFileRange(f, path, fi.Size(), int64(offset), int64(min(limit, readFileLimit)))
+			if err != nil {
+				return errResult(err)
+			}
+			return mcp.ToolResult{Text: text}
 		},
 	})
 
@@ -215,6 +251,77 @@ func registerFileTools(srv *mcp.Server, root string, readOnly bool) {
 			return mcp.ToolResult{Text: fmt.Sprintf("%d occurrence(s) replaced in %s", n, path)}
 		},
 	})
+}
+
+// readFileLimit is read_file's default and maximum range, in bytes.
+const readFileLimit = 256 * 1024
+
+// readFileRange reads the range of f that read_file returns: from offset
+// (negative counts back from size, and a start before 0 becomes 0) for at
+// most limit bytes, without reading anything outside the range. size is the
+// file's size when it was opened; given is the path as the agent spelled it,
+// for the error.
+//
+// The edges then move to UTF-8 character boundaries: a start inside a
+// character moves forward past its continuation bytes, an end inside one
+// moves back to the character's first byte. The start never moves at offset
+// 0 and the end never moves at the end of the file, so a file returned whole
+// is returned byte for byte, a byte order mark included. The end does not
+// move when that would empty the range, which happens only when fewer than
+// 4 bytes remain after the start moved; the range then keeps the cut
+// character. The bytes are not checked for valid UTF-8 beyond that: the
+// JSON encoding of the result replaces invalid bytes anyway. In bytes that
+// are not UTF-8, a range continued at the previous Y can thus skip up to 3
+// bytes at its start; its X shows that.
+//
+// Unless the range is the whole file, the text ends in a trailer line with
+// the range returned, "[bytes X-Y of Z]" (Y exclusive), plus "; continue
+// with offset=Y" when the file goes on. No trailer thus means the whole file.
+func readFileRange(f *os.File, given string, size, offset, limit int64) (string, error) {
+	start := offset
+	if start < 0 {
+		start = max(size+start, 0)
+	}
+	if start > size {
+		return "", fmt.Errorf("'offset' %d is past the end of \"%s\" (%d bytes)", offset, given, size)
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return "", err
+	}
+	b, err := io.ReadAll(io.LimitReader(f, min(limit, size-start)))
+	if err != nil {
+		return "", err
+	}
+	if start > 0 {
+		skip := 0
+		for skip < len(b) && skip < utf8.UTFMax-1 && !utf8.RuneStart(b[skip]) {
+			skip++
+		}
+		b = b[skip:]
+		start += int64(skip)
+	}
+	end := start + int64(len(b))
+	if end < size {
+		// A character whose first byte lies in the last three bytes may be
+		// cut; one that starts earlier is complete, at most 4 bytes long.
+		for i := len(b) - 1; i > 0 && i >= len(b)-(utf8.UTFMax-1); i-- {
+			if utf8.RuneStart(b[i]) {
+				if !utf8.FullRune(b[i:]) {
+					end -= int64(len(b) - i)
+					b = b[:i]
+				}
+				break
+			}
+		}
+	}
+	if start == 0 && end == size {
+		return string(b), nil
+	}
+	trailer := fmt.Sprintf("[bytes %d-%d of %d]", start, end, size)
+	if end < size {
+		trailer = fmt.Sprintf("[bytes %d-%d of %d; continue with offset=%d]", start, end, size, end)
+	}
+	return string(b) + "\n" + trailer, nil
 }
 
 // requiredPathSchema describes a single string path argument that the tool
