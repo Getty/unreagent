@@ -1,0 +1,49 @@
+---
+claimed_at: 2026-11-21T10:39:20Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T10:39:32Z
+created: 2026-11-21T10:19:09Z
+id: 156
+priority: medium
+started: 2026-11-21T10:24:23Z
+status: done
+tags:
+- tests
+- console
+title: Pin the window-mode console switch and two lastExit rules with tests
+updated: 2026-11-21T10:39:32Z
+---
+
+Found in the k120/k126 review; the behaviour is shipped and documented, but nothing pins it:
+1. cmd/launcher/lifecycle.go newConsole: `logSeparate: log != out` is the window-mode switch k120 depends on. Forcing it to true or false still passes the cmd/launcher suite. A two-case newConsole test (log is a file / log is stdout) covers it.
+2. internal/supervisor: ue_restart clears lastExit (supervisor.go ~:678) — removing the clear passes ./... .
+3. internal/supervisor: a restart by the restart policy keeps lastExit (~:645-648) — clearing it there passes too.
+
+Done when each of the three has a test that goes red when its line is changed. Lane: unreagent-test-writer.
+
+**Handed out 2026-11-21** to unreagent-test-writer, own worktree on b8e300c (lifecycle bundle landed there).
+
+Three tests added, no production change. TestNewConsoleAnswersOnTheConsoleOnlyWhenTheLogIsElsewhere (console_test.go): file log vs same-writer log; red with logSeparate forced true or false. TestRestartServiceClearsLastExit and TestPolicyRestartKeepsLastExit (supervisor/status_test.go): red when the clear at supervisor.go:678 is removed, and when lastExit is cleared at :646 in the policy-restart branch. Lines verified. gofmt, vet, go test ./..., -race on cmd/launcher and internal/supervisor green. Windows path not involved.
+
+Review 2026-11-21 (unreagent-reviewer): READY.
+
+Files: cmd/launcher/console_test.go (+35), internal/supervisor/status_test.go (+56). Test-only, no production change, stdlib testing only. Existing helpers reused (syncBuffer, runsSpec, startService, waitExit). Both paths resolve to unreagent-worker in OWNERS, where the test-writer writes *_test.go by the OWNERS note, so they are in scope. Comments are English.
+
+Mutations, repeated on a scratch copy (worktree untouched). Each one goes red on its own assertion:
+- lifecycle.go:36 log != out -> true: red at console_test.go:242 ("the log is the console")
+- lifecycle.go:36 log != out -> false: red at console_test.go:231 ("the log is a file")
+- supervisor.go:678 lastExit dropped from the ctrlRestart reset: red at status_test.go:171
+- supervisor.go:646 lastExit = "" after restarts++: red at status_test.go:187
+
+Flakiness: the new tests pass with -count=50 plain, with -race, and with -race -cpu 1. pollStatus polls Status() through the control loop with a 10s deadline. Its sleep is only the poll interval, nothing depends on it for correctness.
+
+Check: gofmt -l cmd internal skills prints nothing. go vet ./... and GOOS=windows go vet ./... are clean. go test -count=1 ./... and go test -race -count=1 ./... pass. The only skip is TestWarnIfMissingAppliesPathExtOnWindows, an existing Windows-only test. make linux and make windows both build.
+
+Windows: no Windows-path code is touched. The new tests compile for Windows (vet) but were not run there, so they are unverified on Windows. CI is Linux-only.
+
+Nit (non-blocking): the pollStatus at status_test.go:162 is not needed. lastExit is set in the control loop before the OnExit goroutine starts, so a plain Status() after waitExit is already deterministic.
+
+Proposed subject: Pin the window-mode console switch and two lastExit rules with tests (k156)
+
+Committed as b6159c3 (test-only, no Changes entry); fast-forwarded onto main.
