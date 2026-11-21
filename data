@@ -1,0 +1,143 @@
+---
+claimed_at: 2026-11-21T15:20:03Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T15:20:18Z
+created: 2026-11-21T10:21:46Z
+id: 157
+priority: low
+started: 2026-11-21T14:52:57Z
+status: done
+tags:
+- config
+- bug
+title: findConfig follows a dangling unreagent.yaml symlink and silently loads unreagent.yml
+updated: 2026-11-21T15:20:18Z
+---
+
+Found during k124. internal/config findConfig still follows links when it looks for the main config. A dangling unreagent.yaml symlink with an unreagent.yml next to it makes the launcher load the .yml silently, although the user meant the .yaml. Same class of silent failure k124 fixed for unreagent.local.yaml.
+
+Done when: a dangling or looping unreagent.yaml is a load error naming the link (reuse ResolveLink from k124), not a fall-through to the next candidate, with a regression test. Lane: unreagent-worker.
+
+**Main agent 2026-11-21: decision before handing this to unreagent-worker.** These choices are mine, not the maintainer's. k157 and k174 go to one worker, because both are in `internal/config/config.go`.
+
+**k157:**
+- `findConfig` checks each candidate with `os.Lstat`, in the order `unreagent.yaml`, then `unreagent.yml`.
+- A candidate that is a symlink but does not resolve stops the search with a load error naming the link. That covers a dangling link and a loop; reuse `ResolveLink` and its `danglingLinkError` text. A later candidate is never tried.
+- A candidate that is not there falls through, as today.
+- No error from `findConfig` means today's behaviour, with `unreagent.yaml` as the default name.
+- An explicit config path, if `Load` takes one, keeps whatever error it gives today. Say what that is in the note.
+- Pin it with a regression test:
+  - a dangling `unreagent.yaml` next to a real `unreagent.yml` is an error naming the `.yaml` link;
+  - a looping link is an error too;
+  - a dangling `unreagent.yml` with no `.yaml` is an error;
+  - a valid link to a real file still loads.
+- Skip the symlink tests where links cannot be made, in the way k124's tests do.
+
+**k174:** comments only. The `KillCrashReporter` and `CleanOnRestart` comments (`config.go` ~:94-103) get the k153 semantics, matching README's `cleanOnRestart` and `killCrashReporter` rows word for word in substance:
+- a start in place of a pending automatic restart counts as one (ue_start, ue_restart, a console start or `r` during the restart delay or the retry delay of a failed start);
+- a stop during that delay ends the crash episode.
+If README and the code disagree, the code wins. Note the mismatch on the card; the README fix goes to the doc-writer.
+
+**unreagent-worker 2026-11-21: k157 + k174 done, tree commit-ready (worktree on 4ac817d, uncommitted).** Files: `internal/config/config.go`, `internal/config/load_test.go`. No caller change outside `internal/config` (Load's signature is unchanged).
+
+**k157 change (config.go):**
+- `findConfig()` → `findConfig(dir string) (string, error)`; `Load` passes `exeDir()` and returns the error. Each candidate (`unreagent.yaml`, then `unreagent.yml`) goes through the k124 check, `os.Lstat` + `ResolveLink`. A symlink that leads to no file (dangling, chain, loop) stops the search with the k124 text, and the later candidate is never tried. A missing name falls through, and the default is still `unreagent.yaml`. A valid link is still returned under its own name, as before.
+- My choice, not the spec's: the k124 check was `overlayPresent`. I renamed it to `configPresent`, because it now serves the main config candidates too, and I did not want a second copy. With it comes k124's rule that **any Lstat error other than not-exist** is a load error naming the path (`config not readable (<path>): …`). Before, it was a silent fall-through. In practice the next step failed anyway, so no working setup changes.
+- Error texts: dangling `config not readable: <dir>/unreagent.yaml is a symlink to <target>, which does not exist`; loop `config not readable: <link> is a symlink that cannot be resolved: …`.
+- **Explicit `-config <path>` is unchanged:** a dangling link gives `config not readable (<path>): open <path>: no such file or directory`, a loop gives `… open <path>: too many levels of symbolic links` (os.ReadFile in decodeYAML). It is an error, not a fall-through, but it does not name the link's target. I saw both on the real binary.
+- `fileExists` stays, because engine.go still uses it.
+
+**Tests (load_test.go):**
+- `TestFindConfigRefusesBrokenLink`: dangling `.yaml` beside a real `.yml` gives the exact error naming the `.yaml` link; a looping `.yaml` beside a `.yml` gives the error by prefix; a dangling `.yml` with no `.yaml` gives the exact error naming the `.yml`.
+- `TestFindConfigPicksCandidate` (control, pins today's choice): neither file gives `unreagent.yaml`; only `.yml` loads `.yml`; both load `.yaml`; a `.yaml` linked to a real file, with a `.yml` beside it, gives the link path and Load reads the target.
+- Symlinks are made with k124's `symlink()` helper, which skips where links cannot be made (Windows without the privilege).
+- **Red first:** I first changed only the signature and kept today's `fileExists` logic. All 3 RefusesBrokenLink subtests failed: the dangling and looping `.yaml` gave `…/unreagent.yml`, and the dangling `.yml` gave `…/unreagent.yaml`. The control passed. After the fix all are green.
+
+**Mutations** (`go test -overlay`, tree untouched, `-run 'TestFindConfig|TestLoad'`):
+- m1 `continue` on a findConfig error (fall through on a dangling link): killed, 3/3 RefusesBrokenLink.
+- m3 `os.Stat` instead of `os.Lstat` in configPresent: killed (k124 tests + all 3 new).
+- m4 candidate order reversed: killed (2 RefusesBrokenLink + PicksCandidate/both, /linked).
+- m5 old `fileExists` check restored: killed, 3/3.
+- m6 return the resolved target instead of the link path: killed (PicksCandidate/linked).
+- **m2 survives:** Load ignores findConfig's error. `Load("")` reads `exeDir()`, and a unit test cannot set it. I added no test-only seam. Even under m2, findConfig returns `""` on error, so Load fails on the cwd ("is a directory") and never loads the `.yml`; only the message gets worse. I covered the wiring by hand on the real binary: `dist/unreagent` copied next to a dangling `unreagent.yaml` link and a real `unreagent.yml` → `Error: config not readable: <dir>/unreagent.yaml is a symlink to <dir>/gone/unreagent.yaml, which does not exist`, rc=1. The demo (`example/unreagent.yaml` copied next to the binary) still loads through findConfig.
+
+**k174 (comments only, config.go:94-116):** KillCrashReporter and CleanOnRestart now give the k153 cases: an automatic restart (a retry of a failed start too), a start in place of a pending automatic restart (ue_start / ue_restart / console start or r during the restart delay or the retry delay of a failed start), and the first start after a give-up. A ue_stop / console stop during that delay ends the crash episode. KillCrashReporter also names both reporter exes, as the code kills both. Checked against `followsCrash`, `editorPreStart`, `cleanRecovery` (cmd/launcher/lifecycle.go) and the supervisor's `replacesRestart` / ctrlStop (`backoff = nil`).
+
+**Check (all green):** `gofmt -l cmd internal skills` (empty); `go vet ./...`; `GOOS=windows go vet ./...`; `go test -count=1 ./...` (one skip, `TestWarnIfMissingAppliesPathExtOnWindows`, Windows-only and not mine); `go test -race -count=1 ./internal/config`; `make linux`; `make windows`. On Windows this is compiled but not run: whether `os.Lstat` / `ResolveLink` see a Windows symlink or junction at `unreagent.yaml` is k124's existing behaviour, and I did not verify it here.
+
+**Docs drift, for the dispatcher to route (I changed nothing there):**
+- **Skill unreagent-config (skill-author lane):** must change. In "Load order", step 3 names `overlayPresent`, which is now `configPresent`. Step 1 should say that a candidate that is a broken symlink is a load error naming it, not a fall-through to `unreagent.yml`.
+- **README (doc-writer):** should change. The symlink paragraph (README ~:307, "`unreagent.local.yaml` may be a symlink …") covers only the overlay; the same rule and the same error texts now apply to `unreagent.yaml` / `unreagent.yml` found next to the executable. README never mentions the `.yml` fallback at all.
+- **README vs code (k174):** the `killCrashReporter` row lacks the sentence the `cleanOnRestart` row has: a stop during the restart delay ends the crash episode, so a later start kills the reporter. The code applies it to both options (shared `followsCrash`). The two rows agree on every other case. `unreagent.example.yaml`'s killCrashReporter comment lacks the same sentence. Both go to the doc-writer.
+
+**Proposed subject (72):** `Refuse a broken unreagent.yaml link instead of loading .yml (k157, k174)`
+
+**Changes entry (k157; k174 needs none), under `{{$NEXT}}`:**
+```
+  - A dangling or looping unreagent.yaml or unreagent.yml symlink next to the
+    executable is a load error naming the link, as for unreagent.local.yaml;
+    the launcher no longer loads an unreagent.yml in place of a broken
+    unreagent.yaml link.
+```
+
+Ready for review: findConfig refuses a broken candidate link (k124 check), regression + control tests, 5/6 mutants killed (m2 documented). Bundled with k174. Full report in the note above.
+
+Main agent 2026-11-21: README and example yaml done in the worktree. README step 3 (~:198) names unreagent.yaml next to the .exe and the unreagent.yml fallback. The symlink paragraph (~:307) now covers unreagent.yaml / unreagent.yml as well as unreagent.local.yaml: a broken unreagent.yaml link is never passed over for an unreagent.yml. The killCrashReporter row and its example-yaml comment now say that a stop during the restart delay ends the crash episode (k174). The skill-author is updating unreagent-config next, then the reviewer goes over both cards. Subject: the worker's 'Refuse a broken unreagent.yaml link instead of loading .yml (k157, k174)'.
+
+**unreagent-skill-author 2026-11-21: skill unreagent-config brought in line (worktree, uncommitted).** File: `.claude/skills/unreagent-config/SKILL.md` only, "Load order":
+- Step 1: `findConfig(dir)` takes the first of `unreagent.yaml` / `unreagent.yml` that is there, else `unreagent.yaml`. Each candidate goes through `configPresent` (`os.Lstat`, then `ResolveLink`). Only a missing name falls through. A broken link (dangling, chain, loop), or any other Lstat error, is a load error naming it, so `.yml` is never loaded in place of a broken `.yaml` link (`TestFindConfigRefusesBrokenLink`). A valid link counts under its own name, so the config directory and the overlay are the link's. An explicit `-config` skips the check and fails in `decodeYAML`'s read without naming the target.
+- Step 3: `overlayPresent` is now `configPresent`, described as the same check step 1 uses. The ResolveLink / `writeTarget` reference moved to step 1, where the check is first named.
+- k174: the skill only lists `KillCrashReporter` as a `*bool` and states no crash-episode semantics, so nothing changed there. I also checked `unreagent-windows` (killCrashReporter bullet, ~:103-112). It already matches the updated config.go comments, including the stop in the delay ending the episode, so it needs no change. No other skill names `overlayPresent` or `findConfig`.
+- Check: `go -C <worktree> test -count=1 ./internal/skills` gives ok.
+
+**unreagent-reviewer 2026-11-21: k157 + k174 READY.** Reviewed the worktree on 4ac817d (uncommitted). Files: internal/config/config.go, internal/config/load_test.go, README.md, unreagent.example.yaml, .claude/skills/unreagent-config/SKILL.md. The tree was unchanged by the review (sha256 of all 5 files matched before and after).
+
+**Check, run by me, all green:** `gofmt -l cmd internal skills` printed nothing; `go vet ./...` and `GOOS=windows go vet ./...` passed; `go test -count=1 ./...` passed (only skip: TestWarnIfMissingAppliesPathExtOnWindows, Windows-only, not this card); `go test -race -count=1 ./internal/config` passed; `make linux` and `make windows` passed (go1.26.6).
+
+**Applies on 1d30fb6:** `git apply --cached -3` into a scratch index read from 1d30fb6 applied all 5 files cleanly, with no conflicting hunk. k179 touched only internal/supervisor and Changes. k127's worktree changes only internal/config/permission.go and permission_test.go, so there is no file overlap and no name clash (no findConfig, configPresent, overlayPresent, symlink or TestFindConfig* in its diff).
+
+**k157 on the real binary** (`make linux`, copied next to each case in scratch, so exeDir() is that directory):
+- dangling unreagent.yaml + real .yml: `Error: config not readable: <dir>/unreagent.yaml is a symlink to <dir>/gone/unreagent.yaml, which does not exist`, rc=1;
+- chain (.yaml -> hop1 -> missing) + .yml: the "following the links leads to <missing>" text, rc=1;
+- loop + .yml: `... is a symlink that cannot be resolved: EvalSymlinks: too many links`, rc=1;
+- relative dangling link + .yml: names `nothere.yaml`, rc=1;
+- dangling .yml, no .yaml: error naming unreagent.yml, rc=1;
+- only .yml: `Config: <dir>/unreagent.yml` (a missing name falls through);
+- .yaml linked to a real file, with a .yml beside it that holds an unknown key: `Config: <dir>/unreagent.yaml`, loaded through the link, and the .yml was never read;
+- neither: today's `config not readable (<dir>/unreagent.yaml): open ...: no such file or directory`.
+- The text in the dangling case is ResolveLink's, not decodeYAML's "(path): open", so Load does surface findConfig's error. That is the wiring m2 leaves untested; I confirm the worker's manual check.
+- Before (a binary built from main 1d30fb6, whose findConfig is byte-identical to v0.0.9's): the dangling .yaml case logged `Config: <dir>/unreagent.yml` and loaded it.
+
+**configPresent reuse is sound.** findConfig's dir comes from os.Executable, so it is a real directory, and an Lstat error other than not-exist means the directory itself cannot be searched (EACCES and the like). The old fileExists (os.Stat) then fell through to .yml, which hit the same error, and Load failed in decodeYAML. Now it fails one step earlier, with the path named. In the one case that is still possible (.yaml unreadable by Lstat, .yml readable), refusing to load the other file is the point of this card. A directory named unreagent.yaml was "present" before (os.Stat err == nil) and still is, so nothing changes there.
+
+**Tests can fail.** I ran 4 mutants via `go test -overlay` (whole ./internal/config package, tree untouched), and all 4 were killed:
+- worker m1 (`continue` on a configPresent error): 3/3 RefusesBrokenLink subtests failed;
+- worker m3 (os.Stat in configPresent): 3 k124 overlay subtests, TestLoadReportsOverlayLookupError and 3/3 new subtests failed;
+- my m8 (strict check only for .yaml, old fileExists for .yml): the "dangling unreagent.yml" subtest failed;
+- my m9 (findConfig returns the broken link's path, nil error): 3/3 failed.
+- m2 (Load ignores findConfig's error) survives in unit tests, as reported; I accept it, since the binary check covers it and a test-only seam for exeDir() is not worth adding.
+
+**k174: the comments match the code.** I checked config.go:94-116 against followsCrash (`Automatic || ReplacesRestart || AfterGiveUp`), editorPreStart and cleanRecovery (cmd/launcher/lifecycle.go), and the supervisor:
+- replacesRestart() is `cmd == nil && backoff != nil && backoffAuto`, which covers the restart delay and the retry delay of a failed start, but not the delayed first start;
+- ctrlStop sets `backoff = nil`, so a later start has ReplacesRestart false, Automatic false and AfterGiveUp false, and gets the kill and the empty Saved/Crashes;
+- console `r`, ue_restart -> RestartService; console start, ue_start -> StartService; stop, ue_stop -> StopService;
+- TestPreStartSaysWhetherTheStartReplacesAPendingRestart pins the stop case (supervisor_test.go ~:396);
+- k179 on main extends ReplacesRestart to a start that is waiting when the delay runs out ("during the delay" still holds).
+- The main agent's README claim (README.md:658, "a ue_stop / console stop during the restart delay ends the crash episode, so a later start kills the reporter again") is correct by the same path. The killCrashReporter and cleanOnRestart rows now agree with each other and with the comments. Both reporter exe names match crashReporterKillers.
+
+**Findings (none blocking):**
+1. Scope (process): README.md and unreagent.example.yaml belong to unreagent-doc-writer in OWNERS (`ack-team owner`), and the main agent edited them. The house rule lets the main agent edit plain prose docs, and k157's decision note had sent the README fix to the doc-writer. The content is correct, as checked above. The release-manager should take this as an accepted deviation, not a precedent.
+2. .claude/skills/unreagent-config/SKILL.md:28: "so the config directory and the overlay's are the link's" reads ambiguously. Suggestion: "so the config directory, and the overlay next to it, are the link's, not the target's". Skill-author nit.
+3. SKILL.md:47: the reflow left a short line ("a load error too. This is"). Cosmetic.
+4. README.md:309-312 (optional, older): the paragraph names `unreagent.local.yaml`, but with unreagent.yml the overlay is `unreagent.local.yml` (localPathFor). It is more visible now that README names the .yml fallback. Doc-writer, if at all.
+- Windows: the change only compiled. It is not platform-guarded, but whether os.Lstat/ResolveLink see a Windows symlink at unreagent.yaml is k124's behaviour on Windows, and it is **unverified there, not tested**.
+- English only; no German in any added line.
+
+**Subject:** I confirm `Refuse a broken unreagent.yaml link instead of loading .yml (k157, k174)` (72 chars).
+
+**Changes:** I confirm the worker's entry. "no longer" fits, since v0.0.9's findConfig used os.Stat and loaded the .yml past a dangling .yaml (shown above on a binary with the identical findConfig). Optionally, the release-manager can fold it into the existing {{$NEXT}} k124 bullet ("A dangling or looping unreagent.local.yaml symlink is a load error naming the link, not a missing overlay."), so the same rule does not appear in two bullets. k174 needs no entry.
+
+Skill-author: review findings 2 and 3 fixed in .claude/skills/unreagent-config/SKILL.md. Step 1 now reads: a valid link counts under its own name; the config directory is the link's directory and the overlay is named after the link and looked up next to it, not its target (checked against Load: filepath.Abs does not resolve links, filepath.Dir and localPathFor take the found path). Step 3 paragraph rewrapped. go test ./internal/skills ok.
+
+Committed as 43cd3f3 (Refuse a broken unreagent.yaml link instead of loading .yml). Full check green on the committed tree.
