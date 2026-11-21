@@ -1,0 +1,62 @@
+---
+class: standard
+completed: 2026-11-21T14:43:19Z
+created: 2026-11-21T01:18:35Z
+id: 104
+priority: high
+started: 2026-11-21T01:41:39Z
+status: done
+tags:
+- permissions
+- security
+title: 'Permission matcher: a relative rule that cleans to * allows everything'
+updated: 2026-11-21T14:43:19Z
+---
+
+Found in the k42 re-review, pre-existing (not caused by k42): the path cleaning in internal/config/permission.go turns a hand-written relative rule into a wildcard. Write(./*) and Write(x/../*) both allow Write on /etc/passwd in allowlist mode. k42 fixed the substituted case (placeholders are now always absolute), but a user-written relative pattern still widens. Fix: reject (or refuse to load) a path rule that is relative or that cleans to a bare * / root, and decide what a relative rule should mean, if anything. Regression test in internal/config: Write(./*), Write(x/../*), Write(*) on an outside path. Lane: unreagent-worker. Size S/M.
+
+Worker done (worktree-agent-a37f74fe4818f37c6, uncommitted, based on 2e72af4): for Read/Write/Edit/MultiEdit/NotebookEdit a rule whose path is not absolute or is only a root (./*, x/../*, *, Source/*, C:*, empty, /*, C:\*, placeholders climbing to a root) is a load error naming permissions.allow|deny[i] (checked only while permissions.enabled); bare tool name = every path. At match time an allow rule with such a path never grants (covers MCP tools, Glob/Grep, tool-name globs); deny rules match as written. No documented meaning for relative rules found. Tests TestPathRulesMustBeAbsolute, TestPathAllowRulesDoNotWiden, red -> green, each fix pinned by a revert.
+
+**Review 2026-11-21** (unreagent-reviewer, worktree-agent-a37f74fe4818f37c6, uncommitted on 2e72af4; files internal/config/permission.go, permission_test.go, config.go, load_test.go): APPROVE WITH NITS. I found no bypass or widening. Nit 1 should be fixed in the same pass as the k59 changes.
+
+Checks run by me in the worktree, all green: gofmt -l cmd internal (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./... (4 pkgs ok); go test -race ./internal/config; GOOS=windows go test -c ./internal/config; make linux; make windows. unreagent.example.yaml (as shipped, and with mode allowlist plus the commented allow line switched on) and example/unreagent.yaml load.
+
+Adversarial load-time probes, all rejected: ./*, x/../*, *, empty, whitespace, /*, //*, \\*, \\\*, \/*, /./*, /proj/../../*, C:, C:*, C:/, C:\, C:\/*, C:\.\*, C:\..\*, C:/.., ~/*, $HOME/*, " Write ( ./* ) ", placeholder climbing (pinned). Runtime: Wr*(./*), *(./*), *(*), mcp__fs__*(*) do not grant /etc/passwd. Legit grants still work: bare Write, Write(/proj/*), Write(C:\Proj\*), Write(\\server\share\*), mcp__unreal__*(/Game/*), NotebookEdit(/proj/*), Bash(./build.sh *) (without a redirection), Grep(TODO*) (same as HEAD: no grant when a path is passed).
+
+Nits:
+1. permission.go:279-314 (checkRules + pathPatternProblem root case, line 310). Deny rules that name a root are rejected, and the error at :290 says "write the bare tool name". That is only equivalent for /* on POSIX. On a multi-drive Windows host, deny Write(C:\*) means "never write to C:". The bare Write blocks D:, E: and UNC paths as well. No other spelling is left (C:/*, C:\.\* and C:\..\* are all rejected). A root-anchored deny rule cannot widen anything. Suggest applying the root check to allow rules only, and keeping "not absolute" for both lists.
+2. Behaviour change that neither the card nor k111 mentions: Grep(*), Glob(*) and mcp__x__*(*) no longer grant a call that carries a path field. HEAD 2e72af4 granted them, as verified. This fails closed, but it is silent, because these are not load-checked. Add it to k111.
+3. The root check does not know the Windows namespace prefixes. Write(\\?\C:\*) and Write(\\.\C:\*) load, while Write(C:\*) is rejected; \\.\* loads on Windows. The rule is only literal, since it never matches C:\ values, but it is a whole-drive rule in another spelling. Belongs with k109.
+4. The Windows-only branch prefix == "//" (permission.go:310, the \\* root) is not pinned: removing it leaves every test green, because on Linux \\* cleans to /*. My probe shows the logic is correct with windows=true. Add a pathPatternProblem(..., true) table.
+5. On Windows a drive-less rooted deny rule (README's Write(/etc/*)) is accepted but never meets C:\ paths. That is the same "inert deny" argument that justifies rejecting relative deny rules. At least document it (k111 item 1 already plans that).
+
+Mutation spot-checks (scratch copy): removing the allow guard (:243), the checkRules call, the deny list from checkRules, the root case, or the enabled gate each turns TestPathAllowRulesDoNotWiden or TestPathRulesMustBeAbsolute red.
+
+Unverified at runtime (Windows-only): every windowsPaths=true path, meaning the load check, the runtime guard and UNC parsing on Windows. These were exercised via the pure helpers on Linux and a Windows compile only.
+
+**Approved with nits; reopened for one nit in the same worktree (2026-11-21):** root-only rules are rejected in deny too, but bare Write in deny blocks every drive on Windows, so 'deny all writes to C:' can no longer be written; a deny can only block. Check roots only in allow rules (relative deny rules stay rejected: they never match). Plus a test for the Windows-only \\* root check (prefix == "//"). Re-review with k59.
+
+Review fixes done (2026-11-21): relative path patterns rejected at load in both lists, root-anchored ones only in allow (deny at a root loads again, as on main); separate messages per list; runtime guard in matchValue covers MCP/Grep/Glob/tool-glob rules; Windows-only \\* root pinned by TestPathPatternProblem. Back to the same reviewer.
+
+**Re-review 2026-11-21** (unreagent-reviewer, same worktree as k59 and k113; files internal/config/permission.go, config.go, load_test.go): APPROVED. COMMIT GATED ON k113.
+
+Nits 1 and 4 are fixed:
+- Deny rules at a root load again: the POSIX root, a drive root, and traversal to the root. All three are pinned.
+- Relative rules are rejected in both lists. Each list has its own message, e.g. "to deny every path, write the bare tool name".
+- The Windows-only \\* root (prefix == "//") is pinned by TestPathPatternProblem.
+
+Nits 2, 3 and 5 stay with k111 and k109, as planned.
+
+k111 item 1 needs an update from the doc writer. It still says root-only rules are a load error, which is now true for allow rules only.
+
+The load error texts changed. No README, example-config or docs text quotes them (checked with grep). unreagent.example.yaml loads, both as shipped and in allowlist mode with its commented allow line switched on. example/unreagent.yaml loads.
+
+Check: the same green run as on k113.
+
+Revert pins, all red: runtime allow guard off, load check off, deny at a root rejected, verb in the deny message, the // root.
+
+Commit: this worktree also holds k59 and k113. k113 is CHANGES REQUESTED, so k104 goes in with them once k113 is green. Splitting k104 out would need a partial commit of permission.go; that is the release-manager's call.
+
+Unverified at runtime (Windows-only): the load check, the runtime guard and the path readings with windowsPaths=true. These were exercised only through the pure helpers on Linux and a Windows compile.
+
+Committed in 602304e on main (checks green: gofmt, vet both GOOS, test, race, make linux/windows; Windows compiled only).
