@@ -103,7 +103,7 @@ on the next line. The fields of that entry say whether a retry comes:
 | Result | Meaning |
 |---|---|
 | `running: true`, no error | a process was spawned. It can still die while starting up |
-| error, `desired: false` | the executable does not exist (wrong `unreal.editor`, engine root not found). There will be no retry |
+| error, `desired: false` | the executable does not exist (a wrong `unreal.editor`, or an engine root from `UE_ROOT` or `engineRoot` that holds no editor). There will be no retry |
 | error, `desired: true, restarts: 1` | spawning failed for some other reason, such as permissions. It is retried after `restartDelaySeconds` |
 | error, `desired: true, restarts: 0` | spawning failed and will not be retried, as under `unreal.restart: never` |
 

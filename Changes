@@ -78,7 +78,8 @@ Revision history for unreagent
     never reaches logs, and logs service=agent stays empty while the agent
     runs in the foreground.
   - The ue_restart description now agrees with the compile advice (a restart
-    also starts a stopped editor; stop it first to compile), and approve names
+    also starts a stopped editor; stop it first to compile), as does the
+    unreagent-files skill, and approve names
     a non-string tool name as such in its deny reason and logs <unknown> for a
     missing one.
   - The release archives (zip and tar.gz) include NOTICE with the third-party

@@ -325,10 +325,14 @@ What these tools are good for is the text half of a UE project: `.cpp`/`.h`
 under `Source/`, `.cs` build rules, `.ini` under `Config/`, `.uproject` and
 `.uplugin`, shaders, and any scripts or data files you keep alongside.
 
-Editing C++ or config does not change the running editor. A source change needs
-a compile (`run_command` with the project's `compile` command) and usually an
-editor restart (`ue_restart`) before it has any effect; the `unreagent-build`
-and `unreagent-iterate` skills cover that loop.
+Editing C++ or config does not change the running editor. Through unreagent's
+tools, a C++ change takes effect in a new editor process: stop the editor
+(`ue_stop`), compile (`run_command` with the project's `compile` command),
+then start it (`ue_start`) to load the new modules. Stop it before the
+compile, because UnrealBuildTool refuses to build while Live Coding is active.
+A config change (`Config/*.ini`, `.uproject`, `.uplugin`) needs an editor
+restart (`ue_restart`); a C++ plugin newly enabled there needs the C++ steps
+instead. The `unreagent-build` and `unreagent-iterate` skills cover that loop.
 
 ## See also
 

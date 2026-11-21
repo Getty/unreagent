@@ -21,8 +21,8 @@ command line of your own.
 description lists them as well, as they were at launcher start. You get names
 only: the `description` written in the config is not exposed through any tool.
 
-Unless the project's config defines them differently, every launcher has two
-commands:
+Unless the project's config defines them differently, the launcher has two
+built-in commands:
 
 | Name | Runs |
 |---|---|
@@ -30,14 +30,24 @@ commands:
 | `package` | `<engine>/Engine/Build/BatchFiles/RunUAT.bat BuildCookRun -project=<.uproject> -noP4 -platform=Win64 -clientconfig=Development -build -cook -stage -pak -archive -archivedirectory=<project dir>/Packaged` |
 
 - **`compile`** builds the `<ProjectName>Editor` target: the project's own C++
-  modules under `Source/`. A project without its own `Source/` has no such
-  target, and `compile` fails there. That project can still have C++ to build:
-  code plugins under `Plugins/`, for example an in-editor plugin installed as
-  source. Those build through the `UnrealEditor` target with
-  `-Project=<.uproject>`. The built-in `compile` does not run that target, so
-  building them needs a command the user adds under `commands:`.
+  modules under `Source/`, and with them the enabled code plugins under
+  `Plugins/`, so such a project needs no other command for its plugins. A
+  project without its own `Source/` has no such target, and `compile` fails
+  there. That project can still have C++ to build: code plugins under
+  `Plugins/`, for example an in-editor plugin installed as source. Those build
+  through the `UnrealEditor` target with `-Project=<.uproject>`. The built-in
+  `compile` does not run that target, so building them needs a command the
+  user adds under `commands:`.
 - **`package`** builds, cooks, stages and paks a Development Win64 game. It
   archives the result under `Packaged/` in the project directory.
+
+Both need the engine root and the `.uproject`. When the launcher did not find
+one of them at start, it leaves both out: they are not in `status` or in the
+`run_command` description, a call returns `Error: unknown command "compile"`,
+and the launcher log says
+`WARN built-in command compile not offered: it needs the engine and the .uproject (see above)`.
+The user sets `UE_ROOT` or `engineRoot`, or `unreal.project`, and restarts the
+launcher.
 
 The list is fixed when the launcher starts. You cannot add a command, change
 one, or pass it arguments through MCP. New or changed commands are a config
@@ -104,7 +114,7 @@ These errors come back before anything runs:
 |---|---|
 | `Error: 'name' missing` | `name` is absent or empty |
 | `Error: unknown command "<name>"` | no such command. Check `status` |
-| `Error: start failed: exec: …` | the program could not be started, for example `Build.bat` is not at that path. If the path begins with `/Engine/`, the engine root was not found when the launcher started |
+| `Error: start failed: …` | the program could not be started. A program missing at its path, such as `Build.bat`, reads `start failed: fork/exec <path>: …`: the engine root the launcher uses (the `Engine:` line of its log) holds no engine, or a command the user defined names a wrong path. A bare program name that is not on the launcher's PATH reads `start failed: exec: "<name>": …` |
 
 ## Reading the result
 
@@ -235,7 +245,8 @@ There, a run's children are not killed with it.
 | What you see | What it means | What to do |
 |---|---|---|
 | `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
-| `Error: start failed: exec: …/Engine/…` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
+| `Error: unknown command "compile"`, and `status` lists neither `compile` nor `package` | the launcher found no engine root or no `.uproject` at start and left the built-in commands out | the user sets `UE_ROOT` or `engineRoot`, or `unreal.project`, then restarts the launcher |
+| `Error: start failed: fork/exec …/Engine/…: …` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
 | `exit` non-zero, with `Unable to build while Live Coding is active` | the editor is running with Live Coding | `ue_stop`, then compile again |
 | `exit` non-zero, an omitted marker, and the errors look like follow-ons | their cause is among the omitted lines or bytes | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
