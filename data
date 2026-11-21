@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-11-21T14:52:19Z
+created: 2026-11-21T13:05:51Z
+id: 170
+priority: low
+started: 2026-11-21T14:51:02Z
+status: done
+tags:
+- agents
+- owners
+title: unreagent-doc-writer's agent description claims CLAUDE.md, which OWNERS gives
+  to the main agent
+updated: 2026-11-21T14:52:19Z
+---
+
+From the k38/k46 review. .claude/agents/unreagent-doc-writer.md (description, line 3) lists CLAUDE.md among the doc-writer's files, but OWNERS gives CLAUDE.md to the main agent, and CLAUDE.md says OWNERS is authoritative. So the doc-writer edited CLAUDE.md in k38. Done when the agent description and OWNERS agree. The agent files come from the getty-agent-team preset, so the fix may belong in its source rather than as a local edit; check that first. Lane: main agent.
+
+**Main agent 2026-11-21 (fixed in its own lane, uncommitted in the main checkout):** .claude/agents/unreagent-doc-writer.md is a local file. skilletor.json installs no agents, and OWNERS gives .claude/ to the main agent, so the fix is a local edit and the preset's source is not involved. Line 3 now reads 'README.md, unreagent.example.yaml comments and docs/ specs; CLAUDE.md belongs to the main agent (OWNERS).' Nothing else in the agent file names CLAUDE.md. Review: only the description changed, which is agent configuration with no build or test impact, and the main agent checked it against OWNERS:45-46. Not user-facing, so no Changes entry. Proposed subject: 'Keep CLAUDE.md out of the doc-writer's file list (k170)'.
+
+Ready for the release-manager: one-line change to the agent description.
+
+Committed as 4ac817d.
