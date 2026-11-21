@@ -871,6 +871,11 @@ description and are therefore automatically in context.
 Each call opens the root afresh and resolves the path inside it, link by link,
 so a link cannot be swapped in between the check and the use.
 
+The confinement covers path resolution only. A hard link inside the root is a
+second directory entry for a file that may live elsewhere, and on Linux a bind
+mount inside the root leads out of it; neither is detected, so do not put one
+there.
+
 - A relative path is taken against the root. An absolute path is accepted only
   when it lies under the root; any other absolute or rooted path is refused:
   `path "/etc/passwd" must be relative to the project root "<root>"; an absolute path is accepted only under it`.

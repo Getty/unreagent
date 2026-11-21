@@ -64,10 +64,16 @@ authoritative statement of the root and the mode in effect.
 ## Root confinement
 
 `files.root` defaults to `${PROJECT_DIR}`, the directory holding the `.uproject`,
-and is substituted at config load. If it is set to an empty string, the root
-falls back to the agent working directory, and failing that to the launcher's
-own working directory. Where an error message below names `<root>`, that is
-`files.root` made absolute, as configured, not resolved through links.
+and is substituted at config load; an empty `files.root` gets the same default.
+There is no fallback to any other directory. When a placeholder in
+`files.root` cannot be resolved (for the default: no `.uproject` found next to
+the config and no `unreal.project` set), `files.enabled: true` stops the
+launcher at config load with `${PROJECT_DIR} is unresolved (…) but used by …`,
+`files.root` among the named fields, and `-files` starts without the four tools
+and logs
+`WARN file tools disabled: files.root names a placeholder that is unresolved — set unreal.project or files.root`.
+Where an error message below names `<root>`, that is `files.root` made
+absolute, as configured, not resolved through links.
 
 Every call opens the root afresh and resolves the path inside it one component
 at a time, links included, so nothing can be swapped in between the check and
@@ -79,15 +85,23 @@ costs you:
   elsewhere on the machine.
 - **An absolute path is accepted only under the root.** It is made relative to
   the root and then gets every check below; the root's own absolute path means
-  the root. A root that lies behind a link may be spelled either way, as
-  configured or as its real location. Any other absolute path is refused with
+  the root. A root that lies behind a symlink may be spelled either way, as
+  configured or as its real location. Behind a Windows junction only the
+  configured spelling works: Go does not resolve junctions, so the junction's
+  real location counts as outside the root. Any other absolute path is refused
+  with
   `Error: path "<given>" must be relative to the project root "<root>"; an absolute path is accepted only under it`.
   On a Windows host that includes a rooted path (`\Source\Foo.cpp`) and a
   drive-relative one (`C:Source\Foo.cpp`).
-- **Escaping with `..` is refused** after the path is cleaned, with
-  `Error: path outside the allowed root`. `Source/../Config/x.ini` is fine;
-  `../x` and `Source/../../x` are not. On a Windows host a relative path with a
-  colon in it (`a.txt:stream`) gets the same error.
+- **Escaping with `..` is refused** before anything is opened, with
+  `Error: path outside the allowed root`: `../x` and `Source/../../x` never
+  get through. A `..` that stays inside the root is not cleaned away but
+  walked: on a Linux host `Source/../Config/x.ini` works only while `Source`
+  exists as a directory, and otherwise fails with
+  `Error: openat <name>: no such file or directory` (or `not a directory`). A
+  Windows host cleans the path before walking it. Write `Config/x.ini` instead.
+  On a Windows host a relative path with a colon in it (`a.txt:stream`) gets
+  the `path outside the allowed root` error as well.
 - **A link that leaves the root is not followed.** A symlink or junction
   anywhere on the path is refused when its target is absolute or lies outside
   the root:
@@ -99,8 +113,10 @@ costs you:
   missing directories beyond such a link, and it holds through a dangling link.
   An absolute target is refused even when it points back into the root, so a
   Windows junction, whose target is always absolute, is never followed. A
-  relative link that stays inside the root works normally. The link itself
-  still shows up when you list its parent; only following it fails.
+  relative link works normally as long as its target never leaves the root:
+  one that climbs out and back in (`Cfg` → `../MyGame/Config` in a root named
+  `MyGame`) is refused with the same error. The link itself still shows up
+  when you list its parent; only following it fails.
 - **A link loop, or more than 8 links on one path,** fails with
   `Error: openat <name>: too many levels of symbolic links`.
 - **Windows reserved device names are refused** in any path component, on every
