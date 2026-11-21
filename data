@@ -1,0 +1,100 @@
+---
+claimed_at: 2026-11-21T18:46:30Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T18:46:30Z
+created: 2026-11-21T09:31:16Z
+id: 155
+priority: low
+started: 2026-11-21T18:09:51Z
+status: done
+tags:
+- lifecycle
+- mcp
+title: With no agent, a serve failure after the editor gave up leaves the launcher
+  idling
+updated: 2026-11-21T18:46:30Z
+---
+
+Found during the k45/k141 review. With no agent configured, the launcher stays up after the editor gives up, as long as MCP is serving (k69): a retry can still come through MCP. If serving then fails (decision on k45: a serve failure after the bind logs an ERROR and does not exit), nothing checks again. The launcher idles with no editor, no agent and no MCP until Ctrl-C or q.
+
+Done when: in that state (no agent, editor given up, MCP no longer serving) the launcher ends with exit 1 the same way the k69 rule does for MCP off, whichever of the two events comes second, with a test for both orders. Rare; low priority.
+
+**Decision 2026-11-21 (main agent):** as the card says. With no agent, the editor given up and MCP no longer serving, the launcher ends with exit 1 by the k69 rule, in either order, with a test for each order. The log line names both reasons. Worker in its own worktree; main.go/lifecycle.go run one after another.
+
+2026-11-21 Done, not committed (worktree on main dc53cfe). Files: cmd/launcher/lifecycle.go, cmd/launcher/main.go, cmd/launcher/lifecycle_test.go, cmd/launcher/main_test.go.
+
+What changed:
+- lifecycle.go: new type editorGiveUp, zero value ready, one mutex. Methods: keepServing (the editor's give-up), started (the editor's PreStart), mcpStopped (after a serve failure). makeEditorExitHandler takes it as a new parameter. On the k69 give-up (no agent, StartFailed), the handler reads mcpServing under that lock. If MCP serves, the give-up stays waiting. If MCP is not serving, the handler ends the session as before. mcpStopped ends a waiting give-up with exit 1. Its line names both reasons: 'MCP stopped serving, and the editor has not been started again since it failed to start, or failed within 10s of starting; no agent is configured and MCP is not serving — stopping everything.' Both orders return the same run() error (errEditorGaveUp, the old k69 text). The 'failed to start …' wording is now the package var editorFailed.
+- Exactly one event ends the session. serveMCP clears mcpServing before mcpStopped takes the lock. The handler reads mcpServing inside the lock. So whichever event comes second sees the first.
+- main.go: run() declares 'var giveUp editorGiveUp'. The editor's PreStart calls giveUp.started() before editorPreStart, so any start (ue_start, console start/r, the restart policy) takes a give-up back. serveMCP now returns true when it stopped on an error and false when it was closed. run() then calls giveUp.mcpStopped(sess, logger).
+- k45 is kept: with an agent, the give-up is never recorded, so a serve failure is only the ERROR line. TestRunReportsAServeFailureOnTheUsersConsole pins this and goes red under M4.
+
+Tests (lifecycle_test.go, through the real run(); the new hook mcpBreakEnv/breaksOnFile breaks the bound port when the test chooses):
+- TestRunEditorGiveUpThenServeFailureExitsNonZero (order 1): the editor is missing, so 'keeps serving MCP'. Then MCP breaks. Expect exit 1, both lines, and no 'Signal received'.
+- TestRunServeFailureThenEditorGiveUpExitsNonZero (order 2): the editor runs, MCP breaks, then the editor fails fast (restart: never). Expect exit 1, the k69 'MCP is not serving' give-up line, and not the k155 line.
+- TestRunServeFailureAfterTheEditorStartedAgainKeepsRunning: give-up, then ue_start, then MCP breaks. The launcher keeps running, and SIGTERM gives 0. This pins started().
+- Existing makeEditorExitHandler call sites (3) get new(editorGiveUp).
+
+Mutations (go test -overlay, tree unchanged):
+- M0, the whole fix reverted (main's lifecycle.go and main.go, old call sites): order 1 goes RED with 'session never ended'. Order 2 stays GREEN.
+- Order 2 already worked on main. Since 5f10d83 (k123), the handler reads mcpServing at the editor's exit, and TestEditorGiveUpAfterMCPStoppedServing pinned it at unit level. So the order-2 test cannot fail without this fix. It is pinned by M4/M5 instead.
+- M1, mcpStopped not called: order 1 red.
+- M2, the give-up not recorded: order 1 red.
+- M3, started() dropped from PreStart: the started-again test red.
+- M4, every serve failure ends the session: order 2, started-again and TestRunReportsAServeFailureOnTheUsersConsole (agent present, k45) red.
+- M5, keepServing always 'serving': order 2 red, plus the k69 unit tests and TestRunEditorStartFailureWithoutAgentExitsNonZero.
+- Not caught by any test: reading mcpServing outside the lock. That is a narrow interleaving, and it is argued in the comment.
+
+Full check, all green:
+- gofmt -l cmd internal skills: empty
+- go vet ./... and GOOS=windows go vet ./...
+- go test -count=1 -timeout 600s ./...
+- go test -race -timeout 900s ./cmd/launcher (105s)
+- make linux, make windows
+Windows UNVERIFIED: the run() tests skip there. The change has no platform code.
+
+v0.0.9: neither 3ab0142 (k69) nor 5f10d83 (k45/k123) is in v0.0.9. That release idled in every no-agent give-up and logged a serve failure only. So there is no 'no longer' wording.
+
+Proposed subject (71): Exit 1 when MCP stops serving after the editor gave up, no agent (k155)
+
+Proposed Changes entry. It can also be folded into the unreleased k69 bullet ('it also exits 1 with no agent and MCP off …'):
+  - With no agent configured, the launcher also exits 1 when MCP stops
+    serving after the editor gave up and before anything started it again,
+    as it does when MCP is off or stopped serving first.
+
+README, untouched; doc-writer:
+- README.md:404, Exit codes row '1', 'no agent configured and MCP not serving (off, or stopped serving after the bind) …': say 'in either order'. A give-up while MCP served ends the launcher once MCP stops serving, unless the editor was started again in between.
+- README.md:416-419, 'With MCP on … an editor give-up does not end the launcher: it logs the failure and keeps serving MCP …': add that, with no agent, MCP stopping later ends it with exit 1.
+- README.md:1484-1488, the serve-failure paragraph, 'the launcher does not exit … keeps everything else running: the editor, and the agent if one is configured': add the exception, no agent and the editor given up gives exit 1.
+
+Drift for the dispatcher:
+1. .claude/skills/unreagent-core/SKILL.md:154-157 says 'launcher, editor and agent keep running' after a serve failure. It needs the k155 exception (skill text).
+2. serveMCP's ERROR line ('everything else keeps running. Save your work in the editor …', pinned by TestServeMCPFailureMarksMCPNotServingAndSaysSo) is followed in the k155 case by the 'stopping everything' line. The editor is not running then, so the ERROR text is accurate only for the other cases. Wording only, left as is.
+3. Narrow race, not closed: OnExit runs in its own goroutine. A ue_start whose PreStart ran before the give-up's OnExit would leave the give-up waiting while the editor runs. A later serve failure would then end the session.
+
+Ready for review: worktree agent-acb482f557c7999a1 (base main dc53cfe), 4 files in cmd/launcher, not committed. Order 1 fixed, order 2 already held on main since 5f10d83 and is now pinned through run(). Full check green; Windows unverified. Report, mutations, subject, Changes entry and README sentences are in the note above.
+
+2026-11-21 skill-author: .claude/skills/unreagent-core/SKILL.md updated in worktree agent-acb482f557c7999a1, not committed. (1) Invariant 6, serve-failure paragraph: added the k155 exception. With no agent, an editor that gave up by the k69 rule while MCP served and was not started again ends the session with exit 1 once MCP stops serving. It names editorGiveUp (lifecycle.go) with keepServing / started / mcpStopped, serveMCP's stopped result, one lock for both orders, errEditorGaveUp, and with an agent the ERROR line only (k45). (2) Line 42: the editor's PreStart is now 'editorGiveUp.started, then editorPreStart'; the old text named editorPreStart as the whole hook. Checked, unchanged: the main.go and lifecycle.go rows (nothing in them is wrong; neither listed makeEditorExitHandler before). No k69 statement elsewhere: skills/unreagent-iterate crash-loop paragraph and status rows are still correct. go test -count=1 ./internal/skills: ok.
+
+2026-11-21 Review (unreagent-reviewer): CHANGES NEEDED, two small fixes, no logic change. Reviewed: cmd/launcher/lifecycle.go, main.go, lifecycle_test.go, main_test.go, README.md (main agent's 3 edits), .claude/skills/unreagent-core/SKILL.md (skill-author).
+
+Check run myself in the worktree, all green: gofmt -l cmd internal skills (empty); go vet ./... and GOOS=windows go vet ./...; go test -count=1 -timeout 600s ./...; go test -race -timeout 900s ./cmd/launcher (108s); the three new tests -race -count=5 (5/5 each); k45 agent-present, cleanOnRestart run tests, editor-exit unit tests -race -count=3; make linux; make windows. Windows UNVERIFIED: the run() tests skip there, Windows is compiled only; the change has no platform code.
+On 146366f: code files apply cleanly; README conflicts only on the adjacent Exit-code rows (k162 mcp.address row and k155 give-up row). Resolve as main's mcp.address row plus k155's give-up row. Resolved this way in a scratch worktree: gofmt, both vets, go test ./... and make windows green.
+
+Logic, OK: the lock makes exactly one of the two events end the session (give-up reads serving under the lock, serveMCP clears serving before mcpStopped locks). All starts (ue_start, ue_restart, console start/r, autostart, restart-policy backoff) run start() and PreStart, so started() clears. With an agent gaveUp is false and nothing is recorded (k45 kept). A normal close/Ctrl-C returns ErrServerClosed (Serve also returns it when Accept fails during shutdown), and httpSrv.Close only runs after the session ended, so finishLocked would ignore a fail anyway.
+Tests: M0 (fix reverted) turns order 1 red, 'session never ended'; order 2 green as reported, held since k123. M3 turns the started-again test red; M4 turns order 2, started-again and TestRunReportsAServeFailureOnTheUsersConsole red. The hook mcpBreakEnv/breaksOnFile is test-only; production keeps the existing listen seam.
+
+Findings:
+1. (worker) main_test.go:576-587 TestServeMCPClosedIsNotAFailure ignores serveMCP's new result. My mutation 'return true on close' survives every test. Effect today: only a stray k155 line after a shutdown with a waiting give-up; the exit code is safe. Assert false there, and true in TestServeMCPFailureMarksMCPNotServingAndSaysSo (main_test.go:524).
+2. (main agent, README) README.md:1491 'a launcher with no agent whose editor has given up' is wider than the code. README:423 calls every failure without restart a give-up, but a run that failed after more than 10 s is not ended by k155. Say e.g. 'whose editor's last run was a quick failure with no restart following (see Exit codes)'. README:404 and :419 are correct in context.
+Item 3 race: real but microseconds wide. A start must reach the loop after the exit branch's peek at svc.ctrl (a start already waiting there suppresses OnExit) and before the OnExit goroutine takes the lock. It hurts only if a non-temporary Accept failure comes later, which is itself rare. Then exit 1 would kill a running editor. Accept as negligible; optionally one sentence at lifecycle.go:253-254 naming the window. If it is ever closed: keep the flag, and also check the supervisor at serve-failure time (end only when ue is neither Running nor Unresponsive/pre-start). Status alone cannot replace the flag: it cannot tell a quick-failure give-up from a long run that failed, a manual stop, manualStart or a pending backoff.
+Item 2 (ERROR line, then 'stopping everything'): leave it. No agent means no window mode, so both lines are adjacent on one console, the second names the outcome, and README documents 'right after that line'. Changing it means reordering serveMCP's logging and re-pinning its test.
+Changes: fold into the unreleased k69 bullet, not a new one. One topic, one entry; v0.0.9 had neither k69 nor k45/k123. E.g. '... with no agent it also exits 1 when the editor's last run never got going (failed to start, or failed within 10 s) and MCP is not serving: off, stopped serving first, or stopping later with no editor start in between. While MCP serves it keeps serving and says so; a signal still exits 0.'
+Subject OK: 71 chars.
+Scope: README is unreagent-doc-writer's in OWNERS; the main agent's edits fall under its prose-docs lane. No German in the touched text.
+After fixes 1+2: re-run gofmt/vet/test/make windows; no logic re-review needed.
+
+2026-11-21 Review fix, not committed, same worktree. (1) The test gap is closed. In cmd/launcher/main_test.go, TestServeMCPFailureMarksMCPNotServingAndSaysSo now asserts that serveMCP returns true on a serve failure, and TestServeMCPClosedIsNotAFailure asserts false on a normal close (the result is read after the served channel closes). Mutations by go test -overlay, tree unchanged: M6, return true on a close, makes TestServeMCPClosedIsNotAFailure red. M7, the reverse, return false on a failure, makes TestServeMCPFailureMarksMCPNotServingAndSaysSo and TestRunEditorGiveUpThenServeFailureExitsNonZero red. (2) The editorGiveUp doc comment in cmd/launcher/lifecycle.go now names the open window. A start that reaches the editor's control loop after the exit and before the exit handler takes the lock is taken back before the give-up is recorded, so a later serve failure ends the session with that editor running. README untouched. Check: gofmt -l cmd empty; go vet ./cmd/launcher green on linux and windows; go test -count=1 -timeout 600s ./cmd/launcher ok (42s); also go test -race -count=3 -run TestServeMCP ok. Windows unverified.
+
+Committed 65a3f77. Main agent decided: after review fixes 1 and 2 only a re-run of gofmt, vet, tests and make windows was needed, no second logic review. Rebased onto 0c1839c; README conflict resolved (k162 mcp.address row plus k155 no-agent row); Changes folded into the k69 bullet. Re-run green: gofmt, vet linux+windows, tests, race on cmd/launcher, make linux, make windows. Windows unverified.
