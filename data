@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-11-21T07:38:39Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:42:36Z
+created: 2026-11-21T05:35:31Z
+id: 133
+priority: low
+started: 2026-11-21T07:19:44Z
+status: done
+tags:
+- mcp
+- bug
+title: getInt converts any JSON number with int(v) and has no range check
+updated: 2026-11-21T07:42:49Z
+---
+
+Found in k73. getInt in cmd/launcher/helpers.go turns a float64 argument into int with int(v): no range or integrality check. offset=1e20 becomes MinInt64, so read_file reads from the start instead of refusing, and limit=1e20 reports "got -9223372036854775808". Non-integral values (1.5) are truncated silently. Fix: refuse a number that is not integral or does not fit an int, naming the argument; one test per case. Touches helpers.go, so it runs after k119 lands.
+
+Fix in cmd/launcher/helpers.go getInt: a float64 must be integral (v == math.Trunc(v), which also refuses NaN) and lie in [MinInt, 2^63); the upper bound is -float64(math.MinInt) because float64(math.MaxInt) rounds up to 2^63. Errors, verbatim: "'offset' must be an integer, got 1.5" and "'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got 1e+20". My choice beyond the card: a numeric string that overflows (strconv.ErrRange) gets the same range message, so the same value reads alike whether a client sends it as number or string (before: "must be an integer, got ..."). Callers read_file offset/limit and logs lines all return errResult(err), so the style is unchanged without touching filetools.go or tools.go. Tests in helpers_test.go: TestGetIntRefusesNonIntegralAndOutOfRange (non-integral, too large, first value past MaxInt, too small, overflowing string; all red before the fix), TestGetIntAcceptsIntegralEdges (negative offset, 0, MinInt; an off-by-one lower-bound mutant turns it red), TestReadFileRefusesOffsetBeyondInt (end to end through JSON-RPC; before the fix read_file returned the whole file).
+
+Ready for review. Changed: cmd/launcher/helpers.go (getInt float64 integrality and range check, intRangeErr), cmd/launcher/helpers_test.go (3 tests). Same check run as k130, all green; the new refusal tests were red before the fix. Tree uncommitted in worktree agent-a3fb6a25904aeed94, bundled with k130.
+
+Review (unreagent-reviewer), worktree agent-a3fb6a25904aeed94, files cmd/launcher/helpers.go + cmd/launcher/helpers_test.go, uncommitted on c0a5178. VERDICT: ready.
+Check run by me, all green: gofmt -l cmd internal skills (empty); go vet ./...; GOOS=windows go vet ./...; go test -count=1 ./...; go test -race ./cmd/launcher; make linux; make windows.
+Edge cases, probed through getInt and through encoding/json: 2^63 refused; -2^63 accepted as MinInt; Nextafter(2^63, 0) accepted, exact 9223372036854774784; -0 gives 0; +Inf and -Inf get the range message; NaN, 1e-300 and -1.5 get "must be an integer". 1e400 never reaches getInt (encoding/json rejects it); 1e-400 decodes to 0 and is accepted (decoder underflow, not getInt). Strings go through strconv.Atoi, base 10: "+5" and "007" accepted; "1_000", "0x10", "1e3", "5.0" and "--5" get "must be an integer, got ..."; overflow of either sign gets the range message with the original string quoted, surrounding whitespace included. The string extension is consistent and harmless: those strings were refused before too, only the wording changed.
+Callers: read_file offset/limit (filetools.go:95,99) and logs lines (tools.go:65) all return errResult; their schemas say "integer"; no internal caller passes floats; no test relied on truncation or on the old overflow wording.
+Red before the fix: with the base helpers.go, all 5 refusal subtests and TestReadFileRefusesOffsetBeyondInt fail. read_file offset=1e20 returned the whole file "0123456789", and 1.5 came back as 1.
+Mutations (scratch copy; the worktree was not touched): 11 run, 9 killed: integrality check dropped, range check dropped, upper or lower bound dropped, bound > float64(MaxInt), bound > 2^63, lower bound <=, ErrRange branch dropped, quoting dropped. 2 survived: Floor for Trunc (equivalent), and v-math.Trunc(v) > 0 (a real gap, finding 2).
+Findings, none blocking the code:
+1. For unreagent-skill-author: skills/unreagent-files/SKILL.md:179-181 and :300. The cause "not a number and not a numeric string" is now incomplete (1.5 gets the same message), and the range message "'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got ..." is not documented. skills/unreagent-iterate/SKILL.md:196-199: "more lines than are buffered returns the whole buffer" no longer holds past about 9.2e18 (now the range error), and a non-whole lines value is refused. Needs a follow-up card.
+2. nit helpers_test.go:161: only +1.5 is tested. The mutant v-math.Trunc(v) > 0 survives; it turns -1.5 into -1, a legal read_file offset, and NaN into MinInt. Add a -1.5 case.
+3. nit helpers.go:101/128: a JSON number 9223372036854775807 arrives as float64 2^63 and is refused, with a message that names 9223372036854775807 as allowed. That is float64 precision; as a numeric string the value is accepted. Accept it, or reword.
+4. Changes entry: accurate (checked above). Optional: "logs lines=1e20 used to return the whole buffer".
+
+Committed as 6a6f8b5 (k130 and k133 in one commit), fast-forwarded onto main. Windows PATHEXT behaviour (k130) unverified until the Windows box.
