@@ -126,6 +126,12 @@ Revision history for unreagent
     ue-tasks (poll, collect, list and cancel calls in the toolkit's task
     queue) and ue-context (the toolkit's get_ue_context notes and its domain
     documents).
+  - New shipped skills ue-viewport (capture_viewport: level, PIE and
+    asset-editor previews, camera presets, animation frames, and how to get
+    the JPEG into a file) and ue-pie-testing (gameplay_debug,
+    run_console_command and get_output_log: scripted PIE runs with captures
+    and a manifest, input injection, the input monitor, montages, console
+    commands, and which log to read when).
 
 0.0.9     2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
