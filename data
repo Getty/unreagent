@@ -1,0 +1,81 @@
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":115,"ts":"2026-11-21T03:12:09Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":96,"ts":"2026-11-21T03:13:34Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":96,"ts":"2026-11-21T03:14:33Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":96,"ts":"2026-11-21T03:14:45Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":115,"ts":"2026-11-21T03:15:21Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":115,"ts":"2026-11-21T03:16:54Z"}
+{"action":"move","agent":"unreagent","detail":"done","task_id":115,"ts":"2026-11-21T03:18:08Z"}
+{"action":"edit","agent":"unreagent","detail":"done","task_id":115,"ts":"2026-11-21T03:18:21Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":96,"ts":"2026-11-21T03:22:01Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":70,"ts":"2026-11-21T03:24:34Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":69,"ts":"2026-11-21T03:24:45Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":71,"ts":"2026-11-21T03:24:56Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":96,"ts":"2026-11-21T03:29:23Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":122,"ts":"2026-11-21T03:30:21Z"}
+{"action":"move","agent":"unreagent","detail":"done","task_id":96,"ts":"2026-11-21T03:31:50Z"}
+{"action":"edit","agent":"unreagent","detail":"done","task_id":96,"ts":"2026-11-21T03:32:04Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":116,"ts":"2026-11-21T03:33:02Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":118,"ts":"2026-11-21T03:33:15Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":122,"ts":"2026-11-21T03:33:29Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":116,"ts":"2026-11-21T03:33:43Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":70,"ts":"2026-11-21T03:41:41Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":69,"ts":"2026-11-21T03:42:06Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":71,"ts":"2026-11-21T03:42:26Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":70,"ts":"2026-11-21T03:43:42Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":70,"ts":"2026-11-21T03:43:53Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":69,"ts":"2026-11-21T03:44:04Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":69,"ts":"2026-11-21T03:44:16Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":71,"ts":"2026-11-21T03:44:27Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"backlog","task_id":120,"ts":"2026-11-21T03:44:37Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":123,"ts":"2026-11-21T03:44:49Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":70,"ts":"2026-11-21T03:59:15Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":69,"ts":"2026-11-21T03:59:27Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":116,"ts":"2026-11-21T04:01:28Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":118,"ts":"2026-11-21T04:01:40Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":122,"ts":"2026-11-21T04:01:52Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":124,"ts":"2026-11-21T04:02:05Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":116,"ts":"2026-11-21T04:04:13Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":118,"ts":"2026-11-21T04:04:25Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":122,"ts":"2026-11-21T04:04:37Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":70,"ts":"2026-11-21T04:09:56Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":69,"ts":"2026-11-21T04:10:16Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":71,"ts":"2026-11-21T04:10:34Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":116,"ts":"2026-11-21T04:15:54Z"}
+{"action":"move","agent":"unreagent","detail":"done","task_id":69,"ts":"2026-11-21T04:16:13Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":118,"ts":"2026-11-21T04:16:18Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":70,"ts":"2026-11-21T04:16:24Z"}
+{"action":"move","agent":"unreagent","detail":"done","task_id":70,"ts":"2026-11-21T04:16:36Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":71,"ts":"2026-11-21T04:16:48Z"}
+{"action":"move","agent":"unreagent","detail":"done","task_id":71,"ts":"2026-11-21T04:16:59Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":122,"ts":"2026-11-21T04:17:05Z"}
+{"action":"edit","agent":"unreagent","detail":"done","task_id":69,"ts":"2026-11-21T04:17:33Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"backlog","task_id":72,"ts":"2026-11-21T04:18:08Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":72,"ts":"2026-11-21T04:18:19Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"backlog","task_id":77,"ts":"2026-11-21T04:18:30Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":77,"ts":"2026-11-21T04:18:42Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"backlog","task_id":80,"ts":"2026-11-21T04:18:54Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":80,"ts":"2026-11-21T04:19:06Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":116,"ts":"2026-11-21T04:19:54Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":116,"ts":"2026-11-21T04:20:06Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":118,"ts":"2026-11-21T04:20:17Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":118,"ts":"2026-11-21T04:20:28Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":122,"ts":"2026-11-21T04:20:40Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":122,"ts":"2026-11-21T04:20:52Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":125,"ts":"2026-11-21T04:21:04Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":116,"ts":"2026-11-21T04:37:31Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":118,"ts":"2026-11-21T04:37:42Z"}
+{"action":"handoff","agent":"unreagent","detail":"review","task_id":122,"ts":"2026-11-21T04:37:55Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"backlog","task_id":106,"ts":"2026-11-21T04:40:43Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":106,"ts":"2026-11-21T04:40:54Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":117,"ts":"2026-11-21T04:41:06Z"}
+{"action":"move","agent":"unreagent","detail":"in-progress","task_id":119,"ts":"2026-11-21T04:41:18Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":49,"ts":"2026-11-21T04:41:54Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":72,"ts":"2026-11-21T04:42:09Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":77,"ts":"2026-11-21T04:42:20Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":76,"ts":"2026-11-21T04:42:23Z"}
+{"action":"edit","agent":"unreagent","detail":"in-progress","task_id":80,"ts":"2026-11-21T04:42:33Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":116,"ts":"2026-11-21T04:42:37Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":126,"ts":"2026-11-21T04:42:56Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":118,"ts":"2026-11-21T04:43:25Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":122,"ts":"2026-11-21T04:43:46Z"}
+{"action":"edit","agent":"unreagent","detail":"review","task_id":76,"ts":"2026-11-21T04:44:31Z"}
