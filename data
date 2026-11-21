@@ -1,0 +1,92 @@
+---
+claimed_at: 2026-11-21T07:17:40Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-21T07:17:53Z
+created: 2026-08-21T23:23:42Z
+depends_on:
+- 8
+id: 23
+priority: medium
+started: 2026-11-21T06:17:30Z
+status: done
+tags:
+- skills
+- class-a
+title: 'Skills: Audio & MetaSounds (Class A)'
+updated: 2026-11-21T07:17:53Z
+---
+
+- ue-audio -- audio
+- ue-metasounds -- metasound
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 7 (Class A table).
+Agent: unreagent-skill-author.
+
+Sources, in order of authority: the toolkit's C++ headers under ../ue-llm-toolkit/Plugin/UELLMToolkit/Source/UELLMToolkit/**/MCPTool_*.h (each declares Info.Name and enumerates its operations), then VibeUE's Content/Skills/<name>/SKILL.md as adaptable MIT text. Never a guessed API.
+
+Acceptance:
+- one skills/<name>/SKILL.md per skill listed above, frontmatter per #8's precedent
+- toolkit_tools lists exactly the tools named above and passes the lint (#18)
+- unreal_classes only where the skill actually works through execute_script
+- every documented operation traceable to a header declaration
+- MIT attribution line where VibeUE text was adapted (#19)
+- content limited to documented operations: these are written against headers, not against a running editor
+
+Depends on #8 for the format precedent.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID, BLOCKED on the toolkit checkout (not present). Size M. k19 first.
+
+Skill-author: wrote skills/ue-audio/SKILL.md (415 lines, toolkit_tools [audio]) and skills/ue-metasounds/SKILL.md (329 lines, [metasound]). Single SKILL.md each, no sections, no unreal_classes. Written from the toolkit's C++ source only, with no VibeUE text, so there is no attribution line. Sources read: MCPTool_Audio.h/.cpp and Private/AudioEditor.cpp; MCPTool_MetaSound.h/.cpp and Private/MetaSoundEditor.cpp; MCPToolRegistry.cpp:162 and :164-169 (metasound is registered on UE 5.7+ only, and the skill says so); MCPToolBase.h helpers. No plugin contexts or domain notes exist for audio or MetaSound. toolkit_tools hand-checked against the registry (the k18 lint has not landed). Documented the undeclared parameters the code reads: target_path, which set_audio_properties requires instead of the documented asset_path; the top-level property shortcuts; and create_attenuation's settings and extra keys. Hedged: audio: inspect probably reports a MetaSound as SoundWave; what happens to duplicate component names and existing assets; whether a Sound Cue without an editor graph plays; whether set_audio_properties on a placed actor survives a save (it marks nothing dirty, so the skill steers to set_property); numeric-string conversion. MetaSound: the interfaces a new MetaSound starts with (output_format is ignored); add_node with variant classes or a major version other than 1; whether preview includes unsaved builder edits; engine handling of unknown data types and duplicate names. Left out: Sound Class authoring and audio import (no such operation). Sibling skills referenced: ue-assets, ue-level-actors, ue-blueprints, ue-tasks, ue-context, ue-metasounds and ue-audio (each other), unreagent-iterate. Checks: go test -count=1 ./internal/skills ok; gofmt -l clean; go vet ./... clean. Upstream bugs noted on k132 (A1-A9, S1-S6, B1). Not committed.
+
+Ready for review: skills/ue-audio/SKILL.md and skills/ue-metasounds/SKILL.md, uncommitted, in the skill-author worktree on branch worktree-agent-adf1ec83f1cf92b0a. go test ./internal/skills, gofmt and go vet are green. Details in the note above.
+
+**Review 2026-11-21** (unreagent-reviewer): CHANGES NEEDED (minor). Files: skills/ue-audio/SKILL.md, skills/ue-metasounds/SKILL.md (untracked, skill-author worktree, base 9e624eb). Owner per ack-team: unreagent-skill-author for both; no edits outside those paths.
+
+Check run in the worktree: gofmt -l cmd internal skills (clean), go vet ./... (clean), go test -count=1 ./... (all ok), make windows (rc 0). Also ran go test ./internal/skills against main HEAD plus all four new skill dirs in a scratch copy: ok. No Windows-path code involved.
+
+Verified against the toolkit source: every operation, alias, default and error string; frontmatter (toolkit_tools [audio] / [metasound], both in MCPToolRegistry, metasound only under the UE 5.7 gate and its log line quoted exactly; no unreal_classes, correct). Author's claims confirmed: target_path required and undeclared (MCPTool_Audio.cpp:156); the top-level shortcuts and create_attenuation's extra keys; is_spatialized writes bIsUISound = !value (AudioEditor.cpp:588) while get_audio_components reports bAllowSpatialization; a placed actor is not marked dirty; inspect casts USoundWave before UMetaSoundSource (hedged); output_format ignored; AddNodeByClassName with major version 1 and no variant; the AddEdge result ignored; input_node_id / output_node_id; status "playing" unconditional; max_results <= 0 becomes 50. Save guidance matches ue-assets; actor addressing hands off to ue-level-actors. English only. The k18 lint has not landed, so toolkit_tools was hand-checked. No proposed Changes entry is on the card, so none could be checked.
+
+Findings:
+1. skills/ue-audio/SKILL.md:237 and 245-249: any attenuation_overrides object, even {} or one holding only unknown keys, sets bOverrideAttenuation = true and adds "attenuation_overrides" to properties_set (AudioEditor.cpp:621-655). So properties_set does not prove which override was applied, and an empty object switches override attenuation on with default values. Say both.
+2. skills/ue-audio/SKILL.md:331-332: after create_attenuation, the skill says to assign it with set_audio_properties + attenuation_path. That contradicts 272-276 (placed actor not marked dirty, prefer set_property). Point to set_property on the component's AttenuationSettings for a placed actor, and set_audio_properties for a Blueprint.
+3. skills/ue-audio/SKILL.md:105-108: "asset_search resolves short class names only from a few engine modules" overstates it for sounds. SoundWave, SoundCue, SoundAttenuation and SoundClass all live in /Script/Engine and resolve (MCPTool_AssetSearch.cpp:41-73). Only MetaSoundSource does not (it is in /Script/MetasoundEngine; a full class path works). Also, bRecursiveClasses = true, so class_filter SoundWave probably includes MetaSound sources, which derive from it. Hedge that.
+
+Optional:
+4. skills/ue-audio/SKILL.md:252-255: a failed attenuation_path also leaves `sound` applied, since it runs earlier. Add it to the list.
+5. skills/ue-audio/SKILL.md:288-290: "no editor graph" would be more precise as "the wave player is not added to the editor graph".
+6. skills/ue-audio/SKILL.md:291-296 and skills/ue-metasounds/SKILL.md:160-165: in "exactly that package_path", asset_search reports package_path without a trailing slash (ue-assets). Say so.
+7. skills/ue-audio/SKILL.md:387 (Unknown error) and skills/ue-metasounds/SKILL.md:303 (MetaSound operation returned null result): these rows are not reachable on the current code paths. Keep them as defensive rows or drop them.
+8. skills/ue-metasounds/SKILL.md:21: "UE 5.7 and later" — the gate is ENGINE_MAJOR_VERSION == 5, so "5.7 or later 5.x".
+9. skills/ue-metasounds/SKILL.md:203-206 and 310: a present edge may not prove the connection is valid. Also tell the agent to compare the pin types from get_graph before calling connect.
+10. skills/ue-metasounds/SKILL.md:59: what remove_node does on a graph input or output node is unverified. Hedge it.
+11. skills/ue-metasounds/SKILL.md:299: add "the class needs a variant" to the causes of add_node failing.
+
+Back to unreagent-skill-author for 1-3.
+
+Review fixes, each checked against the toolkit source (AudioEditor.cpp 619-656, MetaSoundEditor.cpp, MCPTool_AssetSearch.cpp 20-80, MCPToolRegistry.cpp 166). skills/ue-audio/SKILL.md: 105-112 asset_search: the four short names resolve, MetaSoundSource probably does not (full class path or list_sounds), subclasses match so a SoundWave filter probably includes MetaSounds; 241 table row: attenuation_overrides switches overrides on; 246-249 spatialization also via an attenuation asset; 254-260 new bullet: any attenuation_overrides object, even {}, switches overrides on and lands in properties_set, values cannot be read back; 264-266 a failed attenuation_path also leaves sound applied; 300 'The wave player is not added to the editor graph'; 309 package_path without trailing slash; 343-349 after create_attenuation: set_property on AttenuationSettings for a placed actor, set_audio_properties for a Blueprint; dropped the unreachable 'Unknown error' Errors row. skills/ue-metasounds/SKILL.md: 21-22 and 318 'UE 5.7 or a later 5.x'; 60-62 and 198-199 remove_node on graph input/output nodes hedged; 167 package_path without trailing slash; 208-210 new bullet: compare pin types before connect; 214-216 a present edge is not proof of a valid connection; 295-296 sequence step 6 checks pin types; 309 add_node failure adds 'or the class needs a variant'; 319 connect row: compare types first; dropped the unreachable 'Unknown error' Results line and the null-result Errors row. Checks: go test -count=1 ./internal/skills ok; gofmt -l cmd internal skills clean.
+
+Review findings addressed (required 1-3 and every optional item); changed lines are in the previous note. Skill tests and gofmt green. Uncommitted in the worktree for the release-manager.
+
+**Review round 2, 2026-11-21** (unreagent-reviewer): READY. Files: skills/ue-audio/SKILL.md, skills/ue-metasounds/SKILL.md (untracked, skill-author worktree). Owner per ack-team: unreagent-skill-author; nothing else changed.
+
+Check run in the worktree: gofmt -l cmd internal skills (clean), go vet ./... (clean), go test -count=1 ./... (all ok), make windows (rc 0). Also ran go test -count=1 ./internal/skills against main HEAD plus all four revised skill dirs in a scratch copy: ok.
+
+Changed lines checked against the toolkit source:
+- ue-audio:105-112: the short-name resolution matches MCPTool_AssetSearch.cpp:41-73. The MetaSoundSource fallback and the SoundWave subclass match are hedged. "list_sounds matches each class exactly" matches AudioEditor.cpp:225-262 (ClassPaths without bRecursiveClasses).
+- ue-audio:241 and 254-260: match AudioEditor.cpp:621-655. "get_audio_components does not report the override values" matches :316-336.
+- ue-audio:264-266: matches the set order (sound :593, then attenuation_path :607).
+- ue-audio:300: matches CreateSoundCue :698-699 (no graph built).
+- ue-audio:309 (slash): correct.
+- ue-audio:343-349: correct; AttenuationSettings is an object reference, which set_property accepts (ue-level-actors:293).
+- The Unknown error row is gone.
+- ue-metasounds:21-22 and 318: match the gate in MCPToolRegistry.cpp:45 and :165.
+- ue-metasounds:60-62 and 198-199: the hedge is correct; RemoveEdges runs before RemoveNode (MetaSoundEditor.cpp:366-370).
+- ue-metasounds:167 (slash): correct.
+- ue-metasounds:208-216, 295-296 and 319: connect does no type comparison (MetaSoundEditor.cpp:403-421), and get_graph reports each pin's type (:222, :233).
+- ue-metasounds:309 ("needs a variant"): correct.
+- The null-result row is gone.
+All round-1 findings are resolved.
+
+Committed as c0a5178
