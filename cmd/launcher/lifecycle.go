@@ -639,8 +639,16 @@ func hasEditorSwitch(args []string, name string) bool {
 }
 
 // cleanRecovery removes recovery/crash artefacts for a clean start.
-// PackageRestoreData.json goes on every start: its restore dialog would block
-// an unattended restart. Saved/Crashes is emptied only on a start that does
+// PackageRestoreData.json goes on every start, so that a stale restore offer
+// does not outlive the session it came from. Read from the UE 5.8.4 source,
+// not run: only an editor started without -unattended shows the modal restore
+// dialog and blocks on it; with -unattended
+// FPackageAutoSaver::HasPackagesToRestore
+// (Engine/Source/Editor/UnrealEd/Private/PackageAutoSaver.cpp) is false, so
+// FUnrealEdMisc::OnInit (UnrealEdMisc.cpp, same directory) never calls
+// OfferToRestorePackages — no dialog, nothing restored, and the file keeps
+// its entries until a clean exit (UUnrealEdEngine::FinishDestroy) or the
+// next restore-file update. Saved/Crashes is emptied only on a start that does
 // not follow a crash (followsCrash): the crash dump is what the agent reads
 // to find out why.
 func cleanRecovery(projectDir string, st supervisor.Start, logger func(string)) {
