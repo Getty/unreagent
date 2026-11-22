@@ -73,9 +73,9 @@ tool has read them all the same.
 memory, where an editor stop or crash loses it. Save with the `asset` tool
 (skill `ue-assets`): `save_asset` with the asset's path, or `save_all`.
 
-**`set_audio_properties` on a placed actor marks nothing dirty**, so
-`save_all` probably skips that level. See `set_audio_properties`. No
-operation has an undo.
+**For a placed actor, `set_audio_properties` marks nothing dirty itself.**
+Whether the engine does on its own is not verified, so `save_all` may skip
+that level. See `set_audio_properties`. No operation has an undo.
 
 ## Results through the bridge
 
@@ -249,15 +249,17 @@ same key there. `attenuation_overrides` works only inside `properties`.
   `create_attenuation`).
 - **Keys the engine's JSON classes cannot read as the listed type, unknown
   keys and unknown `distance_algorithm` names are skipped without an
-  error.** Check `properties_set` in the result: it lists what was applied,
-  such as `"volume=0.50"`. `Set 0 properties …` means nothing changed.
+  error.** Which strings those classes read as a number or a boolean is not
+  verified, so send JSON numbers and booleans. Check `properties_set` in the
+  result: it lists what was applied, such as `"volume=0.50"`.
+  `Set 0 properties …` means nothing changed.
 - **Any `attenuation_overrides` object switches the component's own
   attenuation on**, even `{}` or one that holds only unknown keys, and it
   adds `attenuation_overrides` to `properties_set` either way. That entry
   does not prove that a value inside the object was applied, and an empty
-  object turns the overrides on with whatever values they already hold, UE's
-  defaults unless they were set before. `get_audio_components` does not
-  report the override values, so no tool here can read them back.
+  object turns the overrides on with whatever values they already hold: the
+  tool sets none. `get_audio_components` does not report the override values,
+  so no tool here can read them back.
 - `distance_algorithm` takes `Linear`, `Logarithmic`, `Inverse`,
   `NaturalSound`, `LogReverse` or `Custom`, case-insensitive.
 - **A failed `sound` or `attenuation_path` stops the call, but not the
@@ -281,13 +283,13 @@ same key there. `attenuation_overrides` works only inside `properties`.
   `No audio component '<name>' found on actor: <name>`, `Editor not available`,
   `No editor world available`.
 
-**A placed actor is not marked dirty.** The change is in memory, but the level
-is not flagged as changed, so `save_all` probably does not save it. For a
-placed actor, prefer `set_property` (skill `ue-level-actors`) on the audio
-component's own properties, such as `VolumeMultiplier`, `PitchMultiplier` or
-`Sound`, which marks the actor and the level dirty. Whether the engine applies
-a change made through this tool to a sound already playing in the editor has
-not been verified.
+**The tool marks neither a placed actor nor its level dirty.** The change is
+in memory; whether the engine flags the level on its own is not verified, so
+`save_all` may not save it. For a placed actor, prefer `set_property` (skill
+`ue-level-actors`) on the audio component's own properties, such as
+`VolumeMultiplier`, `PitchMultiplier` or `Sound`, which marks the actor and
+the level dirty. Whether the engine applies a change made through this tool
+to a sound already playing in the editor has not been verified.
 
 The result has `properties_set[]` and `target_path`. The message is
 `Set <n> properties on audio component in <target>`.
@@ -332,10 +334,10 @@ top level, use `attenuation_shape`.
 | `spatialization_algorithm` | `Default` (or `Panning`), `HRTF` (or `Binaural`) |
 
 - **Unknown shape, algorithm or spatialization names are skipped without an
-  error.** Every setting left out keeps UE's default. Read the asset back with
-  `inspect`.
-- Only the first extent can be set. A capsule's, box's or cone's other
-  dimensions keep UE's defaults.
+  error.** The tool sets nothing for a setting you leave out. Read the asset
+  back with `inspect`.
+- Only the first extent can be set. The tool leaves a capsule's, box's or
+  cone's other dimensions as the new asset has them.
 - The existence caveat of `create_sound_cue` applies here too.
 - Errors: `Failed to create package: <path>`,
   `Failed to create USoundAttenuation object`.
@@ -408,12 +410,12 @@ Errors:
 |---|---|---|
 | plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
 | `set_audio_properties` fails with `Missing required parameter: target_path` | the description names `asset_path`, the code reads `target_path` | pass `target_path` |
-| `properties_set` is missing a key you sent | wrong JSON type, wrong key name, or an unknown enum name | fix the key and send it again |
+| `properties_set` is missing a key you sent | a value the tool could not read as the listed type, a wrong key name, or an unknown enum name | fix the key and send it again, numbers and booleans as JSON numbers and booleans |
 | `is_spatialized` shows the old value after `set_audio_properties` | the key sets a different flag | see `set_audio_properties` |
-| a change to a placed actor's audio is gone after a save and reload | the level was not marked dirty | use `set_property` for placed actors |
+| a change to a placed actor's audio is gone after a save and reload | the tool did not mark the level dirty | use `set_property` for placed actors |
 | `inspect` on a MetaSound says `SoundWave` | the SoundWave test runs first | use the `metasound` tool (`ue-metasounds`) |
 | `list_sounds` takes long | it loads every SoundWave in the folder | narrow `folder_path`, drop `recursive` |
-| a new Sound Cue looks empty in its editor | the tool builds no editor graph | tell the user; it cannot be fixed with this tool |
+| a new Sound Cue plays wrong or looks empty in its editor (neither is verified) | the tool adds the wave player to no editor graph | test the cue before you build on it; this tool cannot add the graph node |
 
 ## Background in the plugin
 

@@ -25,8 +25,8 @@ The tool looks the widget up as a member variable of the Blueprint's skeleton
 class, or of its generated class when there is no skeleton class. Whether the
 skeleton class already holds a widget added in this session has not been
 verified for this skill, so compile with `blueprint_modify compile` and retry.
-If the error stays, the widget's Is Variable flag is off, and no toolkit tool
-sets it.
+If the error stays, the widget's Is Variable flag is most likely off, as the
+error text says, and no toolkit tool sets it.
 
 ## Property bindings
 

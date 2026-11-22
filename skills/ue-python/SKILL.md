@@ -220,7 +220,7 @@ person, because the history goes with them.
 |---|---|---|
 | `Script execution queued. Task ID: …` | normal. The script has not run yet | poll that id (skill `ue-tasks`) |
 | `Error: Script execution denied by user` | someone clicked Deny or closed the window. In an editor started with `-unattended`, unreagent's default, whether the engine can also end the window this way is unverified | ask before you try again |
-| `Error: Task execution timed out after 600 seconds`, or no answer for 10 minutes | nobody approved the script, or it ran too long | ask whether anyone is at the editor. An approval given later can still run the script |
+| `Error: Task execution timed out after 600 seconds`, or no answer for 10 minutes | nobody approved the script, or it ran too long | ask whether anyone is at the editor. The timeout does not withdraw the call, so an approval given later may still run the script |
 | `Error: Script MUST include @Description …` | no description in either place | add `# @Description: …` or pass `description` |
 | `Error: Python script execution failed` | the output matched one of the scanned words | read the editor log, then the "Failure" section above |
 | `Python script executed (actors created: 0)` plus the warning line | success. The plugin warns about every script that spawns nothing | judge by your own output |

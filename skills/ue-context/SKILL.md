@@ -4,8 +4,9 @@ description: >
   Load the UE LLM Toolkit's own reference notes: its UE API contexts through
   get_ue_context, and its domain documents, which that tool does not serve,
   from disk. Use before writing UE C++, Blueprint or editor logic from memory,
-  or to pick the plugin document that fits a task.
-toolkit_tools: [get_ue_context]
+  or to pick the plugin document that fits a task. Also covers unreal_status,
+  the bridge's check whether the plugin answers.
+toolkit_tools: [get_ue_context, status]
 ---
 
 # The toolkit's reference notes
@@ -28,9 +29,9 @@ has not been exercised against a running editor.
   the bridge and never reaches the editor. It needs no editor world and does
   not wait for the game thread.
 - **It is listed only while the editor is reachable.** When the bridge cannot
-  reach the plugin, its tool list holds `unreal_status` alone. Whether your
-  client fetches the list again once the editor is up depends on the client.
-  The files are on disk either way (see "Reading the files").
+  reach the plugin, its tool list holds `unreal_status` alone (see "status").
+  Whether your client fetches the list again once the editor is up depends on
+  the client. The files are on disk either way (see "Reading the files").
 - **Tool name.** The bridge lists it as `unreal_get_ue_context`. Your MCP
   client may put its own server prefix in front of that.
 - **Written for UE 5.7.** A result starts with `# UE 5.7 Context: …`, and a
@@ -56,6 +57,45 @@ short keywords hit inside other words. `build a level` loads `slate` as well
 as `actor` and `parallel_workflows`, because slate's keyword `ui` is inside
 "build". The result is about 27,000 characters, most of them unrelated. Call
 without arguments once, then ask for the one category you need.
+
+## status
+
+The bridge's second tool of its own, listed as `unreal_status`. It takes no
+parameters and asks the plugin's HTTP server whether it answers.
+
+**It is not unreagent's `status` tool.** That one belongs to the launcher and
+reports its supervised processes, such as whether an editor process exists
+and how the last one ended; it is the `status` that skills
+`unreagent-iterate` and `ue-tasks` mean. `unreal_status` comes from the
+plugin's bridge and says only whether the plugin answers. Tell the two apart
+by the server prefix your MCP client shows.
+
+- **Plugin reachable.** The result is JSON text with `connected: true`,
+  `project`, `engine`, `context_system`, `tool_summary`, `total_tools` and
+  `message`.
+  - `project` and `engine` are what the plugin reports about itself.
+  - `context_system` is `OK (<n> categories: …)` when the bridge could load
+    its `animation` context, else `FAILED - context files not loading`.
+  - `tool_summary` counts the plugin's tools in six buckets by name pattern
+    (`blueprint`, `animation`, `asset`, `task_queue`, `actor`, `utility`). It
+    is a rough count, not a tool list.
+  - `message` is `Unreal Editor connected. All tools operational.` That means
+    only that every tool has a description; no tool was called. Otherwise
+    `broken_tools` lists each tool without one (`name`, `issue`), and the
+    message becomes `Unreal Editor connected. <n> tool(s) have issues.`
+- **Plugin not reachable.** The result is an error whose text is JSON:
+  `connected: false`, `reason` and a `message` asking to start the editor
+  with the plugin. `reason` is `timeout`, `HTTP <code>` or the network
+  error's own text. The bridge waits up to 30 s for the plugin
+  (`MCP_REQUEST_TIMEOUT_MS`) before it says `timeout`.
+- **The tool list tells the same story.** While the plugin is unreachable,
+  `unreal_status` is the only tool the bridge lists, and its description ends
+  in `Currently: NOT CONNECTED. …`. Once reachable, the description reads
+  `Currently: CONNECTED to <project> (<engine>)`. Both are from the moment
+  the list was fetched; call the tool for the current state.
+
+To get the editor up, or to find out why it is down, use unreagent's tools
+(skill `unreagent-iterate`), not this one.
 
 ## Categories
 
@@ -150,6 +190,8 @@ asking for one category when you need it costs less.
 | `No context found for query: "<query>"` | no keyword matched | call with no arguments and pick a category |
 | a result far larger than expected | the query matched several categories | ask for one `category` |
 | `get_ue_context` missing from the tool list | the bridge could not reach the editor when the list was fetched | read the files. See skill `unreagent-iterate` for getting the editor up |
+| `unreal_status` returns `connected: false` | the plugin's HTTP server did not answer the bridge; `reason` says how | check the editor with unreagent's own `status` (skill `unreagent-iterate`) |
+| a `status` result with `services` and `commands` instead of `connected` | you called unreagent's `status`, not the bridge's | read it with skill `unreagent-iterate` |
 | a document asks you to run `ue-tool.sh` or `help` | the toolkit's shell wrapper | call `unreal_<tool>` and read its schema |
 
 ## See also

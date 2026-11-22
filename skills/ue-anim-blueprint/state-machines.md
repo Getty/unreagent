@@ -116,8 +116,8 @@ Needs `state_machine` (`state_machine parameter required`) and `state_name`
 (default false). Returns `node_id` (`State_<name>_<n>`), `state_name`,
 `is_entry_state` and `message`.
 
-- The state gets its own graph with an output pose node; it plays nothing
-  until `set_state_animation` or `add_anim_node` fills it.
+- The state gets its own graph with an output pose node and nothing wired to
+  it. Fill it with `set_state_animation` or `add_anim_node`.
 - `is_entry_state: true` makes it the entry state as `set_entry_state` does.
   **If that step fails, the call still succeeds** and still returns
   `is_entry_state: true`; the failure goes only to the editor log. Check with

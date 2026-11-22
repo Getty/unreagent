@@ -279,8 +279,8 @@ tool since the MetaSound was loaded has not been verified.
   `Playing MetaSound: <name>`.
 
 `stop_preview` takes no parameters. Its message is `Preview stopped`, or
-`No preview was playing`; both are successes. A MetaSound that keeps playing
-until it is stopped needs this call.
+`No preview was playing`; both are successes. Call it when you are done with a
+`preview`: whether a preview ends on its own has not been verified.
 
 ## A typical sequence
 
@@ -316,7 +316,7 @@ until it is stopped needs this call.
 | What you see | What it means | What to do |
 |---|---|---|
 | `unreal_metasound` is not in the tool list | the engine is not UE 5.7 or a later 5.x, or the plugin is not loaded | on UE 5.7 or a later 5.x, wait for the plugin (`unreagent-iterate`); otherwise this tool is not available |
-| `connect` succeeded but `get_graph` shows no new edge | the engine refused the connection | compare both pins' `type` in `get_graph` before you connect; the input may already be connected |
+| `connect` succeeded but `get_graph` shows no new edge | the tool does not check what the engine did with the edge; most likely it refused the connection | compare both pins' `type` in `get_graph` before you connect; the input may already be connected |
 | a graph input's id is missing from the result | the field is `input_node_id` or `output_node_id` | read that field |
 | an input default has no effect | `data_type` did not match the pin, such as `int` instead of `int32` | set it again with the pin's type |
 | a new MetaSound has outputs you did not ask for, or not the format you asked for | `output_format` is ignored; the engine set up the document | work with what `inspect` reports, or tell the user |

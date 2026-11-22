@@ -225,14 +225,15 @@ skill. Before you rely on one, restart the editor and check the mapping's
    `blueprint_modify add_node`, with `action_path` (skill `ue-blueprints`,
    section `graphs`).
 
-An action fires at runtime only when the game adds the mapping context to the
-player's Enhanced Input subsystem. This tool does not do that; the plugin's
-context notes show the game code.
+For a key to fire an action at runtime, the game adds the mapping context to
+the player's Enhanced Input subsystem, as the game code in the plugin's
+context notes does. This tool does not do that.
 
 To try an action in Play In Editor, inject it with `gameplay_debug` (skill
 `ue-pie-testing`, section `input`). Injection hands the engine the action's
-value, not a key press, so it shows whether the game reacts to the action, not
-whether the key mapping works.
+value, not a key press, so it does not test the key mapping. Whether the
+mapping's context, triggers and modifiers still take part is not verified
+(see there).
 
 ## Errors
 

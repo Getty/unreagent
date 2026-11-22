@@ -147,9 +147,9 @@ result has `path` (the object path) and `name`. The message is
 - `package_path` is not checked, and the tool does not check whether an asset
   of that name already exists. What the engine does then is not covered here.
   Check with `asset_search` first.
-- The tool adds no animation to the new montage. The slot tracks and sections
-  it starts with, and its length, are the engine's defaults; read them with
-  `get_info` and add segments before notifies.
+- The tool adds no animation to the new montage and sets no slot tracks,
+  sections or length. Read what it starts with through `get_info`, and add
+  segments before notifies.
 - Errors: `Failed to load skeleton: <path>`, `Failed to create package: <path>`,
   `FactoryCreateNew failed to create montage`.
 

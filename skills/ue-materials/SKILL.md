@@ -167,8 +167,9 @@ lands.** The tool does not stop at the first error. It applies every entry it
 can read and collects the failures: all scalars, all vectors and every texture
 that loads are set in memory, and only the textures in the error message are
 missing. On this path the tool skips its change notification and does not
-mark the package dirty. Send the failed textures again with fixed paths; a
-call that succeeds marks the package dirty, and then you save.
+mark the package dirty itself; whether the engine's setters do is not
+verified. Send the failed textures again with fixed paths; a call that
+succeeds marks the package dirty, and then you save.
 
 ## get_material_info
 
@@ -263,7 +264,7 @@ The actor and the level are marked dirty: save with `asset save_all`.
 | What you see | What it means | What to do |
 |---|---|---|
 | plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a parameter you set is not in `get_material_info` | its value had the wrong JSON type and was skipped, or a texture failed during `create_material_instance` | send it again with the type from "The parameters object" |
+| a parameter you set is not in `get_material_info` | the tool could not read its value as the listed type and skipped it, or a texture failed during `create_material_instance` | send it again with the type from "The parameters object" |
 | a parameter shows in `get_material_info` but the material looks unchanged | probably no parameter of that name in the parent | check the name in the parent material |
 | a slot change is gone after an editor restart | the mesh or level was never saved | `asset save_asset` or `save_all` after each change |
 | `set_actor_material` changed the wrong component | the actor has several mesh components and the first was taken | not selectable with this tool; tell the user |

@@ -38,6 +38,10 @@ When the mesh has render data, the result also holds, all from LOD 0:
 - `sample_vertices`, up to five vertices spread over the vertex buffer, each
   with `vertex_index`, `position` (a string) and `weights` (`bone`, `weight`).
 
+The tool names a bone by taking the buffer's bone index as an index into the
+reference skeleton. Whether the engine stores the index that way is not
+verified, so check the bone names in these two lists against a mesh you know.
+
 The message is `Mesh inspection: <path> (<n> bones)`. The result grows with the
 bone count: each bone appears in `bones` and again in `skin_weight_summary`.
 

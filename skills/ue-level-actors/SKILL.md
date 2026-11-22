@@ -49,10 +49,10 @@ Every actor has two names:
 
 `move_actor`, `delete_actors` and `set_property` accept either. They walk the
 level's actors and take the **first** one whose object name or label equals the
-string. The comparison is UE's `FString ==`, which ignores case. Where labels
-repeat, address the actor by its object name. `get_level_actors` returns both as
-`name` and `label`, and `spawn_actor` returns them as `actorName` and
-`actorLabel`.
+string. The comparison is UE's `FString ==`; expect it to ignore case (not
+verified here). Where labels repeat, address the actor by its object name.
+`get_level_actors` returns both as `name` and `label`, and `spawn_actor`
+returns them as `actorName` and `actorLabel`.
 
 Before the lookup, the string is validated:
 
@@ -77,7 +77,7 @@ Lists the actors of the level, one page at a time. It is read-only.
 |---|---|---|
 | `class_filter` | — | substring of the class name, case-insensitive, at most 256 characters |
 | `name_filter` | — | substring of the object name or the label, case-insensitive, at most 256 characters |
-| `include_hidden` | `false` | include actors whose Actor Hidden In Game flag is set (`IsHidden()`). Hiding an actor in the editor viewport does not count |
+| `include_hidden` | `false` | include actors for which the engine's `IsHidden()` is true, most likely the Actor Hidden In Game flag. Hiding an actor in the editor viewport probably does not count (not verified) |
 | `brief` | `true` | `false` adds `location`, `rotation`, `scale`, `hidden` and, when there are any, `tags` |
 | `limit` | `25` | page size. Values of 0 or below become 25, and values above 1000 become 1000 |
 | `offset` | `0` | matches to skip |
@@ -152,7 +152,7 @@ path. Prefer the forms in the table.
   default name mode probably treats a taken name as fatal, which would take
   the editor down. That has not been verified against a running editor. Before
   you pass `name`, look it up with `get_level_actors` and `name_filter`.
-  Without a `name`, the engine picks a free one.
+  Without a `name`, the tool passes none and leaves naming to the engine.
 - `Failed to spawn actor of class: <class>` means the class resolved but the
   engine returned no actor.
 
@@ -314,9 +314,11 @@ Some types and values are traps:
 - Array elements and map entries can be numbers, booleans (also `"true"` as a
   string), strings, names, enums and references. A **struct inside an array or
   map** is not supported, and neither is an array inside an array.
-- **A JSON value of the wrong type** also ends in `Unsupported property type
-  '<type>' for: <path>`, even when the type itself is supported. Before you
-  conclude the type cannot be set, check the JSON type you sent.
+- **A JSON value the tool cannot read as the property's type** also ends in
+  `Unsupported property type '<type>' for: <path>`, even when the type itself
+  is supported. Which conversions the engine's JSON classes make, such as a
+  numeric string for a number, is not verified, so send the JSON type from the
+  table before you conclude the type cannot be set.
 
 Other value errors:
 
@@ -367,7 +369,7 @@ engine infrastructure.
 | `Class not found: …` | none of the five class lookups worked | use a full class path, as in the table under spawn_actor |
 | `Property not found: <part> on <class>`, and the class is not where the part lives | a misspelt middle part was skipped, and the walk stayed on the outer object | check every part against `level_query info` |
 | a write landed one level above the component you named | the same skip, and the outer object has a property of that name | set the old value back, then fix the path |
-| `Unsupported property type '…' for: …` | an `enum class`, an unsupported container, or the wrong JSON type | check the JSON type. An `enum class` is not settable through this tool |
+| `Unsupported property type '…' for: …` | an `enum class`, an unsupported container, or a value the tool could not read as the property's type | check the JSON type. An `enum class` is not settable through this tool |
 | a byte enum element came out as its first value | a name string was stored as 0 | pass the numeric value |
 | `Error: Task timed out after …ms (task_id: …)` | the bridge stopped waiting, but the editor may still be working on the call | read the state back before you retry |
 | the editor goes away during a spawn with `name` | probably a name that was already taken, which UE's default name mode treats as fatal (unverified) | look the name up before you pass it, or omit `name` |

@@ -233,7 +233,9 @@ Some types cannot be set here at all:
 - `enum class` properties.
 
 All of these fail with `Unsupported property type for: <path>`. So does any
-value whose JSON type does not fit, such as a name for a `TEnumAsByte`.
+value the tool cannot read as the property's type, such as a name for a
+`TEnumAsByte`. Which JSON types the engine's JSON classes convert is not
+verified, so send the JSON type the property has.
 `set_property` (skill `ue-level-actors`) accepts more value forms, but for
 placed actors only.
 
@@ -348,10 +350,10 @@ target folder on disk. Errors: `Target directory does not exist: <dir>`,
 | `delete_folder` | `folder_path` | errors: `Folder does not exist: <path>`, `Failed to delete folder: <path> (must be empty — delete contained assets first)` |
 
 **Treat `delete_folder` as a recursive delete.** The toolkit's text says the
-folder has to be empty. The engine function it calls,
-`UEditorAssetLibrary::DeleteDirectory`, is documented in UE as deleting the
-assets inside as well. List the folder with `list_assets` and `recursive:
-true` before you call it.
+folder has to be empty. Epic's documentation describes the engine function it
+calls, `UEditorAssetLibrary::DeleteDirectory`, as deleting the assets inside
+as well; this skill has run neither case. List the folder with `list_assets`
+and `recursive: true` before you call it.
 
 ### open_editor and set_preview_mesh
 
@@ -435,7 +437,7 @@ code does not read those names.
 | `normal_import` | `import` | static mesh option: `compute`, `mikk` (normals and tangents), or anything else for imported normals |
 | `replace_existing` | `true` | overwrite an asset of the same name in `dest_path` |
 | `save` | `true` | save the imported assets |
-| `custom_sample_rate` | `0` | animation sample rate. 0 means the default |
+| `custom_sample_rate` | `0` | animation sample rate. At 0 or below the tool sets none |
 | `snap_to_frame_boundary` | `false` | animation option |
 
 `auto` starts from the static-mesh options and leaves it to the engine's FBX
@@ -484,7 +486,7 @@ adds `file_pattern`, default `*.fbx`.
 | Parameter | Meaning |
 |---|---|
 | `asset_path` | required |
-| `output_path` | required. A file path on disk. Its folder is created, and its extension picks the exporter |
+| `output_path` | required. A file path on disk. The tool asks for its folder to be created, without checking the result, and looks the exporter up by its extension |
 
 `.fbx` exports a mesh or an animation. The plugin's `domains/tooling.md`
 describes `.t3d` as a text dump, for reading properties no tool exposes. The
@@ -554,7 +556,7 @@ generic-assets pipeline. The result holds `asset_path`, `asset_class` and
 | `asset_search` returns nothing for a class you know exists | none of the four lookups resolved the short class name | pass `/Script/<Module>.<Class>` |
 | `Property not found: MaterialInterface on SkeletalMesh` | the path tried to enter an array of structs | not reachable through `set_asset_property` |
 | the editor crashes after `set_asset_property` | the path probably ended in an array index | never end the path with an index |
-| `Unsupported property type for: …` | an array, an `enum class`, an unlisted struct, or the wrong JSON type (such as a name for a `TEnumAsByte`) | check the JSON type. Arrays and `enum class` properties cannot be set here |
+| `Unsupported property type for: …` | an array, an `enum class`, an unlisted struct, or a value the tool could not read as the property's type | check the JSON type. Arrays and `enum class` properties cannot be set here |
 | `Deleted 0 of 1 assets` | the engine deleted nothing. The toolkit does not say why, and a reference to the asset is a likely cause (unverified) | `asset_referencers`, then decide on `force` |
 | `save_all` success with `failed_count` above 0 | some packages did not save | retry them with `save_asset` and read its error |
 | `Error: Batch import: … failed …` | at least one file failed, and the per-file list is gone | `asset_search` on `dest_path` shows what landed |

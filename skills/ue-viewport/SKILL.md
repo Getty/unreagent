@@ -126,8 +126,8 @@ Otherwise the call fails with
 - The value is rounded to a whole frame. A negative `frame` is ignored.
 - An Animation Sequence converts frames with its own sampling rate. Any other
   animation asset is treated as 30 fps, and its `total_frames` is 0.
-- The time is clamped to the animation's length: a frame past the end shows
-  the last pose without an error. Compare `frame_time` with `play_length`.
+- The time is clamped to the animation's length: a frame past the end is
+  taken as the end, without an error. Compare `frame_time` with `play_length`.
 - The tool looks for the first skeletal mesh component that previews exactly
   this asset, pauses it and moves it to that time. The preview stays paused
   there. Without such a component the call fails with

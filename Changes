@@ -437,6 +437,12 @@ Revision history for unreagent
   - The run_command tool description no longer states that UnrealBuildTool
     refuses to build while Live Coding is active; it still tells the agent to
     stop the editor before compile and start it afterwards.
+  - Shipped skills: 17 of the toolkit-tool skills no longer state Unreal
+    engine behaviour as fact where only the plugin source was read (JSON type
+    conversion, dirty and save state, engine defaults, a few runtime effects).
+    Each such sentence now says what the tool does and what is unverified, or
+    names its source. ue-context documents the plugin bridge's own status tool
+    and how it differs from unreagent's status.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

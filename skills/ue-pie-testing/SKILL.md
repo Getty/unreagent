@@ -58,11 +58,12 @@ This skill has three sections:
   Starting a session in a large project can keep the game thread busy for a
   while, so poll seldom (skill `ue-tasks`, "A 30 s timeout can crash the
   editor").
-- **The game waits for every toolkit call.** Toolkit calls run on the game
-  thread, which also runs PIE, so the game does not advance while a call runs.
+- **Expect the game to wait for every toolkit call.** Toolkit calls run on the
+  game thread, and PIE most likely ticks on it too (not verified), so the game
+  would not advance while a call runs.
 - **Focus.** The plugin's notes say PIE runs at about 3 fps while the editor
-  window is not in front. `run_sequence` brings it to the front and caps the
-  frame rate at 60. The manual operations do neither.
+  window is not in front. `run_sequence` asks the system to bring the PIE
+  window to the front and runs `t.MaxFPS 60`. The manual operations do neither.
 
 ## gameplay_debug at a glance
 
@@ -222,7 +223,7 @@ editor died. After a crash, use `logs`, then `read_file` with a negative
 | plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
 | `PIE is not running. Call start_pie first.` | no PIE session, or it has not started yet | `start_pie`, then poll `pie_status` |
 | `pie_status` stays `running: false` after `start_pie` | the editor has not started the session | poll again, then look for errors in the output log |
-| the game barely moves | the editor window is not in front | ask the user to bring it to the front, or use `run_sequence` |
+| the game barely moves | probably the editor window is not in front (the plugin's notes) | ask the user to bring it to the front, or use `run_sequence` |
 | `Command '<entry>' is blocked for safety` | the command begins with a blocked entry | use the dedicated tool, or ask the user to run it |
 | `run_console_command` succeeds and nothing changes | the engine did not accept the command, or it did not reach PIE | check the log; in a run, use a `console` step |
 | `A sequence is already running. …` | a run is in progress, or is still waiting for PIE | `sequence_status`; section `sequences` |

@@ -124,8 +124,9 @@ the `node_id` from the result rather than building one.
 
 Creates one node. `pos_x` and `pos_y` default to 0. To set input pins at the
 same time, put `pin_values` inside `node_params`: an object of pin name to
-value string. Values that are not strings are skipped. A pin value that does
-not apply is skipped without an error, as with `set_pin_value`.
+value string. Values the tool cannot read as a string are skipped; whether a
+JSON number or boolean is read as one is not verified, so send strings. A pin
+value that does not apply is skipped without an error, as with `set_pin_value`.
 
 ```json
 {"operation": "add_node", "blueprint_path": "/Game/BP/BP_Door",

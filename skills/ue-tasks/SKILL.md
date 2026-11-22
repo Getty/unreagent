@@ -186,8 +186,9 @@ The message is `Task submitted: <id>`.
   the tool then runs with no arguments at all.
 - **The tool's arguments are checked when the task runs.** A bad argument
   surfaces in `task_result`, not here.
-- **Only plugin tools can be queued.** `get_ue_context` and `status` are
-  answered by the bridge itself, and naming them fails like an unknown tool.
+- **Only plugin tools can be queued.** `get_ue_context` and `status` (listed
+  as `unreal_get_ue_context` and `unreal_status`) are answered by the bridge
+  itself, and naming them fails like an unknown tool.
 - **A limit of 30000 or less** does not end the wait sooner than 30 s: such a
   task goes through the plugin's ordinary 30 s wait for the game thread.
 

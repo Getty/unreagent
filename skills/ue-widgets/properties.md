@@ -85,9 +85,10 @@ report its `slot_type`. Six slot types are supported. Any other one fails with
   left out keeps its current value.
 - An unknown `size_rule` is still listed as set, but changes nothing.
 
-Anchors and alignment are fractions of the parent: `{min_x: 0.5, min_y: 0.5,
-max_x: 0.5, max_y: 0.5}` anchors to the center, and `alignment {x: 0.5, y: 0.5}`
-centers the widget on its position.
+The tool passes these numbers to the slot unchanged. In UMG's usual reading,
+which this skill has not checked, anchors and alignment are fractions:
+`{min_x: 0.5, min_y: 0.5, max_x: 0.5, max_y: 0.5}` anchors to the parent's
+center, and `alignment {x: 0.5, y: 0.5}` centers the widget on its position.
 
 ## set_brush targets
 

@@ -176,9 +176,10 @@ Samples are addressed by `sample_index`, as `inspect` lists them.
 **`rate_scale`** is the playback speed of one sample. In `add_sample` and
 `move_sample`, a value above 0 is clamped to 0.01–64 and applied. **Leaving it
 out, or passing 0 or a negative value, leaves the sample's rate untouched**:
-the engine's default on a new sample, the current value on a moved one. The
-tool's parameter list states a default of 1.0, but the code's default is -1,
-which means "do not set". `inspect` shows the value that is in effect.
+the tool sets none on a new sample and keeps the current value on a moved
+one. The tool's parameter list states a default of 1.0, but the code's
+default is -1, which means "do not set". `inspect` shows the value that is in
+effect.
 
 After `add_sample`, `remove_sample`, `move_sample` and `set_axis` the tool has
 the engine re-validate the samples and rebuild the blend space's geometry.

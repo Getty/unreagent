@@ -67,8 +67,10 @@ through `open_level`.
 ## Unsaved changes and the save prompt
 
 The tool's own description says: "The editor will prompt to save unsaved
-changes before switching levels." The `open` action always leaves that prompt
-to the engine. The `new` action prompts unless you pass `save_current: false`.
+changes before switching levels." By its parameter text, `open` always uses
+the engine's built-in save prompt, and `new` prompts unless you pass
+`save_current: false`. The code only hands that flag to the engine, so when
+the engine prompts has not been verified.
 
 A save prompt waits for a person to click. With nobody at the editor, nothing
 answers it, so expect the call not to return before the bridge gives up. This
@@ -112,7 +114,7 @@ Creates a new level and replaces the current one.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `template` | blank level | the name of a template from `list_templates` |
-| `save_current` | `true` | `true` prompts to save the current level first. Pass `false` after you have saved |
+| `save_current` | `true` | by its parameter text, `true` prompts to save the current level first. Pass `false` after you have saved |
 
 Without `template`, the result holds `action`, `template: "blank"` and
 `mapName`, and the message is `Created new blank map: <name>`. The new level
@@ -128,7 +130,7 @@ template.
   itself, not an untitled copy. Before you change anything, `save_as` to a
   `/Game/` path. `save_all` skips `/Engine/` packages, so edits to an engine
   template are not saved in place.
-- `save_current` is not used on this branch. The engine's own prompt applies,
+- `save_current` is not used on this branch. Any prompt is the engine's own,
   as for `open`.
 
 | Error | Meaning |
@@ -147,11 +149,12 @@ Saves the level that is open in the editor under a package path.
 |---|---|
 | `save_path` | required. Package path, such as `/Game/Maps/Arena`, checked like any level path |
 
-The `.umap` file is written to the path's place on disk. The result holds
-`action`, `save_path`, `filename` (the file path on disk) and `mapName`, and the
-message is `Saved level to: /Game/Maps/Arena`. Compare `mapName` with the name
-you saved under. If they differ, `open` the saved path before you go on
-editing, so that later saves land in the file you meant.
+The tool hands the engine's map save the file name for that path. The result
+holds `action`, `save_path`, `filename` (the file path on disk) and `mapName`,
+and the message is `Saved level to: /Game/Maps/Arena`. Whether the editor then
+goes on editing the level under the new path is not verified: compare
+`mapName` with the name you saved under, and if they differ, `open` the saved
+path before you go on editing, so that later saves land in the file you meant.
 
 | Error | Meaning |
 |---|---|

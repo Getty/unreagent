@@ -147,8 +147,8 @@ later call.
 - Errors: `Unknown widget class: <c>`, `Widget with name '<n>' already exists`,
   `Parent widget not found: <p>`, `Parent '<p>' is not a panel widget (is <c>)`,
   `Root widget is not a panel — cannot add children`. `AddChild returned null slot`
-  means the parent refused the child, for example a container that holds one
-  child and already has it.
+  means the engine gave the parent no slot for the child, most likely a
+  container that holds one child and already has it (not verified).
 
 **`remove_widget`** removes a widget from the tree. Errors:
 `Widget not found: <n>`, `Failed to remove widget: <n>`. Run `inspect`

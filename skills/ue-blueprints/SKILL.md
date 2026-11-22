@@ -128,8 +128,8 @@ Graph operations address nodes by ID.
   `get_node_connections` and `get_node` assign an ID on first sight. These
   queries are read-only in name only: the ID is stored as `MCP_ID:<id>` in the
   node's comment, and **it replaces any comment the node already had**. The
-  package is not marked as modified, so nothing is saved unless something else
-  saves it.
+  queries do not mark the package as modified, so the ID is saved only if
+  something else saves the Blueprint.
 - Animation graph nodes are addressed by their UE object name, for example
   `AnimGraphNode_Root_0`. A lookup by ID falls back to that name for every
   node.

@@ -94,11 +94,12 @@ another module needs its object path: `/Script/UMG.UserWidget*`.
 There is no map type, no enum type, no class reference and no soft reference.
 Errors: `Unknown type: <t>`, `Unknown class: <c>`.
 
-`add_variable` sets only name and type. The variable gets the engine's default
-value, category and flags. To give it a default value, run `set_cdo_default`
-with the variable name as `property` afterwards. `remove_variable` does not
-look for nodes that still use the variable. Run `blueprint_query find_nodes`
-with `search` set to the variable name first.
+`add_variable` sets only name and type. The tool sets no default value,
+category or flags; `blueprint_query inspect` with `include_variables: true`
+shows what the variable got. To give it a default value, run
+`set_cdo_default` with the variable name as `property` afterwards.
+`remove_variable` does not look for nodes that still use the variable. Run
+`blueprint_query find_nodes` with `search` set to the variable name first.
 
 ## add_function, remove_function
 
@@ -209,8 +210,9 @@ struct values still work in UE text form. Whether a numeric or boolean string
 converts depends on the engine's JSON classes, which this skill has not
 verified.
 
-Class defaults reach actors spawned later. Actors already placed in a level
-keep their saved values (main document, "Failure modes").
+By the plugin's domain notes, class defaults reach only actors spawned later,
+and actors already placed in a level keep their saved values (main document,
+"Failure modes").
 
 ## add_debug_print, remove_debug_print
 

@@ -11,8 +11,10 @@ Reads one bone track at chosen frames. It changes nothing.
 - `asset_path` and `bone_name` are required.
 - `sample_frames` (default `[0, -1]`) is an array of frame indices. A negative
   index counts from the end: `-1` is the last frame, `-2` the one before it.
-  Indices outside the animation are skipped without an error. Entries that are
-  not numbers are skipped, and when none is left, `[0, -1]` is used.
+  Indices outside the animation are skipped without an error. Entries the tool
+  cannot read as a number are skipped, and when none is left, `[0, -1]` is
+  used. Whether a numeric string is read as a number is not verified, so send
+  JSON numbers.
 
 Returns `animation` (the asset name), `bone`, `total_frames` and `frames`, one
 entry per sampled frame with `frame`, `position` `{x, y, z}`, `rotation`

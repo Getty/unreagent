@@ -55,9 +55,10 @@ first player has no Enhanced Input subsystem.
 The result has `action`, `action_path` (the full object path) and
 `frame_number`; the message is `Injected <action> at frame <n>`.
 
-A single injection lasts one frame. The plugin's notes say a digital action
-with a `Pressed` trigger needs the value held across frames to fire; for that
-use `start_continuous` and stop it again, or a `hold` step in `run_sequence`.
+The plugin's notes call a single injection a single-frame one, and say a
+digital action with a `Pressed` trigger needs the value held across frames to
+fire; for that use `start_continuous` and stop it again, or a `hold` step in
+`run_sequence`.
 
 ## Continuous injection
 
@@ -125,8 +126,9 @@ bound on that component. Every line goes to the log with the category
 ends and attaches again to the next session, as the tool's description says.
 **With `log_axes`, it stops for good when PIE ends**, although the description
 says it stays active. `log_axes` also runs `t.MaxFPS 60` on attaching; only
-`stop_monitor` runs `t.MaxFPS 0`, so after an automatic stop the cap of 60
-stays until you lift it (`run_console_command` with `t.MaxFPS 0`).
+`stop_monitor` runs `t.MaxFPS 0`, so after an automatic stop expect the cap of
+60 to stay (not verified) until you lift it (`run_console_command` with
+`t.MaxFPS 0`).
 
 **`stop_monitor`** returns `duration_s` and `events_logged`, and the message
 `Monitor stopped: <s>s, <n> events`; without a monitor, `Monitor not active`.

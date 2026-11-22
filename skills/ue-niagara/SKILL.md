@@ -218,7 +218,7 @@ Spawns the system in the level open in the editor, through UE's
 | `location` | `{"x": 0, "y": 0, "z": 0}` | world position |
 | `rotation` | `{"pitch": 0, "yaw": 0, "roll": 0}` | rotation in degrees |
 | `scale` | `{"x": 1, "y": 1, "z": 1}` | scale |
-| `auto_destroy` | `true` | let UE remove the effect once it has finished |
+| `auto_destroy` | `true` | handed to the engine's spawn call as its auto-destroy flag. By the tool's description the spawned system then auto-destroys; the engine's auto-destroy removes it once it has finished (not verified) |
 | `label` | — | label for the owning actor, see below |
 
 A missing component of `location`, `rotation` or `scale` takes its default.

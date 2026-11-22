@@ -70,9 +70,10 @@ A missing or empty required string returns
 - **`asset_paths` is a JSON array of strings.** A single `asset_path` does not
   take its place in `adjust_track`, `resample` and `replace_skeleton`. A missing
   or empty array returns
-  `Missing required parameter: asset_paths (non-empty array)`. Entries that are
-  not non-empty strings are skipped; when none is left, the call returns
-  `asset_paths contains no valid paths`.
+  `Missing required parameter: asset_paths (non-empty array)`. Entries the tool
+  cannot read as a non-empty string are skipped; when none is left, the call
+  returns `asset_paths contains no valid paths`. Whether the engine's JSON
+  classes read a number as a string is not verified, so send strings.
 - **Vectors and rotations are objects**: `{x, y, z}` and
   `{pitch, yaw, roll}`. A component you leave out is 0. That matters for
   `scale_override` (section `sequences`) and `set_ref_pose` (section `meshes`).
@@ -107,10 +108,10 @@ A missing or empty required string returns
 
 ## Saving and undo
 
-- **Every write saves by default.** `save` defaults to `true`, and the asset is
-  written to disk in the same call. There is no dry run. Read first
-  (`inspect_track`, `inspect_mesh`), and pass `"save": false` to keep a change
-  in the editor only.
+- **Every write saves by default.** `save` defaults to `true`, and the tool
+  then calls the engine's asset save in the same call. There is no dry run.
+  Read first (`inspect_track`, `inspect_mesh`), and pass `"save": false` to
+  keep a change in the editor only.
 - **A failed save is not reported.** The tool ignores the result of its save
   call, so a save that did not happen still returns success. `asset`
   `get_asset_info` reports `is_dirty` (skill `ue-assets`); a package that is
@@ -175,7 +176,7 @@ A missing or empty required string returns
 |---|---|
 | `Missing required parameter: <name>` | a required parameter is absent or an empty string |
 | `Missing required parameter: asset_paths (non-empty array)` | no `asset_paths` array, or an empty one |
-| `asset_paths contains no valid paths` | no entry of `asset_paths` is a non-empty string |
+| `asset_paths contains no valid paths` | no entry of `asset_paths` could be read as a non-empty string |
 | `Unknown operation: '<op>'. Valid: …` | misspelt operation, or one of the curve operations |
 | `Failed to load anim sequence: <path>` / `Asset is not an AnimSequence: <path>` | the path does not load as an AnimSequence |
 | `Failed to load USkeletalMesh: <path>` | the path does not load as a skeletal mesh |
@@ -192,7 +193,7 @@ The errors of each operation are in its section.
 | `Unknown operation: 'get_curves'` | the curve operations are advertised but not dispatched | no `anim_edit` route; montage curves: `ue-anim-montage` |
 | a batch call failed with only a count | every asset failed, and the reasons are dropped | `inspect_track` on one of the assets |
 | `success` with `fail_count` above 0 | some assets failed | read `error` in `results` |
-| a test edit is already on disk | `save` defaults to `true` | pass `"save": false` while trying things |
+| a test edit was saved with the call | `save` defaults to `true` | pass `"save": false` while trying things |
 | after `resample` the sequence plays at a different speed or length | the frame rate was not changed (section `sequences`) | reimport the source at the wanted rate instead |
 | `adjust_track` set every scale key to 0 | `scale_override` was partial or not an object | send all three components as an object |
 | `rename_bone` worked, but another mesh still has the old name | only the mesh at `mesh_path` is renamed | `rename_bone` on that mesh too; it takes the mesh-only path |
