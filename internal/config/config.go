@@ -441,8 +441,9 @@ func loadMode(explicitPath, dir string, engineOptional bool) (*Config, Info, err
 	}
 
 	if err := c.validate(); err != nil {
-		if engineOptional && engine == "" {
-			// A rule or path that still holds ${ENGINE} can fail for that alone.
+		if engineOptional && engine == "" && strings.Contains(err.Error(), "${ENGINE}") {
+			// The value the error quotes still holds ${ENGINE}, and can fail
+			// for that alone.
 			return nil, info, fmt.Errorf("%w (checked with ${ENGINE} left in place: %s)", err, placeholderHint("${ENGINE}"))
 		}
 		return nil, info, err

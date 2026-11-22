@@ -217,6 +217,11 @@ func run() error {
 	// and which plugins -DisablePlugins= switches off.
 	checkPluginEngineVersions(cfg.Unreal.Project, engineDirOf(cfg.Unreal.Editor, info.EngineRoot),
 		ueArgs, alertWarnings(logger, alert, logPath))
+	// A module without its binary makes the editor exit at startup, again
+	// after every restart, until the launcher gives up on it (k229): name it
+	// and the compile command first. Nothing is built here.
+	_, compile := cfg.Commands["compile"]
+	checkProjectModules(cfg.Unreal.Project, cfg.Unreal.Editor, compile, alertWarnings(logger, alert, logPath))
 	ueProjectDir := ""
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)

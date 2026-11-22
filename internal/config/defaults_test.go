@@ -497,4 +497,14 @@ func TestLoadForPreflightStillFails(t *testing.T) {
 		_, _, err := LoadForPreflight(path, "")
 		errContains(t, err, "permissions.allow[0]", "checked with ${ENGINE} left in place: engine not found — set UE_ROOT or engineRoot")
 	})
+	t.Run("error that has nothing to do with the engine", func(t *testing.T) {
+		dir := t.TempDir()
+		writeUProject(t, dir, "Game.uproject")
+		path := writeConfigFiles(t, dir, "agent: {enabled: true, onExit: sometimes}\n", "")
+		_, _, err := LoadForPreflight(path, "")
+		errContains(t, err, "agent.onExit invalid")
+		if err != nil && strings.Contains(err.Error(), "${ENGINE}") {
+			t.Errorf("err = %v; it names the engine, which this error is not about", err)
+		}
+	})
 }

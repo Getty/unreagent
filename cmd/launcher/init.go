@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -46,7 +44,8 @@ const (
 //
 // args, out and the usage errors are as for hermesSetup. The returned error
 // is non-nil when the configuration cannot be loaded (no .uproject, or
-// several, among the causes) or the preflight has a blocking finding.
+// several, among the causes) or the preflight has a blocking finding; either
+// way it ends on what init wrote, the file or nothing.
 func initCommand(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "Print the preflight for this unreagent.yaml (default: the one next to the executable); init never writes to a -config path")
@@ -71,6 +70,7 @@ func initRun(load func() (*config.Config, config.Info, error), check bool, out i
 	if err != nil {
 		return fmt.Errorf("%w (unreagent init wrote nothing)", err)
 	}
+	wrote := "nothing"
 	switch {
 	case !info.Defaults:
 		fmt.Fprintf(out, "Config: %s exists and is left as it is. Preflight only.\n", info.ConfigPath)
@@ -84,6 +84,7 @@ func initRun(load func() (*config.Config, config.Info, error), check bool, out i
 		// cfg stays the one loaded: the written document decodes to the same
 		// configuration (config.TestDefaultYAMLRoundTrips).
 		fmt.Fprintf(out, "Wrote %s:\n\n%s\n\n", info.ConfigPath, indent(string(doc), "    "))
+		wrote = info.ConfigPath
 	}
 
 	findings := preflight(cfg, info)
@@ -103,7 +104,7 @@ func initRun(load func() (*config.Config, config.Info, error), check bool, out i
 	}
 	fmt.Fprintf(out, "%d blocking, %d warning(s). BLOCKING keeps the editor from starting; with a WARN the launcher starts, and the finding says what is missing then.\n", blocking, warnings)
 	if blocking > 0 {
-		return fmt.Errorf("preflight: %d blocking finding(s), see [BLOCKING] above", blocking)
+		return fmt.Errorf("preflight: %d blocking finding(s), see [BLOCKING] above (unreagent init wrote %s)", blocking, wrote)
 	}
 	return nil
 }
@@ -151,11 +152,13 @@ type finding struct {
 // preflight checks what a start of the launcher on cfg needs, without
 // starting anything. Blocking is what keeps the editor from starting at all:
 // no project, no engine. cfg is config.LoadForPreflight's, so without an
-// engine the fields that use ${ENGINE} still hold the placeholder, and what
-// needs the engine — the editor binary, the plugins' EngineVersion — is
-// reported as not checked. Everything else — the editor binary, the agent
-// command, node, npm, the toolkit, an unbuilt module — is a warning, as it is
-// at a start of the launcher, which goes on without it.
+// engine the fields that use ${ENGINE} still hold the placeholder. What needs
+// the engine is not looked up then: the editor binary is part of the blocking
+// engine line, the plugins' EngineVersion and every command or path that
+// holds the placeholder (withoutEngine) are reported as not checked. With an
+// engine, everything else — the editor binary, the agent command, node, npm,
+// the toolkit, an unbuilt module — is a warning, as it is at a start of the
+// launcher, which goes on without it.
 func preflight(cfg *config.Config, info config.Info) []finding {
 	var fs []finding
 	add := func(level, text, fix string) { fs = append(fs, finding{level, text, fix}) }
@@ -194,6 +197,8 @@ func preflight(cfg *config.Config, info config.Info) []finding {
 
 	if !cfg.Agent.Enabled {
 		add(levelInfo, "agent: off (agent.enabled is false) — the launcher starts no agent; an external one can connect to the MCP server", "")
+	} else if withoutEngine(info, cfg.Agent.Command) {
+		add(levelInfo, "agent: not checked — agent.command is "+cfg.Agent.Command+", which needs the engine", "")
 	} else if _, err := exec.LookPath(cfg.Agent.Command); err != nil {
 		add(levelWarn, "agent: command "+cfg.Agent.Command+" is not on PATH — the launcher starts the editor and the MCP server, and the agent fails to start",
 			"install Claude Code (https://code.claude.com/docs/en/setup) so that claude is on PATH, or set agent.command to its full path in unreagent.local.yaml")
@@ -270,7 +275,8 @@ func toolkitFindings(cfg *config.Config, info config.Info, engine ueVersion, eng
 		}
 		script = nodeScript(args)
 	}
-	if script != "" && !filepath.IsAbs(script) {
+	scriptNeedsEngine := withoutEngine(info, script)
+	if script != "" && !scriptNeedsEngine && !filepath.IsAbs(script) {
 		script = filepath.Join(projectDir, script)
 	}
 
@@ -278,6 +284,8 @@ func toolkitFindings(cfg *config.Config, info config.Info, engine ueVersion, eng
 	switch {
 	case configured && script == "":
 		add(levelInfo, "UE LLM Toolkit: mcp.extraServers."+config.ToolkitServerName+" is configured without a script unreagent recognises; the launcher's smoke test at start judges it", "")
+	case configured && scriptNeedsEngine:
+		add(levelInfo, "UE LLM Toolkit: not checked — the bridge script the config names is "+script+", which needs the engine", "")
 	case configured && !fileExists(script):
 		add(levelWarn, "UE LLM Toolkit: the bridge script the config names is not there: "+script+" — "+without,
 			"correct the path under mcp.extraServers."+config.ToolkitServerName+".args, or add the plugin:\n"+toolkitAddCommand(engine, engineErr))
@@ -305,7 +313,9 @@ func toolkitFindings(cfg *config.Config, info config.Info, engine ueVersion, eng
 		{"node", node, "the bridge cannot start"},
 		{"npm", cfg.Runtimes.Node.Npm, "the bridge's dependencies cannot be installed"},
 	} {
-		if _, err := exec.LookPath(tool.command); err != nil {
+		if withoutEngine(info, tool.command) {
+			add(levelInfo, tool.label+": not checked — "+tool.command+" needs the engine", "")
+		} else if _, err := exec.LookPath(tool.command); err != nil {
 			add(level, tool.label+": "+tool.command+" is not on PATH — "+tool.role+need, "install Node.js (https://nodejs.org), which brings both node and npm, and open a new console so that PATH is current")
 		} else {
 			add(levelOK, tool.label+": "+tool.command+" is on PATH", "")
@@ -324,6 +334,13 @@ func toolkitFindings(cfg *config.Config, info config.Info, engine ueVersion, eng
 		}
 	}
 	return fs
+}
+
+// withoutEngine reports whether s cannot be looked up because it holds
+// ${ENGINE} and no engine was found (config.LoadForPreflight leaves the
+// placeholder in place then).
+func withoutEngine(info config.Info, s string) bool {
+	return info.EngineRoot == "" && strings.Contains(s, "${ENGINE}")
 }
 
 // errNoEngine stands in for the engine's version where no engine was found.
@@ -347,64 +364,24 @@ func toolkitAddCommand(engine ueVersion, engineErr error) string {
 	return text + "\nThe plugin has C++ modules: build the project's editor target after adding it."
 }
 
-// moduleFinding guesses whether the project's C++ modules are built: for each
-// module the .uproject declares it looks for the Development editor binary,
-// Binaries/Win64/UnrealEditor-<Name>.dll. A heuristic, not verified against a
-// real project: a module the editor target does not build, or another
-// build configuration, would be reported wrongly. What is known (k208, UE
-// 5.7.4 and 5.8.4): an editor started on a .uproject that names a module
-// without a binary exits 1 at startup.
+// moduleFinding is the preflight's line on whether the project's C++ modules
+// are built — the guess modules.go describes, with its label.
 func moduleFinding(cfg *config.Config, info config.Info) finding {
 	projectDir := filepath.Dir(info.Project)
-	modules := projectModules(info.Project)
-	if len(modules) == 0 {
+	missing, declared := unbuiltModules(info.Project)
+	if declared == 0 {
 		if fi, err := os.Stat(filepath.Join(projectDir, "Source")); err == nil && fi.IsDir() {
 			return finding{levelInfo, "project modules: not checked — there is a Source/ directory, but no Modules could be read from the .uproject", ""}
 		}
 		return finding{levelOK, "project modules: the .uproject declares none, so there is nothing to build", ""}
 	}
-	var missing []string
-	for _, m := range modules {
-		if !fileExists(filepath.Join(projectDir, "Binaries", "Win64", "UnrealEditor-"+m+".dll")) {
-			missing = append(missing, m)
-		}
-	}
-	const heuristic = " (a heuristic, not verified against a real project: the Modules of the .uproject against Binaries/Win64/UnrealEditor-<Name>.dll)"
 	if len(missing) == 0 {
-		return finding{levelOK, "project modules: built, as far as unreagent can tell" + heuristic, ""}
+		return finding{levelOK, "project modules: built, as far as unreagent can tell" + moduleHeuristic, ""}
 	}
 	fix := "build the project's editor target (" + info.ProjectName + "Editor, Win64, Development) in your IDE"
-	if c, ok := cfg.Commands["compile"]; ok && c.Command != "" {
+	if c, ok := cfg.Commands["compile"]; ok && c.Command != "" && !withoutEngine(info, strings.Join(append([]string{c.Command}, c.Args...), " ")) {
 		fix += ", or run what the launcher's compile command runs:\n    " + strings.Join(append([]string{c.Command}, c.Args...), " ")
 	}
-	return finding{levelWarn, "project modules: " + strings.Join(missing, ", ") + " look unbuilt — no Binaries/Win64/UnrealEditor-<Name>.dll for them" + heuristic +
+	return finding{levelWarn, "project modules: " + strings.Join(missing, ", ") + " look unbuilt — no Binaries/Win64/UnrealEditor-<Name>.dll for them" + moduleHeuristic +
 		". An editor that misses a module's binary exits at startup, and the launcher gives up on it after a few tries", fix}
-}
-
-// projectModules are the names of the modules a .uproject declares, in its
-// order; none when the file or its Modules cannot be read.
-func projectModules(project string) []string {
-	data, err := readUEJSON(project)
-	if err != nil {
-		return nil
-	}
-	m, err := firstMembers(data, "Modules")
-	if err != nil {
-		return nil
-	}
-	var raws []json.RawMessage
-	if json.Unmarshal(bytes.TrimSpace(m["Modules"]), &raws) != nil {
-		return nil
-	}
-	var names []string
-	for _, raw := range raws {
-		mod, err := firstMembers(raw, "Name")
-		if err != nil {
-			continue
-		}
-		if name, ok := jsonString(mod["Name"]); ok && name != "" {
-			names = append(names, name)
-		}
-	}
-	return names
 }

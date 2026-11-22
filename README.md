@@ -315,10 +315,14 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
   on PATH, the toolkit (bridge path, `node`, `npm`, the bridge's dependencies),
   whether a project plugin's `EngineVersion` would make the editor refuse it,
   whether the project's modules look built, and what permissions off means. Each
-  finding is `ok`, `info`, `WARN` or `BLOCKING`, and names its fix.
+  finding is `ok`, `info`, `WARN` or `BLOCKING`, and names its fix. **Without an
+  engine**, what holds `${ENGINE}` (the agent command, the toolkit's bridge
+  script, the `node` / `npm` commands, the compile command line) is reported as
+  `not checked` (`info`) instead of being looked up.
 - **No or several `.uproject`, or a config that does not load, end `init` with
   the load error** (`Error: ... (unreagent init wrote nothing)`) and **no
-  preflight**. A missing engine is not one of them: `init` reports it as a
+  preflight**. (A blocking finding ends `init` with a closing error too, see
+  below; its suffix says whether the defaults were written.) A missing engine is not one of them: `init` reports it as a
   **BLOCKING** finding inside the full preflight (next bullet). **BLOCKING**
   lines keep the editor from starting; everything else is a `WARN`: the
   launcher starts without it and the finding says what is missing then.
@@ -337,8 +341,12 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
   ...
   [info]     plugin EngineVersion: not checked — without an engine there is no version to hold the project plugins' EngineVersion against
   1 blocking, 1 warning(s). BLOCKING keeps the editor from starting; ...
-  Error: preflight: 1 blocking finding(s), see [BLOCKING] above
+  Error: preflight: 1 blocking finding(s), see [BLOCKING] above (unreagent init wrote <path>)
   ```
+
+  The closing line ends `(unreagent init wrote <path>)` when this run created
+  `unreagent.yaml`, and `(unreagent init wrote nothing)` when it did not (a
+  config was already there, or `-check` / `-config`).
 
   Only `init` is lenient here: a normal start and `hermes-setup` still stop at
   load without an engine, and `-check` still writes nothing.
@@ -362,6 +370,11 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
 
 - **No engine found:** `${ENGINE} is unresolved` (above). Set `UE_ROOT` or
   `engineRoot`.
+- **A project module is not built** (the editor exits within seconds and is
+  restarted until the launcher gives up): before the editor starts, the
+  launcher logs `WARN project modules look unbuilt: <names> ...` and names the
+  fix; see [the unbuilt-module note](#crashes--recovery-unattended)
+  below.
 - **The toolkit is not loaded** (port 3000 never opens): the editor refused the
   plugin over its `EngineVersion`, or its module is not built. The launcher
   warns about the `EngineVersion` case at start and `init` reports it; the
@@ -1029,7 +1042,18 @@ Windows with 5.7.4 and 5.8.4:
   with 5.7.4 and 5.8.4). A project
   whose C++ module has not been built yet therefore fails slowly and loops
   through the restart policy; build first (`c compile`, about 3.5 minutes on a
-  fresh clone of the reference project).
+  fresh clone of the reference project). The launcher warns once before the
+  first editor start (once per launcher run, not per restart):
+  `WARN project modules look unbuilt: <names> — no Binaries/Win64/UnrealEditor-<Name>.dll
+  for them next to the .uproject ...`, naming the fix: with the editor stopped
+  (`stop ue`), `c compile` in the console (an agent: `ue_stop`, then
+  `run_command compile`), then `start ue`; where the launcher offers no
+  `compile` command it names the IDE build instead. It builds nothing itself.
+  The check is a heuristic: a C++ module the `.uproject` declares without a
+  `Binaries/Win64/UnrealEditor-<Name>.dll`. It stays quiet when `unreal.editor`
+  is not the engine's `UnrealEditor.exe` / `UnrealEditor-Cmd.exe` under a
+  `Win64` directory (a wrapper script, the demo's `ping`). Not run on Windows
+  or against a real UE project.
 - **A plugin is skipped silently** when its `.uplugin` `EngineVersion`
   does not match the engine's compatible version in major, minor or patch (log
   `Skipping load of` or the declined "Incompatible" question;

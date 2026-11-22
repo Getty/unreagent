@@ -553,6 +553,14 @@ Revision history for unreagent
     BLOCKING finding and exits 1. A start of the launcher still fails at load
     as before. unreagent hermes-setup names unreagent init when there is no
     config file.
+  - Before the editor starts, the launcher warns when a C++ module the
+    .uproject declares has no Binaries/Win64/UnrealEditor-<Name>.dll, and
+    names the fix: c compile in the launcher console, run_command compile for
+    an agent. It builds nothing. This is a heuristic not yet verified against
+    a real project.
+  - unreagent init without an engine reports the commands and paths that hold
+    ${ENGINE} as not checked, and its closing error says whether init wrote
+    the config.
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
     Launcher versions and source-build ids resolve, every registered Launcher

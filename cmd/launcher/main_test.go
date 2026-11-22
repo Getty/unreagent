@@ -1417,3 +1417,82 @@ agent:
 		})
 	}
 }
+
+// k229 through run(): the wiring call of checkProjectModules. A project whose
+// .uproject declares a module without Binaries/Win64/UnrealEditor-<Name>.dll
+// gets one WARN before the editor starts, naming the compile command; in
+// window mode, where the log is a file, it also reaches stderr, once. The
+// "editor" is a shell script under the engine editor's Windows name and
+// directory, which is all the check looks at; a real editor on Windows is
+// untested.
+func TestRunWarnsWhenAProjectModuleLooksUnbuilt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		window bool
+	}{
+		{"window mode, log is a file", true},
+		{"log on stdout", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			editor := filepath.Join(dir, "UE", "Engine", "Binaries", "Win64", "UnrealEditor.exe")
+			if err := os.MkdirAll(filepath.Dir(editor), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(editor, []byte("#!/bin/sh\nexec sleep 20\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			project := filepath.Join(dir, "Demo.uproject")
+			mustWriteFile(t, project, `{"Modules": [{"Name": "Demo", "Type": "Runtime"}]}`)
+			yaml := `unreal:
+  editor: ` + editor + `
+  project: ` + project + `
+  args: ["20"]
+  unattended: false
+  killCrashReporter: false
+mcp:
+  enabled: false
+permissions:
+  enabled: false
+runtimes:
+  python: { enabled: false }
+  node: { enabled: false }
+commands:
+  compile: { command: echo }
+agent:
+  enabled: true
+  command: sleep
+  args: ["20"]
+  window: ` + fmt.Sprint(tc.window) + `
+  claudeIntegration: false
+  startDelaySeconds: 1
+`
+			addr := freeLoopbackAddr(t)
+			l := startLauncherIn(t, dir, withMCP(yaml, addr))
+			const warn = "WARN project modules look unbuilt: Demo — no Binaries/Win64/UnrealEditor-<Name>.dll"
+			const fix = "'c compile' in the launcher console"
+			if tc.window {
+				waitFileLine(t, filepath.Join(dir, "unreagent.log"), warn)
+				l.waitStderr(t, "unreagent: "+warn)
+				waitFileLine(t, filepath.Join(dir, "unreagent.log"), "MCP server listening on "+addr)
+			} else {
+				l.waitLine(t, warn)
+				l.waitLine(t, "MCP server listening on "+addr)
+			}
+			if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("SIGTERM: %v", err)
+			}
+			if code := l.exitCode(t); code != 0 {
+				t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			stderr := l.stderr.String()
+			if n := strings.Count(stderr, warn); tc.window && n != 1 {
+				t.Errorf("stderr has the module WARN %d times, want once:\n%s", n, stderr)
+			} else if tc.window && !strings.Contains(stderr, fix) {
+				t.Errorf("the WARN on stderr does not name the compile command:\n%s", stderr)
+			} else if !tc.window && strings.Contains(stderr, "WARN") {
+				t.Errorf("stderr repeats a warning that the log on stdout already shows:\n%s", stderr)
+			}
+		})
+	}
+}

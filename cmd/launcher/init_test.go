@@ -239,8 +239,8 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 	if strings.Contains(out, "[ok]       engine: ") {
 		t.Skip("this host has an engine config.Load detects without UE_ROOT")
 	}
-	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s)") {
-		t.Errorf("err = %v, want one blocking finding\n%s", err, out)
+	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s), see [BLOCKING] above (unreagent init wrote "+tr.config()+")") {
+		t.Errorf("err = %v, want one blocking finding and the file init wrote\n%s", err, out)
 	}
 	doc, _, _, derr := config.DefaultYAML(tr.dir)
 	if derr != nil {
@@ -268,7 +268,7 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 
 	// Again, now with the file there: the same finding, nothing rewritten.
 	out, err = tr.run(false)
-	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s)") {
+	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s), see [BLOCKING] above (unreagent init wrote nothing)") {
 		t.Errorf("second run: err = %v, want one blocking finding\n%s", err, out)
 	}
 	wantAll(t, out, "exists and is left as it is. Preflight only.", "[BLOCKING] engine: not found")
@@ -290,6 +290,37 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 			t.Errorf("err = %v, want one blocking finding\n%s", err, out)
 		}
 		wantAll(t, out, "[BLOCKING] engine: not found\n", "1 blocking, ")
+		if err != nil && !strings.Contains(err.Error(), "(unreagent init wrote nothing)") {
+			t.Errorf("err = %v; want it to end on what init wrote: nothing", err)
+		}
+	})
+	// What holds ${ENGINE} cannot be looked up without an engine: it is
+	// reported as not checked, never as missing under a path with the
+	// placeholder in it.
+	t.Run("commands and paths on the engine are not checked", func(t *testing.T) {
+		tr := newInitTree(t, "")
+		mustWriteFile(t, tr.config(), `agent: {enabled: true, command: "${ENGINE}/bin/agent"}
+mcp:
+  enabled: true
+  extraServers:
+    ue-llm-toolkit: {command: node, args: ["${ENGINE}/bridge/index.js"]}
+runtimes:
+  node: {npm: "${ENGINE}/bin/npm"}
+commands:
+  compile: {command: "${ENGINE}/Build.bat"}
+`)
+		out, err := tr.run(false)
+		if err == nil {
+			t.Errorf("init without an engine succeeded:\n%s", out)
+		}
+		wantAll(t, out,
+			"[info]     agent: not checked — agent.command is ${ENGINE}/bin/agent, which needs the engine",
+			"[info]     UE LLM Toolkit: not checked — the bridge script the config names is ${ENGINE}/bridge/index.js, which needs the engine",
+			"[WARN]     node: node is not on PATH", // no placeholder in it: looked up as ever
+			"[info]     npm: not checked — ${ENGINE}/bin/npm needs the engine",
+			"[WARN]     project modules: Game look unbuilt",
+			"1 blocking, 2 warning(s)")
+		wantNone(t, out, "${ENGINE}/bin/agent is not on PATH", "is not there", "${ENGINE}/bin/npm is not on PATH", "${ENGINE}/Build.bat", tr.dir+"/${ENGINE}")
 	})
 }
 
@@ -453,22 +484,5 @@ func TestInitUsageErrors(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("init ran, output:\n%s", out.String())
-	}
-}
-
-func TestProjectModules(t *testing.T) {
-	dir := t.TempDir()
-	for content, want := range map[string]string{
-		`{"Modules": [{"Name": "A"}, {"name": "B", "Type": "Editor"}, {"Type": "Runtime"}, 7,]}`: "A,B",
-		`{"Modules": []}`:  "",
-		`{}`:               "",
-		`{"Modules": "x"}`: "",
-		`not json`:         "",
-	} {
-		path := filepath.Join(dir, "P.uproject")
-		mustWriteFile(t, path, content)
-		if got := strings.Join(projectModules(path), ","); got != want {
-			t.Errorf("projectModules(%s) = %q, want %q", content, got, want)
-		}
 	}
 }
