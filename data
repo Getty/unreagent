@@ -1,0 +1,48 @@
+---
+claimed_at: 2026-11-22T06:44:32Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T06:44:32Z
+created: 2026-11-21T23:05:48Z
+id: 202
+priority: medium
+started: 2026-11-22T06:38:10Z
+status: done
+tags:
+- ue
+- windows-check
+- bug
+title: Does -unattended decline package recovery, or does that need -AutoDeclinePackageRecovery?
+updated: 2026-11-22T06:44:32Z
+---
+
+Found in k198. The comment on UnrealConfig.Unattended, the log line in run() and README "Crashes & recovery" say -unattended suppresses both recovery prompts (README: checked against the UE 5.7 source, no file named). Epic's flag reference lists a separate flag, AutoDeclinePackageRecovery, and the cleanRecovery comment itself says the restore dialog would block an unattended restart. skills/unreagent-iterate repeats the claim.
+
+Needs a Windows run with an editor first: experiment U2 in docs/research/2026-11-21-unreal-editor.md. Then either add the documented flag to the default editor args, or correct the comments, README and the shipped skill. Owner after the run: unreagent-worker (code), unreagent-doc-writer and unreagent-skill-author for the text.
+
+From the k206/k210 review (2026-11-21): the shipped skills no longer state the claim. The log line at cmd/launcher/main.go:214 ('no crash dialog, no recovery prompt') and the comment at internal/config/config.go:91-92 are now the only places that do.
+
+Windows run 2026-11-22 (U2, package-recovery part), UE 5.7.4 (CL 51494982) and 5.8.4 (CL 58902052), both Launcher builds; Windows 11 Pro 26H2 build 26300.9711. Disposable Blueprint project from TP_BlankBP (PythonScriptPlugin as a control channel, autosave set to 1 min), editor started directly, not through unreagent. Raw timelines, stdout and editor logs: C:\Temp\unreagent-probe\runs\03..09 (5.7) and 20..24 (5.8) on that machine.
+
+Setup: open /Game/ProbeMap, spawn 3 PointLights (map dirty), wait for the autosave (came 58 s later, also under -unattended), TerminateProcess the editor. State then: Saved/Autosaves/PackageRestoreData.json = {"RestoreEnabled": true, "Packages": [{"PackagePathName": "/Game/ProbeMap", "PackageAssetName": "ProbeMap", "AutoSavePath": "Game/ProbeMap_Auto1.umap"}]} plus Saved/Autosaves/Game/ProbeMap_Auto1.umap. Every variant started from a copy of exactly that state. Same results on 5.7.4 and 5.8.4:
+- no flag: modal window "Pakete wiederherstellen" (German UI; Restore Packages) ~10.5 s after start; no game-thread tick for 120-150 s, i.e. the editor blocks until a human answers.
+- -unattended: no prompt, first tick ~14 s, NOT restored (0 PointLights). The restore file is left untouched during the session and is rewritten to {"RestoreEnabled": false, "Packages": []} only at the clean exit (exit 0).
+- -AutoDeclinePackageRecovery alone: no prompt, not restored; the file is cleared to RestoreEnabled false at start (~12 s, before the first tick).
+- both flags: exactly like -unattended alone: file not cleared at start, only at the clean exit. Next to -unattended the flag had no visible effect.
+- chain (5.7): restore state, start with -unattended, TerminateProcess before anything got dirty -> file still holds the old entry -> a later start without flags shows the restore prompt again, for the autosave of two sessions back.
+More file facts: PackageRestoreData.json exists after every clean exit (96 bytes, RestoreEnabled false); UTF-16LE without BOM, CRLF, tab-indented; the editor rewrites it to RestoreEnabled true, Packages [] as soon as a package gets dirty (so a stale entry is dropped at the session's first dirty package) and lists packages after an autosave; the autosave .umap stays behind as an orphan after a clean exit. LogPackageAutoSaver at VeryVerbose logged nothing. Both flags exist as strings in UnrealEditor-UnrealEd.dll 5.7.4.
+
+Verdict:
+- "-unattended suppresses the recovery prompt" (comment on UnrealConfig.Unattended, run() log line): CONFIRMED for package recovery on 5.7.4 and 5.8.4. Disaster recovery (Concert) was not tested.
+- README "Crashes & recovery": "discards the unclean state instead of asking" is CONTRADICTED in part: -unattended skips the restore but keeps the state until a clean exit or the first dirty package; a crash before that hands the old offer to the next start without -unattended. "not re-checked for UE 5.8" can go: 5.8.4 is now checked.
+- cleanRecovery comment "its restore dialog would block an unattended restart": does not hold with -unattended (no dialog); it holds only for unattended: false.
+- research doc section 1 row on AutoDeclinePackageRecovery: -unattended does not do the same; it suppresses and skips, it does not decline (does not clear the state).
+Decision proposed for the owners: do NOT add -AutoDeclinePackageRecovery to the default args (no effect next to -unattended); correct the comment at internal/config/config.go:91-92, the log line at cmd/launcher/main.go:214 and the README to the observed behaviour. Optional: with unattended: false, -AutoDeclinePackageRecovery would be the way to drop a stale offer without a prompt. Not run: the missing-module part of U2 (on k208 as U5).
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). Premise refuted: -AutoDeclinePackageRecovery exists (Engine/Source/Editor/UnrealEd/Private/PackageAutoSaver.cpp:157) but is redundant under -unattended (same file 673-690: no restore offer, the restore file is rewritten as 'restore off'). Disaster recovery is skipped under -unattended too (Plugins/Developer/Concert/.../DisasterRecoveryClientModule.cpp:382). No flag change needed. Left to do: the cleanRecovery comment ('its restore dialog would block an unattended restart') is wrong when -unattended is set; deleting Saved/Autosaves/PackageRestoreData.json stays harmless. The log line in cmd/launcher/main.go is accurate.
+
+Comment-only diff, no behaviour change, not committed. (1) cmd/launcher/lifecycle.go, cleanRecovery doc comment: dropped 'its restore dialog would block an unattended restart'; now says the file goes on every start so a stale restore offer does not outlive its session, and that (UE 5.8.4 source, read not run) only an editor without -unattended shows the modal dialog: FPackageAutoSaver::HasPackagesToRestore (Engine/Source/Editor/UnrealEd/Private/PackageAutoSaver.cpp) is false under -unattended, so FUnrealEdMisc::OnInit (UnrealEdMisc.cpp) never calls OfferToRestorePackages; the file keeps its entries until a clean exit (UUnrealEdEngine::FinishDestroy) or the next restore-file update. (2) internal/config/engine.go, chooseEngine doc comment: the 'may offer to convert it' claim is replaced by a statement that the warning's wording has no backing in the 5.8.4 source (association read via FDesktopPlatformBase::GetEngineIdentifierForProject, Engine/Source/Developer/DesktopPlatform/Private/DesktopPlatformBase.cpp; callers are version selector, project browser, home screen). Left alone on purpose, for k203 on the Windows side: the warning STRING in chooseEngine still says 'and the editor may offer to convert the project' (log string, not a comment), and the k88 test comment at cmd/launcher/main_test.go:366-367 repeats the claim. Correction to the scout note above: under -unattended the restore file is NOT rewritten as 'restore off' at start — OfferToRestorePackages (which does that) is gated by HasPackagesToRestore at its only call site, so it is not reached; this matches the Windows run (file untouched until clean exit). Check on Linux: gofmt clean, go vet, go test -count=1 ./... all ok, make windows builds; nothing run on Windows, engine facts are source reads only.
+
+Review (unreagent-reviewer, 2026-11-22): READY. Files: cmd/launcher/lifecycle.go (cleanRecovery doc comment), internal/config/engine.go (chooseEngine doc comment); both unreagent-worker paths in OWNERS, comment-only, English, engine paths relative to the engine root, no copied engine code. Check run on this tree: gofmt -l cmd internal skills empty, go vet ./... ok, go test -count=1 ./... ok (all packages), make windows builds dist/unreagent.exe. The uncommitted k222 skill files were in the tree and did not break the check. Nothing run on Windows; the comments are source reads, labelled as such. Source re-checked in UE 5.8.4: HasPackagesToRestore is false under FApp::IsUnattended (PackageAutoSaver.cpp 673-676); OfferToRestorePackages has exactly one call site, FUnrealEdMisc::OnInit (UnrealEdMisc.cpp 371-376), gated by it; FinishDestroy calls UpdateRestoreFile(false) (UnrealEdEngine.cpp 520-523). GetEngineIdentifierForProject callers: UnrealVersionSelector, SProjectBrowser, SHomeScreen, plus Mac UnrealEditorServices (not named in the comment; minor, also not the editor). The interim state (comment says the warning string's 'may offer to convert' is unsupported, string and main_test.go:366-367 unchanged) is acceptable: it is named in the comment and the string correction is on k203. Notes for k203, not blocking: the editor does show a separate 'Project file is out of date. Would you like to update it?' prompt (GameProjectUtils::CheckForOutOfDateGameProjectFile, run from UnrealEdGlobals.cpp:346), keyed on the .uproject FileVersion and plugin references, not on EngineAssociation, so the softened string should not claim the editor never prompts. Optional: the cleanRecovery comment says 'read, not run', but the k202 Windows run measured the same behaviour on 5.7.4 and 5.8.4; the rationale 'so that a stale restore offer does not outlive the session it came from' is the worker's wording and matches that measured chain.
+
+Committed as 2b06e19 (comment-only; no Changes entry, no user-visible change)
