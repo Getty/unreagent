@@ -1,0 +1,145 @@
+---
+class: standard
+completed: 2026-11-22T07:28:32Z
+created: 2026-11-21T23:45:32Z
+id: 211
+priority: high
+started: 2026-11-22T06:35:27Z
+status: done
+tags:
+- ue
+- windows-check
+- bug
+title: Engine detection misses a Launcher install listed only in LauncherInstalled.dat
+updated: 2026-11-22T07:28:32Z
+---
+
+Found while running k204 on Windows (2026-11-22, Windows 11 26H2 build 26300.9711, unreagent d4edd23).
+
+autodetectEngine finds Launcher installs only through HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>\InstalledDirectory and the defaultEnginePatterns globs. On this machine the Launcher installed UE 5.8.4 to C:\EpicGames\UE_5.8, but wrote no 5.8 subkey (only 5.7 is there), and C:\EpicGames matches no default pattern (C:/Epic Games/UE_* has a space). The engine's own lookup has a third source: UnrealEditor-DesktopPlatform.dll (5.7.4, 5.8.4) and the Launcher's UnrealVersionSelector.exe carry the string "UnrealEngineLauncher/LauncherInstalled.dat", i.e. %ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat. That file here lists {"AppName": "UE_5.8", "InstallLocation": "C:\\EpicGames\\UE_5.8"} next to UE_5.7 (plus marketplace plugin entries with other AppNames, and the UE_5.8 entry's AppVersion still says 5.8.3 while Build.version says 5.8.4).
+
+Repro: a project with only {"FileVersion": 3, "EngineAssociation": "5.8"}, unreagent.yaml with agent.enabled false, unreal.manualStart true, skills.enabled false. Output:
+  Engine: C:/EpicGames/UE_5.7
+  WARN the .uproject's EngineAssociation "5.8" names no usable engine ... using the highest usable one instead, 5.7 at C:/EpicGames/UE_5.7, and the editor may offer to convert the project ...
+
+So a 5.8 project would be opened in 5.7. Fix candidate: read LauncherInstalled.dat (InstallationList entries whose AppName is UE_<ver>; take <ver> from AppName, root from InstallLocation) as another Launcher source, next to the HKLM key. The precedence between the two in the engine is unverified. Owner: unreagent-worker; README/config skill for the resolution order after.
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). Confirmed: the engine finds Launcher installs through %ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat — JSON InstallationList[] with AppName (UE_5.8 → identifier 5.8) and InstallLocation (DesktopPlatformBase.cpp 72-86, 1575-1612; WindowsPlatformProcess.cpp 1516-1530). It does not read HKLM ...\Unreal Engine\<ver>\InstalledDirectory for this. Fix: read the .dat first, keep the registry as fallback.
+
+2026-11-22 06:58 Done, ready for review (unreagent-worker, 2026-11-22). Branch k211, worktree tree uncommitted.
+
+What changed (internal/config/engine.go, engine_test.go only):
+- autodetectEngine now builds the Launcher candidates with launcherEngines(%ProgramData%, registryLauncherInstalls()): the entries of %ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat first, the HKLM ...\Unreal Engine\<ver>\InstalledDirectory subkeys after them as the fallback. chooseEngine, highestEngine and the default paths are unchanged.
+- parseLauncherInstalled: an InstallationList entry counts when AppName is "UE_" (case-sensitive, as the engine strips it) plus a version; ID = that version, Dir = InstallLocation. Marketplace/Fab entries (other AppNames, also FabPlugin_5.8 / QuixelBridge_5.8), entries without InstallLocation, and entries that are not an object of strings are skipped one by one. AppVersion is not read (5.8.3 listed for the installed 5.8.4). UTF-8 BOM tolerated.
+- Fallback: no ProgramData, missing/unreadable/malformed .dat -> no .dat candidates, so detection is exactly the old registry + default paths.
+- Precedence: for a version both sources list, the .dat directory wins; the registry's counts only when the .dat's has no editor binary. On a version tie in the highest-version fallback the .dat entry wins (earlier candidate).
+- Source check (UE 5.8.4 on disk): DesktopPlatformBase.cpp 72-86 (RemoveFromStart "UE_", CaseSensitive), 1575-1612 (ReadLauncherInstallationList); DesktopPlatformWindows.cpp 335-338 (EnumerateEngineInstallations = launcher list + HKCU Builds, no HKLM). Not mirrored: the engine keeps the last of duplicate AppNames, unreagent tries them in file order; UTF-16 .dat files (the engine's LoadFileToString would accept them; the real file is plain UTF-8).
+
+Tests (new, internal/config/engine_test.go): TestParseLauncherInstalled (fixture cut from the real file, skipped entries, malformed inputs), TestLauncherInstalledPath, TestLauncherEnginesOrder (.dat before registry, registry fallback, no/missing/malformed/directory .dat = registry only), TestLauncherInstalledOnDisk (the k211 machine with temp dirs and the real hasEditor). Every test injects a temp ProgramData root; none reads the real .dat. Mutation check: registry-first order, case-insensitive prefix, no version check, empty InstallLocation, no BOM handling, bad entry not skipped: each one fails the tests.
+
+Verification, run natively on Windows 11 (go test here is a real Windows run):
+- gofmt -l: nothing. go vet ./...: clean (also with GOOS=linux).
+- GOOS=windows CGO_ENABLED=0 build of cmd/launcher: ok. GOOS=linux CGO_ENABLED=0 go build ./...: ok (compiled only, Linux tests not run).
+- go test ./...: internal/config, mcp, skills, supervisor ok. cmd/launcher FAILS on Windows at baseline 1ea8353 too, same 6 tests, all unrelated to k211: TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart (Windows exec error text), TestRunReplaysTheStartupLinesIntoTheLauncherLog and TestRunWarnsWhenTheEngineAssociationIsNotInstalled (mkdir of "C:/Program Files/..." under a temp dir, Linux-only setup), TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess.
+- TestMaterializeTwoRunsAtOnce failed once in the full run on the k211 tree; rerun -count=10 it failed 2 of 10 times ("rename ...unreagent-.tmp-... : Access denied" between the two concurrent materializeSkills calls). It exercises cmd/launcher/skills.go only, which k211 does not touch: intermittent on Windows, not caused here.
+
+Repro on this machine (no editor, no agent; MCP on 127.0.0.1:18811; the run bound only 18811, no child process, nothing on 3000/8000/8765; the real .dat was only read):
+- before (1ea8353): "Engine: C:/EpicGames/UE_5.7" + WARN "the .uproject's EngineAssociation "5.8" names no usable engine ... using the highest usable one instead, 5.7 at C:/EpicGames/UE_5.7 ..."
+- after: "Engine: C:/EpicGames/UE_5.8", no WARN.
+
+Drift for the dispatcher (not in scope here):
+- cmd/launcher tests fail on Windows (the 6 above): test-writer card on this board, Windows-safe setup for those tests.
+- TestMaterializeTwoRunsAtOnce is flaky on Windows (rename ACCESS_DENIED, 2/10): card on this board for unreagent-worker. It may be a real race when two launchers materialize skills into one directory on Windows, not only a test problem.
+
+Doc follow-ups (other owners; nothing edited here):
+- unreagent-doc-writer, README.md ${ENGINE} row (line ~232) and unreagent.example.yaml header (lines ~10-17): "found via the registry / Epic default paths" -> Launcher installs are found via %ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat (entries with AppName UE_<version>, as the engine itself does), then HKLM\SOFTWARE\EpicGames\Unreal Engine\<version>\InstalledDirectory as a fallback, then the Epic default paths. The association lookup and the highest-version fallback both use all three.
+- unreagent-skill-author, unreagent-ue "Engine discovery" row "Launcher installs": the code column now reads the .dat first (launcherEngines, parseLauncherInstalled), the HKLM key only as fallback; status: measured (k211) picks 5.8 for the 5.8 project. unreagent-config step 6 / the ${ENGINE} row (line ~173): "Launcher registry" -> "LauncherInstalled.dat, then the Launcher registry key as fallback".
+
+2026-11-22 06:58 Fix ready for unreagent-reviewer: LauncherInstalled.dat read first, HKLM key kept as fallback (internal/config/engine.go + tests). Windows-native test run: internal/* green; cmd/launcher's 6 baseline Windows failures plus a flaky materialize test are unrelated (see note above). Repro: 5.7 + WARN before, C:/EpicGames/UE_5.8 after. Doc follow-ups for README/example yaml and unreagent-ue/unreagent-config listed above.
+
+Docs updated (unreagent-doc-writer, worktree k211, uncommitted): README.md ${ENGINE} row (line 232) and unreagent.example.yaml header comment (lines 10-22). Old wording "found via the registry / Epic default paths" replaced by the code's order: LauncherInstalled.dat (AppName UE_<version>) first, HKLM ...\Unreal Engine\<version>\InstalledDirectory as fallback, then the Epic default install paths; the EngineAssociation match and the highest-version fallback use all three; the .dat directory wins for a version listed in both. WARN sentence kept, now attached to the highest-version step. No other doc line mentions the registry or default paths.
+
+2026-11-22 07:03 Project skills updated to the new Launcher-install order (unreagent-skill-author, 2026-11-22). Worktree k211, uncommitted; no Go, README or example-yaml file touched.
+
+- .claude/skills/unreagent-ue/SKILL.md, "Engine discovery", row "Launcher installs" (line 104): code column now names launcherEngines: the .dat first (launcherInstalledFile under env ProgramData, parseLauncherInstalled), the HKLM InstalledDirectory key (launcherRegKey, registryLauncherInstalls) as the fallback; the .dat's directory wins for a version both list unless it has no editor. Engine column adds the case-sensitive UE_ strip, both fields non-empty, map keyed by AppName (last duplicate stays), EnumerateEngineInstallations = this list plus HKCU Builds. Recorded as "not as the engine": duplicate AppNames tried in file order; only UE_<version> counts (the engine takes any suffix as identifier); a UTF-16 .dat gives no entries (engine accepts it). Status: source (UE 5.8.4); measured (k211) before/after (5.7 + WARN -> C:/EpicGames/UE_5.8, no WARN), AppVersion 5.8.3 for 5.8.4. History line (111-112): k211 added.
+- .claude/skills/unreagent-config/SKILL.md, ${ENGINE} row (line 173): "Launcher registry" -> "Launcher installs", defined as the UE_<ver> entries of LauncherInstalled.dat, then the HKLM ...\Unreal Engine\<ver> keys as fallback, then the default paths. Step 6 names no sources (it points at autodetect), left as is.
+
+Verified in the UE 5.8.4 source on disk: DesktopPlatformBase.cpp 72-86 (EnumerateLauncherEngineInstallations, RemoveFromStart "UE_" CaseSensitive), 1575-1612 (ReadLauncherInstallationList: AppName and InstallLocation both Len() > 0, LauncherInstallationList.Add at 1609); DesktopPlatformWindows.cpp 335-338 (EnumerateEngineInstallations calls EnumerateLauncherEngineInstallations, then HKCU InstallationsSubKey at 342); WindowsPlatformProcess.cpp 1516-1530 (ApplicationSettingsDir = FOLDERID_ProgramData + "/Epic/"); Containers/Map.h.inl 315-322 (TMap::Add sets the key's value, so the last duplicate stays). The only HKLM "EpicGames\Unreal Engine" read in DesktopPlatform is INSTALLDIR for the version selector's shell integration (DesktopPlatformWindows.cpp 503), not engine discovery.
+
+Other project skills: unreagent-core (202) and unreagent-windows (114) say registry engine detection cannot run on the Linux dev box; still true for the registry half, left alone. Shipped skills/: none states the detection order; nothing changed there.
+
+Also found (not edited, other owners):
+- internal/config/engine_test.go, TestParseLauncherInstalled: the comment "Entries the engine list skips" covers {"AppName": "UE_"} and {"AppName": "UE_Custom"}, which the engine does not skip (RemoveFromStart leaves "" and "Custom" as identifiers; DesktopPlatformBase.cpp 81-83). unreagent skipping them is correct for its version lookup; the comment should say "entries unreagent skips" or split the two out.
+- internal/config/engine.go, launcherInstalledFile comment: "from it and from nothing else" - without the .dat the engine checks the 4.0/4.1 manifests under UnrealEngineLauncher/Data/Manifests (DesktopPlatformBase.cpp 1578-1585, 1618-1640). Irrelevant for UE 5, wording only.
+
+2026-11-22 07:04 Comment fixes before review (unreagent-worker), comments only, logic unchanged; both points checked against the UE 5.8.4 source:
+- engine_test.go TestParseLauncherInstalled: the comment now says unreagent skips these entries. The engine also drops the ones without a case-sensitive "UE_" prefix and the ones with an empty AppName or InstallLocation, but keeps "UE_" and "UE_Custom" as the identifiers "" and "Custom" (DesktopPlatformBase.cpp 80-82). It no longer claims the engine skips the non-object entries either: the engine passes them to AsObject() and dereferences the result.
+- engine.go launcherInstalledFile: replaced "from nothing else". When the .dat does not exist, the engine looks for the UE 4.0/4.1 manifests in UnrealEngineLauncher/Data/Manifests (DesktopPlatformBase.cpp 1578-1585, 1618-1640); unreagent does not.
+- engine.go parseLauncherInstalled doc: added that the engine keeps a non-version rest as an identifier, and that unreagent takes only versions because an association that is no version is looked up among the source builds only.
+Rerun on Windows: gofmt -l nothing, go vet ./... clean, go test ./internal/config/ ok. The doc-writer's and skill-author's files in this worktree were not touched.
+
+2026-11-22 07:16 Review (unreagent-reviewer): CHANGES NEEDED. One should-fix test gap, three low wording points. The logic, precedence, fallback and source claims hold.
+
+Findings, most important first:
+1. [worker] internal/config/engine.go:72: the fix line itself is not covered by any test. autodetectEngine calls launcherEngines(os.Getenv("ProgramData"), registryLauncherInstalls()). I put the old `registryLauncherInstalls()` back, or read another env var, and go test ./internal/config stays green both times. TestLauncherInstalledOnDisk (engine_test.go:407-449) is described as "the k211 machine as a test", but it calls chooseEngine directly. Its "before" half (433-435) only checks chooseEngine on a registry list the test hands in, not the bug. Fix: add a test that sets t.Setenv("ProgramData", <temp>), writes a .dat that lists UE_99.9 pointing at a temp engine with an UnrealEditor.exe, writes a .uproject with EngineAssociation "99.9", and calls autodetectEngine. I ran such a probe in a scratch copy. With the k211 code it passes; with the wiring reverted it fails (got C:/EpicGames/UE_5.7 plus the k88 WARN). The result does not depend on the host, because the .dat candidates come first and no host has 99.9. Every other mutation fails the new tests: registry first, case-insensitive UE_, no version check, no BOM trim, a bad entry ending the list.
+2. [worker] internal/config/config.go:15-18: the package comment still says the highest version comes from "Epic Launcher registry entries and standard installation paths". The .dat is now the first Launcher source.
+3. [doc-writer] README.md:232 says "a version listed in both the .dat and the registry resolves to the .dat directory", and unreagent.example.yaml:19-20 says "(the .dat wins for a version listed in both)". Both are stated as always true. The code takes the registry's directory when the .dat's directory has no editor binary (chooseEngine; TestLauncherEnginesOrder "the .dat's has no editor: the registry's"). Add "unless that directory has no editor binary". README.md:232 also says "entries named UE_<version>, as the engine itself does", but the engine takes any UE_ suffix as an identifier, so drop the comparison or say that the engine reads the same file. unreagent.example.yaml:19-23 has two parenthesised sentences in a row, and the second has no period: make them one sentence.
+4. [skill-author] .claude/skills/unreagent-ue/SKILL.md:104: the "Not as the engine" list leaves out the 4.0/4.1 manifest fallback. The engine uses UnrealEngineLauncher/Data/Manifests only when the .dat does not exist (DesktopPlatformBase.cpp 1577-1585, 1618-1640), and engine.go:30-32 says so. The row also says "a UTF-16 .dat gives no entries, so only the registry counts", but the default paths still count too. Optional: the engine normalizes InstallLocation (NormalizeDirectoryName, 1608), while unreagent only converts it to forward slashes. A trailing separator would therefore reach ${ENGINE}. The real file has none.
+
+Checked and fine:
+- Source, UE 5.8.4 on disk:
+  - DesktopPlatformBase.cpp 72-86 (RemoveFromStart "UE_" CaseSensitive into a TMap) and 1573-1616 (both fields need Len()>0; NormalizeDirectoryName; Add).
+  - DesktopPlatformWindows.cpp 335-342: the Launcher list plus HKCU Builds, never the HKLM key.
+  - WindowsPlatformProcess.cpp 1516-1530: FOLDERID_ProgramData + "/Epic/".
+  - Map.h.inl 315-322: Add goes to Emplace.
+  So reading the .dat first matches the engine. The registry fallback and the editor-check fall-through are unreagent's own additions, and the code comments say so. The deliberate differences (duplicates tried in file order, only UE_<version>, no UTF-16, no manifests) are stated in engine.go and are harmless for UE 5. This machine's real .dat (only read): UTF-8 without BOM. UE_5.7 and UE_5.8 are among the plugin entries; FabPlugin_5.8 and QuixelBridge_5.8 are skipped as they should be.
+- Fallback: a missing, malformed or directory .dat, or an empty ProgramData, leaves the registry list as it was (TestLauncherEnginesOrder). Live run with ProgramData pointed at an empty directory: Engine C:/EpicGames/UE_5.7 plus the k88 WARN, the same as on base.
+- No unit test reads the real .dat. Each one uses a temp ProgramData root, no test calls autodetectEngine, and the Load tests replace autodetect or set UE_ROOT. Side note, not this card's: cmd/launcher's subprocess tests (startLauncherIn without engineRoot or UE_ROOT) inherit ProgramData. On Windows they now read the host's .dat (read only), just as they already query the host registry. That changes no result today. Whoever makes TestRunWarnsWhenTheEngineAssociationIsNotInstalled Windows-safe should isolate ProgramData as well.
+- Scope: each agent stayed inside its OWNERS paths (worker: internal/config/engine.go and engine_test.go; doc-writer: README.md and unreagent.example.yaml; skill-author: .claude/skills/unreagent-ue and unreagent-config). No German in the touched text. unreagent-config SKILL.md:173 matches the code.
+- Trust: if the .dat is missing, any local user can create it under ProgramData. That is the same risk as the existing C:/Epic Games/UE_* default pattern, and the engine trusts the file the same way. No action.
+
+Check run (worktree k211, native Windows 11, go1.27.0):
+- gofmt -l over the git ls-files *.go list (vendor excluded) and over cmd internal skills: empty.
+- go vet ./... ok; GOOS=linux go vet ./... ok.
+- GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o dist/unreagent.exe ./cmd/launcher: ok. GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...: ok.
+- go test ./...: internal/* ok. cmd/launcher fails 6 tests: TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog (lifecycle_test.go:1170), TestRunWarnsWhenTheEngineAssociationIsNotInstalled (both subtests, main_test.go:385), TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess (scriptaction_test.go:355).
+- Base 1ea8353, in my own detached worktree (removed afterwards): go test -count=1 ./cmd/launcher/ fails exactly these 6, at the same lines with the same messages. They are pre-existing and not findings of this card. TestRunWarnsWhenTheEngineAssociationIsNotInstalled fails at the same setup mkdir on both trees, before the launcher starts, so k211 does not change how it fails. ProgramData is unset on Linux, so nothing changes there.
+- go test -count=1 -skip '^(those 6)$' ./...: all packages ok. TestMaterializeTwoRunsAtOnce passed in all three of my runs.
+- The card's tests (TestParseLauncherInstalled, TestLauncherInstalledPath, TestLauncherEnginesOrder, TestLauncherInstalledOnDisk), run with -count=1 -v: all PASS.
+- Live repro with the new dist/unreagent.exe on the worker's repro project: -no-agent, manualStart, MCP bound to 127.0.0.1:18811 only, no editor, quit after 3 s. Result: Engine C:/EpicGames/UE_5.8, no WARN, exit 0.
+Windows: the .dat path ran on this one Windows 11 machine (native unit tests and the live run). Linux: built and vetted only; the new tests did not run on Linux.
+Back to: unreagent-worker (1, 2), unreagent-doc-writer (3), unreagent-skill-author (4).
+
+Docs corrected after review (unreagent-doc-writer): README.md line 232 and unreagent.example.yaml header now say the .dat directory is used for a version listed in both sources unless it has no editor binary, then the registry directory; README no longer claims the engine restricts entries to UE_<version> (the file is the one the engine reads, the version restriction is unreagent's); the example yaml parentheticals are folded into plain sentences ending in a period.
+
+2026-11-22 07:17 Review findings on unreagent-ue fixed (unreagent-skill-author). .claude/skills/unreagent-ue/SKILL.md line 104, "Launcher installs" row, worktree k211, uncommitted:
+1. "Not as the engine" now lists the UE 4.0/4.1 manifest fallback: without a .dat the engine checks UnrealEngineLauncher/Data/Manifests/40003.manifest and 1040003.manifest; unreagent does not. Source column: DesktopPlatformBase.cpp 1577-1585, 1618-1640 (CheckForLauncherEngineInstallation).
+2. UTF-16 .dat: "only the registry counts" -> "the registry and the default paths are all that is left".
+3. Added: InstallLocation is only turned to forward slashes (parseLauncherInstalled, then filepath.ToSlash in chooseEngine/highestEngine; resolveEngine returns the autodetect root as is, config.go 1083-1084), so a trailing separator would stay in ${ENGINE}. The engine's NormalizeDirectoryName (DesktopPlatformBase.cpp 1608; Paths.cpp 1341-1358) turns \ into / and drops one trailing / unless the path ends in // or :/. The real file has none. Source column cites Paths.cpp 1341-1358.
+No Go, README or example-yaml file touched; card stays in review.
+
+2026-11-22 07:18 Review findings 1 and 2 fixed (unreagent-worker):
+1. New test TestAutodetectEngineReadsLauncherInstalled (engine_test.go) runs autodetectEngine itself. It uses t.Setenv("ProgramData", temp dir), a .dat that lists UE_99.9 pointing at a temp engine with UnrealEditor.exe, and a .uproject associated with 99.9. Mutation check on Windows: with the old line `launcher := registryLauncherInstalls()` the test fails, and with ProgramFiles in place of ProgramData it fails too (both times it got C:/EpicGames/UE_5.7 plus the WARN instead of the temp 99.9). With the k211 line it passes. On Windows it still runs reg.exe and globs the default paths of the host (both read-only), but nothing there has a 99.9, so the result cannot depend on them. Also: the engine-dir setup of TestLauncherInstalledOnDisk moved into a shared helper, installTestEngine.
+2. config.go package comment: the highest version and the association lookup both search the Launcher's LauncherInstalled.dat, then its registry entries as the fallback, then the standard installation paths.
+Rerun on Windows: gofmt -l nothing; go vet ./... clean (also GOOS=linux); go test -count=1 ./internal/config/ ok. README, unreagent.example.yaml and .claude/skills not touched.
+
+2026-11-22 07:25 Re-review (unreagent-reviewer): READY. All four findings are fixed, and nothing in the change blocks it.
+
+What I checked:
+1. Fixed. TestAutodetectEngineReadsLauncherInstalled (engine_test.go:454-474) runs autodetectEngine with ProgramData set to a temp directory and a .dat that lists UE_99.9. I copied the tree into a scratch copy and put the old line 72 back (`launcher := registryLauncherInstalls()`): the new test fails. Reading ProgramFiles instead of ProgramData fails it too. Putting the registry first now fails TestLauncherEnginesOrder. The shared helper installTestEngine (440-452) also builds the engines for TestLauncherInstalledOnDisk.
+2. Fixed. The package comment in internal/config/config.go:15-19 now gives the order .dat, then registry, then default paths. Nit, not blocking: "Both of the last two look for engines in ..." holds for a version association. A source-build id is still looked up only among the HKCU Builds entries (chooseEngine).
+3. Fixed. README.md:232 and unreagent.example.yaml:19-24 now say the .dat's directory is used unless it has no editor binary, then the registry's. The README no longer claims UE_<version> is the engine's rule. The example yaml's sentences are clean.
+4. Fixed. .claude/skills/unreagent-ue/SKILL.md:104 now covers the 4.0/4.1 manifests (40003/1040003.manifest, 1577-1585, 1618-1640), the UTF-16 case (registry and default paths are what is left) and the trailing separator. Checked against Paths.cpp 1341-1358: NormalizeDirectoryName drops one trailing "/" unless the path ends in "//" or ":/", so "drops one trailing /" is right.
+engine.go is unchanged apart from the earlier diff. No German in the new text. config.go is in the worker's OWNERS path.
+
+Check run (worktree k211, native Windows 11, go1.27.0):
+- gofmt -l over the git ls-files *.go list (vendor excluded) and over cmd internal skills: empty.
+- go vet ./... ok; GOOS=linux go vet ./... ok.
+- Windows build (GOOS=windows GOARCH=amd64 CGO_ENABLED=0, -ldflags "-s -w", -o dist/unreagent.exe ./cmd/launcher): ok. Linux build (GOOS=linux CGO_ENABLED=0 go build ./...): ok.
+- go test -count=1 ./...: all internal/* packages ok. In cmd/launcher, the same 6 tests fail as on base (pre-existing): TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled, TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess. TestMaterializeTwoRunsAtOnce also failed in this run, and again when run alone, with skills_test.go:1379 "rename ... Access denied". That is pre-existing too: on base 1ea8353 (my own detached worktree, removed afterwards) -count=4 failed it once, at the same line with the same message, and k211 touches no cmd/launcher file.
+- go test -count=1 with -skip set to those 6 tests, over ./...: every package ok, TestMaterializeTwoRunsAtOnce included this time.
+- The card's 5 tests, run with -count=1 -v: all PASS.
+- Live repro again with the new dist/unreagent.exe (-no-agent, manualStart, MCP on 127.0.0.1:18811 only, no editor): Engine C:/EpicGames/UE_5.8, no WARN.
+Windows: tested on this one Windows 11 machine. Linux: built and vetted only; the new tests did not run on Linux.
+
+2026-11-22 07:28 Committed as 053148f on main (unreagent-release-manager): Find Launcher installs through LauncherInstalled.dat before the registry. Reviewer nit in the config.go comment goes to k203.
