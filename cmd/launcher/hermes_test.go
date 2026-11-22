@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/conflict-industries/unreagent/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1991,5 +1992,30 @@ func TestHermesSetupRefusesKeysNotWrittenPlain(t *testing.T) {
 				t.Errorf("localConfigWithToken = %v, want the refusal %q", err, c.want)
 			}
 		})
+	}
+}
+
+// k238: without a config file the hint must not send the user to
+// unreagent.yaml — creating that file for the hermes setting alone leaves the
+// built-in defaults, and agent and MCP server go off. It names the
+// unreagent.local.yaml that is overlaid on the defaults instead.
+func TestHermesEnableHintNamesTheFileToEdit(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "unreagent.yaml")
+	localPath := filepath.Join(dir, "unreagent.local.yaml")
+
+	withFile := strings.Join(hermesEnableHint(config.Info{ConfigPath: cfgPath}), "\n")
+	if !strings.Contains(withFile, "Set it in unreagent.yaml") || !strings.Contains(withFile, cfgPath) || strings.Contains(withFile, "local") {
+		t.Errorf("hint with a config file does not point to it alone:\n%s", withFile)
+	}
+
+	defaults := strings.Join(hermesEnableHint(config.Info{ConfigPath: cfgPath, Defaults: true}), "\n")
+	for _, want := range []string{"Set it in unreagent.local.yaml", localPath, "built-in defaults", "Do not create an unreagent.yaml"} {
+		if !strings.Contains(defaults, want) {
+			t.Errorf("hint on the defaults path does not mention %q:\n%s", want, defaults)
+		}
+	}
+	if strings.Contains(defaults, "Set it in unreagent.yaml") {
+		t.Errorf("hint on the defaults path still sends the user to unreagent.yaml:\n%s", defaults)
 	}
 }

@@ -92,7 +92,9 @@ func run() error {
 	}
 	logger(fmt.Sprintf("unreagent %s — Config: %s", version, info.ConfigPath))
 	if info.Defaults {
-		logger("INFO no config file there — running on built-in defaults: agent and MCP server on, permissions off, the UE LLM Toolkit bridge if the plugin is below Plugins/")
+		for _, line := range defaultsNotice(cfg) {
+			logger("INFO " + line)
+		}
 	}
 	if info.LocalPath != "" {
 		logger("Local overlay: " + info.LocalPath)
@@ -553,6 +555,18 @@ func hasArg(args []string, want string) bool {
 
 func hasPromptArg(args []string) bool {
 	return hasArg(args, "-p") || hasArg(args, "--print")
+}
+
+// defaultsNotice is what a start without a config file says about itself,
+// without the INFO prefix: what the built-in defaults switch on and, unless an
+// unreagent.local.yaml enabled permissions, that unreagent applies no
+// permission policy on this path.
+func defaultsNotice(cfg *config.Config) []string {
+	lines := []string{"no config file there — running on built-in defaults: agent and MCP server on, the UE LLM Toolkit bridge if the plugin is below Plugins/"}
+	if !cfg.Permissions.Enabled {
+		lines = append(lines, "unreagent applies no permission policy on built-in defaults (permissions.enabled is off): it neither allows nor denies a tool call, and Claude Code's own permission prompts and settings alone decide what the agent may do")
+	}
+	return lines
 }
 
 // approveTool is the launcher's permission prompt tool, as

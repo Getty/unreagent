@@ -72,8 +72,9 @@ func hermesSetup(args []string, out io.Writer) error {
 
 	if !cfg.Agent.Hermes.Enabled {
 		fmt.Fprintln(out, "agent.hermes.enabled is not set — nothing to do.")
-		fmt.Fprintln(out, "Set it in unreagent.yaml and re-run this command to integrate Hermes.")
-		fmt.Fprintln(out, "Hint: this file — "+info.ConfigPath)
+		for _, line := range hermesEnableHint(info) {
+			fmt.Fprintln(out, line)
+		}
 		return nil
 	}
 
@@ -192,6 +193,25 @@ func hermesSetup(args []string, out io.Writer) error {
 	fmt.Fprintln(out, "Restart Hermes so it re-reads the config. The unreagent tools")
 	fmt.Fprintln(out, "(ue_start/stop/restart, logs, run_command, …) will then be available.")
 	return nil
+}
+
+// hermesEnableHint tells where to set agent.hermes.enabled. Without a config
+// file (info.Defaults) that is unreagent.local.yaml, which is overlaid on the
+// built-in defaults: an unreagent.yaml holding only this setting would replace
+// the defaults, and agent and MCP server would be off (k238).
+func hermesEnableHint(info config.Info) []string {
+	if !info.Defaults {
+		return []string{
+			"Set it in unreagent.yaml and re-run this command to integrate Hermes.",
+			"Hint: this file — " + info.ConfigPath,
+		}
+	}
+	return []string{
+		"There is no unreagent.yaml here: the launcher runs on its built-in defaults.",
+		"Set it in unreagent.local.yaml, which is overlaid on the defaults, and re-run this command to integrate Hermes:",
+		"  " + localOverridePath(info.ConfigPath),
+		"Do not create an unreagent.yaml for this setting alone: a config file replaces the built-in defaults, and one without agent.enabled and mcp.enabled starts neither the agent nor the MCP server.",
+	}
 }
 
 // resolveHermesConfigPath returns the absolute path to the Hermes config:

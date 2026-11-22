@@ -159,8 +159,12 @@ func TestDefaultsToolkitDetection(t *testing.T) {
 		{name: "nested", plugins: []string{nested}, want: nested},
 		{name: "several take the shallowest", plugins: []string{nested, flat}, want: flat, warn: true},
 		{name: "several at one depth take the first by name", plugins: []string{"B", "A"}, want: "A", warn: true},
+		{name: "at the depth limit", plugins: []string{"a/b/c/d"}, want: "a/b/c/d"},
 		{name: "too deep", plugins: []string{"a/b/c/d/e"}},
 		{name: "not below node_modules", plugins: []string{"X/node_modules/y"}},
+		{name: "not below Content", plugins: []string{"X/Content/y"}},
+		{name: "not below Source", plugins: []string{"X/Source/y"}},
+		{name: "not below Saved", plugins: []string{"X/Saved/y"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -213,6 +217,104 @@ func TestDefaultsToolkitDetection(t *testing.T) {
 	}
 }
 
+// k238: a plugin directory that is a link (a toolkit checkout kept outside
+// the project) is searched like a directory, and the bridge path stays the
+// one below Plugins/. Links that lead to a file or nowhere are passed over.
+// Windows junctions take the same branch (linksToDir) but are unverified.
+func TestDefaultsToolkitBehindSymlink(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
+	writeUProject(t, dir, "Game.uproject")
+	checkout := t.TempDir()
+	writeBridge(t, checkout, "UELLMToolkit") // checkout/Plugins/UELLMToolkit
+	plugins := filepath.Join(dir, "Plugins")
+	if err := os.Mkdir(plugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugins, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, filepath.Join(checkout, "Plugins", "UELLMToolkit"), filepath.Join(plugins, "Toolkit"))
+	symlink(t, filepath.Join(plugins, "README.md"), filepath.Join(plugins, "ToFile"))
+	symlink(t, filepath.Join(plugins, "missing"), filepath.Join(plugins, "Dangling"))
+
+	c, info, err := load("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.ToSlash(filepath.Join(plugins, "Toolkit", "Resources", "mcp-bridge", "index.js"))
+	if got := toolkitArgs(c); !reflect.DeepEqual(got, []interface{}{want}) {
+		t.Errorf("args = %v, want [%s]", got, want)
+	}
+	if len(info.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none", info.Warnings)
+	}
+}
+
+// k238: the toolkit is optional, so a Plugins the search cannot look into
+// warns and the launcher starts without the bridge — it does not stop.
+func TestDefaultsUnsearchablePluginsWarns(t *testing.T) {
+	setup := func(t *testing.T) string {
+		dir := t.TempDir()
+		t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
+		writeUProject(t, dir, "Game.uproject")
+		return dir
+	}
+	check := func(t *testing.T, dir string, wantBridge bool, wants ...string) {
+		t.Helper()
+		c, info, err := load("", dir)
+		if err != nil {
+			t.Fatalf("load failed, want a warning: %v", err)
+		}
+		if !info.Defaults || !c.Agent.Enabled || !c.MCP.Enabled {
+			t.Errorf("Defaults=%v agent.enabled=%v mcp.enabled=%v; want the defaults", info.Defaults, c.Agent.Enabled, c.MCP.Enabled)
+		}
+		if got := len(c.MCP.ExtraServers) == 1; got != wantBridge {
+			t.Errorf("extraServers = %v, want a bridge: %v", c.MCP.ExtraServers, wantBridge)
+		}
+		if len(info.Warnings) != 1 {
+			t.Fatalf("warnings = %v, want one", info.Warnings)
+		}
+		for _, w := range wants {
+			if !strings.Contains(info.Warnings[0], w) {
+				t.Errorf("warning %q does not mention %q", info.Warnings[0], w)
+			}
+		}
+	}
+	t.Run("Plugins is a file", func(t *testing.T) {
+		dir := setup(t)
+		if err := os.WriteFile(filepath.Join(dir, "Plugins"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		check(t, dir, false, "Plugins next to the .uproject is not a directory", "UE LLM Toolkit")
+	})
+	// unreadable makes path a directory that cannot be listed, and skips the
+	// test where that cannot be arranged (root, or a file system without modes).
+	unreadable := func(t *testing.T, path string) {
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+		if _, err := os.ReadDir(path); err == nil {
+			t.Skip("cannot make a directory unreadable here")
+		}
+	}
+	t.Run("Plugins unreadable", func(t *testing.T) {
+		dir := setup(t)
+		writeBridge(t, dir, "UELLMToolkit")
+		unreadable(t, filepath.Join(dir, "Plugins"))
+		check(t, dir, false, "cannot read Plugins:", "UE LLM Toolkit")
+	})
+	// One unreadable plugin directory does not hide the bridge in another.
+	t.Run("a plugin directory unreadable", func(t *testing.T) {
+		dir := setup(t)
+		writeBridge(t, dir, "UELLMToolkit")
+		writeBridge(t, dir, "Locked")
+		unreadable(t, filepath.Join(dir, "Plugins", "Locked"))
+		check(t, dir, true, "cannot read Plugins/Locked:")
+	})
+}
+
 // The document DefaultYAML returns is what `unreagent init` writes: portable
 // (placeholders, no machine path), and loading it as a file gives the config
 // a start without a file runs on.
@@ -222,9 +324,9 @@ func TestDefaultYAMLRoundTrips(t *testing.T) {
 	writeUProject(t, dir, "Game.uproject")
 	writeBridge(t, dir, "ue-llm-toolkit/Plugin/UELLMToolkit")
 
-	doc, bridges, err := DefaultYAML(dir)
-	if err != nil {
-		t.Fatal(err)
+	doc, bridges, warnings, err := DefaultYAML(dir)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("err = %v, warnings = %v", err, warnings)
 	}
 	const want = `agent:
   enabled: true
@@ -261,7 +363,7 @@ mcp:
 		t.Errorf("config from the defaults differs from the config loaded from the written document:\n%+v\n%+v", fromDefaults, fromFile)
 	}
 
-	plain, bridges, err := DefaultYAML(t.TempDir())
+	plain, bridges, _, err := DefaultYAML(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

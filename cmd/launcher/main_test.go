@@ -608,6 +608,24 @@ func TestServeMCPClosedIsNotAFailure(t *testing.T) {
 	}
 }
 
+// k238: a start on the built-in defaults says plainly that unreagent applies
+// no permission policy there. An unreagent.local.yaml that enables permissions
+// makes that untrue, and the line goes.
+func TestDefaultsNoticeSaysNoPermissionPolicy(t *testing.T) {
+	off := strings.Join(defaultsNotice(&config.Config{}), "\n")
+	for _, want := range []string{"built-in defaults", "applies no permission policy", "Claude Code's own permission prompts"} {
+		if !strings.Contains(off, want) {
+			t.Errorf("notice does not mention %q:\n%s", want, off)
+		}
+	}
+	var cfg config.Config
+	cfg.Permissions.Enabled = true
+	on := defaultsNotice(&cfg)
+	if len(on) != 1 || strings.Contains(on[0], "permission") {
+		t.Errorf("notice with permissions enabled by the overlay = %q; want the defaults line alone", on)
+	}
+}
+
 // k38, k46 (maintainer's decision: warn, do not refuse): an enabled
 // permissions policy that the launcher cannot hand to the agent it starts —
 // an interactive agent, or one without claudeIntegration — is named in one

@@ -523,6 +523,12 @@ Revision history for unreagent
     truncated one, and scrub accepts any readable number, bool or numeric
     string as frame. ue-anim-montage: an unreadable arrive_tangent or
     leave_tangent is dropped while the key is still added.
+  - A start without a config file now states that unreagent applies no
+    permission policy there and that Claude Code's own prompts decide.
+    hermes-setup without a config file points to unreagent.local.yaml instead
+    of unreagent.yaml. The UE LLM Toolkit bridge search skips Content/,
+    Source/ and Saved/, follows links to directories, and warns instead of
+    stopping the start when Plugins is a file or a directory cannot be read.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

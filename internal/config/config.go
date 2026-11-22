@@ -312,7 +312,8 @@ type Info struct {
 	// for the launcher to log as a WARN line: today that the engine the
 	// .uproject names — by its EngineAssociation, or by lying in an engine
 	// tree — is not usable (see chooseEngine), and on the defaults path a
-	// toolkit bridge chosen among several (loadDefaults).
+	// toolkit bridge chosen among several and a directory the bridge search
+	// could not read (loadDefaults).
 	Warnings []string
 	// Defaults is true when there was no config file and the configuration is
 	// the built-in one (DefaultYAML). ConfigPath then names the file that was
@@ -365,13 +366,11 @@ func load(explicitPath, dir string) (*Config, Info, error) {
 
 	var c Config
 	if info.Defaults {
-		warning, err := loadDefaults(&c, path)
+		warnings, err := loadDefaults(&c, path)
 		if err != nil {
 			return nil, info, err
 		}
-		if warning != "" {
-			info.Warnings = append(info.Warnings, warning)
-		}
+		info.Warnings = append(info.Warnings, warnings...)
 	} else if err := decodeYAML(path, &c); err != nil {
 		return nil, info, err
 	}

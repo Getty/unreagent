@@ -57,12 +57,10 @@ type defaultServer struct {
 //
 // bridges are the bridge entry points found, relative to projectDir with
 // forward slashes; the document uses the first. More than one is the caller's
-// to report.
-func DefaultYAML(projectDir string) (doc []byte, bridges []string, err error) {
-	bridges, err = findBridges(projectDir)
-	if err != nil {
-		return nil, nil, err
-	}
+// to report, as are warnings: what kept the search from looking everywhere,
+// each a complete message.
+func DefaultYAML(projectDir string) (doc []byte, bridges, warnings []string, err error) {
+	bridges, warnings = findBridges(projectDir)
 	var d defaultDoc
 	d.Agent.Enabled = true
 	d.Agent.ClaudeIntegration = true
@@ -78,77 +76,108 @@ func DefaultYAML(projectDir string) (doc []byte, bridges []string, err error) {
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(d); err != nil {
-		return nil, nil, fmt.Errorf("built-in defaults: %w", err)
+		return nil, nil, nil, fmt.Errorf("built-in defaults: %w", err)
 	}
 	if err := enc.Close(); err != nil {
-		return nil, nil, fmt.Errorf("built-in defaults: %w", err)
+		return nil, nil, nil, fmt.Errorf("built-in defaults: %w", err)
 	}
-	return buf.Bytes(), bridges, nil
+	return buf.Bytes(), bridges, warnings, nil
+}
+
+// bridgeSearchSkips are the directory names the bridge search does not enter:
+// dependency, build and content trees, which hold no plugin and can be large.
+// Hidden directories are skipped as well.
+var bridgeSearchSkips = map[string]bool{
+	"node_modules": true,
+	"Binaries":     true,
+	"Intermediate": true,
+	"Content":      true,
+	"Source":       true,
+	"Saved":        true,
 }
 
 // findBridges returns every Resources/mcp-bridge/index.js in a directory up
 // to bridgeSearchDepth levels below projectDir/Plugins, relative to projectDir
 // with forward slashes, the shallowest first and by name within one depth.
-// Hidden directories, node_modules, Binaries and Intermediate are not
-// searched. No Plugins directory is no bridge; one that cannot be read is an
-// error.
-func findBridges(projectDir string) ([]string, error) {
-	var found []string
+// Hidden directories and bridgeSearchSkips are not searched; a link to a
+// directory is followed like a directory. No Plugins directory is no bridge.
+// A Plugins that is not a directory, or a directory the search cannot read,
+// is a warning — the bridge may be there unseen — and never an error: the
+// toolkit is optional, and the launcher starts without it.
+func findBridges(projectDir string) (found, warnings []string) {
+	const consequence = " — the UE LLM Toolkit bridge was not looked for there; if the plugin is there, the agent starts without its editor tools"
+	abs := func(rel string) string { return filepath.Join(projectDir, filepath.FromSlash(rel)) }
+	if fi, err := os.Stat(abs("Plugins")); err == nil && !fi.IsDir() {
+		return nil, []string{"Plugins next to the .uproject is not a directory" + consequence}
+	}
 	level := []string{"Plugins"}
 	for depth := 0; depth <= bridgeSearchDepth && len(level) > 0; depth++ {
 		var next []string
 		for _, rel := range level {
-			entries, err := os.ReadDir(filepath.Join(projectDir, filepath.FromSlash(rel)))
+			entries, err := os.ReadDir(abs(rel))
 			if err != nil {
-				if depth == 0 && !os.IsNotExist(err) {
-					return nil, fmt.Errorf("looking for the UE LLM Toolkit: %w", err)
+				if !os.IsNotExist(err) {
+					warnings = append(warnings, fmt.Sprintf("cannot read %s: %v%s", rel, err, consequence))
 				}
-				continue // not a directory, or one that cannot be read
+				continue
 			}
-			if depth > 0 && fileExists(filepath.Join(projectDir, filepath.FromSlash(rel), filepath.FromSlash(bridgeEntry))) {
+			if depth > 0 && fileExists(filepath.Join(abs(rel), filepath.FromSlash(bridgeEntry))) {
 				found = append(found, rel+"/"+bridgeEntry)
 				continue // a plugin holds no further plugin
 			}
 			for _, e := range entries { // os.ReadDir sorts by name
-				switch name := e.Name(); {
-				case strings.HasPrefix(name, "."), name == "node_modules", name == "Binaries", name == "Intermediate":
-				case e.IsDir() || e.Type()&os.ModeSymlink != 0:
+				name := e.Name()
+				if strings.HasPrefix(name, ".") || bridgeSearchSkips[name] {
+					continue
+				}
+				if e.IsDir() || linksToDir(e, abs(rel+"/"+name)) {
 					next = append(next, rel+"/"+name)
 				}
 			}
 		}
 		level = next
 	}
-	return found, nil
+	return found, warnings
+}
+
+// linksToDir reports whether the directory entry e at path is a link that
+// leads to a directory: a symlink or, on Windows, a junction, which Go
+// reports as irregular rather than as a symlink.
+func linksToDir(e os.DirEntry, path string) bool {
+	if e.Type()&(os.ModeSymlink|os.ModeIrregular) == 0 {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 // loadDefaults decodes the built-in defaults into c for a start without a
 // config file: path is where findConfig looked for it. The project is the one
 // .uproject in that directory; none or several is an error naming them, as
-// there is no unreal.project to choose with. warning reports a bridge chosen
-// among several.
-func loadDefaults(c *Config, path string) (warning string, err error) {
+// there is no unreal.project to choose with. warnings report a bridge chosen
+// among several and what the bridge search could not read.
+func loadDefaults(c *Config, path string) (warnings []string, err error) {
 	dir := filepath.Dir(path)
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.uproject")) // as resolveProject looks
 	sort.Strings(matches)
 	const fix = "put the launcher next to your .uproject, or write an unreagent.yaml that sets unreal.project"
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("no unreagent.yaml and no .uproject in %s: without a config file the launcher runs on built-in defaults for the project next to it — %s (-config <path> names a config elsewhere)", filepath.ToSlash(dir), fix)
+		return nil, fmt.Errorf("no unreagent.yaml and no .uproject in %s: without a config file the launcher runs on built-in defaults for the project next to it — %s (-config <path> names a config elsewhere)", filepath.ToSlash(dir), fix)
 	case 1:
 	default:
 		names := make([]string, len(matches))
 		for i, m := range matches {
 			names[i] = filepath.Base(m)
 		}
-		return "", fmt.Errorf("no unreagent.yaml in %s and several .uproject files there (%s): without a config file the launcher cannot tell which project is meant — %s", filepath.ToSlash(dir), strings.Join(names, ", "), fix)
+		return nil, fmt.Errorf("no unreagent.yaml in %s and several .uproject files there (%s): without a config file the launcher cannot tell which project is meant — %s", filepath.ToSlash(dir), strings.Join(names, ", "), fix)
 	}
-	doc, bridges, err := DefaultYAML(dir)
+	doc, bridges, warnings, err := DefaultYAML(dir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(bridges) > 1 {
-		warning = fmt.Sprintf("several UE LLM Toolkit bridges found below Plugins/, using the first: %s — write an unreagent.yaml to choose another", strings.Join(bridges, ", "))
+		warnings = append(warnings, fmt.Sprintf("several UE LLM Toolkit bridges found below Plugins/, using the first: %s — write an unreagent.yaml to choose another", strings.Join(bridges, ", ")))
 	}
-	return warning, decodeDoc("built-in defaults", doc, c)
+	return warnings, decodeDoc("built-in defaults", doc, c)
 }
