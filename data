@@ -1,0 +1,34 @@
+---
+claimed_at: 2026-11-22T22:28:00Z
+claimed_by: unreagent-doc-writer
+class: standard
+completed: 2026-11-22T22:28:00Z
+created: 2026-11-22T07:08:39Z
+id: 232
+priority: medium
+started: 2026-11-22T22:10:13Z
+status: done
+tags:
+- onboarding
+- docs
+title: 'README: one New project quick start'
+updated: 2026-11-22T22:28:00Z
+---
+
+Part of k224. Owner: unreagent-doc-writer (README.md, unreagent.example.yaml). After k214, k215, the zero-config start and init cards.
+
+Replaces the path now scattered over Setup, Option B and the example README: create a project in Unreal (or use unreagent-example as template), drop in unreagent, start, tell the agent to set up the rest; init and its preflight; the Launcher-created path. Remove the npm and EngineVersion hand-workaround text once k214 and k215 have landed. Acceptance: a reader gets from zero to a first session without leaving the section.
+
+From the k227 review, the quick start and the example yaml header must state: the defaults (agent and MCP server on, permissions off and what that means in practice); how the toolkit is found (up to 4 levels below Plugins/, skipped folders, shallowest first then by name, WARN when several); the errors for no and for several .uproject; unreal.project is not allowed in unreagent.local.yaml without an unreagent.yaml; the config is looked for next to the executable, not in the working directory. Must land before the next v* tag.
+
+README: new 'New project (quick start)' section (steps, defaults table, permissions-off meaning, config next to exe, one .uproject + both errors, toolkit search, local.yaml overlay, unreagent init incl. -check/-config/exit codes/no-engine/fork command/module heuristic, first-start failure pointers); Setup folded into it; init added to sub-command table and exit-code table; Option B npm/EngineVersion text shortened (npx aside removed, step 3 notes zero-config wiring). Example yaml header says file is optional + what a start without it does. Windows unverified, labelled. Anchors checked by hand, no card ids, no machine paths.
+
+Review (unreagent-reviewer): CHANGES NEEDED (all small, factual). Files: README.md, unreagent.example.yaml (doc-writer's lane per OWNERS). Check on the combined tree with k237: gofmt -l empty, go vet ./..., go test ./..., make windows - green. Verified against make linux output in a scratch dir: both .uproject errors, the unreal.project-in-local.yaml error, the no-engine load error, init -h, the stray-word and bad-flag usage errors (exit 2), the unknown-sub-command list, the defaults notice and permission line, the written document, -check, never-overwrite (existing file and dangling link); search depth 4 and the skip list match defaults.go; anchors resolve; no card ids, machine paths or German. Findings: (1) README.md:1769 - says any other flag is a usage error printed with hermes-setup's usage; for init it is printed with init's usage (seen: 'unreagent init -no-agent' prints 'Usage of init'). Reword for both sub-commands. (2) README.md:236 and :298 - 'Do this in a console in the project folder' / 'Run it next to the .uproject': init loads from the executable's directory, not the working directory (an unreagent on PATH run from the project folder looks next to itself and fails). Say the .exe must sit next to the .uproject, the console's folder does not matter. (3) README.md:314 - lists no/several .uproject and a config that does not load as BLOCKING findings; those end init with the load error (Error: ... (unreagent init wrote nothing)) and no preflight. [BLOCKING] lines only come from a loaded config with no project or no engine. (4) unreagent.example.yaml:8 - the k227 acceptance asks the header to state how the toolkit is found too (four levels below Plugins/, skipped folders, shallowest first then by name, WARN when several); the header only says 'found below Plugins/'. Add it or point to the README section. (5) README.md:850 'Only should the retry fail too' - ungrammatical; 'Only if the retry fails too'. No promise of a shipped set-up skill (step 4 says nothing ships), Windows label is honest, removed npx aside and old Setup steps lose nothing a user needs.
+
+Review fixes (1)-(5) applied in README.md and unreagent.example.yaml
+
+Review round 2 (unreagent-reviewer): CHANGES NEEDED (one line). Files: README.md, unreagent.example.yaml. Check: gofmt -l cmd internal skills empty, go vet ./..., go test ./..., make windows - green; make linux binary exercised in a scratch dir. Fixes confirmed: (1) README.md:1772 - 'init -no-agent' prints 'Usage of init', hermes-setup prints its own, stray word 'init takes flags only' exit 2. (2) README.md:236/:299 - init run from another dir loads next to the exe (wrote to the exe's project with UE_ROOT set); an unreagent on PATH from the project dir looks in its own dir and fails - matches. (3) README.md:316-319 - no/several .uproject and no engine end with 'Error: ... (unreagent init wrote nothing)', exit 1, no preflight; [BLOCKING] project+engine only from a loaded config with literal editor; a config using ${PROJECT} without a project is a load error - the parenthesis holds. (4) unreagent.example.yaml:9-14 - depth 4, skip list (hidden, node_modules, Binaries, Intermediate, Content, Source, Saved), shallowest-then-name, WARN on several all match internal/config/defaults.go. (5) README.md:853 fixed. New finding: (A) unreagent.example.yaml:14 - fix (4) inserted the toolkit sentences between 'permissions OFF.' and 'Off means unreagent applies no permission policy', so 'Off' now follows 'a WARN lists them all' and reads as the toolkit being off. Write 'Permissions off means ...'. Nit, optional: README.md:319 is one unwrapped long line. Blueprint-only: the quick start describes or promises no Blueprint-only path (README.md:217 'Create one in Unreal Editor' is neutral; VS is required at :213). No German, card ids or machine paths in the diff. Windows label honest.
+
+Round-two finding A fixed by the main agent (prose only, wording as the reviewer prescribed): unreagent.example.yaml header now reads "Permissions off means unreagent applies no permission policy…" on its own line after the toolkit sentences; README line with the BLOCKING explanation wrapped. No third review round: the diff is these two edits; internal/config tests (which load the example yaml) pass.
+
+Committed 72beb67; full check green (gofmt, vet, go test, make windows)
