@@ -4,8 +4,8 @@ description: >
   The Unreal Engine and UE LLM Toolkit facts unreagent's Go code depends on,
   each with its source or the label unverified. Use when changing editor
   start, stop or restart, crash and recovery handling, engine detection, the
-  build command lines, the bridge smoke test or editor readiness, or when a
-  card turns on "what does UE do here".
+  build command lines, the bridge's npm install or smoke test, editor
+  readiness, or when a card turns on "what does UE do here".
 ---
 
 # unreagent — what UE and the toolkit actually do
@@ -23,9 +23,10 @@ source at 5.8.4 on 2026-11-22 (`E/` = `Engine/Source/`, symbol and line given;
 lines move between versions). Read, not run: say "the 5.8.4 source", never
 "tested", and nothing about another engine version follows from it.
 `measured (kNN)` — observed in the Windows runs of 2026-11-22 noted on that
-card (Launcher builds of UE 5.7.4 and 5.8.4, one machine): an observation, not
-a bound. `doc` — Epic's documentation says so (page re-read 2026-11-21); a
-documented contract, not observed behavior. `research` —
+card (Launcher builds of UE 5.7.4 and 5.8.4, one machine; k215 ran npm only,
+no editor): an observation, not a bound. `doc` — Epic's documentation says so
+(page re-read 2026-11-21); a documented contract, not observed behavior.
+`research` —
 `docs/research/2026-11-21-unreal-editor.md` (R§n) cites a page that was not
 re-read; that document was written without the engine source. `unverified` —
 no source holds; U1–U8 are that document's experiments.
@@ -147,7 +148,9 @@ default to.
 | `/mcp/status` answers `status`, `port`, `version`, `toolCount`, `tools`, `projectName`, `projectDirectory`, `engineVersion`. `version` is the literal `"1.0.0"` in `HandleStatus`; it is not the plugin's `VersionName`, which is 1.1.0 at 9f6a0f7. The tools are registered in the server's constructor, before it listens | `waitForEndpoint` (`cmd/launcher/bridge.go`) makes a bare connect and logs "is reachable"; only this route tells the toolkit from another listener | `HandleStatus`; `FUnrealClaudeMCPServer()`; `MCPToolRegistry.cpp` `FMCPToolRegistry()`; `T/UELLMToolkit.uplugin` | source |
 | A tool runs on the game thread; the HTTP handler waits 30 s (`GameThreadTimeoutMs`), then answers an error while the tool may still run. A failed tool is HTTP 400 with `{success, message, data}` | none in Go | `HandleExecuteTool`; `UnrealClaudeConstants.h` | source |
 | Which interface the server binds | the "localhost only?" hint of `editorEndpoint` | not in the toolkit; it is UE's `FHttpServerModule` | unverified |
-| The bridge needs `npm install`: one runtime dependency, `@modelcontextprotocol/sdk`, plus the devDependencies `vitest` and `@vitest/coverage-v8`; no `node_modules` in the repository, Node ≥ 18 | `prepareNodeBridge` runs a plain `npm install`, which fetches the devDependencies too — that is what `bridgeInstallTimeout` has to cover; `bridgeInstallMarker` | `T/Resources/mcp-bridge/package.json` | source |
+| The bridge needs `npm install`: one runtime dependency, `@modelcontextprotocol/sdk`, plus the devDependencies `vitest` and `@vitest/coverage-v8`, which only the `test` scripts use; it starts as `node index.js` (`main`, `start`), no build step; no `node_modules` in the repository, Node ≥ 18 | `prepareNodeBridge` runs a plain `npm install` first, which fetches the devDependencies too — that, with the one retry below, is what `bridgeInstallTimeout` has to cover; `bridgeInstallMarker` | `T/Resources/mcp-bridge/package.json` | source |
+| npm 10.9.2 cannot install the bridge plainly: `npm install` exits 1 after 2.6 s with `npm error Cannot read properties of null (reading 'edgesOut')` (arborist `build-ideal-tree` `#loadPeerSet`, under `vitest`) and no `npm error code` line, leaving no `node_modules` and the lock untouched; `--omit=dev` and `npm ci` crash the same way, and so, by the card's report, does an install with the lock removed. `npm install --legacy-peer-deps` installs it (152 packages, SDK 1.25.1, the lock's pin) and the bridge then answers `initialize` and `tools/list`. The only peer the flag leaves out is `hono` (peer of `@hono/node-server`), which the SDK imports only from files the bridge does not load | `prepareNodeBridge`: one retry with `legacyPeerDeps`, inside the same `bridgeInstallTimeout`, only when the plain install exits non-zero and `npmErrorCode` finds no `npm error code` line, or `ERESOLVE` (a peer-conflict probe installs with the flag); any other code is not retried — with an unreachable registry and an empty cache npm took 141 s to fail with `ECONNREFUSED`. End to end, the built launcher retries, the smoke test passes, and the next start skips the install | card k215 (a scratch copy of the bridge); the retry rule: `cmd/launcher/bridge.go` | measured (k215: Windows 11, Node 22.17.1, npm 10.9.2, no editor). That npm 11.21.3 installs it without the flag is the card's report, not re-run; which npm versions crash: unverified |
+| The bridge's `package-lock.json` does not match its `package.json`: the lock is `unrealclaude-mcp-bridge` 1.1.0 with the root dependencies SDK and `zod` and no `vitest`; `package.json` is `ue5-mcp-server` 1.3.0. So every successful install, the retry included, rewrites the tracked lock (about +1570/−65 lines) and leaves a submodule checkout dirty | `prepareNodeBridge` installs without `--no-save`; with it the lock stayed byte-identical and its pins were still installed. Whether the launcher should pass it is the maintainer's open decision (k242) | `T/Resources/mcp-bridge/package-lock.json`, `package.json`; the rewrite: card k215 | source for the mismatch; the rewrite and `--no-save` measured (k215) |
 | The bridge answers `initialize` (`serverInfo.name` `ue5-mcp-server`) without contacting the editor | `smokeTestMCP`, `initResponse`: a pass proves node and the dependencies, nothing about the editor | `mcp-bridge/index.js` `main` | source |
 | Environment: `UNREAL_MCP_URL` (`http://localhost:3000`), `MCP_REQUEST_TIMEOUT_MS` (30000), `MCP_ASYNC_ENABLED` (on unless `"false"`), `MCP_ASYNC_TIMEOUT_MS` (300000), `MCP_POLL_INTERVAL_MS` (2000), `INJECT_CONTEXT` (off unless `"true"`). A number that does not parse, or 0, means the default | `prepareMCPBridges` reads only `UNREAL_MCP_URL` from the entry's `env`; unset, no endpoint is watched | `index.js` `CONFIG` | source |
 | Every tool call goes through the queue, except `task_*` and the two the bridge answers itself before that branch (`unreal_status`, `unreal_get_ue_context`): `POST /mcp/tool/task_submit` `{tool_name, params, timeout_ms}` → `data.task_id`; `task_status` every 2 s until `completed`, `failed` or `cancelled`; then `task_result`. A failed submit falls back to the direct call | none in Go; it is why a call can take 300 s, and a direct one 30 s | `mcp-bridge/lib.js` `executeUnrealToolAsync` | source |

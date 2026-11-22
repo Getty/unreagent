@@ -30,13 +30,20 @@ const (
 	smokeTestWaitDelay = 2 * time.Second
 )
 
-// bridgeInstallTimeout caps the whole npm install of a node bridge. It runs
-// before the services start, so without a cap a stalled registry keeps the
-// editor from ever starting. Five minutes is a choice made here, not a known
-// requirement: npm's default fetch-timeout (five minutes, per request) was the
-// reference point, which leaves a cold install over a slow link room while a
-// wedged one still lets the launcher go on. A var so tests can shorten it.
+// bridgeInstallTimeout caps the whole npm install of a node bridge, the retry
+// with legacyPeerDeps included. It runs before the services start, so
+// without a cap a stalled registry keeps the editor from ever starting. Five
+// minutes is a choice made here, not a known requirement: npm's default
+// fetch-timeout (five minutes, per request) was the reference point, which
+// leaves a cold install over a slow link room while a wedged one still lets
+// the launcher go on. A var so tests can shorten it.
 var bridgeInstallTimeout = 5 * time.Minute
+
+// legacyPeerDeps is the flag of the one retry of a failed bridge install
+// (prepareNodeBridge): npm then resolves the tree the way npm 6 did and
+// installs no package that only a peerDependencies entry asks for. A peer
+// that is also a regular dependency of another package is installed anyway.
+const legacyPeerDeps = "--legacy-peer-deps"
 
 // bridgeInstallMarker is the file in a node bridge's node_modules that lets
 // the next start skip npm install. Only a passing smoke test writes it
@@ -138,7 +145,9 @@ func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 
 // prepareNodeBridge makes sure the script and node_modules of a Node bridge are
 // present, with an npm install unless node_modules carries the marker. ok
-// false = the bridge is unusable. After a failed install over a node_modules
+// false = the bridge is unusable. A plain npm install that fails on peer
+// resolution, or crashes, gets one retry with legacyPeerDeps within the same
+// bridgeInstallTimeout. After a failed install over a node_modules
 // that was there before, the bridge stays usable and the smoke test judges
 // what that install left — npm may have changed it, and the earlier tree may
 // itself be the leftover of a failed install.
@@ -184,23 +193,47 @@ func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 	logger(fmt.Sprintf("MCP server '%s': %s — installing dependencies (npm install, at most %s) in %s …", name, state, bridgeInstallTimeout, dir))
 	ictx, cancel := context.WithTimeout(ctx, bridgeInstallTimeout)
 	defer cancel()
-	res, err := sup.RunOnceContext(ictx, npm, []string{"install"}, dir, nil, "prepare:mcp:"+name)
+	install := []string{"install"}
+	res, err := sup.RunOnceContext(ictx, npm, install, dir, nil, "prepare:mcp:"+name)
+	// One retry with legacyPeerDeps (k215), for a failure that flag can
+	// change: the peer conflict ERESOLVE, whose own message suggests it, or
+	// no error code at all, which is how an exception inside npm's tree
+	// building shows — npm 10.9.2 crashes that way on the UE LLM Toolkit
+	// bridge ("Cannot read properties of null (reading 'edgesOut')") and
+	// installs it with the flag. Any other code (network, registry, file
+	// access, an install script) has nothing to do with peers, and a retry
+	// would only repeat it: a refused registry connection took npm 10.9.2
+	// 141 s to give up on an empty cache. A bridge npm installs without the
+	// flag keeps the peers npm adds on its own.
+	if code := npmErrorCode(res.Output); err == nil && res.ExitCode != 0 && (code == "" || code == "ERESOLVE") {
+		if code == "" {
+			code = "no npm error code"
+		}
+		logger(fmt.Sprintf("MCP server '%s': npm install exit %d (%s) — trying once more with %s, which installs no package that only a peerDependencies entry asks for:\n%s",
+			name, res.ExitCode, code, legacyPeerDeps, tailLines(res.Output, 20)))
+		install = []string{"install", legacyPeerDeps}
+		res, err = sup.RunOnceContext(ictx, npm, install, dir, nil, "prepare:mcp:"+name)
+	}
+	command := "npm " + strings.Join(install, " ")
 	var cause, hint string
 	switch {
 	case err != nil && ctx.Err() != nil:
 		logger("MCP server '" + name + "': npm install aborted — the launcher is shutting down; the next start installs again.")
 		return bridgeModules{}, false
 	case errors.Is(err, context.DeadlineExceeded):
-		cause = fmt.Sprintf("npm install timed out after %s", bridgeInstallTimeout)
-		hint = " Registry or proxy unreachable? Run npm install in " + dir + " by hand."
+		cause = fmt.Sprintf("%s timed out after %s", command, bridgeInstallTimeout)
+		if len(install) > 1 {
+			cause = fmt.Sprintf("%s timed out: the plain install and it had %s together", command, bridgeInstallTimeout)
+		}
+		hint = " Registry or proxy unreachable? Run " + command + " in " + dir + " by hand."
 	case err != nil:
-		cause = "npm install failed: " + err.Error()
+		cause = command + " failed: " + err.Error()
 	case res.ExitCode != 0:
-		cause = fmt.Sprintf("npm install exit %d", res.ExitCode)
+		cause = fmt.Sprintf("%s exit %d", command, res.ExitCode)
 	default:
 		// Not marked yet: npm can call a package cut short mid-extraction up
 		// to date, so only the smoke test can vouch for the result.
-		logger("MCP server '" + name + "': dependencies installed.")
+		logger("MCP server '" + name + "': dependencies installed (" + command + ").")
 		return m, true
 	}
 	// Offline, a complete node_modules from before the marker must not cost
@@ -218,6 +251,21 @@ func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		return m, true
 	}
 	return bridgeModules{}, false
+}
+
+// npmErrorCode returns the error code a failed npm names in its output
+// ("npm error code ERESOLVE", in older npm "npm ERR! code ERESOLVE"), or ""
+// when it names none.
+func npmErrorCode(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range []string{"npm error code ", "npm ERR! code "} {
+			if code, ok := strings.CutPrefix(line, prefix); ok {
+				return strings.TrimSpace(code)
+			}
+		}
+	}
+	return ""
 }
 
 // settleModules acts on the smoke test's verdict for a node bridge's

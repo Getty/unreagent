@@ -138,14 +138,15 @@ func nodeBridge(t *testing.T, s *scripts, dir, ran, npmBody string) *config.Conf
 // k106 fixtures. initAnswer is a bridge that answers MCP initialize;
 // brokenBridge one that dies like node on a missing module. npmOK installs
 // and succeeds; npmOffline fails like npm without a registry, after leaving
-// a partial node_modules behind.
+// a partial node_modules behind — with an error code, so it gets no retry
+// with --legacy-peer-deps (k215).
 const (
 	initAnswer = `read line
 echo '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake","version":"0"}}}'
 `
 	brokenBridge = "echo \"Error: Cannot find module 'dep'\" >&2\nexit 1\n"
 	npmOK        = "mkdir -p node_modules/dep\nexit 0\n"
-	npmOffline   = "mkdir -p node_modules/half\necho 'npm ERR! network request failed' >&2\nexit 1\n"
+	npmOffline   = "mkdir -p node_modules/half\necho 'npm error code ENOTFOUND' >&2\necho 'npm error network request failed' >&2\nexit 1\n"
 )
 
 // installFixture is a node bridge (nodeBridge) whose npm touches npmRan and

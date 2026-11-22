@@ -207,6 +207,10 @@ bearer auth, origin checks — is tested in `internal/mcp/mcp_test.go`. Bridge
 preparation is tested in `cmd/launcher/bridge_test.go`: most of the smoke-test
 cases (`smokeTestMCP` against a fake stdio server, `initResponse`,
 `stderrTail`), the node bridge install, `prepareMCPBridges`,
-`waitForEndpoint` and `dialAddr`. `cmd/launcher/mcpcheck_test.go` holds only
+`waitForEndpoint` and `dialAddr`. The install's retry (k215) is tested in
+`cmd/launcher/bridge_npm_test.go`, whose `TestMain` — the package's only one —
+turns the test binary into a fake npm (`UNREAGENT_TEST_FAKE_NPM`), so those
+cases run on Windows too, where the shell-script npm of `bridge_test.go`
+skips. `cmd/launcher/mcpcheck_test.go` holds only
 the two oldest smoke-test cases, a good answer and a crash. Extend the matching
 file rather than writing a new harness.

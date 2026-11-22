@@ -75,7 +75,8 @@ bridges are fully checked before the agent starts, with each step logged
 loudly, instead of letting the agent run into a meaningless `-32000`
 connect error: binary on PATH? bridge script present? `node_modules` there
 and marked as working (`.unreagent-installed`, written once the bridge passed
-its smoke test; otherwise the launcher runs `npm install`, cut off after 5
+its smoke test; otherwise the launcher runs `npm install` (retried once with
+`--legacy-peer-deps` on an `ERESOLVE` or code-less npm failure), cut off after 5
 minutes; a failed install is logged as a warning and skips the smoke test,
 but the bridge stays in the agent's config — unless a `node_modules` was
 already there, which is kept and left to the smoke test)? does the bridge
@@ -666,22 +667,29 @@ Things to know:
    plugin **"Python Editor Script Plugin"** (Edit -> Plugins) — the other
    tools don't need it.
 
-**The bridge's `npm install` can fail.** With npm 10.9.2 (Node 22.17.1) the
-install in the Toolkit's `mcp-bridge` folder exits 1 with
-`Cannot read properties of null (reading 'edgesOut')` while npm resolves peer
-dependencies of the bridge's dev dependencies (measured on
-Windows; the same with `--omit=dev` and `npm ci`). The launcher then logs the
-warning from the `-32000` chain below and the bridge never starts. Working by
-hand, in that folder:
+**The bridge's `npm install` can fail, and the launcher retries.** With npm
+10.9.2 (Node 22.17.1) a plain `npm install` in the Toolkit's `mcp-bridge`
+folder exits 1 with `Cannot read properties of null (reading 'edgesOut')`
+while npm resolves peer dependencies of the bridge's dev dependencies
+(measured on Windows; the same with `--omit=dev` and `npm ci`). The launcher
+runs the plain `npm install` first; if it exits non-zero and npm names no
+error code (this crash) or `ERESOLVE`, it retries once with
+`npm install --legacy-peer-deps`, within the same 5-minute limit. Other npm
+errors (network, registry, file access, install scripts) are not retried.
+`--legacy-peer-deps` leaves out a package that only a `peerDependencies`
+entry asks for (a peer that is also a regular dependency of another package is
+installed anyway); on the Toolkit bridge that is only `hono` (a peer of
+`@hono/node-server`), which nothing loads. The warning and the success line
+name the npm command that ran. Should the retry fail too, install by hand in
+that folder:
 
 ```bash
 npm install --omit=dev --legacy-peer-deps
 ```
 
 (the bridge needs its runtime dependencies only); `npx npm@11.21.3 install`
-also worked. The launcher's own install runs a bare `npm install`, so do this
-once by hand before the first start; the launcher keeps an existing
-`node_modules` and lets the smoke test decide. Upstream's
+also worked. The launcher keeps an existing `node_modules` and lets the smoke
+test decide. Upstream's
 `package-lock.json` does not match its `package.json`, so every successful
 install rewrites the tracked lock file and leaves a git checkout of the plugin
 dirty; restore it with `git checkout -- package-lock.json`.
@@ -743,8 +751,10 @@ suspects, in this order:
    starts, so Claude Code reports the server as failed. Once the bridge
    passes the smoke test, the launcher writes
    `node_modules/.unreagent-installed`; the next start skips the install
-   only if that marker exists. (A failed install whose npm error mentions
-   `edgesOut` is the npm 10.9.2 problem from Option B.) Without it, the launcher runs
+   only if that marker exists. (A plain `npm install` that fails on npm 10.9.2 with
+   `edgesOut`, or on `ERESOLVE`, is retried once with `--legacy-peer-deps`,
+   see Option B; if that fails too, the warning reads
+   `npm install --legacy-peer-deps exit N`.) Without it, the launcher runs
    `npm install` over whatever `node_modules` is there — say, one left by an
    install cut short (the timeout, or Ctrl-C) — once the network works, or
    you run `npm install` there by hand (the launcher deletes nothing; npm
