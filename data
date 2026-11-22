@@ -1,0 +1,26 @@
+---
+claimed_at: 2026-11-22T22:22:33Z
+claimed_by: unreagent-test-writer
+class: standard
+completed: 2026-11-22T22:22:33Z
+created: 2026-11-22T07:12:25Z
+id: 237
+priority: low
+started: 2026-11-22T22:11:47Z
+status: done
+tags:
+- tests
+- toolkit
+title: Test the k214 plugin EngineVersion warning through run()
+updated: 2026-11-22T22:22:51Z
+---
+
+Follow-up from k214 (2026-11-22). k214 adds checkPluginEngineVersions (cmd/launcher/uplugin.go) with unit tests over temp trees, and one wiring call in run() (cmd/launcher/main.go, right after editorArgs; the logger is wrapped in alertWarnings so the WARN also reaches stderr in window mode). That wiring line has no test: the run()-level tests skip on Windows, where k214 was written and verified.
+
+Owner: unreagent-test-writer. Done when a run()-level test (Linux, where those tests run) asserts the plugin EngineVersion WARN on stdout and, in window mode, on stderr, for a project whose plugin declares a refused EngineVersion; and fails when the call is removed.
+
+Added TestRunWarnsWhenAPluginEngineVersionIsRefused (cmd/launcher/main_test.go): run() on a temp project whose plugin declares EngineVersion 5.6.0 against a 5.8.4 Build.version; asserts the k214 WARN on the log (stdout, or unreagent.log in window mode) and, in window mode, exactly once on stderr with the unreagent: prefix; stderr stays WARN-free with the log on stdout. Fails with the main.go call removed (verified, main.go restored byte-identical). gofmt, vet, go test ./..., make windows all green. Windows path untested.
+
+Review (unreagent-reviewer): READY. Files: cmd/launcher/main_test.go (TestRunWarnsWhenAPluginEngineVersionIsRefused), in the test-writer's lane per OWNERS. Check run on the combined tree with k232: gofmt -l empty, go vet ./..., go test ./..., make windows - all green. Mutation in a scratch copy: with the checkPluginEngineVersions call removed from run() both subtests fail; with alertWarnings dropped (plain logger) the window-mode subtest fails on stderr - so the test pins the call and the stderr routing. Flakiness: -count=20 (40 subtests) green, -race -count=5 green; no orphaned child processes afterwards, t.TempDir only, no faked syscalls. Windows: the test skips there with the other run() tests - Windows path untested, as the report says.
+
+Committed as 57016c9
