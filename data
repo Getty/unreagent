@@ -1,0 +1,124 @@
+---
+class: standard
+completed: 2026-11-22T09:21:10Z
+created: 2026-11-22T02:28:33Z
+id: 215
+priority: medium
+started: 2026-11-22T06:35:20Z
+status: done
+tags:
+- toolkit
+- bridge
+- bug
+- windows
+title: Bridge npm install fails on npm 10.9.2 for the Toolkit bridge (arborist edgesOut)
+updated: 2026-11-22T09:21:10Z
+---
+
+Found on Windows 2026-11-22 (Windows 11 Pro 26H2 build 26300.9711, Node 22.17.1, npm 10.9.2, unreagent d4edd23) while setting up the UE 5.8 example project.
+
+prepareNodeBridge runs a bare "npm install" in Plugin/UELLMToolkit/Resources/mcp-bridge. With the Toolkit at 9f6a0f7 it exits 1: "npm error Cannot read properties of null (reading 'edgesOut')", stack in @npmcli/arborist build-ideal-tree.js #loadPeerSet, while npm resolves the peers of the bridge's devDependencies (vitest ^4.0.18 -> vitest 4.1.12 -> @vitest/browser-* ...). Same with --omit=dev, with npm ci, and with package-lock.json removed. Works: npm install --legacy-peer-deps (with --omit=dev: 89 packages, @modelcontextprotocol/sdk 1.25.1), and npx npm@11.21.3 install.
+
+Under the launcher (example run 41): with node_modules already there, installed by the example's setup script, the WARN says the launcher keeps them, the smoke test passes, the marker is written, and later starts skip the install. On a fresh clone without the setup script there is no node_modules, so "bridge will not start".
+
+Second effect: upstream's package-lock.json does not match its package.json (lock: name unrealclaude-mcp-bridge 1.1.0 with zod; package.json: ue5-mcp-server 1.3.0 with vitest dev deps), so every successful install rewrites the tracked lock file and leaves a submodule checkout dirty.
+
+Candidates (unreagent-worker): install bridges with "npm install --omit=dev --legacy-peer-deps" (a bridge needs its runtime deps only), or make the install arguments configurable; mention the lock-file rewrite in the README's Toolkit section. The example's setup script now runs the install itself with those flags and restores the lock file afterwards.
+
+2026-11-22 08:40 Progress (unreagent-worker): reproduced on a copy of the Toolkit bridge (Windows 11, Node 22.17.1, npm 10.9.2). Bare npm install: exit 1 after 2.6 s, "Cannot read properties of null (reading 'edgesOut')", no "npm error code" line, lock untouched, no node_modules. --omit=dev and npm ci: same crash. After that failure, npm install --legacy-peer-deps in the same dir: exit 0, 152 packages, bridge answers initialize and tools/list. Unreachable registry: plain install fails after 141 s with "npm error code ECONNREFUSED" - a blind retry would double that. Leaning to: plain install first, one retry with --legacy-peer-deps only when npm names no error code or ERESOLVE. Implementing now.
+
+2026-11-22 08:50 Measured (unreagent-worker, Windows 11 Pro 26H2, Node 22.17.1, npm 10.9.2, on a copy of the Toolkit mcp-bridge without node_modules; the submodule itself untouched):
+- npm install: exit 1 after 2.6 s, output only "npm error Cannot read properties of null (reading 'edgesOut')" plus the log path, no "npm error code" line; stack arborist build-ideal-tree #loadPeerSet under node_modules/vitest. No node_modules, lock untouched. --omit=dev and npm ci: the same crash.
+- npm install --legacy-peer-deps right after that failure, same dir: exit 0, 152 packages, SDK 1.25.1 (the lock's pin). --omit=dev --legacy-peer-deps: 89 packages.
+- Runtime needs: main/start = node index.js, plain ESM, no build step, no dist/; the devDependencies are vitest and @vitest/coverage-v8 only (test scripts). The only peer --legacy-peer-deps leaves out is hono (peer of @hono/node-server); the SDK loads it nowhere at runtime (only serve-static and an example), even sdk/server/streamableHttp.js imports fine without it. zod is a direct dependency of the SDK, so it is installed either way.
+- Smoke test of that tree, node index.js over stdio with UNREAL_MCP_URL on a dead port (the bridge binds no port and contacts the editor only on tools/list or a call): initialize answers serverInfo ue5-mcp-server 1.3.0; tools/list answers unreal_status "NOT CONNECTED".
+- Peer conflict probe (react 17 + react-dom 18): "npm error code ERESOLVE", and npm's own message names --legacy-peer-deps; the flag installs it.
+- Unreachable registry (--registry on a dead port, empty cache): "npm error code ECONNREFUSED" after 141 s. A blind retry would double that, close to the 5-minute budget.
+- Failing install script: "npm error code 3".
+- End to end with the built launcher (manualStart, agent off, MCP 127.0.0.1:18815, bridge copy as extraServer): "npm install exit 1 (no npm error code)  trying once more with --legacy-peer-deps", then "dependencies installed (npm install --legacy-peer-deps)", "smoke test OK", marker written; the second start skips the install, smoke test OK.
+
+Choice (mine): plain npm install first; one retry with --legacy-peer-deps, within the same 5-minute bridgeInstallTimeout, only when the plain install exits non-zero and npm names no error code (an exception inside npm, like this crash) or ERESOLVE. Why: fixed --legacy-peer-deps would silently drop auto-installed peers for every bridge, and --omit=dev does not avoid the crash (the ideal tree is built with dev deps either way) while it would break a bridge whose install script needs a dev dependency. Every bridge that installs today keeps exactly the same npm call. Any other npm code (network, registry, file access, install script) gets no retry, because the flag cannot change it and the network case costs 141 s per try. No config option: the retry needs none, and npm's own config (npm_config_* in the environment, a user .npmrc) already reaches the launcher's npm, which inherits the environment.
+
+Lock file (decision for Getty, not implemented): every successful install rewrites upstream's out-of-sync package-lock.json (+1570/-65 lines), the retry as well. Measured: --no-save leaves the lock byte-identical and still installs its pins (SDK 1.25.1, 152 packages); for a bridge without a lock it writes none (a plain install would add an untracked package-lock.json), and npm still adds peers on its own. --no-package-lock also leaves the lock alone but ignores it: SDK drifts to 1.32.2, 158 packages, a real cost. For a correct lock, a plain re-install leaves it byte-identical anyway, so --no-save costs nothing there. Recommendation: add --no-save to both install calls in a follow-up, if Getty agrees that the launcher should never write a plugin's tracked files.
+
+2026-11-22 08:51 Done (unreagent-worker), tree commit-ready in worktree k214, not committed.
+Changed: cmd/launcher/bridge.go  prepareNodeBridge retries a failed plain npm install once with --legacy-peer-deps (const legacyPeerDeps) when npm names no error code or ERESOLVE (new npmErrorCode), sharing the one bridgeInstallTimeout; the WARN and the success line name the npm command that ran; the Job Object path (sup.RunOnceContext) unchanged. cmd/launcher/bridge_npm_test.go (new)  TestMain makes the test binary a fake npm (env UNREAGENT_TEST_FAKE_NPM), so the retry tests run through RunOnceContext and the job object on Windows too: TestNpmErrorCode (real npm 10.9.2 outputs), retry on crash and ERESOLVE, plain success = one call without the flag, no retry for ECONNREFUSED or a failing install script, retry fails too, retry shares the timeout. cmd/launcher/bridge_test.go  npmOffline fixture now prints an error code like real npm, so it keeps testing the no-retry offline path.
+Verified on Windows: gofmt clean, go vet clean, go test -count=1 ./...: only the known k234/k235 failures (TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled, TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess); with those plus TestMaterializeTwoRunsAtOnce skipped, all packages green. Mutation check: no retry, blind retry, and a retry with its own timeout each fail a new test. Windows and Linux cross-builds OK. Linux: the cmd/launcher test binary cross-compiled and run in WSL Ubuntu, full suite PASS, the shell-fixture bridge tests included. End to end with real npm 10.9.2 and the launcher: see the note above.
+Doc follow-ups (other owners):
+- README Toolkit section, "The bridge's npm install can fail." (unreagent-doc-writer): the launcher now retries once with --legacy-peer-deps itself, so the "do this once by hand before the first start" step is no longer needed (keep the command as a fallback); --legacy-peer-deps installs no peer the bridge does not list itself (for the Toolkit only hono, unused). The lock-rewrite sentence stays true. The "-32000" chain, item 3, "(A failed install whose npm error mentions edgesOut ...)" needs the same update; if the retry fails too, the WARN says "npm install --legacy-peer-deps exit N". The intro list (around "otherwise the launcher runs npm install") may name the retry.
+- unreagent.example.yaml, the extraServers comment "(else npm install; ...)" (unreagent-doc-writer): optional mention of the retry.
+- .claude/skills/unreagent-ue/SKILL.md, the "bridge needs npm install" row (unreagent-skill-author): add the retry and the measured npm 10.9.2 crash; and that the Toolkit's package-lock.json (unrealclaude-mcp-bridge 1.1.0, zod) does not match its package.json (ue5-mcp-server 1.3.0), so an install rewrites it.
+Drift for the dispatcher: (1) lock-file decision for Getty (--no-save, see note above). (2) prepareRuntime for runtimes.node (cmd/launcher/scripts.go) also runs a bare npm install with no retry; the user's own package, not hit by this bug, low priority. (3) the shell-script npm/bridge fixtures in bridge_test.go skip on Windows; the fake-npm TestMain pattern could carry the k106 marker tests to Windows (test-writer card).
+
+unreagent-doc-writer: README (intro check list, Toolkit 'npm install can fail' paragraph, -32000 item 3) and the extraServers comment in unreagent.example.yaml now describe the one retry with --legacy-peer-deps (when, what it leaves out, new warning text); the once-by-hand step became a fallback.
+
+2026-11-22 08:55 Project skills (unreagent-skill-author), in worktree k214, not committed:
+- .claude/skills/unreagent-ue/SKILL.md, section "Toolkit server and node bridge": the "bridge needs npm install" row now says the devDependencies serve only the test scripts and the bridge starts as node index.js with no build step (source, package.json), and that prepareNodeBridge runs a plain install first. Two new rows: (1) the npm 10.9.2 edgesOut crash, --omit=dev and npm ci the same, --legacy-peer-deps installs (152 packages, SDK 1.25.1), hono the only peer left out, the retry rule (legacyPeerDeps, npmErrorCode, same bridgeInstallTimeout, no retry for other codes, ECONNREFUSED after 141 s), end to end with the launcher; status measured (k215: Windows 11, Node 22.17.1, npm 10.9.2, no editor); npm 11.21.3 labelled as the card's report, which npm versions crash: unverified. (2) the lock/package.json mismatch (source, checked at 9f6a0f7: lock unrealclaude-mcp-bridge 1.1.0 with zod and no vitest, package.json ue5-mcp-server 1.3.0), the rewrite on every install and the --no-save measurement (measured, k215); --no-save recorded as the maintainer's open decision, nothing decided. The measured-status definition notes that k215 ran npm only, no editor; the frontmatter trigger names the bridge's npm install.
+- .claude/skills/unreagent-mcp-tools/SKILL.md, test section: names cmd/launcher/bridge_npm_test.go and its TestMain fake npm (UNREAGENT_TEST_FAKE_NPM, the package's only TestMain, runs on Windows where bridge_test.go's shell-script npm skips).
+Checked and still true: unreagent-core (prepareRuntimes' npm install warning), unreagent-mcp-tools (only bridge preparation uses RunOnceContext). Shipped skills/ do not say how the launcher installs a bridge, so skills/ and internal/skills are untouched.
+
+2026-11-22 09:12 Review (unreagent-reviewer): changes needed. The fixes are small and cover wording in shipped log and hint text and in the README. The retry logic itself is sound.
+
+Checked in worktree k214 (main 362d9af + uncommitted k215): cmd/launcher/bridge.go, cmd/launcher/bridge_npm_test.go (new), cmd/launcher/bridge_test.go, README.md, unreagent.example.yaml, .claude/skills/unreagent-ue/SKILL.md, .claude/skills/unreagent-mcp-tools/SKILL.md. Every path is in its owner's OWNERS lane. No German in the touched text.
+
+Run natively on Windows 11 with Go 1.27.0:
+- gofmt -l on the tracked .go files plus bridge_npm_test.go: clean. go vet ./...: clean.
+- go test -count=1 ./...: only the six known failures failed (TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled, TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess). TestMaterializeTwoRunsAtOnce passed this time. With those seven skipped, all packages are ok.
+- The k215 tests pass natively on Windows, with the fake npm going through RunOnceContext and the job object. The retry and timeout tests also pass with -count=10.
+- GOOS=windows build: OK. GOOS=linux go build ./...: OK.
+- The cmd/launcher test binary, cross-compiled for linux/amd64 and run in WSL Ubuntu from the package directory: full suite PASS. With -v, the shell-fixture marker tests (TestPrepareNodeBridge*, TestPrepareMCPBridges*) and the k215 tests all pass.
+- End to end with real npm 10.9.2 and Node 22.17.1, using the built launcher (manualStart, agent off, MCP on 127.0.0.1:18915, UNREAL_MCP_URL on a dead port) on a scratch copy of the Toolkit bridge without node_modules:
+  - The plain install exited 1 "(no npm error code)". The retry with --legacy-peer-deps exited 0, the smoke test passed and the marker was written.
+  - The second start skipped the install and the smoke test passed.
+  - The installed tree has 152 packages and SDK 1.25.1. The only required peer missing is hono (a peer of @hono/node-server; only its serve-static imports it).
+  - No npm, node or bridge process was left over, and the submodule's git status stayed clean.
+
+Judged and fine:
+- The retry runs only when err == nil, so never after a timeout or a shutdown cancel (runOnce returns "aborted" in both cases).
+- The retry's RunOnceContext refuses to start on a ctx that is already done, so a cancel that races an exiting npm cannot start a second npm.
+- The retry shares ictx, so both installs fit in the one bridgeInstallTimeout.
+- Both calls go through sup.RunOnceContext; internal/supervisor is unchanged.
+- After a retry, the marker flow is the unchanged default branch, confirmed end to end.
+- The output buffer keeps a 1 MiB head and tail, so npm's closing "npm error code" line survives a long output.
+- TestMain calls m.Run unless the env var is set. It is the package's only TestMain, it sits in a test-only file, and t.Setenv keeps parallel tests out, so it cannot reach the shipped binary.
+
+Findings, most important first:
+1. cmd/launcher/bridge.go:222-224 (unreagent-worker): the timeout case does not name the command that timed out.
+   - When the retry is what runs out of the shared timeout, the WARN reads "npm install timed out after 5m0s" with the hint "Run npm install in <dir> by hand". On the npm 10.9.2 Toolkit case this card fixes, that plain command is the one that just crashed.
+   - The exit and failed cases name `command`; this case does not. README.md:681-682 ("The warning and the success line name the npm command that ran") is therefore not true for a timeout.
+   - bridge_npm_test.go:268 pins the plain wording for the "retry times out" case.
+   - Fix: use `command` in the cause and the hint, and adjust the test.
+2. cmd/launcher/bridge.go:43-44 and :211, the log line (unreagent-worker), and README.md:679-680 (unreagent-doc-writer): the claim "installs no peer dependency the bridge does not list itself" is not what the flag does.
+   - Measured on the retry tree: zod, express and vite are peers the bridge does not list, and they are installed because other packages list them as regular dependencies.
+   - What the flag leaves out is a package that only a peerDependencies entry asks for (here hono).
+   - Suggested wording: "installs no package that only a peerDependencies entry asks for".
+   - The skill row (unreagent-ue :152, "The only peer the flag leaves out is hono") is right.
+3. .claude/skills/unreagent-ue/SKILL.md:153 (unreagent-skill-author): the open --no-save decision is cited as "(k215)", but it lives on k242.
+4. Nit, cmd/launcher/bridge_npm_test.go:24-27 (unreagent-worker): TestMain switches to the fake npm on the env var alone.
+   - Measured: with UNREAGENT_TEST_FAKE_NPM set in the environment, `go test ./cmd/launcher` prints "ok" after 0.09 s and runs no test. The fake npm records its call as "-test.paniconexit0 -test.timeout=10m0s -test.count=1".
+   - That needs a stray env var, but it is a silent pass. Also requiring npm's argument shape (args[0] == "install") would close it.
+5. Nit, bridge_npm_test.go:246-273 and bridge.go:207 (unreagent-worker). This is from reading the code; I did not run the mutation.
+   - No test asserts that a timed-out or cancelled install logs no "trying once more".
+   - Dropping `err == nil` from the condition would still pass the suite, because runOnce's ctx check keeps the second npm from starting. Only the log would then announce a retry that never runs.
+
+Residual design risk, not a finding (for Getty):
+- The "no error code" trigger also catches a code-less failure that has nothing to do with peers: npm killed from outside, an out-of-memory crash, another npm bug.
+- The retry then installs a legacy-peer tree. Because the smoke test checks only initialize and the marker skips later installs, a tree that lacks a peer the bridge loads lazily can stay in place.
+- The log line names the flag, and the README says what the flag leaves out.
+
+Windows: the k215 tests and the end-to-end run were real Windows runs (tested). The shell-fixture marker tests ran on Linux (WSL) only.
+The lock-file rewrite (--no-save) is k242, not a finding. The reviewer changed no files.
+
+unreagent-doc-writer: README corrected what --legacy-peer-deps leaves out: only a package that nothing but a peerDependencies entry asks for (hono on the Toolkit bridge); peers that are also regular dependencies elsewhere are installed anyway.
+
+2026-11-22 09:13 Project skill (unreagent-skill-author): .claude/skills/unreagent-ue/SKILL.md line 153 now cites k242 for the open --no-save decision instead of k215; nothing else changed.
+
+2026-11-22 09:18 Review fixes (unreagent-worker), worktree k214, not committed:
+1. Timeout: cause and hint name the command that ran. Plain: "WARN MCP server '<name>': npm install timed out after 5m0s  bridge will not start. Registry or proxy unreachable? Run npm install in <dir> by hand." Retry: "WARN MCP server '<name>': npm install --legacy-peer-deps timed out: the plain install and it had 5m0s together  bridge will not start. Registry or proxy unreachable? Run npm install --legacy-peer-deps in <dir> by hand." Both pinned verbatim in TestPrepareNodeBridgeRetrySharesTheTimeout.
+2. Wording, in the legacyPeerDeps comment and the retry line: "MCP server '<name>': npm install exit <n> (<code or: no npm error code>)  trying once more with --legacy-peer-deps, which installs no package that only a peerDependencies entry asks for:" followed by npm's last 20 lines. This corrects my earlier notes too: the flag does not leave out every peer the bridge does not list, only one nothing else depends on regularly (on the Toolkit bridge: hono). README, the example yaml and the skill do not quote the old line; the README text in the tree already has the correct wording.
+3. TestMain answers as npm only with the env var set and "install" as the first argument. Checked: with UNREAGENT_TEST_FAKE_NPM set, go test ./cmd/launcher runs the tests.
+4. New TestPrepareNodeBridgeNoRetryAfterTimeoutOrCancel: npm prints the crash output, then hangs; timeout and Ctrl-C must log no "trying once more". With err == nil dropped, it fails on Linux (WSL run: "npm install exit -1 (no npm error code)  trying once more ..."). It cannot fail on Windows: there an npm ended by closing the job object reports exit code 0 (measured), so the exit-code check alone keeps the retry out. The test comment says so.
+Checks: gofmt and vet clean. go test -count=1 ./cmd/launcher/ with the known skip list green on Windows. Full cmd/launcher suite on Linux (cross-compiled test binary in WSL Ubuntu): PASS. Windows and Linux builds OK.
+Also found (for the dispatcher): on Windows, a RunOnceContext call that its ctx aborts returns ExitCode 0 (KILL_ON_JOB_CLOSE ends the process with 0), on Linux -1. A caller that checks only ExitCode would take an aborted command for a success. Bridge preparation checks err first, and RunOnceContext has no other caller today; it matters for k75 (ctx for every tool handler).
+
+2026-11-22 09:21 unreagent-release-manager: committed as d74e3fe on local main (fast-forward from k214), not pushed. Changes entry added under {{$NEXT}}. The lock-file decision (--no-save) is on k242.
