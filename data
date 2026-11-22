@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-11-22T22:10:45Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T22:10:45Z
+created: 2026-11-22T07:07:27Z
+id: 228
+priority: high
+started: 2026-11-22T21:59:50Z
+status: done
+tags:
+- onboarding
+- launcher
+title: 'unreagent init: write a minimal config next to a .uproject and print a preflight'
+updated: 2026-11-22T22:11:02Z
+---
+
+Part of k224; maintainer decision D1. Owner: unreagent-worker (new file in cmd/launcher plus the sub-command table in main.go; hermes-setup is the precedent for a one-shot sub-command). After k214 and the zero-config start card (shared defaults).
+
+Acceptance:
+- Next to a .uproject with no config it writes a minimal unreagent.yaml with ${ENGINE}/${PROJECT} placeholders, no machine paths.
+- The toolkit entry appears only when the plugin is found, with the bridge path as found.
+- It never overwrites an existing config.
+- Preflight reports engine (k211, k203), node, claude, toolkit EngineVersion (k214), bridge deps (k215) and whether the project module is built; non-zero exit when something blocking is missing; each finding names the fix. When the toolkit is missing it prints the exact command to add it (no download inside the binary).
+- No Unreal MCP entry by hand; that comes with the switch from k220.
+- Tests on Linux; Windows paths labelled unverified.
+
+From k227: reuse config.DefaultYAML(projectDir) (internal/config/defaults.go) to write the file — the defaults path decodes the same document. Extend the INFO line in run() to name "unreagent init". The preflight should say what "permissions off" means on the defaults path.
+
+unreagent init implemented: cmd/launcher/init.go (+ init_test.go), one entry in the subcommands map. Full check green on Linux (gofmt, go vet, go test -count=1 ./..., make windows; no test skipped here). Nothing was run on Windows: the .exe compiles, init's Windows behaviour (PATH lookup with PATHEXT, Win64 paths, junctions) is UNVERIFIED.
+Worker's choices: (1) preflight-only is automatic when unreagent.yaml or unreagent.yml exists (never writes, exclusive create as a second guard); plus -check to write nothing where there is none, and -config <path> to preflight a config elsewhere (never written). (2) Blocking = no/several .uproject, config that does not load, engine missing. node, npm, agent command, toolkit, editor binary, unbuilt module, refused plugin are WARN — the launcher starts without them. (3) Module check reads Modules[].Name from the .uproject and looks for Binaries/Win64/UnrealEditor-<Name>.dll (not 'Source/ exists + project name' as briefed); labelled in the output as a heuristic not verified against a real project. (4) Toolkit command printed: git submodule add -b ue-5.8 https://github.com/Getty/ue-llm-toolkit Plugins/ue-llm-toolkit, said to be a fork branch for UE 5.8, upstream named; for an engine that is not 5.8 it says the branch is not made for it and unreagent knows no matching version. The branch's existence was not checked by me.
+LIMIT found: on the built-in defaults a missing engine is a config.Load error (${ENGINE} used by unreal.editor), so init exits 1 with that error and writes and checks nothing — no full preflight in the case a new user most likely hits. Changing that needs a lenient load in internal/config: proposed as its own card for this board.
+Folded in from the k238 review: findBridges reads each real directory once (filepath.EvalSymlinks), so a link back up or a second link gives no false 'several bridges'; defaultsNotice's first line follows the loaded config and a new second line names unreagent init. Also: config.LoadIn(dir) exported for init's tests; nodeScript extracted from prepareNodeBridge (bridge.go) for reuse.
+Stale skill text (.claude/skills/unreagent-config/SKILL.md, not touched): the defaultsNotice paragraph (around lines 196-201: 'one or two lines', test name TestDefaultsNoticeSaysNoPermissionPolicy -> TestDefaultsNotice, now two or three lines) and the bridge-search paragraph (around 236-250: no mention of the once-per-real-directory rule, TestDefaultsToolkitFoundOncePerDirectory); LoadIn is not documented. DefaultYAML's signature is unchanged.
+For README (k232, doc-writer): see the worker's report.
+
+unreagent-skill-author: .claude/skills/unreagent-config/SKILL.md, defaults-path section brought in line with the k228 tree (defaultsNotice two or three lines / TestDefaultsNotice, findBridges once per real directory, LoadIn, a bullet on unreagent init as DefaultYAML's consumer); uncommitted, go test -count=1 ./internal/config ./internal/skills green. Note: LoadIn is called only from cmd/launcher/init_test.go, initCommand uses Load - its doc comment says otherwise.
+
+Review (unreagent-reviewer): READY on Linux; Windows UNVERIFIED (cross-compiled only: PATHEXT lookup, Win64 paths, junctions, O_EXCL over a link never run on Windows). Check run by me: gofmt -l clean, go vet ./..., go test -count=1 ./... all ok, make windows ok; init tests run -v, none skipped. Plus an end-to-end run of a Linux build in a temp project: init -h exit 0, stray word exit 2, no engine exit 1 with one error and nothing written, first run writes header + DefaultYAML (no machine path), second run preflight only, dangling unreagent.yaml symlink exit 1 untouched, -config to a missing file exit 1 and nothing written. Files: cmd/launcher/init.go, init_test.go, main.go, main_test.go, bridge.go, internal/config/config.go, defaults.go, defaults_test.go, .claude/skills/unreagent-config/SKILL.md. Findings: (1) the lenient-load follow-up the worker proposed (missing engine on the defaults path ends init with no preflight) is not on the board; file it before or with the commit. With that card the limit is acceptable: init exits 1 and the error names the fix. (2) minor: no init test for -config never writing or for a symlink at the target; both hold by construction (Load with an explicit path never sets Defaults; configPresent refuses a dangling link, O_EXCL refuses any link) and in my e2e run. (3) For the maintainer: the binary hardcodes the Getty/ue-llm-toolkit fork URL and its ue-5.8 branch; the text calls it a fork branch made for UE 5.8 and names upstream, which is honest, but changing the URL or branch takes a release. Never-overwrite guards each fail their test if removed; the findBridges dedupe test fails without the seen map; nodeScript has the same behaviour as before; scope stays inside the worker's paths (Go) and the skill-author's (SKILL.md); no German in touched text. SKILL.md matches the code.
+
+Committed as 9150d67. Not run on Windows (cross-compiled only). Lenient-load follow-up is k246.
