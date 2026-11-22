@@ -1,0 +1,33 @@
+---
+class: standard
+completed: 2026-11-22T04:29:24Z
+created: 2026-08-21T22:13:00Z
+id: 2
+priority: high
+started: 2026-11-22T04:29:24Z
+status: done
+tags:
+- skills
+- tests
+- epic
+title: 'Epic: Skill subsystem -- tests + toolkit-registry lint'
+updated: 2026-11-22T04:29:24Z
+---
+
+Go tests in the style of internal/supervisor/supervisor_test.go, stdlib testing only, plus the lint that catches upstream toolkit drift.
+
+Spec: docs/superpowers/specs/2026-08-21-skill-subsystem-design.md section 8.
+
+Children:
+- #14 internal/skills parsing, Load, DescribeAll
+- #15 config defaults, flag override, both-paths-off error
+- #16 skills MCP tool dispatch
+- #17 materialization prefix rules
+- #18 toolkit-registry lint for toolkit_tools
+
+Container ticket -- do not claim it. Children move backlog -> todo as their dependencies close.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID (epic). No skills tests exist; children k14-k18 open.
+
+Scout triage 2026-11-22: children k14 to k18 are done; the tests and the toolkit-registry lint are in the tree. Closing the container.
