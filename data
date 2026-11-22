@@ -1,0 +1,43 @@
+---
+claimed_at: 2026-11-22T22:55:49Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T22:55:49Z
+created: 2026-11-22T07:07:45Z
+id: 229
+priority: medium
+started: 2026-11-22T22:37:44Z
+status: done
+tags:
+- onboarding
+- launcher
+title: Name an unbuilt project module before the first editor start
+updated: 2026-11-22T22:55:49Z
+---
+
+Part of k224. Owner: unreagent-worker (cmd/launcher, serial with other run() cards). After k214 (same shape: a startup check that reads project state and names the fix) and the k226 walk-through (path B decides what a Blueprint-only project needs).
+
+Today an unbuilt C++ project makes the editor exit and restart until give-up; the human has to know the compile console command. Acceptance: one WARN before the editor start that names compile, pinned by a test with a temp tree; no automatic build.
+
+Maintainer decision, 2026-11-22: Blueprint-only projects are out of scope — the projects carry plugins and are C++ projects anyway. Do not measure, special-case or document a Blueprint-only path; a C++ project is the assumed starting point. The warning only has to cover a C++ project whose module is not built; no longer waits for a Blueprint-only measurement in k226.
+
+k229 worked, tree commit-ready on 31b4cd7 (not committed). Full check green on Linux: gofmt, go vet, go test -count=1 ./..., make windows (cross-compile only; Windows behaviour and a real UE project unverified).
+
+The WARN: new cmd/launcher/modules.go holds the shared module guess (projectModules moved from init.go, unbuiltModules, the label moduleHeuristic 'a heuristic, not verified against a real project') and checkProjectModules; init's moduleFinding now uses the same code. run() calls it right after the k214 check with alertWarnings, so in window mode it reaches stderr. One single-line WARN naming the modules and the fix: 'stop ue', 'c compile' in the launcher console (agent: ue_stop, run_command compile), 'start ue'; where the launcher offers no compile command it names the IDE build instead. Nothing is built.
+Quiet when: no project; .uproject without Modules or unreadable; unreal.editor not named UnrealEditor.exe / UnrealEditor-Cmd.exe in a directory Win64 (wrapper script, the demo's ping, a bare name, another platform directory, another build configuration).
+Worker's choices: there is no -no-editor flag or 'editor disabled' setting in this tree; with unreal.manualStart the WARN still comes at launcher start (true then, and the user starts the editor later). It is checked once per launcher start, not per editor restart, like k214.
+Tests: cmd/launcher/modules_test.go (TestCheckProjectModules over temp trees, TestProjectModules moved there), TestRunWarnsWhenAProjectModuleLooksUnbuilt in main_test.go (window mode and stdout); the run() test fails with the call removed (checked).
+
+Folded in from the k246 review: (1) config.go: the '(checked with ${ENGINE} left in place ...)' suffix only when the validation error quotes a value holding ${ENGINE}; test added. (2) init.go: preflight doc comment corrected. (3) init without an engine reports agent.command, the toolkit bridge script, node/npm commands holding ${ENGINE} as 'not checked' (info) instead of looking them up; the compile command line with the placeholder is not printed either; test added. (4) init's blocking error now ends '(unreagent init wrote <path>)' or '(unreagent init wrote nothing)'.
+
+Proposal, not done (restart policy untouched): the WARN alone is not enough once the give-up comes, minutes and many log lines later. The give-up lines in makeEditorExitHandler (cmd/launcher/lifecycle.go) should repeat the pointer when unbuiltModules still reports missing modules at that moment: 'modules X still look unbuilt — c compile, then start ue'. For a new card.
+
+Follow-ups for other lanes:
+- unreagent-doc-writer, README.md section 'unreagent init': the quoted closing line 'Error: preflight: 1 blocking finding(s), see [BLOCKING] above' now ends '(unreagent init wrote <path>)' (or 'wrote nothing'); the bullet 'No or several .uproject, or a config that does not load, end init with the load error (Error: ... (unreagent init wrote nothing))' — that suffix is no longer the load error's alone; the preflight bullet ('the agent command on PATH, the toolkit ...') lacks that without an engine what holds ${ENGINE} is reported as not checked. Section on the unbuilt project ('A project whose C++ module has not been built yet therefore fails slowly and loops through the restart policy; build first (c compile ...)') lacks the new WARN before the first start.
+- unreagent-skill-author: .claude/skills/unreagent-ue could record checkProjectModules next to the k208 measurement; unreagent-core's cmd/launcher file list lacks modules.go (as do the rules files, which list the k93 split — main's lane).
+
+README updated: init closing line and wrote-nothing text, not-checked note in the preflight list, unbuilt-module WARN in the quick start failures list and the unreal options note; texts checked against make linux and init in a temp dir; not run on Windows or a real UE project
+
+Review (unreagent-reviewer): READY. Ran: gofmt -l cmd internal skills (empty), go vet ./..., go test ./... (all ok), make windows (cross-compile only: Windows behaviour and a real UE project unverified, as the WARN text and README say). Also: go test -count=10 on TestRunWarnsWhenAProjectModuleLooksUnbuilt/TestCheckProjectModules/TestProjectModules/TestInitWithoutEnginePrintsTheFullPreflight (green); scratch-copy mutations: call removed -> run() test fails; logger instead of alertWarnings -> window-mode subtest fails. Demo config (ping) with a .uproject declaring an unbuilt module, Linux build: no module WARN. Files: cmd/launcher/modules.go, modules_test.go, main.go, main_test.go, init.go, init_test.go, internal/config/config.go, defaults_test.go; README.md (doc-writer) read last, complete, anchor resolves. Console 'stop ue'/'start ue'/'c compile' (lifecycle.go commandLoop, service 'ue') and ue_stop/run_command (tools.go) exist as named. Non-blocking findings: (1) low-medium, modules.go unbuiltModules: UE 5.8.4 resolves module files through the Binaries/Win64/UnrealEditor.modules manifest (ModuleManager.cpp FindModulePathsInDirectory, BuildId must match the engine's) and skips modules not compiled for the target (ModuleDescriptor.cpp IsCompiledInConfiguration: CookedOnly/Program types, PlatformAllowList/TargetAllowList). So a built project with such a module gets a false WARN, and a project built against another engine (BuildId mismatch) gets none. Reading UnrealEditor.modules (missing -> unbuilt; BuildId vs Engine/Binaries/Win64/UnrealEditor.modules; listed files present) is the sounder check -> new card. DebugGame is covered by the editor-name gate. (2) low, modules.go:53: in interactive non-window mode no launcher console runs while the agent has stdin, and with mcp off the agent route does not exist; wording only. (3) low, README.md ~line 325: one unwrapped long line (doc-writer). Follow-up proposal (give-up line repeats the compile pointer): agreed, new card.
+
+Committed as 4c16e2f
