@@ -1,0 +1,35 @@
+---
+claimed_at: 2026-11-22T04:26:51Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-22T04:25:46Z
+created: 2026-11-22T03:59:22Z
+id: 217
+priority: high
+started: 2026-11-22T04:01:36Z
+status: done
+tags:
+- skills
+title: 'Skills: replace settled hedges in unreagent-ue, unreagent-build, unreagent-iterate,
+  unreagent-files and ue-retarget with the 5.8.4 source facts'
+updated: 2026-11-22T04:26:51Z
+---
+
+Owner: unreagent-skill-author. Paths: .claude/skills/unreagent-ue/, skills/unreagent-build/, skills/unreagent-iterate/, skills/unreagent-files/, skills/ue-retarget/.
+Source of every fact: the scout notes of 2026-11-22 on k202, k203, k204, k207, k208, k211, k154, k136, k205 (read them; they carry path and line in the UE 5.8.4 source). State the engine version the fact was read from; copy no engine code.
+- unreagent-ue: move the rows those notes settle from unverified to source; keep what needs a run as open (timing windows, job close vs crash report, UBT against a locked DLL without a Live Coding session). Add: log file is UTF-8 with BOM under Saved/Logs/<Project>.log, async writer flushing every 0.2 s, -LOG=/-ABSLOG= rules (GenericPlatformOutputDevices.cpp 75-127, OutputDeviceFile.cpp 44-518); -stdout alone carries Display and above, -FullStdOutLogOutput (singular) all verbosities (OutputDeviceStdOut.cpp 190-195).
+- unreagent-build / -iterate / -files (hedged in f2ec67b): -WaitMutex waits without a time limit on any other UnrealBuildTool of the same engine installation; without it UBT exits 10 at once (UnrealBuildTool.cs 445-447, GlobalSingleInstanceMutex.cs). With an active Live Coding session the build fails with exit 6 and 'Unable to build while Live Coding is active' (HotReload.cs 277); under -unattended Live Coding does not auto-start (LiveCodingModule.cpp 501), so with the default args that refusal does not fire. Missing modules: exit 1 and the log line, not a waiting dialog. 'Stop the editor before compile' stays.
+- ue-retarget: batch_retarget has three engine branches in the fork Getty/ue-llm-toolkit ue-5.8 (RetargetEditor.cpp 1473-1497); on 5.8 it calls RunBatchRetarget with overwrite on. Output placement on 5.8 is unverified.
+Acceptance: go test ./internal/skills green; no hedge left that the notes settle; nothing new stated without a source.
+
+2026-11-22 04:09 Done, uncommitted tree, 6 files: .claude/skills/unreagent-ue/SKILL.md, skills/unreagent-build/SKILL.md, skills/unreagent-iterate/SKILL.md, skills/unreagent-files/SKILL.md, skills/ue-retarget/SKILL.md, skills/ue-retarget/retargeter.md. Verified: go test -count=1 -v ./internal/skills ok (TestToolkitToolsExistInToolkit ran, PASS); go test -count=1 ./cmd/launcher ok (tree also held other agents' edits). Every engine passage was re-opened in the 5.8.4 source before the sentence was written; nothing was run.
+unreagent-ue: status legend gains 'source (UE 5.8.4)' and 'measured (kNN)' (my choice: the Windows runs on k202/k208/k154/k205/k204/k214 are cited as single observations, never as settled); toolkit pin now reads 9f6a0f7 = 43 tools, VersionName 1.1.0, tag v1.0.0 = 4854c4e with 38 tools; /mcp/status 'version' is a literal 1.0.0 in HandleStatus, not the plugin version. Rows moved to source: package recovery and disaster recovery under -unattended, missing modules (exit 1, no rebuild box), plugin EngineVersion skip, Slate modal vs -unattended, -stdout verbosity and -FullStdOutLogOutput, log file (name, UTF-8 BOM, 0.2 s flush, -LOG=/-LogFileName=/-ABSLOG=), flag case, exit codes (new section), reporter as lifetime monitor inside the job, EngineAssociation resolution, Builds key, LauncherInstalled.dat, .uproject encoding, -WaitMutex, Live Coding refusal and auto-start, Engine Initialization log line.
+Kept open: timing windows, job close vs crash report (one run on k154, 5.7.4 only), UBT against a loaded DLL without a session, stdout encoding and last lines, execute_script window under -unattended, BuildCookRun flags, project-argument parsing.
+Two places where a source reading and a Windows run on the same card disagree, recorded as such and not averaged: (1) k202 restore file under -unattended: scout reads 'rewritten as restore off at start', the run saw it untouched until a clean exit; (2) k208 missing module under -unattended: scout reads the 'Incompatible or missing module' path with no dialog, the run saw an auto-answered message box and 15-17 s to exit 1.
+unreagent-build/-iterate/-files: -waitmutex waits without limit on any UBT of the same engine, exit 10 without it; Live Coding refusal exit 6 with its message, no auto-start under -unattended; recovery prompt hedge replaced; missing-module start exits 1; two new failure rows in iterate (missing module; plugin skipped for its EngineVersion, k214), two in build (exit 6, exit 10). Stop-before-compile stays.
+ue-retarget: upstream 9f6a0f7 named with its two branches; the 5.8 port (fork branch ue-5.8, 9fc7d4f) adds a third branch calling RunBatchRetarget with overwrite on; output placement and the auto-move statement are marked not verified on 5.8.
+Also found: Parse.cpp shows -unattended=1 is not -unattended (matters for k207); -LiveCoding in unreal.args starts Live Coding even under -unattended; the comment on cleanRecovery and the chooseEngine convert warning are cmd/launcher and internal/config text (worker). k218 not started.
+
+Review (unreagent-reviewer), rounds 1-3: READY. Round 1: six findings, among them a claimed k202 source/run disagreement that did not exist and an EngineVersion fix that was too loose. Round 2: two wording findings in skills/unreagent-iterate/SKILL.md plus one optional in skills/unreagent-build/SKILL.md. Round 3: all three fixed and checked against the source. (1) unreagent-iterate missing-module paragraph and failure row: 'nothing waits for a click' now applies only while -unattended or -stdout is among the editor's arguments. The Missing <Project> Modules Yes/No box matches UE 5.8.4 LaunchEngineLoop.cpp 6704-6708 / 6720-6737 and is labelled read in source, not run. The advice holds: unreal.args replaces the default -stdout -FullStdOutLogOutput (internal/config/config.go:400), and -unattended is appended from unreal.unattended (cmd/launcher/lifecycle.go:598). (2) Plugin row now reads 'other than this engine's compatible version (<major>.<minor>.0)'. (3) unreagent-build (~200 and the timeout row): 'any other build, clean or project file generation on the same engine'. Nit, not blocking: the 'neither flag' condition names unreal.unattended off plus no -stdout in unreal.args, but -unattended written into unreal.args also counts; the closing 'With neither flag there' covers it. Check run on the whole tree (k207, k216, k217): gofmt -l cmd internal skills empty, go vet ./..., go test ./..., make windows -> dist/unreagent.exe, all green. Text-only for k217, so there is no Windows runtime claim.
+
+Committed as f73a5bb.
