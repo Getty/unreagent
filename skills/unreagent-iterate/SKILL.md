@@ -156,11 +156,14 @@ kills whatever it left behind. What follows from this:
 - **Unsaved changes are lost.** Save through the in-editor plugin before you
   stop or restart. These tools cannot save.
 - **Do not count on recovering them later.** The editor runs with
-  `-unattended`, on by default, which Epic documents as disabling pop-ups and
-  dialogs. Whether that covers the package recovery prompt is not verified
-  against an editor, so do not assume the start after a crash or a kill is
-  free of one either: if the editor is running but the in-editor plugin stays
-  unreachable, a dialog on the host may be waiting for the user.
+  `-unattended`, on by default. With it, the start after a crash or a kill
+  does not offer to restore packages: no prompt, and nothing is restored
+  (UE 5.8.4 source; seen on Windows with UE 5.7.4 and 5.8.4). Only when the
+  user turned `unreal.unattended` off does a Restore Packages dialog wait on
+  the host after an unclean exit. The editor is then running, but the
+  in-editor plugin stays unreachable until a human answers. Other dialogs
+  are not ruled out: each one decides for itself whether it honors
+  `-unattended`.
 - **Work in flight inside the editor is cut off mid-way**: shader compiles,
   saves, imports, anything it was running.
 - **Nothing is left behind as an orphan, as long as the job exists.** No stray
@@ -375,12 +378,41 @@ For C++:
 
 Stop the editor before you compile, not after. The `run_command` tool
 description gives the same order: `ue_stop` before `compile`, then `ue_start`
-to load the new modules. A running editor has the module binaries loaded and
-may have a Live Coding session open. What UnrealBuildTool does then is not
-verified against an editor: expect the build to fail or to wait. If a
-`compile` with the editor up fails on something other than your code, look in
-its output for Live Coding, the running editor or a binary it cannot write
-(the exact wording is not confirmed), then stop the editor and compile again.
+to load the new modules. A running editor has the module binaries loaded. With
+a Live Coding session active in it, UnrealBuildTool refuses the build: exit 6
+and `Unable to build while Live Coding is active` (UE 5.8.4 source, not run).
+Under `-unattended`, the default, Live Coding does not start by itself, so
+expect that only when the user changed the editor arguments or started it by
+hand. What a build does against the loaded binaries without a session is not
+verified: expect it to fail. If a `compile` with the editor up fails on
+something other than your code, look in its output for Live Coding, the
+running editor or a binary it cannot write, then stop the editor and compile
+again. `unreagent-build` has the exit codes.
+
+A start before the compile succeeded does not wait at a dialog either, as
+long as `-unattended` or `-stdout` is among the editor's arguments. The
+default arguments carry both. An
+editor whose project module is missing exits with code 1 and names the module
+in its log. Under the default arguments, which include `-unattended`, what
+was seen is a message box the editor answered itself: a
+`Message dialog closed, result: Ok` line carrying the module-not-found text,
+some 9 to 17 s after the start. A start without `-unattended` showed
+`Incompatible or missing module: <name>` and exited within 2 s (both seen on
+Windows with UE 5.7.4 and 5.8.4). With either flag present, nothing waits for
+a click. The
+launcher then restarts the editor by its restart policy, and each start ends
+the same way: `ue_stop`, compile, `ue_start`.
+
+With neither flag, the editor asks in a Yes/No box titled
+`Missing <Project> Modules` whether to rebuild, and waits there for a human
+(read in the UE 5.8.4 source, not run). That takes both `unreal.unattended`
+turned off and an `unreal.args` list without `-stdout`: setting `unreal.args`
+replaces the default list, so a config with its own list has only the flags
+it names. If the editor stays `running: true` after a start that came before
+a successful compile, with no exit and the in-editor plugin unreachable, read
+`unreal.args` and `unreal.unattended` in `unreagent.yaml` and
+`unreagent.local.yaml`. With neither flag there, expect that box: `ue_stop`,
+compile, `ue_start`.
 
 ### Waiting for the in-editor plugin
 
@@ -405,6 +437,8 @@ nothing in `status` reflects this. Check the plugin itself:
 | `running: true` at start, then `lastExit`, a new `pid` or a higher `restarts` | the editor died during startup. The launcher restarts it, or gave up (next row) | `ue_stop`, then read `logs` |
 | `running: false, desired: true` and `lastExit` that stay past the restart delay | the editor failed and no restart is coming, for example after 3 quick failures in a row | read `logs` and `Saved/Crashes/`, fix the cause, then `ue_start` |
 | `restarts` climbs every few seconds | a crash loop of an editor that runs more than 10 s each time, or one under a `maxRestarts` limit | `ue_stop` breaks it |
+| `lastExit` is exit 1 some seconds after every start, and `logs` hold `Message dialog closed, result: Ok` with a module-not-found text (the form seen under the default arguments) or `Incompatible or missing module` (seen on a start without `-unattended`) | the project's C++ module is not built; the UE 5.8.4 source treats a module built for another engine version the same way (not run). The editor exits instead of waiting for a click while `-unattended` or `-stdout` is among its arguments; with neither (`unreal.unattended` off and an `unreal.args` list without `-stdout`) it stays running at a `Missing <Project> Modules` box instead (UE 5.8.4 source, not run) | `ue_stop`, `run_command` `compile`, then `ue_start` |
+| the editor runs, `unreal_status` stays `connected: false` for minutes, and `logs` or `Saved/Logs/` hold `Skipping load of '<plugin>'` or `'<plugin>' is Incompatible` | the plugin's `.uplugin` sets an `EngineVersion` other than this engine's compatible version (`<major>.<minor>.0`), and under `-unattended` the editor skips it instead of asking (UE 5.8.4 source; seen on Windows with UE 5.7.4 and 5.8.4) | removing the `EngineVersion` field from the `.uplugin` lifts the check, and so does setting it to `<major>.<minor>.0` of the engine: `5.8.0` for UE 5.8.4, not `5.8.4` (seen: `5.7.0` loads on 5.7.4). An engine build marked as a licensee version compares its own patch number instead (read in the UE 5.8.4 source, not run). The plugin must still be built for this engine. It is a change to a third-party plugin: ask the user, then `ue_restart` |
 | `ue_start`, `ue_stop` or `ue_restart` returns `Error: service "ue" is not responding: it did not take the request within 10s; nothing was done` | the control loop was busy for more than 10 s and never took the call | wait, call `status`, then retry |
 | a control call returns `Error: service "ue" is busy with its pre-start step and did not take the request within 10s; nothing was done, try again shortly` | the loop is running the pre-start hooks of another start and never took the call | wait a few seconds, then retry |
 | a control call returns `Error: service "ue" took the request and is still carrying it out after 10s` (with `(busy with its pre-start step)` while the hooks run), ending in `do not repeat it, check status for the outcome` | the call is still under way. It has not failed | do not repeat it: a second `ue_restart` waits behind the first and then restarts the editor the first one just spawned. Poll `status` until it answers without `unresponsive`, then read the `ue` entry as the call's result: `running: true` for a start that spawned, `desired: false` for a stop, a `lastError` for a start that failed |

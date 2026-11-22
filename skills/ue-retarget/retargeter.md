@@ -125,7 +125,9 @@ Errors: `No FK Chains op found in retargeter stack` (run `setup_ops`),
 
 ## batch_retarget
 
-Runs the engine's duplicate-and-retarget batch over AnimSequences.
+Runs the engine's duplicate-and-retarget batch over AnimSequences. Which
+engine call that is depends on the engine version (skill body, "Engine
+versions").
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -147,13 +149,21 @@ Returns `retargeted_count`, `root_motion_count`, `new_assets[]` (`name`,
   with what you sent, and match `new_assets[].name` against your list.
 - **`retargeted_count: 0` is a success.** The tool reports whatever the engine
   returned.
-- **Where the new assets land** is decided by the engine; the tool passes only
-  the prefix, no folder, and empty search, replace and suffix strings. The
-  tool's own header comment says "auto-move results", but the code moves
-  nothing. Take the paths from `new_assets[].path`.
-- **Overwriting.** On UE 5.7 or later the tool asks the engine to overwrite
-  existing output assets; on UE 5.6 it passes no such flag. A second run over
-  the same input can therefore replace the first run's output.
+- **Where the new assets land** is decided by the engine. On UE 5.6 and 5.7
+  the tool passes only the prefix, no folder, and empty search, replace and
+  suffix strings. In the UE 5.8 port it passes the prefix and sets no folder,
+  search, replace or suffix at all. On UE 5.8 the engine call then keeps its
+  default folder: a target folder is taken only when one is passed, and the
+  "same folder as the source" option is off unless asked for. The default is
+  the content root, so the new assets land directly in `/Game`, not beside
+  the source animations and not beside the target mesh (UE 5.8.4 source, not
+  run). The tool's own header comment says "auto-move results"; the tool's
+  code moves nothing after the engine call, on any version. Take the paths
+  from `new_assets[].path`.
+- **Overwriting.** On UE 5.7 or later, UE 5.8 included, the tool asks the
+  engine to overwrite existing output assets; on UE 5.6 it passes no such
+  flag. A second run over the same input can therefore replace the first
+  run's output.
 - Referenced assets are not included: only the sequences themselves are
   duplicated.
 - **Root motion by name.** With `auto_root_motion`, each new asset whose name

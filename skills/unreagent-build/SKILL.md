@@ -194,13 +194,17 @@ in which stage.
   call. A run that takes longer still finishes, but its reply can no longer be
   sent: the connection drops at that point, and no result arrives.
 - **A repeated call starts a second run beside the first.** Nothing in the
-  launcher serializes runs, and `status` does not show runs in progress. The
-  `compile` command line passes `-waitmutex`, which Epic documents only as a
-  flag name: whether a second UnrealBuildTool waits for the first, fails, or
-  builds beside it is not verified. Treat a `compile` that does not come back
-  as possibly waiting on another UnrealBuildTool. Do not retry a build whose
-  call you lost. Do not start the editor while a compile you lost track of may
-  still be writing binaries.
+  launcher serializes runs, and `status` does not show runs in progress.
+  UnrealBuildTool serializes itself instead. The `compile` command line
+  passes `-waitmutex`, and with it UnrealBuildTool waits, with no time limit,
+  for any other build, clean or project file generation on the same engine
+  installation to end, whoever started it (read in the UE 5.8.4 source, not run). A `compile`
+  that does not come back is therefore most likely waiting behind another
+  build. Without the flag, as in a command the user wrote without it,
+  UnrealBuildTool does not wait: while another UnrealBuildTool of the same
+  engine is running, it exits 10 at once. Do not retry a build
+  whose call you lost. Do not start the editor while a compile you lost track
+  of may still be writing binaries.
 - **The launcher log is the only trace of a lost run.** It records
   `[cmd:<name>] done (exit N)` when the run ends. That log is `unreagent.log`
   next to the `.uproject` when the launcher runs its own agent in the
@@ -233,9 +237,18 @@ There, a run's children are not killed with it.
 ## The editor and the build
 
 - **Stop the editor before `compile`.** A running editor has the project's
-  modules loaded, and it may have a Live Coding session open. What
-  UnrealBuildTool does then is not verified against an editor: expect the
-  build to fail or to wait. Stopping first rules both out.
+  modules loaded. Two cases, both read in the UE 5.8.4 source and not run:
+  - *A Live Coding session is active in the editor.* UnrealBuildTool refuses
+    the build: exit 6 and `Unable to build while Live Coding is active`. It
+    does not wait.
+  - *No session.* Under `-unattended`, the launcher's default, Live Coding
+    does not start by itself, so the refusal above does not fire. It can
+    still be active when the user turned `unreal.unattended` off, put
+    `-LiveCoding` into `unreal.args`, or started it by hand. What
+    UnrealBuildTool does against module binaries the editor holds open
+    without a session is not verified: expect the build to fail.
+
+  Stopping first rules both out.
   `unreagent-iterate` has the full stop → compile → start loop, including what
   a stop does to unsaved work.
 - **A new build takes effect only in a newly started editor.** After a
@@ -251,14 +264,16 @@ There, a run's children are not killed with it.
 | `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
 | `Error: unknown command "compile"`, and `status` lists neither `compile` nor `package` | the launcher found no engine root or no `.uproject` at start and left the built-in commands out | the user sets `UE_ROOT` or `engineRoot`, or `unreal.project`, then restarts the launcher |
 | `Error: start failed: fork/exec …/Engine/…: …` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
-| `exit` non-zero while the editor is running, and the output names Live Coding, the running editor or a module binary it cannot write, not your code (the exact wording is not confirmed) | the open editor is in the build's way | `ue_stop`, then compile again |
+| `exit 6` while the editor is running, and the output has `Unable to build while Live Coding is active` | a Live Coding session is active in the open editor (UE 5.8.4 source) | `ue_stop`, then compile again |
+| `exit` non-zero while the editor is running, and the output names the running editor or a module binary it cannot write, not your code (this case was not run; the wording is not confirmed) | the open editor is in the build's way | `ue_stop`, then compile again |
+| `exit 10` at once, and the output says a conflicting instance is already running | another UnrealBuildTool of the same engine is running, and this command line has no `-waitmutex` (UE 5.8.4 source). The built-in `compile` has the flag and waits instead | wait for the other build, then run it again |
 | `exit` non-zero, an omitted marker, and the errors look like follow-ons | their cause is among the omitted lines or bytes | fix what is visible, then compile again |
 | `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
 | `exit` non-zero, `[... N lines omitted]` between the first lines and the last | the output was more than a failing reply's 10,000 bytes; the N lines between its first 4 KiB and its end were cut (past 2 MiB, N includes the dropped middle) | they are gone, and a rerun of the same state cuts the same way. Fix what is visible and compile again; for the whole output, the user adds a command that writes it to a file, read with `read_file` |
 | `[... B bytes omitted; a failing call's reply holds at most 10 KB]` | a single line was longer than its share of a failing reply: a first line over 4 KiB is cut to its start, a last line that does not fit to its end | as for the lines marker above |
 | `exit 0`, then `[... N lines omitted]` | the first N lines of a successful run's output were cut | they are gone. Rerun only if you must |
 | `exit 0`, then `[... B bytes omitted; a reply holds at most 48 KiB]`, alone or below the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut (past 2 MiB, B can include the dropped middle); the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
-| the call never returns, or the client times out | no timeout exists, and the run continues on the host. A `compile` may also be waiting on an earlier UnrealBuildTool run | do not retry. Watch the launcher log for `[cmd:<name>] done` |
+| the call never returns, or the client times out | no timeout exists, and the run continues on the host. A `compile` also waits, without a time limit, behind any other build, clean or project file generation on the same engine | do not retry. Watch the launcher log for `[cmd:<name>] done` |
 | a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
 
 ## See also

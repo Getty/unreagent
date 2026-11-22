@@ -453,6 +453,10 @@ Revision history for unreagent
     meta-tools, no tools for blueprints, assets, levels or Python). The
     toolkit notes cover the EngineVersion skip under -unattended and npm
     install on npm 10; the -unattended section is re-checked.
+  - Shipped skills unreagent-build, unreagent-iterate, unreagent-files and
+    ue-retarget: statements that were hedged as unverified now carry the facts
+    read from the UE 5.8.4 source and Windows measurements. ue-retarget
+    documents the UE 5.8 branch of batch_retarget.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
