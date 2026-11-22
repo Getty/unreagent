@@ -1,0 +1,37 @@
+---
+class: standard
+created: 2026-11-22T06:48:31Z
+id: 224
+priority: medium
+status: backlog
+tags:
+- epic
+- onboarding
+title: 'Epic: a good first start — from nothing to a supervised UE 5.8 project'
+updated: 2026-11-22T22:22:33Z
+---
+
+Goal (maintainer, 2026-11-22): get from an empty directory to a UE 5.8 project that unreagent supervises, with the UE LLM Toolkit loading, a working first agent session and owned Fab content in the project with as few human clicks as possible.
+
+Constraint: shipped skills reach the agent only once unreagent runs, so "nothing -> launcher running" is README plus a possible init sub-command; a shipped skill takes over after that.
+
+Planned cut (planner, not all filed yet):
+- Already carded and on the path: k211 (engine detection), k214 (toolkit refused under -unattended), k215 (bridge npm install), k205 (readiness), k203, k191.
+- Measure on Windows: fresh-start walk-through (filed separately), Fab acquisition in an unreagent-started editor (filed separately).
+- N2: name an unbuilt project module before the first editor start (worker; one WARN naming compile, no automatic build). After k214 and the walk-through.
+- N3: unreagent init — write a minimal config next to a .uproject and print a preflight (engine, node, claude, toolkit EngineVersion, bridge deps, module built). Never overwrites a config. Needs the maintainer decision below.
+- S1: shipped skill "first session in a fresh project" (skill-author), after N2, N3 and the walk-through.
+- S2: shipped skill for Fab content (skill-author), after the Fab measurement: ask the human for the one click per listing, then finish the on-disk part. No unofficial downloaders.
+- R1: README "New project" quick start (doc-writer), after k214, k215, N3.
+- X1: unreagent-example as the project template (card on that repo).
+
+Open maintainer decisions:
+- D1: how far does unreagent itself go — docs and skill only / init that adopts an existing project and runs a preflight (planner recommends) / init that also scaffolds the project and fetches the toolkit. Sub-choices: may shipped text recommend the toolkit fork branch for 5.8 by URL; no automatic first compile.
+- D2: where a new project comes from — Launcher-created then adopted / unreagent-example as template (planner recommends, with the Launcher path as second) / a separate template repo.
+- D3 (after the Fab measurement): a tool that lists and copies locally present packs, or skill only.
+
+Unknown, to scout on Linux: what the launcher does with no unreagent.yaml, and with a config but no .uproject; whether anything before the editor start notices an unbuilt module.
+
+Maintainer decisions, 2026-11-22: D1 = init sub-command (adopt an existing project, write a minimal config, preflight; no scaffolding of the UE project and no toolkit download inside the binary). D2 = unreagent-example is the template. Added by the maintainer as the default path: create a project in Unreal, start unreagent inside it with no further setup, and tell the agent "set up the rest" — the agent then builds a good setup for the project from what it sees and knows (config, toolkit, the Claude-side team: CLAUDE.md, agents, skills) and asks where it cannot tell. That makes a start without unreagent.yaml a first-class path, and adds a shipped setup skill.
+
+Maintainer decision, 2026-11-22: Blueprint-only projects are out of scope — the projects carry plugins and are C++ projects anyway. Do not measure, special-case or document a Blueprint-only path; a C++ project is the assumed starting point.
