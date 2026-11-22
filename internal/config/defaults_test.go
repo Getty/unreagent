@@ -429,3 +429,72 @@ func TestDefaultsTakeLocalOverlay(t *testing.T) {
 	_, _, err = load("", dir)
 	errContains(t, err, "unreal.project", "unreagent.local.yaml", "unreagent.yaml")
 }
+
+// k246: LoadForPreflight is Load for `unreagent init`. A missing engine is the
+// one thing it lets through: the configuration loads with ${ENGINE} left in
+// place and the engine-bound built-in commands left out, where Load — the
+// launcher's start — keeps refusing with the error that names the fix.
+func TestLoadForPreflightLoadsWithoutAnEngine(t *testing.T) {
+	noEngine(t)
+	dir := t.TempDir()
+	project := writeUProject(t, dir, "Game.uproject")
+
+	_, _, err := load("", dir)
+	errContains(t, err, "${ENGINE} is unresolved (engine not found — set UE_ROOT or engineRoot in unreagent.local.yaml) but used by unreal.editor")
+
+	c, info, err := LoadForPreflight("", dir)
+	if err != nil {
+		t.Fatalf("LoadForPreflight without an engine: %v", err)
+	}
+	if !info.Defaults || info.EngineRoot != "" || info.Project != project {
+		t.Errorf("info = %+v; want the defaults, no engine and project %s", info, project)
+	}
+	if want := "${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe"; c.Unreal.Editor != want {
+		t.Errorf("unreal.editor = %q; want the placeholder kept: %q", c.Unreal.Editor, want)
+	}
+	if want := []string{"compile", "package"}; !reflect.DeepEqual(info.SkippedCommands, want) || len(c.Commands) != 0 {
+		t.Errorf("SkippedCommands = %v, commands = %v; want %v left out", info.SkippedCommands, c.Commands, want)
+	}
+	if !c.Agent.Enabled || !c.MCP.Enabled {
+		t.Errorf("agent.enabled = %v, mcp.enabled = %v; want the built-in defaults", c.Agent.Enabled, c.MCP.Enabled)
+	}
+
+	// With an engine it is Load.
+	t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
+	strict, strictInfo, err := load("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenient, lenientInfo, err := LoadForPreflight("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(strict, lenient) || !reflect.DeepEqual(strictInfo, lenientInfo) {
+		t.Errorf("with an engine LoadForPreflight differs from Load:\n%+v\n%+v", lenient, strict)
+	}
+}
+
+// Only the engine is optional there: every other load error stays one, and a
+// check that fails on the placeholder left in place says so.
+func TestLoadForPreflightStillFails(t *testing.T) {
+	noEngine(t)
+	t.Run("no project", func(t *testing.T) {
+		_, _, err := LoadForPreflight("", t.TempDir())
+		errContains(t, err, "no unreagent.yaml and no .uproject")
+	})
+	t.Run("unresolved project placeholder", func(t *testing.T) {
+		path := writeConfigFiles(t, t.TempDir(), "unreal: {editor: \"${PROJECT_DIR}/ue\"}\n", "")
+		_, _, err := LoadForPreflight(path, "")
+		errContains(t, err, "${PROJECT_DIR} is unresolved", "unreal.editor")
+		if err != nil && strings.Contains(err.Error(), "${ENGINE}") {
+			t.Errorf("err = %v; the engine is not an error here", err)
+		}
+	})
+	t.Run("rule on the engine", func(t *testing.T) {
+		dir := t.TempDir()
+		writeUProject(t, dir, "Game.uproject")
+		path := writeConfigFiles(t, dir, "mcp: {enabled: true}\npermissions:\n  enabled: true\n  allow: [\"Read(${ENGINE}/*)\"]\n", "")
+		_, _, err := LoadForPreflight(path, "")
+		errContains(t, err, "permissions.allow[0]", "checked with ${ENGINE} left in place: engine not found — set UE_ROOT or engineRoot")
+	})
+}

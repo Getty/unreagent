@@ -541,12 +541,18 @@ Revision history for unreagent
     agent command, UE LLM Toolkit and its bridge, node, npm, plugin
     EngineVersion, project modules and permissions, each finding with its fix.
     It exits 1 on a blocking finding. -check prints the preflight without
-    writing. Without an engine it stops at the load error.
+    writing. Without an engine it still writes the defaults and prints the
+    whole preflight, with the engine as the blocking finding (exit 1).
   - The start without a config file now names unreagent init, reports agent,
     MCP server and bridge as loaded, and counts a toolkit reached through
     several links once.
   - README: one "New project" quick start covers the start without a config
     and unreagent init, from an empty project to the first agent session.
+  - unreagent init no longer stops at the load error when no engine is found:
+    it writes the defaults, prints the whole preflight with the engine as its
+    BLOCKING finding and exits 1. A start of the launcher still fails at load
+    as before. unreagent hermes-setup names unreagent init when there is no
+    config file.
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
     Launcher versions and source-build ids resolve, every registered Launcher

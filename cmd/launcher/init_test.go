@@ -77,7 +77,7 @@ func (tr initTree) built() {
 func (tr initTree) run(check bool) (string, error) {
 	tr.t.Helper()
 	var out bytes.Buffer
-	err := initRun(func() (*config.Config, config.Info, error) { return config.LoadIn(tr.dir) }, check, &out)
+	err := initRun(func() (*config.Config, config.Info, error) { return config.LoadForPreflight("", tr.dir) }, check, &out)
 	return out.String(), err
 }
 
@@ -126,7 +126,7 @@ func TestInitWritesTheDefaultsAndACleanPreflight(t *testing.T) {
 		t.Errorf("written config holds a machine path:\n%s", written)
 	}
 	// The written file is a config the launcher loads, no longer the defaults.
-	if _, info, err := config.LoadIn(tr.dir); err != nil || info.Defaults {
+	if _, info, err := config.LoadForPreflight("", tr.dir); err != nil || info.Defaults {
 		t.Errorf("loading the written config: Defaults=%v, err=%v", info.Defaults, err)
 	}
 
@@ -228,30 +228,169 @@ func TestInitNeedsExactlyOneProject(t *testing.T) {
 	}
 }
 
-// A missing engine stops init with a non-zero exit either way. On the
-// built-in defaults config.Load itself refuses (unreal.editor needs
-// ${ENGINE}): its error names the fix, and nothing is written or checked. A
-// config that does not use ${ENGINE} loads, and the preflight has the
-// blocking finding.
-func TestInitWithoutEngineFails(t *testing.T) {
+// k246: a missing engine does not end init at the load, as it ends a start of
+// the launcher. The defaults are written — the document does not depend on
+// the engine — and the preflight is printed in full, with the engine as its
+// one blocking finding and a non-zero exit.
+func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 	tr := newInitTree(t, "", "node", "npm", "claude")
+	tr.toolkit(`{"EngineVersion": "5.6.0"}`, true)
 	out, err := tr.run(false)
 	if strings.Contains(out, "[ok]       engine: ") {
 		t.Skip("this host has an engine config.Load detects without UE_ROOT")
 	}
-	if err == nil || !strings.Contains(err.Error(), "engine not found — set UE_ROOT or engineRoot in unreagent.local.yaml") || !strings.Contains(err.Error(), "unreagent init wrote nothing") {
-		t.Errorf("err = %v, want the load error naming the fix\n%s", err, out)
-	}
-	if fileExists(tr.config()) {
-		t.Error("init wrote unreagent.yaml although the load failed")
-	}
-
-	mustWriteFile(t, tr.config(), "unreal: {editor: claude}\n")
-	out, err = tr.run(false)
 	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s)") {
 		t.Errorf("err = %v, want one blocking finding\n%s", err, out)
 	}
-	wantAll(t, out, "[BLOCKING] engine: not found", "Fix: set the environment variable UE_ROOT, or engineRoot in a git-ignored unreagent.local.yaml", "1 blocking, ")
+	doc, _, _, derr := config.DefaultYAML(tr.dir)
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if !fileExists(tr.config()) {
+		t.Fatalf("init wrote no unreagent.yaml:\n%s", out)
+	}
+	if written := mustReadFile(t, tr.config()); written != initHeader+string(doc) {
+		t.Errorf("written config is not the header and config.DefaultYAML:\n%s", written)
+	}
+	wantAll(t, out, "Wrote "+tr.config(),
+		"[ok]       project: ",
+		"[BLOCKING] engine: not found — the launcher does not start without it: unreal.editor is ${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe",
+		"Fix: set the environment variable UE_ROOT, or engineRoot in a git-ignored unreagent.local.yaml",
+		"[ok]       agent: claude is on PATH",
+		"[ok]       UE LLM Toolkit: bridge ", "[ok]       node: ", "[ok]       npm: ",
+		"[ok]       bridge dependencies: installed",
+		"[info]     plugin EngineVersion: not checked — without an engine",
+		"[WARN]     project modules: Game look unbuilt",
+		"permissions: off",
+		"1 blocking, 1 warning(s)")
+	// Nothing is said about an editor binary or a plugin that needs the engine to judge.
+	wantNone(t, out, "unreal.editor not found", "does not match the engine", "or run what the launcher's compile command runs")
+
+	// Again, now with the file there: the same finding, nothing rewritten.
+	out, err = tr.run(false)
+	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s)") {
+		t.Errorf("second run: err = %v, want one blocking finding\n%s", err, out)
+	}
+	wantAll(t, out, "exists and is left as it is. Preflight only.", "[BLOCKING] engine: not found")
+
+	t.Run("check writes nothing", func(t *testing.T) {
+		tr := newInitTree(t, "")
+		out, err := tr.run(true)
+		if err == nil || fileExists(tr.config()) {
+			t.Errorf("init -check without an engine: err = %v, config written = %v\n%s", err, fileExists(tr.config()), out)
+		}
+		wantAll(t, out, "[BLOCKING] engine: not found", "git submodule add -b ue-5.8", "No engine was found, so whether the branch fits yours is unknown.", "1 blocking, ")
+		wantNone(t, out, "could not be read")
+	})
+	t.Run("config that does not use the engine", func(t *testing.T) {
+		tr := newInitTree(t, "", "node", "npm", "claude")
+		mustWriteFile(t, tr.config(), "unreal: {editor: claude}\n")
+		out, err := tr.run(false)
+		if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s)") {
+			t.Errorf("err = %v, want one blocking finding\n%s", err, out)
+		}
+		wantAll(t, out, "[BLOCKING] engine: not found\n", "1 blocking, ")
+	})
+}
+
+// k246: init never writes to a -config path — not to a config that is there,
+// and not where the path names no file, which is a load error.
+func TestInitConfigFlagNeverWrites(t *testing.T) {
+	const existing = "# mine\nunreal: {editor: claude}\n"
+	tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
+	path := filepath.Join(tr.dir, "custom.yaml")
+	mustWriteFile(t, path, existing)
+	before := dirNames(t, tr.dir)
+
+	var out bytes.Buffer
+	if err := initCommand([]string{"-config", path}, &out); err != nil {
+		t.Fatalf("init -config failed: %v\n%s", err, out.String())
+	}
+	wantAll(t, out.String(), path+" exists and is left as it is. Preflight only.", "Preflight:")
+	wantNone(t, out.String(), "Wrote ")
+	if got := mustReadFile(t, path); got != existing {
+		t.Errorf("the -config file was changed:\n%s", got)
+	}
+
+	out.Reset()
+	missing := filepath.Join(tr.dir, "missing.yaml")
+	if err := initCommand([]string{"-config", missing}, &out); err == nil || !strings.Contains(err.Error(), "unreagent init wrote nothing") {
+		t.Errorf("init -config on a missing file: err = %v\n%s", err, out.String())
+	}
+	wantNone(t, out.String(), "Wrote ", "Preflight:")
+	if after := dirNames(t, tr.dir); after != before {
+		t.Errorf("init -config changed the directory: %s, was %s", after, before)
+	}
+}
+
+// dirNames lists the entries of dir, sorted.
+func dirNames(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return strings.Join(names, ",")
+}
+
+// k246: a symlink at the target is left untouched. One that leads to a config
+// is that config: preflight only, nothing written through it. A broken one is
+// a load error, and neither the link nor the file it names is created or
+// replaced — writeDefaultConfig refuses it as well, were the load to miss it.
+func TestInitLeavesASymlinkAtTheTargetAlone(t *testing.T) {
+	symlink := func(t *testing.T, target, link string) {
+		t.Helper()
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("cannot create a symlink here: %v", err)
+		}
+	}
+	isLinkTo := func(t *testing.T, link, target string) {
+		t.Helper()
+		if got, err := os.Readlink(link); err != nil || got != target {
+			t.Errorf("%s is no longer the link to %s: %q, %v", link, target, got, err)
+		}
+	}
+
+	t.Run("to a config", func(t *testing.T) {
+		const existing = "# mine\nagent: {enabled: false}\n"
+		tr := newInitTree(t, buildVersion584)
+		target := filepath.Join(t.TempDir(), "shared.yaml")
+		mustWriteFile(t, target, existing)
+		symlink(t, target, tr.config())
+
+		out, err := tr.run(false)
+		if err != nil {
+			t.Fatalf("init failed: %v\n%s", err, out)
+		}
+		wantAll(t, out, "exists and is left as it is. Preflight only.", "agent: off (agent.enabled is false)")
+		wantNone(t, out, "Wrote ")
+		isLinkTo(t, tr.config(), target)
+		if got := mustReadFile(t, target); got != existing {
+			t.Errorf("the linked config was changed:\n%s", got)
+		}
+	})
+	t.Run("broken", func(t *testing.T) {
+		tr := newInitTree(t, buildVersion584)
+		target := filepath.Join(t.TempDir(), "gone.yaml")
+		symlink(t, target, tr.config())
+
+		out, err := tr.run(false)
+		if err == nil || !strings.Contains(err.Error(), "unreagent init wrote nothing") {
+			t.Errorf("init on a broken link: err = %v\n%s", err, out)
+		}
+		wantNone(t, out, "Wrote ", "Preflight:")
+		if _, err := writeDefaultConfig(tr.config()); err == nil || !strings.Contains(err.Error(), "does not overwrite") {
+			t.Errorf("writeDefaultConfig on a broken link: err = %v", err)
+		}
+		isLinkTo(t, tr.config(), target)
+		if fileExists(target) {
+			t.Error("init wrote the file the broken link names")
+		}
+	})
 }
 
 // What the launcher starts without is a warning, each with its fix: the

@@ -242,8 +242,12 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   `preflight`, pinned by `cmd/launcher/init_test.go`
   (`TestInitWritesTheDefaultsAndACleanPreflight`,
   `TestInitNeverOverwritesAConfig`). A load error ends it before anything is
-  written or checked — on the defaults that includes a missing engine
-  (`TestInitWithoutEngineFails`).
+  written or checked (`TestInitNeedsExactlyOneProject`). A missing engine is
+  not one of them (k246): `initCommand` loads through
+  `config.LoadForPreflight` (below), so the defaults are still written — the
+  document does not depend on the engine — and the preflight is printed in
+  full with the engine as its BLOCKING finding, which makes the exit code 1
+  (`TestInitWithoutEnginePrintsTheFullPreflight`).
 - **The overlay still applies** (step 3): `unreagent.local.yaml` next to the
   executable is decoded over the defaults, so `engineRoot` there works without
   a config file (`TestDefaultsTakeLocalOverlay`). One key is refused: a
@@ -275,11 +279,30 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
 `load(explicitPath, dir)` is `Load` with the executable's directory as a
 parameter (`Load` passes `exeDir()`), and the entry point for every test of
 this path: `load("", t.TempDir())` after `writeUProject`, with `UE_ROOT` set
-or `noEngine(t)`. `LoadIn(dir)` is its exported form for other packages,
-`load("", dir)` and nothing else: no explicit path, so `findConfig(dir)`
-decides between a config file there and the defaults path. Its only callers
-are the tests in `cmd/launcher/init_test.go`; `initCommand` itself goes
-through `Load` with its `-config` value.
+or `noEngine(t)`. Both are `loadMode(explicitPath, dir, false)`.
+
+`config.LoadForPreflight(explicitPath, dir)` (k246) is the same `loadMode`
+with `engineOptional` set, and the only other exported way in. It relaxes one
+thing: an engine that is not found is no load error. `Info.EngineRoot` is
+then `""`, every field that uses `${ENGINE}` keeps the placeholder as written
+(`unreal.editor` of the built-in defaults among them — `substitute` leaves it
+out of the replacement instead of replacing it by nothing), and the
+engine-bound built-in commands are left out and named in
+`Info.SkippedCommands` as usual. With an engine it returns exactly what
+`Load` returns. Both are pinned by `TestLoadForPreflightLoadsWithoutAnEngine`,
+which also holds `load` to its error on the same directory. Every other load
+error stays one, and a check that fails on the placeholder left in place — a
+permission rule on `${ENGINE}` — fails with a message that says so
+(`TestLoadForPreflightStillFails`). An empty `dir` is the executable's
+directory, as for `Load`; init's tests pass their own.
+
+**The launcher start uses `Load`; only a preflight may use the lenient
+load.** A `Config` from `LoadForPreflight` can hold a literal `${ENGINE}` in
+a path, so it is for reporting on, never for starting an editor, an agent or
+a command from. Its one caller is `initCommand`; `run()` and `hermes-setup`
+stay on `Load`, and a start without an engine fails at load as before. Code
+that reads such a `Config` checks `Info.EngineRoot` before it uses an
+engine-bound field, as `preflight` in `cmd/launcher/init.go` does.
 
 ## Placeholders
 

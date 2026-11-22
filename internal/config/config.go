@@ -337,14 +337,31 @@ func Load(explicitPath string) (*Config, Info, error) {
 	return load(explicitPath, exeDir())
 }
 
-// LoadIn is Load without an explicit path for a launcher whose executable lies
-// in dir: `unreagent init` and its tests look at a directory of their choice.
-func LoadIn(dir string) (*Config, Info, error) {
-	return load("", dir)
+// LoadForPreflight is Load for `unreagent init`, which reports on a setup
+// instead of starting it. It differs in one thing: an engine that is not found
+// is not an error, so that the preflight can name it next to everything else.
+// Info.EngineRoot is "" then, every field that uses ${ENGINE} keeps the
+// placeholder as written (unreal.editor of the built-in defaults among them),
+// and the built-in commands that need it are left out as usual
+// (Info.SkippedCommands). Such a configuration is for looking at, never for
+// starting anything. Everything else fails as in Load.
+//
+// dir is the directory the launcher's executable lies in; "" is the running
+// executable's, as for Load. init's tests name a directory of their choice.
+func LoadForPreflight(explicitPath, dir string) (*Config, Info, error) {
+	if dir == "" {
+		dir = exeDir()
+	}
+	return loadMode(explicitPath, dir, true)
 }
 
 // load is Load with the executable's directory as a parameter.
 func load(explicitPath, dir string) (*Config, Info, error) {
+	return loadMode(explicitPath, dir, false)
+}
+
+// loadMode is load; engineOptional makes it LoadForPreflight.
+func loadMode(explicitPath, dir string, engineOptional bool) (*Config, Info, error) {
 	var info Info
 
 	path := explicitPath
@@ -417,13 +434,17 @@ func load(explicitPath, dir string) (*Config, Info, error) {
 	// with the project and project-related features can use it.
 	c.Unreal.Project = project
 
-	skipped, err := c.substitute(engine, project, projectDir, projectName, builtins)
+	skipped, err := c.substitute(engine, project, projectDir, projectName, builtins, engineOptional)
 	info.SkippedCommands = skipped
 	if err != nil {
 		return nil, info, err
 	}
 
 	if err := c.validate(); err != nil {
+		if engineOptional && engine == "" {
+			// A rule or path that still holds ${ENGINE} can fail for that alone.
+			return nil, info, fmt.Errorf("%w (checked with ${ENGINE} left in place: %s)", err, placeholderHint("${ENGINE}"))
+		}
 		return nil, info, err
 	}
 	return &c, info, nil
@@ -561,7 +582,11 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 // in skipped, and files.root and skills.dir are cleared, so that -files and
 // -no-skills-mcp, which turn their feature on after loading, find no directory
 // rather than a wrong one.
-func (c *Config) substitute(engine, project, projectDir, projectName string, builtins map[string]bool) (skipped []string, err error) {
+//
+// engineOptional (LoadForPreflight) takes the error away from an empty
+// ${ENGINE} and nothing else: the placeholder stays in the text instead of
+// being replaced by nothing, and what is removed or cleared for it still is.
+func (c *Config) substitute(engine, project, projectDir, projectName string, builtins map[string]bool, engineOptional bool) (skipped []string, err error) {
 	values := [][2]string{
 		{"${ENGINE}", engine},
 		{"${PROJECT_DIR}", projectDir},
@@ -569,11 +594,15 @@ func (c *Config) substitute(engine, project, projectDir, projectName string, bui
 		{"${PROJECT}", project},
 	}
 	var pairs, empty []string
+	engineKept := engineOptional && engine == ""
 	for _, v := range values {
-		pairs = append(pairs, v[0], v[1])
 		if v[1] == "" {
 			empty = append(empty, v[0])
+			if engineKept && v[0] == "${ENGINE}" {
+				continue // not replaced: the text keeps the placeholder
+			}
 		}
+		pairs = append(pairs, v[0], v[1])
 	}
 	rep := strings.NewReplacer(pairs...)
 	unresolved := func(s string) []string {
@@ -676,7 +705,7 @@ func (c *Config) substitute(engine, project, projectDir, projectName string, bui
 
 	var problems []string
 	for _, p := range empty {
-		if len(usedBy[p]) == 0 {
+		if len(usedBy[p]) == 0 || engineKept && p == "${ENGINE}" {
 			continue
 		}
 		fields := make([]string, 0, len(usedBy[p]))

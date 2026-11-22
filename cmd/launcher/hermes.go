@@ -198,7 +198,8 @@ func hermesSetup(args []string, out io.Writer) error {
 // hermesEnableHint tells where to set agent.hermes.enabled. Without a config
 // file (info.Defaults) that is unreagent.local.yaml, which is overlaid on the
 // built-in defaults: an unreagent.yaml holding only this setting would replace
-// the defaults, and agent and MCP server would be off (k238).
+// the defaults, and agent and MCP server would be off (k238); `unreagent
+// init` is named as the way to a file that holds the defaults.
 func hermesEnableHint(info config.Info) []string {
 	if !info.Defaults {
 		return []string{
@@ -211,6 +212,7 @@ func hermesEnableHint(info config.Info) []string {
 		"Set it in unreagent.local.yaml, which is overlaid on the defaults, and re-run this command to integrate Hermes:",
 		"  " + localOverridePath(info.ConfigPath),
 		"Do not create an unreagent.yaml for this setting alone: a config file replaces the built-in defaults, and one without agent.enabled and mcp.enabled starts neither the agent nor the MCP server.",
+		"To get a config file, run `unreagent init`: it writes the built-in defaults out as unreagent.yaml, and the setting can go in there.",
 	}
 }
 

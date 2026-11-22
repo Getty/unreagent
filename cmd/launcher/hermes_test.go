@@ -2005,12 +2005,12 @@ func TestHermesEnableHintNamesTheFileToEdit(t *testing.T) {
 	localPath := filepath.Join(dir, "unreagent.local.yaml")
 
 	withFile := strings.Join(hermesEnableHint(config.Info{ConfigPath: cfgPath}), "\n")
-	if !strings.Contains(withFile, "Set it in unreagent.yaml") || !strings.Contains(withFile, cfgPath) || strings.Contains(withFile, "local") {
+	if !strings.Contains(withFile, "Set it in unreagent.yaml") || !strings.Contains(withFile, cfgPath) || strings.Contains(withFile, "local") || strings.Contains(withFile, "unreagent init") {
 		t.Errorf("hint with a config file does not point to it alone:\n%s", withFile)
 	}
 
 	defaults := strings.Join(hermesEnableHint(config.Info{ConfigPath: cfgPath, Defaults: true}), "\n")
-	for _, want := range []string{"Set it in unreagent.local.yaml", localPath, "built-in defaults", "Do not create an unreagent.yaml"} {
+	for _, want := range []string{"Set it in unreagent.local.yaml", localPath, "built-in defaults", "Do not create an unreagent.yaml", "run `unreagent init`"} {
 		if !strings.Contains(defaults, want) {
 			t.Errorf("hint on the defaults path does not mention %q:\n%s", want, defaults)
 		}

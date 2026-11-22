@@ -235,7 +235,10 @@ is C++ source and is built once).
    [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup)).
    `init` looks next to the `unreagent.exe` it runs from, not in the console's
    folder, so the .exe must sit next to the `.uproject` (step 2). It never
-   changes an existing config.
+   changes an existing config. Without an engine (no `UE_ROOT`, no
+   `engineRoot`), it still writes the defaults and prints the full preflight
+   with `[BLOCKING] engine: not found`, then exits 1; set `UE_ROOT` and run it
+   again.
 
 ### What a start without a config does
 
@@ -315,19 +318,30 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
   finding is `ok`, `info`, `WARN` or `BLOCKING`, and names its fix.
 - **No or several `.uproject`, or a config that does not load, end `init` with
   the load error** (`Error: ... (unreagent init wrote nothing)`) and **no
-  preflight**. **BLOCKING** lines appear only for a config that loads but has no
-  project or no engine (one that does not use `${ENGINE}` or `${PROJECT}`);
-  they keep the editor from starting. Everything else is a `WARN`: the
+  preflight**. A missing engine is not one of them: `init` reports it as a
+  **BLOCKING** finding inside the full preflight (next bullet). **BLOCKING**
+  lines keep the editor from starting; everything else is a `WARN`: the
   launcher starts without it and the finding says what is missing then.
 - **Exit codes:** `0` when nothing is blocking (and for `-h`), `1` for a
-  blocking finding or a config that does not load, `2` for a usage error (an
+  blocking finding (a missing engine included) or a config that does not load, `2` for a usage error (an
   unknown flag, or a word after the flags).
-- **With no engine found, `init` prints only the load error** and exits 1,
-  writing and checking nothing: on the built-in defaults a missing engine is a
-  load error (`${ENGINE} is unresolved (engine not found — set UE_ROOT or
-  engineRoot in unreagent.local.yaml) but used by unreal.editor`), so there is
-  no preflight to print. Fix the engine first: set `UE_ROOT`, or `engineRoot` in
-  a git-ignored `unreagent.local.yaml`, then run `init` again.
+- **With no engine found, `init` still writes the defaults and prints the whole
+  preflight**, with the engine as its `BLOCKING` finding, and exits 1. The
+  defaults file does not depend on the engine, and the fix never goes into it:
+  set `UE_ROOT`, or `engineRoot` in a git-ignored `unreagent.local.yaml` next to
+  `unreagent.yaml`, then run `init` again. The output then contains:
+
+  ```
+  [BLOCKING] engine: not found — the launcher does not start without it: unreal.editor is ${ENGINE}/Engine/Binaries/Win64/UnrealEditor.exe
+             Fix: set the environment variable UE_ROOT, or engineRoot in a git-ignored unreagent.local.yaml next to unreagent.yaml, to the directory that holds Engine/
+  ...
+  [info]     plugin EngineVersion: not checked — without an engine there is no version to hold the project plugins' EngineVersion against
+  1 blocking, 1 warning(s). BLOCKING keeps the editor from starting; ...
+  Error: preflight: 1 blocking finding(s), see [BLOCKING] above
+  ```
+
+  Only `init` is lenient here: a normal start and `hermes-setup` still stop at
+  load without an engine, and `-check` still writes nothing.
 - **When the toolkit is missing**, `init` prints the command to add it:
   `git submodule add -b ue-5.8 https://github.com/Getty/ue-llm-toolkit Plugins/ue-llm-toolkit`
   (`git clone -b ue-5.8 ...` for a project that is no git repository). That
@@ -450,8 +464,9 @@ Two exceptions never fail the load:
   `WARN skills not written: skills.dir names a placeholder that is unresolved — set unreal.project or skills.dir`.
 
 Without an engine and with the default `unreal.editor`, the launcher therefore
-stops at load, and so do `unreagent hermes-setup` and `unreagent init`, although
-they do not start the editor. Point `UE_ROOT` / `engineRoot` at an installation, or set
+stops at load, and so does `unreagent hermes-setup`, although it does not start
+the editor. `unreagent init` does not stop: it prints the missing engine as a
+`BLOCKING` finding in its preflight and exits 1. Point `UE_ROOT` / `engineRoot` at an installation, or set
 `unreal.editor` to a literal path.
 
 Machine-specific overrides go in a **git-ignored `unreagent.local.yaml`**,
@@ -575,7 +590,7 @@ as after an exit; `/M` only with an explicit `maxRestarts`).
 |---|---|
 | `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup` or `init`, which print the usage and start nothing; also `unreagent init` when its preflight has no blocking finding |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
-| `1` | `unreagent init` when the config does not load (no or several `.uproject`, no engine, ...) or the preflight has a `BLOCKING` finding; a start without a config file that finds no or several `.uproject` next to the executable |
+| `1` | `unreagent init` when the config does not load (no or several `.uproject`, ...) or the preflight has a `BLOCKING` finding (a missing engine is one, and `init` still writes the defaults and prints the preflight then); a start without a config file that finds no or several `.uproject` next to the executable |
 | `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 and a host that is empty, an IP address or a plain name (see `mcp` in the configuration quick reference; checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up. The order does not matter: MCP that stops serving after such a give-up ends the launcher too, unless the editor was started again in between |
 | `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments; `init` likewise for any flag but `-config`, `-check` and `-h`, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |

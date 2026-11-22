@@ -38,6 +38,12 @@ const (
 // it writes nothing and prints the preflight for that config; -check prints
 // the preflight without writing where there is none.
 //
+// An engine that is not found does not end it at the load, as it ends a start
+// of the launcher (config.LoadForPreflight): the defaults are written all the
+// same — the document does not depend on the engine, and the fix belongs in
+// the environment or in an unreagent.local.yaml next to it — and the preflight
+// is printed in full, with the engine as its blocking finding.
+//
 // args, out and the usage errors are as for hermesSetup. The returned error
 // is non-nil when the configuration cannot be loaded (no .uproject, or
 // several, among the causes) or the preflight has a blocking finding.
@@ -55,11 +61,11 @@ func initCommand(args []string, out io.Writer) error {
 	if fs.NArg() > 0 {
 		return usageError{msg: fmt.Sprintf("init takes flags only, not %q (unreagent init -h lists them)", fs.Arg(0))}
 	}
-	return initRun(func() (*config.Config, config.Info, error) { return config.Load(*cfgPath) }, *check, out)
+	return initRun(func() (*config.Config, config.Info, error) { return config.LoadForPreflight(*cfgPath, "") }, *check, out)
 }
 
-// initRun is initCommand behind its flags: load is config.Load for the
-// directory in question.
+// initRun is initCommand behind its flags: load is config.LoadForPreflight
+// for the path or directory in question.
 func initRun(load func() (*config.Config, config.Info, error), check bool, out io.Writer) error {
 	cfg, info, err := load()
 	if err != nil {
@@ -144,9 +150,10 @@ type finding struct {
 
 // preflight checks what a start of the launcher on cfg needs, without
 // starting anything. Blocking is what keeps the editor from starting at all:
-// no project, no engine — reached only by a config that does not use
-// ${ENGINE}, since config.Load refuses any other without an engine, the
-// built-in defaults among them. Everything else — the editor binary, the agent
+// no project, no engine. cfg is config.LoadForPreflight's, so without an
+// engine the fields that use ${ENGINE} still hold the placeholder, and what
+// needs the engine — the editor binary, the plugins' EngineVersion — is
+// reported as not checked. Everything else — the editor binary, the agent
 // command, node, npm, the toolkit, an unbuilt module — is a warning, as it is
 // at a start of the launcher, which goes on without it.
 func preflight(cfg *config.Config, info config.Info) []finding {
@@ -160,9 +167,13 @@ func preflight(cfg *config.Config, info config.Info) []finding {
 	}
 
 	engineDir := ""
-	engineVersion, engineVersionErr := ueVersion{}, errors.New("no engine")
+	engineVersion, engineVersionErr := ueVersion{}, errNoEngine
 	if info.EngineRoot == "" {
-		add(levelBlocking, "engine: not found", "set the environment variable UE_ROOT, or engineRoot in a git-ignored unreagent.local.yaml next to unreagent.yaml, to the directory that holds Engine/")
+		text := "engine: not found"
+		if strings.Contains(cfg.Unreal.Editor, "${ENGINE}") {
+			text += " — the launcher does not start without it: unreal.editor is " + cfg.Unreal.Editor
+		}
+		add(levelBlocking, text, "set the environment variable UE_ROOT, or engineRoot in a git-ignored unreagent.local.yaml next to unreagent.yaml, to the directory that holds Engine/")
 	} else {
 		engineDir = engineDirOf(cfg.Unreal.Editor, info.EngineRoot)
 		engineVersion, engineVersionErr = compatibleEngineVersion(engineDir)
@@ -207,6 +218,8 @@ func preflight(cfg *config.Config, info config.Info) []finding {
 		if quiet {
 			add(levelOK, "plugin EngineVersion: no project plugin is predicted to be refused by this engine (the check says nothing where it cannot tell)", "")
 		}
+	} else if info.Project != "" {
+		add(levelInfo, "plugin EngineVersion: not checked — without an engine there is no version to hold the project plugins' EngineVersion against", "")
 	}
 
 	if info.Project != "" {
@@ -313,6 +326,9 @@ func toolkitFindings(cfg *config.Config, info config.Info, engine ueVersion, eng
 	return fs
 }
 
+// errNoEngine stands in for the engine's version where no engine was found.
+var errNoEngine = errors.New("no engine")
+
 // toolkitAddCommand is the command that adds the UE LLM Toolkit to a project,
 // indented, with what is known about its fit: the fork's branch is made for
 // UE 5.8, and for any other engine unreagent knows of no matching version.
@@ -321,6 +337,8 @@ func toolkitAddCommand(engine ueVersion, engineErr error) string {
 		"(in the project directory; for a project that is no git repository: git clone -b " + toolkitForkBranch + " " + toolkitForkURL + " " + toolkitSubmodule + ")\n" +
 		"That is the " + toolkitForkBranch + " branch of a fork, made for UE 5.8; upstream is " + toolkitUpstreamURL + "."
 	switch {
+	case engineErr == errNoEngine:
+		text += " No engine was found, so whether the branch fits yours is unknown."
 	case engineErr != nil:
 		text += " The version of this engine could not be read, so whether the branch fits it is unknown."
 	case engine.major != 5 || engine.minor != 8:
