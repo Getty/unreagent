@@ -337,6 +337,12 @@ func Load(explicitPath string) (*Config, Info, error) {
 	return load(explicitPath, exeDir())
 }
 
+// LoadIn is Load without an explicit path for a launcher whose executable lies
+// in dir: `unreagent init` and its tests look at a directory of their choice.
+func LoadIn(dir string) (*Config, Info, error) {
+	return load("", dir)
+}
+
 // load is Load with the executable's directory as a parameter.
 func load(explicitPath, dir string) (*Config, Info, error) {
 	var info Info

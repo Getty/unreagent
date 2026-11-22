@@ -100,7 +100,10 @@ var bridgeSearchSkips = map[string]bool{
 // to bridgeSearchDepth levels below projectDir/Plugins, relative to projectDir
 // with forward slashes, the shallowest first and by name within one depth.
 // Hidden directories and bridgeSearchSkips are not searched; a link to a
-// directory is followed like a directory. No Plugins directory is no bridge.
+// directory is followed like a directory, and a directory reached a second
+// time (a link back up, two links to one plugin) is not read again, so one
+// plugin is one bridge, under the first path that led to it. No Plugins
+// directory is no bridge.
 // A Plugins that is not a directory, or a directory the search cannot read,
 // is a warning — the bridge may be there unseen — and never an error: the
 // toolkit is optional, and the launcher starts without it.
@@ -110,10 +113,17 @@ func findBridges(projectDir string) (found, warnings []string) {
 	if fi, err := os.Stat(abs("Plugins")); err == nil && !fi.IsDir() {
 		return nil, []string{"Plugins next to the .uproject is not a directory" + consequence}
 	}
+	seen := map[string]bool{} // directories read, by their path with links resolved
 	level := []string{"Plugins"}
 	for depth := 0; depth <= bridgeSearchDepth && len(level) > 0; depth++ {
 		var next []string
 		for _, rel := range level {
+			if real, err := filepath.EvalSymlinks(abs(rel)); err == nil {
+				if seen[real] {
+					continue
+				}
+				seen[real] = true
+			}
 			entries, err := os.ReadDir(abs(rel))
 			if err != nil {
 				if !os.IsNotExist(err) {

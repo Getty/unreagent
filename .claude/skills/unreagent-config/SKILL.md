@@ -195,10 +195,14 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   alone. Its directory is still the config directory, so the overlay name and
   everything in steps 5 to 7 derive from it as usual. `run()` logs the path
   and, on `Info.Defaults`, one INFO line per entry of `defaultsNotice(cfg)`
-  (`cmd/launcher/main.go`): what the defaults switch on, then that unreagent
-  applies no permission policy on this path. The second is dropped when the
-  overlay enabled permissions, so the notice is one or two lines
-  (`TestDefaultsNoticeSaysNoPermissionPolicy`).
+  (`cmd/launcher/main.go`). The first line is read off the loaded `cfg`, not
+  off the defaults: agent and MCP server on or off, and the bridge named only
+  when the `ToolkitServerName` entry is configured — the overlay is the one
+  thing that can have switched agent or MCP server off on this path. The next
+  names `unreagent init` (below). The last says that unreagent applies no
+  permission policy on this path and is dropped when the overlay enabled
+  permissions, so the notice is two or three lines (`TestDefaultsNotice` in
+  `cmd/launcher/main_test.go`).
 - **Exactly one `.uproject`** in that directory (`loadDefaults`): none, or
   several, is a load error naming the directory or the files, because there is
   no `unreal.project` to choose with. This rule is the defaults path's alone;
@@ -218,8 +222,8 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   `.uproject` itself — that check is `loadDefaults`'.
 - **Decoded like a file.** `loadDefaults` hands those bytes to `decodeDoc`,
   the decoder behind `decodeYAML`, and steps 4 to 8 then run unchanged. There
-  is no second way to build the default `Config`, so `unreagent init` (k228)
-  can write the same bytes and get the same configuration; a start on the
+  is no second way to build the default `Config`, so `unreagent init` (next
+  bullet) can write the same bytes and get the same configuration; a start on the
   defaults and a start on the written document are compared whole in
   `TestDefaultYAMLRoundTrips`, which also pins the document's text. A default
   **value** that should differ on a start without a file goes into
@@ -227,6 +231,19 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   is about values, not checks: a check that refuses something on this path
   may branch on `Info.Defaults`, as the `unreal.project` refusal in the next
   bullet does.
+- **`unreagent init`** (k228, `cmd/launcher/init.go`) is `DefaultYAML`'s
+  second consumer. It loads the configuration first, and only on
+  `Info.Defaults` — neither `unreagent.yaml` nor `unreagent.yml` there, and no
+  `-check` — writes a header comment plus that document to `Info.ConfigPath`
+  (`writeDefaultConfig`). The file is created exclusively, so one that
+  appeared since the load is not overwritten either. With a config file in
+  place it writes nothing. In every case it then prints a preflight of the
+  loaded configuration; what that checks and what counts as blocking is in
+  `preflight`, pinned by `cmd/launcher/init_test.go`
+  (`TestInitWritesTheDefaultsAndACleanPreflight`,
+  `TestInitNeverOverwritesAConfig`). A load error ends it before anything is
+  written or checked — on the defaults that includes a missing engine
+  (`TestInitWithoutEngineFails`).
 - **The overlay still applies** (step 3): `unreagent.local.yaml` next to the
   executable is decoded over the defaults, so `engineRoot` there works without
   a config file (`TestDefaultsTakeLocalOverlay`). One key is refused: a
@@ -237,7 +254,13 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   `projectDir/Plugins` for a directory holding `bridgeEntry`, bounded by
   `bridgeSearchDepth`; a directory that has the entry is a plugin and is not
   searched further. Results are relative to the project directory with
-  forward slashes, the shallowest first and by name within a depth. The
+  forward slashes, the shallowest first and by name within a depth. A link to
+  a directory is followed, and each real directory is read once: the walk
+  keys the directories it has read by `filepath.EvalSymlinks`, so a link back
+  up, or several links to one plugin, yield one bridge under the first path
+  that reached it and no "several bridges" report
+  (`TestDefaultsToolkitFoundOncePerDirectory`). A path that cannot be
+  resolved is read without that guard. The
   document uses the first; more than one is the caller's to report, and
   `loadDefaults` does so through `Info.Warnings`. The search never makes the
   load fail: every problem it meets — a `Plugins` that is not a directory, a
@@ -252,7 +275,11 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
 `load(explicitPath, dir)` is `Load` with the executable's directory as a
 parameter (`Load` passes `exeDir()`), and the entry point for every test of
 this path: `load("", t.TempDir())` after `writeUProject`, with `UE_ROOT` set
-or `noEngine(t)`.
+or `noEngine(t)`. `LoadIn(dir)` is its exported form for other packages,
+`load("", dir)` and nothing else: no explicit path, so `findConfig(dir)`
+decides between a config file there and the defaults path. Its only callers
+are the tests in `cmd/launcher/init_test.go`; `initCommand` itself goes
+through `Load` with its `-config` value.
 
 ## Placeholders
 

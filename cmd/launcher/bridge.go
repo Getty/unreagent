@@ -152,13 +152,7 @@ func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 // what that install left — npm may have changed it, and the earlier tree may
 // itself be the leftover of a failed install.
 func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *config.Config, name string, args []string, agentWorkdir string, logger func(string)) (m bridgeModules, ok bool) {
-	var script string
-	for _, a := range args {
-		if strings.HasSuffix(a, ".js") || strings.HasSuffix(a, ".mjs") || strings.HasSuffix(a, ".cjs") {
-			script = a
-			break
-		}
-	}
+	script := nodeScript(args)
 	if script == "" {
 		return m, true // no script recognisable — the smoke test decides
 	}
@@ -251,6 +245,17 @@ func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		return m, true
 	}
 	return bridgeModules{}, false
+}
+
+// nodeScript is the script among a node bridge's args: the first that ends
+// in .js, .mjs or .cjs, "" if there is none.
+func nodeScript(args []string) string {
+	for _, a := range args {
+		if strings.HasSuffix(a, ".js") || strings.HasSuffix(a, ".mjs") || strings.HasSuffix(a, ".cjs") {
+			return a
+		}
+	}
+	return ""
 }
 
 // npmErrorCode returns the error code a failed npm names in its output

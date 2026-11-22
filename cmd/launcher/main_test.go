@@ -610,19 +610,33 @@ func TestServeMCPClosedIsNotAFailure(t *testing.T) {
 
 // k238: a start on the built-in defaults says plainly that unreagent applies
 // no permission policy there. An unreagent.local.yaml that enables permissions
-// makes that untrue, and the line goes.
-func TestDefaultsNoticeSaysNoPermissionPolicy(t *testing.T) {
-	off := strings.Join(defaultsNotice(&config.Config{}), "\n")
-	for _, want := range []string{"built-in defaults", "applies no permission policy", "Claude Code's own permission prompts"} {
-		if !strings.Contains(off, want) {
-			t.Errorf("notice does not mention %q:\n%s", want, off)
+// makes that untrue, and the line goes. k228: the first line is true to the
+// loaded configuration — the overlay can switch agent or MCP server off, and
+// the bridge is named only when it is configured — and `unreagent init` is
+// named.
+func TestDefaultsNotice(t *testing.T) {
+	var cfg config.Config
+	cfg.Agent.Enabled, cfg.MCP.Enabled = true, true
+	cfg.MCP.ExtraServers = map[string]map[string]interface{}{config.ToolkitServerName: {"command": "node"}}
+	lines := defaultsNotice(&cfg)
+	all := strings.Join(lines, "\n")
+	for _, want := range []string{"built-in defaults: agent on, MCP server on, UE LLM Toolkit bridge configured", "`unreagent init`", "applies no permission policy", "Claude Code's own permission prompts"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("notice does not mention %q:\n%s", want, all)
 		}
 	}
-	var cfg config.Config
+
+	cfg = config.Config{}
 	cfg.Permissions.Enabled = true
-	on := defaultsNotice(&cfg)
-	if len(on) != 1 || strings.Contains(on[0], "permission") {
-		t.Errorf("notice with permissions enabled by the overlay = %q; want the defaults line alone", on)
+	lines = defaultsNotice(&cfg)
+	all = strings.Join(lines, "\n")
+	for _, want := range []string{"agent off (unreagent.local.yaml), MCP server off (unreagent.local.yaml), no UE LLM Toolkit bridge"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("notice for an overlay that switches both off does not mention %q:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "agent on") || strings.Contains(all, "MCP server on") || strings.Contains(all, "permission") {
+		t.Errorf("notice claims what the loaded config does not do (agent, MCP server and no permission policy):\n%s", all)
 	}
 }
 
@@ -1080,7 +1094,7 @@ func TestRunFindsTheSubcommandAfterAnyFlag(t *testing.T) {
 		// hermes-setup runs and refuses the launcher flag, as it does after
 		// the word: a usage error since k159.
 		{"bool flag before", []string{"-no-agent", "hermes-setup"}, 2, "Usage of hermes-setup"},
-		{"unknown word after a bool flag", []string{"-no-agent", "bogus"}, 2, `unknown sub-command "bogus" (sub-commands: hermes-setup)`},
+		{"unknown word after a bool flag", []string{"-no-agent", "bogus"}, 2, `unknown sub-command "bogus" (sub-commands: hermes-setup, init)`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1153,7 +1167,7 @@ func TestExtractSubcommand(t *testing.T) {
 		// This -- is -config's value, not the end of the flags: it stays.
 		{name: "-- as a flag value", args: []string{"-config", "--", "hermes-setup"}, sub: "hermes-setup", rest: []string{"-config", "--"}, config: "--"},
 		{name: "-- as a flag value, then --", args: []string{"-config", "--", "--", "hermes-setup"}, sub: "hermes-setup", rest: []string{"-config", "--"}, config: "--"},
-		{name: "unknown word", args: []string{"bogus"}, usageErr: `unknown sub-command "bogus" (sub-commands: hermes-setup)`},
+		{name: "unknown word", args: []string{"bogus"}, usageErr: `unknown sub-command "bogus" (sub-commands: hermes-setup, init)`},
 		{name: "unknown word after a bool flag", args: []string{"-no-agent", "bogus"}, usageErr: `unknown sub-command "bogus"`},
 		{name: "unknown word before the sub-command", args: []string{"bogus", "hermes-setup"}, usageErr: `unknown sub-command "bogus"`},
 		// A file dropped onto the .exe arrives as its path.

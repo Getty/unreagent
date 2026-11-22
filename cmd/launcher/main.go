@@ -557,14 +557,32 @@ func hasPromptArg(args []string) bool {
 	return hasArg(args, "-p") || hasArg(args, "--print")
 }
 
+// noPolicyMeaning says what permissions.enabled off means for the agent.
+const noPolicyMeaning = "it neither allows nor denies a tool call, and Claude Code's own permission prompts and settings alone decide what the agent may do"
+
 // defaultsNotice is what a start without a config file says about itself,
-// without the INFO prefix: what the built-in defaults switch on and, unless an
-// unreagent.local.yaml enabled permissions, that unreagent applies no
-// permission policy on this path.
+// without the INFO prefix: what the loaded configuration switches on — the
+// built-in defaults with an unreagent.local.yaml over them, which is the only
+// thing that can have switched agent or MCP server off —, that `unreagent
+// init` writes the defaults out, and, unless the overlay enabled permissions,
+// that unreagent applies no permission policy on this path.
 func defaultsNotice(cfg *config.Config) []string {
-	lines := []string{"no config file there — running on built-in defaults: agent and MCP server on, the UE LLM Toolkit bridge if the plugin is below Plugins/"}
+	onOff := func(what string, on bool) string {
+		if on {
+			return what + " on"
+		}
+		return what + " off (unreagent.local.yaml)"
+	}
+	bridge := "no UE LLM Toolkit bridge (plugin not found below Plugins/)"
+	if _, ok := cfg.MCP.ExtraServers[config.ToolkitServerName]; ok {
+		bridge = "UE LLM Toolkit bridge configured"
+	}
+	lines := []string{
+		"no config file there — running on built-in defaults: " + onOff("agent", cfg.Agent.Enabled) + ", " + onOff("MCP server", cfg.MCP.Enabled) + ", " + bridge,
+		"`unreagent init` writes these defaults out as an unreagent.yaml to edit, and checks the setup (engine, node, the agent command, the toolkit plugin)",
+	}
 	if !cfg.Permissions.Enabled {
-		lines = append(lines, "unreagent applies no permission policy on built-in defaults (permissions.enabled is off): it neither allows nor denies a tool call, and Claude Code's own permission prompts and settings alone decide what the agent may do")
+		lines = append(lines, "unreagent applies no permission policy on built-in defaults (permissions.enabled is off): "+noPolicyMeaning)
 	}
 	return lines
 }
@@ -690,6 +708,10 @@ var subcommands = map[string]subcommand{
 	"hermes-setup": {
 		run:     func(args []string) error { return hermesSetup(args, os.Stdout) },
 		summary: "merge the unreagent MCP server into Hermes Agent's config.yaml (needs agent.hermes.enabled)",
+	},
+	"init": {
+		run:     func(args []string) error { return initCommand(args, os.Stdout) },
+		summary: "write the built-in defaults as unreagent.yaml next to the .uproject (never over an existing config) and print a preflight of the setup",
 	},
 }
 

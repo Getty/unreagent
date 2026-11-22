@@ -251,6 +251,33 @@ func TestDefaultsToolkitBehindSymlink(t *testing.T) {
 	}
 }
 
+// k228: a link that leads back up (Plugins/Loop -> Plugins), or a second link
+// to the same plugin, shows the one bridge again under another path. It is
+// one bridge: no "several bridges" warning, and the path is the first found.
+func TestDefaultsToolkitFoundOncePerDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
+	writeUProject(t, dir, "Game.uproject")
+	want := writeBridge(t, dir, "Sub/UELLMToolkit")
+	plugins := filepath.Join(dir, "Plugins")
+	symlink(t, plugins, filepath.Join(plugins, "Loop"))
+	symlink(t, filepath.Join(plugins, "Sub", "UELLMToolkit"), filepath.Join(plugins, "Sub", "Again"))
+	symlink(t, filepath.Join(plugins, "Sub", "UELLMToolkit"), filepath.Join(plugins, "Zzz"))
+
+	c, info, err := load("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none: it is one plugin", info.Warnings)
+	}
+	// Plugins/Zzz is the shallowest path to it, and so the one used.
+	want = strings.Replace(want, "Plugins/Sub/UELLMToolkit", "Plugins/Zzz", 1)
+	if got := toolkitArgs(c); !reflect.DeepEqual(got, []interface{}{want}) {
+		t.Errorf("args = %v, want [%s]", got, want)
+	}
+}
+
 // k238: the toolkit is optional, so a Plugins the search cannot look into
 // warns and the launcher starts without the bridge — it does not stop.
 func TestDefaultsUnsearchablePluginsWarns(t *testing.T) {
