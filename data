@@ -1,0 +1,66 @@
+---
+claimed_at: 2026-11-22T07:21:16Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T07:21:16Z
+created: 2026-11-22T07:07:10Z
+id: 227
+priority: high
+started: 2026-11-22T07:11:08Z
+status: done
+tags:
+- onboarding
+- launcher
+title: 'Start next to a .uproject without unreagent.yaml: run on defaults'
+updated: 2026-11-22T07:21:33Z
+---
+
+Part of k224. Owner: unreagent-worker (cmd/launcher, internal/config; serial with other run() cards). Maintainer wants as the default path: create a project in Unreal, drop unreagent.exe in, start it — no config written by hand.
+
+First step (scout, Linux, read-only): what the launcher does today when started with no unreagent.yaml, and with a config but no .uproject (only the WARN in cmd/launcher/main.go is known).
+
+Acceptance: started in a directory holding exactly one .uproject and no config, the launcher runs with built-in defaults (project found, engine detected, agent started, toolkit bridge entry only when the plugin is present), logs one INFO line saying it runs on defaults and that "unreagent init" writes them out; several or no .uproject gives a clear error. Tests on Linux with a temp tree; Windows paths labelled unverified. Shares the default-building code with the init card — do this one first or together.
+
+Scout result (Linux, code read plus runs of the Linux build in a temp dir):
+- The config is searched only next to the executable (config.Load -> findConfig(exeDir())), not in the working directory. A missing file is fatal: "config not readable", exit 1, no hint.
+- An empty unreagent.yaml is accepted but leaves agent.enabled, agent.claudeIntegration and mcp.enabled false (plain bools without defaults), so "no config" cannot mean "decode an empty document".
+- Nothing in the file is required. Minimal working config today: agent {enabled, claudeIntegration} and mcp {enabled}.
+- resolveProject takes the first *.uproject in the config dir, silently, when there are several.
+- Nothing detects the toolkit plugin; the bridge exists only as an mcp.extraServers entry. README and skills use the flat path Plugins/UELLMToolkit/Resources/mcp-bridge/index.js, the example config the nested submodule path — detection has to search Plugins/ for Resources/mcp-bridge/index.js.
+- Nothing notices an unbuilt project module (k229).
+- Sub-commands: the subcommands map in cmd/launcher/main.go; hermes-setup is the precedent (k228).
+
+Proposed hook, least change: in config.Load, when no explicit path is given and no config file exists, build the config from a synthesized default (a builder in internal/config that k228 reuses to emit YAML): agent.enabled, agent.claudeIntegration, mcp.enabled true; toolkit entry only when the bridge file is found; everything else through applyDefaults, resolveProject, resolveEngine, substitute, validate unchanged. Exactly-one-.uproject rule only on this path, so existing configs keep their behaviour. Info carries a flag; run() logs one INFO line. Engine detection functions (engine.go) are only called, not edited — low conflict with k211/k203.
+
+Open: permissions on the defaults path (main agent proposes: off, as the built-in default is today — an interactive agent keeps Claude Code own prompts; maintainer may overrule); several plugin directories matching; the working directory on a double-click start (Windows, unmeasured).
+
+Worker result (unreagent-worker, Linux). Tree is commit-ready, not committed.
+
+Changed: internal/config/defaults.go (new: DefaultYAML, findBridges, loadDefaults, ToolkitServerName), internal/config/defaults_test.go (new), internal/config/config.go (Load -> load(explicitPath, dir); Info.Defaults; decodeYAML split into decodeYAML + decodeDoc), cmd/launcher/main.go (3 lines in run(): one INFO line).
+
+Design choices (the worker's, not maintainer requirements):
+- Shape of the builder: config.DefaultYAML(projectDir) returns the defaults as a portable YAML document (${PROJECT_DIR} in the bridge path, no machine path) plus the bridges found. The defaults path decodes that very document through the normal decoder, so a start without a config and a start with the file k228 writes cannot drift (pinned by TestDefaultYAMLRoundTrips). k228 writes the bytes, optionally under a header comment.
+- Several toolkit bridges: pick deterministically (shallowest below Plugins/, then by name) and report all of them as one WARN through Info.Warnings; no error. Search is at most 4 directory levels below Plugins/, skipping hidden directories, node_modules, Binaries, Intermediate; a .uplugin is not required.
+- unreagent.local.yaml is still overlaid on the defaults (so the engineRoot hint keeps working without a config), but unreal.project there is a load error on this path: the toolkit is looked up next to the launcher.
+- Info.ConfigPath on the defaults path is the file that was looked for (keeps hermes-setup's local-overlay path working); the INFO line right below says it is not there.
+- The INFO line does not mention "unreagent init": the sub-command does not exist before k228. k228 must extend the line.
+- "Next to" means next to the executable, as for the config search today — not the working directory.
+
+Permissions stay off on the defaults path (the built-in default). That is the main agent's choice, not a maintainer requirement; the maintainer may overrule.
+
+Side effect to check in review: hermes-setup also goes through config.Load, so without a config it now reports "agent.hermes.enabled is not set" (or the no-.uproject error) instead of "config not readable".
+
+Verified on Linux: gofmt clean, go vet, go test -count=1 ./... all ok, make windows and make linux build. Real start of dist/unreagent in a temp dir with UE_ROOT set to a fake engine and -no-agent: INFO line, Engine, Project, MCP server up; with a nested plugin the ue-llm-toolkit server was picked up (smoke test ran against a stub index.js); no .uproject and two .uproject each exit 1 with the error naming directory/files.
+Unverified: everything on Windows (the .exe only cross-compiles) — case-insensitive file names, junctions below Plugins/, exe directory versus working directory on a double-click, real engine detection; an actual agent start on the defaults path (run was -no-agent); a real toolkit bridge.
+
+Docs needed (not edited; other owners):
+- README (unreagent-doc-writer, k232): quick start without a config; what the defaults are (agent, claudeIntegration, MCP on; permissions off; toolkit entry when found); the two errors; the overlay rule (unreal.project not allowed without a config); the INFO and several-bridges WARN lines.
+- unreagent.example.yaml (unreagent-doc-writer): header note that the file is optional and what a start without it does.
+- Skill unreagent-config, "Load order" step 1 (unreagent-skill-author): the defaults path, Info.Defaults, load(explicitPath, dir) as the test seam, DefaultYAML.
+
+Proposed commit subject: Run on built-in defaults when started next to a .uproject without a config (k227)
+Proposed Changes entry: Started next to exactly one .uproject with no unreagent.yaml, the launcher now runs on built-in defaults (agent and MCP server on, permissions off, the UE LLM Toolkit bridge when the plugin is found below Plugins/) instead of failing; none or several .uproject files is an error naming them.
+
+Review (unreagent-reviewer): READY to commit; Windows UNVERIFIED (cross-compiled only). Check run by the reviewer: gofmt -l cmd internal skills (empty) && go vet ./... && go test -count=1 ./... && make windows, all green. Files reviewed: internal/config/defaults.go, internal/config/defaults_test.go, internal/config/config.go, cmd/launcher/main.go. Scope inside unreagent-worker's OWNERS paths, no German. Mutation probes in a scratch copy: accepting 2 .uproject on the defaults path and dropping the local unreal.project guard both fail the tests; the config-file and explicit-missing tests fail if the defaults path is taken there. NOT pinned: bridgeSearchDepth 4 vs 3 (no fixture at exactly 4 levels) and following symlinked plugin dirs (no symlink fixture), both pass under mutation. Follow-ups (non-blocking): (1) worker: hermes-setup on the defaults path says 'Set it in unreagent.yaml' and names a file that does not exist; creating it with only agent.hermes leaves the defaults path and turns agent and MCP off, so the hint should point at unreagent.local.yaml (overlay works there) or at unreagent init once k228 lands. (2) worker/test-writer: fixtures for depth 4 and a symlinked plugin dir; consider skipping Content/Source/Saved in findBridges; a Plugins entry that is a file or unreadable is fatal today, a WARN would do. (3) maintainer: permissions off on this path gives no WARN (permissionsInertReason is empty when permissions are disabled); the INFO line 'permissions off' does not say that unreagent's policy is not applied and Claude Code's own prompts decide, nor that the MCP server on 127.0.0.1:8765 has no token. Wording or a WARN is the maintainer's call. (4) k228 must extend the INFO line with 'unreagent init'. (5) Docs (k232 README + example yaml header, skill unreagent-config load order step 1) must land before the next release tag; they need: defaults list, permissions off and what that means, toolkit detection (depth 4 below Plugins/, skipped dirs, shallowest-then-name, WARN on several), the none/several .uproject errors, unreal.project not allowed in unreagent.local.yaml without a config, config searched next to the exe not the working dir.
+
+Committed as 0a441d1 (not run on Windows, cross-compiled only).
