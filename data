@@ -1,0 +1,29 @@
+---
+claimed_at: 2026-11-22T21:59:54Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T21:59:54Z
+created: 2026-11-22T07:12:17Z
+id: 236
+priority: high
+started: 2026-11-22T21:55:23Z
+status: done
+tags:
+- example
+- bug
+- windows
+title: 'Demo config gives up on its ping editor: -unattended is appended'
+updated: 2026-11-22T21:59:54Z
+---
+
+Found while working k213 on Windows 2026-11-22 (Windows 11 Pro 26H2, native run of a build of 1ea8353). The shipped demo config example/unreagent.yaml runs ping as the editor (args -n 999999 127.0.0.1) and sets no unreal.unattended, which defaults to true, so the launcher appends -unattended (cmd/launcher/lifecycle.go, the boolVal(u.Unattended) branch). ping rejects it ("invalid option -unattended"), exits 1 three times within 10 s, and the launcher gives up on the editor ("failed 3 times in a row ... giving up").
+
+The release zip ships example/unreagent.yaml as the demo unreagent.yaml, so the first thing a new user runs gives up on its editor. Measured on Windows only; Linux ping would reject the option as well (unverified).
+
+Fix candidate: unattended: false under unreal: in example/unreagent.yaml, with a comment why (the demo editor is not UnrealEditor). Owner: unreagent-worker (example/ in OWNERS); example/README.md (unreagent-doc-writer) if it describes the demo's output.
+
+example/unreagent.yaml: unattended: false under unreal:, with a comment why (ping is not UnrealEditor and rejects -unattended; leave the key out for a real editor). TestExampleDemoConfigLoads (internal/config/load_test.go) already pinned the demo config; it now also pins unattended off and unreal.args — red without the yaml change, green with it. Full check green on Linux (gofmt, go vet, go test -count=1 ./..., make windows). NOT verified: the demo on Windows — nobody ran the fixed config there; unreal.unattended is read only in editorArgs (cmd/launcher/lifecycle.go), so ping now gets exactly -n 999999 127.0.0.1. On Linux ping still fails on the Windows arguments (exit 2 here), as example/README.md says. example/README.md (doc-writer): nothing in it becomes wrong; step 3 of 'Getting started' now holds on Windows. Optional for doc-writer: 'Switching to real' step 3 says remove unreal.editor/args — it should also name the new unattended: false line.
+
+doc-writer: example/README.md 'Switching to real' step 3 now also tells the reader to remove unreal.unattended: false (not committed)
+
+Review (unreagent-reviewer): READY. Files: example/unreagent.yaml, internal/config/load_test.go, example/README.md. Check run by reviewer: gofmt -l cmd internal skills (empty), go vet ./..., go test -count=1 ./..., make windows - all green on Linux. TestExampleDemoConfigLoads is red against HEAD's example/unreagent.yaml (copied tree, 'unreal.unattended is on') and green with the change. unreal.unattended is read only in editorArgs (cmd/launcher/lifecycle.go:618); uplugin/main.go see it only through the built ueArgs; editorArgs with unattended off is covered by cmd/launcher/lifecycle_test.go. release.yml:65 copies example/unreagent.yaml to dist/unreagent.yaml for both archives - claim holds. README.md 'Try it now' and example/README.md stay correct (Linux note still true: ping rejects the Windows args). Ownership matches OWNERS. Windows: UNVERIFIED - the fixed demo was not run on Windows; only cross-compiled.
