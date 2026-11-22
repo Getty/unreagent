@@ -1,0 +1,45 @@
+---
+claimed_at: 2026-11-22T22:44:38Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T22:44:38Z
+created: 2026-11-22T22:09:56Z
+id: 246
+priority: medium
+started: 2026-11-22T22:37:26Z
+status: done
+tags:
+- onboarding
+- launcher
+title: 'unreagent init: show the full preflight when no engine is found'
+updated: 2026-11-22T22:44:54Z
+---
+
+Follow-up from k228 and its review. Owner: unreagent-worker. Part of k224.
+
+1. On the built-in defaults a missing engine is a config.Load error (unreal.editor uses ${ENGINE}), so init exits 1 with that one error and prints no preflight — in the case a new user most likely hits. Needs a lenient load in internal/config (or a preflight that runs on what could be resolved) so init still reports project, agent command, node, npm, toolkit and the rest, with the engine as the blocking finding.
+2. Tests missing in cmd/launcher/init_test.go: -config never writes; a symlink (also a broken one) at the target is left untouched. Both hold today by design and in a manual run.
+3. The doc comment of config.LoadIn says init uses it; only init tests do (initCommand goes through config.Load).
+4. hermesEnableHint does not name init yet.
+5. For the maintainer: the toolkit command printed by init hardcodes the fork URL and its ue-5.8 branch in cmd/launcher/init.go; changing it takes a release.
+
+k246 worked, tree commit-ready (not committed). Full check green on Linux: gofmt, go vet, go test -count=1 ./..., make windows (cross-compile only; Windows behaviour unverified).
+
+1. config.LoadForPreflight(explicitPath, dir) in internal/config/config.go: Load with one difference, an engine that is not found is no error; ${ENGINE} stays in the text, engine-bound built-in commands are skipped as usual. Load/load are unchanged, a launcher start fails at load as before (pinned in TestLoadForPreflightLoadsWithoutAnEngine). initCommand uses it; the preflight shows everything with the engine as the BLOCKING finding, exit 1; plugin EngineVersion is an info line 'not checked' without an engine.
+   Worker's choice: init DOES write unreagent.yaml when no engine is found. The defaults document does not depend on the engine, and the fix (UE_ROOT, or engineRoot in unreagent.local.yaml next to it) never goes into that file. -check still writes nothing.
+2. Tests added: TestInitConfigFlagNeverWrites, TestInitLeavesASymlinkAtTheTargetAlone (link to a config, broken link), TestInitWithoutEnginePrintsTheFullPreflight (replaces TestInitWithoutEngineFails, whose claim 'nothing written, load error only' is replaced on purpose).
+3. config.LoadIn removed (it had no caller outside init's tests); LoadForPreflight is what init and its tests call, and its comment says so.
+4. hermesEnableHint names unreagent init on the defaults path.
+5. No change (maintainer note).
+
+Follow-ups for other lanes (not done here):
+- unreagent-doc-writer, README.md: section 'unreagent init' bullets 'No or several .uproject, or a config that does not load ...' (BLOCKING 'only for a config that ... does not use ${ENGINE}'), 'With no engine found, init prints only the load error ...' (whole bullet), the Exit codes bullet as far as it implies no-engine is a load error; the paragraph 'Without an engine and with the default unreal.editor, the launcher therefore stops at load, and so do unreagent hermes-setup and unreagent init'; exit-code table row 1 ('no engine' listed among the load failures of init).
+- unreagent-skill-author, .claude/skills/unreagent-config/SKILL.md: the unreagent init bullet ('A load error ends it ... on the defaults that includes a missing engine') and the paragraph on LoadIn(dir) (function removed, replaced by LoadForPreflight).
+
+README: init section, load-stop paragraph, exit-code rows and quick-start step 5 now describe the no-engine preflight (doc-writer)
+
+unreagent-skill-author: .claude/skills/unreagent-config/SKILL.md updated for k246 (not committed) — the unreagent init bullet now says a missing engine is no load error (defaults written, full preflight, engine BLOCKING, exit 1), and the LoadIn paragraph is replaced by config.LoadForPreflight with the rule that a launcher start uses Load and only a preflight the lenient load; go test -count=1 ./internal/config ./internal/skills green.
+
+Review (unreagent-reviewer): READY. Check run by reviewer: gofmt -l clean, go vet ./... clean, go test -count=1 ./... green (new tests ran, none skipped on this host), make windows built dist/unreagent.exe (cross-compile only; Windows behaviour unverified). Files: internal/config/config.go, internal/config/defaults_test.go, cmd/launcher/init.go, init_test.go, hermes.go, hermes_test.go; README.md and .claude/skills/unreagent-config/SKILL.md match the code. Strict path: run() and hermes-setup stay on config.Load; load's error text pinned in TestLoadForPreflightLoadsWithoutAnEngine (fails if load turns lenient). Non-blocking findings: (1) config.go ~444: the '(checked with ${ENGINE} left in place ...)' suffix is added to EVERY validation error when the engine is missing, also ones unrelated to it (agent.onExit, mcp.allowedOrigins). (2) init.go preflight doc comment lists 'the editor binary' both as 'not checked' and under warnings; it is actually folded into the BLOCKING engine line. (3) preflight still runs LookPath/fileExists on user-config fields that hold a literal ${ENGINE} (agent.command, runtimes.node.npm, the toolkit script) and reports them as 'not on PATH'/'not there' rather than 'not checked'; the defaults have none. (4) For the maintainer: writing unreagent.yaml with no engine and exiting 1 is the worker's choice; the 'Wrote' line comes first, but the final error ('preflight: 1 blocking finding(s)') does not say the file was written, unlike the load-error path's '(unreagent init wrote nothing)'. Not moved to done.
+
+Committed as 31b4cd7
