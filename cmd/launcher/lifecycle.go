@@ -64,13 +64,27 @@ func (c console) show(line string) {
 // the k71 handover keeps the readers to one at a time.
 type lineReader struct {
 	in io.Reader
+	// started is set by the first readLine, the only one that drops a byte
+	// order mark (utf8BOM).
+	started bool
 }
+
+// utf8BOM is the byte order mark in UTF-8. Windows PowerShell 5.1 writes it
+// before what it pipes into a native program when its $OutputEncoding is
+// UTF-8 ([Text.Encoding]::UTF8), so 'quit' | unreagent.exe arrived as an
+// unknown command (k213). It comes once per stream, at its very start, however
+// many lines follow: only the first line can carry it, and a U+FEFF anywhere
+// later is input.
+const utf8BOM = "\xef\xbb\xbf"
 
 // readLine returns the next line without its line end (CRLF included), and
 // false at EOF or on a read error — after a last line without a line end.
+// The first line comes without a leading byte order mark.
 func (r *lineReader) readLine() (string, bool) {
 	var line []byte
 	b := make([]byte, 1)
+	bom := !r.started
+	r.started = true
 	for {
 		n, err := r.in.Read(b)
 		if n == 1 {
@@ -78,6 +92,12 @@ func (r *lineReader) readLine() (string, bool) {
 				return strings.TrimSuffix(string(line), "\r"), true
 			}
 			line = append(line, b[0])
+			if bom && len(line) == len(utf8BOM) {
+				bom = false
+				if string(line) == utf8BOM {
+					line = line[:0]
+				}
+			}
 		}
 		if err != nil {
 			return string(line), len(line) > 0

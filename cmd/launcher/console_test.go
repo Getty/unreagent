@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -80,6 +81,102 @@ func TestConsoleReaderTakesNoMoreThanItsLine(t *testing.T) {
 	}
 	if got, want := string(rest), "hello agent\n"; got != want {
 		t.Fatalf("the pipe holds %q after one line, want %q: the reader took input meant for the next reader", got, want)
+	}
+}
+
+// k213: Windows PowerShell 5.1 starts what it pipes into a native program
+// with a byte order mark when its $OutputEncoding is UTF-8, so
+// 'quit' | unreagent.exe reached the launcher console as "\xef\xbb\xbfquit": an
+// unknown command, and the launcher kept running. The console takes the q.
+func TestConsoleQuitsOnAPipedLineAfterAByteOrderMark(t *testing.T) {
+	con, w, out := pipedConsole(t)
+	if _, err := w.WriteString("\xef\xbb\xbfq\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = w.Close()
+	stopped := make(chan struct{})
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		commandLoop(context.Background(), con, func() { close(stopped) }, supervisor.New(nil), func(string) {}, "")
+	}()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the console did not end on q and EOF within 10s; console:\n%s", out)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatalf("the console did not take the q after the byte order mark; console:\n%s", out)
+	}
+}
+
+// The mark is the stream's, not a line's: PowerShell writes it once, before
+// the first byte it pipes, however many lines follow and however far apart
+// they come. The reader drops it from the first line only; a U+FEFF further on
+// is input like any other.
+func TestConsoleReaderDropsTheByteOrderMarkOfTheStream(t *testing.T) {
+	for _, tc := range []struct {
+		name, in string
+		want     []string
+	}{
+		{"LF", "\xef\xbb\xbfq\n", []string{"q"}},
+		{"PowerShell's CRLF lines", "\xef\xbb\xbfquit\r\nstatus\r\n", []string{"quit", "status"}},
+		{"no line end", "\xef\xbb\xbfq", []string{"q"}},
+		{"nothing but the mark", "\xef\xbb\xbf", nil},
+		{"once per stream", "\xef\xbb\xbfq\n\xef\xbb\xbfs\n", []string{"q", "\xef\xbb\xbfs"}},
+		{"first line without the mark", "q\n\xef\xbb\xbfs\n", []string{"q", "\xef\xbb\xbfs"}},
+		{"two marks", "\xef\xbb\xbf\xef\xbb\xbfq\n", []string{"\xef\xbb\xbfq"}},
+		{"partial mark", "\xef\xbbq\n", []string{"\xef\xbbq"}},
+		{"no mark", "q\n", []string{"q"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &lineReader{in: strings.NewReader(tc.in)}
+			var got []string
+			for {
+				line, ok := r.readLine()
+				if !ok {
+					break
+				}
+				got = append(got, line)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("lines of %q = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The exit prompt reads through the same reader, so a choice piped with the
+// mark in front is the choice: a marked k or r fell through to "stop
+// everything" before.
+func TestPromptTakesAChoiceAfterAByteOrderMark(t *testing.T) {
+	if _, err := exec.LookPath("false"); err != nil {
+		t.Skip("false not on PATH")
+	}
+	for _, tc := range []struct{ choice, want string }{
+		{"k", "Editor keeps running."},
+		{"r", "Restarting agent"},
+	} {
+		t.Run(tc.choice, func(t *testing.T) {
+			con, w, out := pipedConsole(t)
+			sess, _, _ := agentSessionOn(t, con, "false")
+			// One write ahead of the prompt, as PowerShell pipes it: the mark,
+			// the choice, then the q that ends the session — read by the
+			// launcher console after k, by the next prompt after r.
+			if _, err := w.WriteString("\xef\xbb\xbf" + tc.choice + "\nq\n"); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			select {
+			case <-sess.ctx.Done():
+			case <-time.After(10 * time.Second):
+				t.Fatalf("the session did not end on the q; console:\n%s", out)
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("the prompt did not take the %s after the byte order mark (want %q); console:\n%s", tc.choice, tc.want, out)
+			}
+		})
 	}
 }
 

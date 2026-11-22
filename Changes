@@ -467,6 +467,11 @@ Revision history for unreagent
     ue-anim-sequence (a number or boolean in asset_paths is read as text),
     ue-anim-montage (which wrong types a notify property accepts silently; a
     TEnumAsByte notify property takes the number, not the name).
+  - The launcher console and the agent exit prompt take a command piped from
+    Windows PowerShell 5.1 when its $OutputEncoding is UTF-8: the byte order
+    mark PowerShell writes in front of the stream no longer turns
+    'quit' | unreagent.exe into "Unknown command" with the launcher left
+    running.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
