@@ -516,6 +516,13 @@ Revision history for unreagent
     permissions off, and the UE LLM Toolkit bridge when the plugin is found
     below Plugins/. None or several .uproject files is an error naming them.
     A start with a config file is unchanged.
+  - Shipped ue-* skills: the JSON-read rules are corrected (read in the UE
+    5.8.4 source, not run). A lone sign or dot counts as numeric and reads as
+    0. The editor-localized True/Yes/False/No words are accepted as bools.
+    ue-sequencer: open returns the frame it read while scrub returns the
+    truncated one, and scrub accepts any readable number, bool or numeric
+    string as frame. ue-anim-montage: an unreadable arrive_tangent or
+    leave_tangent is dropped while the key is still added.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

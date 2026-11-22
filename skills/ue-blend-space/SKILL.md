@@ -97,10 +97,14 @@ read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
   one dot, such as `"150"`, and `true` and `false` as 1 and 0. Any other
   string counts as absent: the default applies without an error, and a
   `sample_index` or `axis_index` is reported as missing.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
 - **A boolean is read from any string and any number.** `true`, `yes`, `on`
   and `false`, `no`, `off` count in any case; every other string is `false`
   unless it starts with a non-zero integer. A typo in `snap_to_grid`,
   `wrap_input` or `recursive` therefore sets `false`, with no error.
+  The editor language's words for True, Yes, False and No count as well
+  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
 
 ## Reading
 

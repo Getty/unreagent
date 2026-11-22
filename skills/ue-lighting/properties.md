@@ -17,11 +17,16 @@ Rules for every table:
   - A number key also reads `true` and `false` as 1 and 0, and a string made
     of an optional sign, digits and at most one dot, such as `"0.5"`. Any
     other string, such as `"1e3"` or `"5 lux"`, is skipped.
+    A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+    (`TCString::IsNumeric`,
+    `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
   - **A boolean key reads any string and any number, and never skips one.**
     `true`, `yes`, `on` and `false`, `no`, `off` count in any case; every
     other string is `false` unless it starts with a non-zero integer, so a
     typo sets `false` and the key is still listed as applied. A number is
     `true` when it is not 0.
+    The editor language's words for True, Yes, False and No count as well
+    (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
   - A string key reads a number or a boolean as its text, `5` or `true`.
 - **Check the result.** `properties_set` or `settings_applied` lists the keys
   that were applied. `spawn_light` and `spawn_post_process_volume` return no

@@ -85,11 +85,16 @@ whole list.
   source, not run, while the toolkit targets UE 5.6 and 5.7):
   - a number field also reads `true` and `false` as 1 and 0, and a string
     made of an optional sign, digits and at most one dot, such as `"600"`;
-    any other string is skipped;
+    any other string is skipped.
+    A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+    (`TCString::IsNumeric`,
+    `Engine/Source/Runtime/Core/Public/Misc/CString.h`);
   - a string field stores a number or a boolean as its text, `5` or `true`;
   - **`is_player_character` reads any string and any number**: `true`, `yes`,
     `on` and `false`, `no`, `off` in any case, and every other string as
     `false` unless it starts with a non-zero integer. A typo writes `false`.
+    The editor language's words for True, Yes, False and No count as well
+    (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
 
   Send strings, numbers and booleans as those JSON types.
   `update_character_data` with no readable field still saves and succeeds.

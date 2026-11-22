@@ -330,9 +330,14 @@ Some types and values are traps:
   - **A `bool` property accepts any string and any number.** `true`, `yes`,
     `on` and `false`, `no`, `off` count in any case; every other string is
     `false` unless it starts with a non-zero integer. A typo writes `false`.
+    The editor language's words for True, Yes, False and No count as well
+    (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
   - A `float` or `double` property also takes `true` and `false` as 1 and 0,
     and a string made of an optional sign, digits and at most one dot, such
     as `"0.5"`. Any other string ends in the error above.
+    A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+    (`TCString::IsNumeric`,
+    `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
   - An `FString` or `FName` property stores a number or a boolean as its
     text, `5` or `true`.
 

@@ -124,6 +124,8 @@ required number returns `Missing required parameter: <name>`, and an optional
 one keeps its default without an error (`TJsonValueString::TryGetNumber`,
 `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
 source, not run, while the toolkit targets UE 5.6 and 5.7).
+A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+(`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
 
 This holds for the operation's own parameters only. A value inside a notify's
 `properties` is checked against the property's type, and a string that is not

@@ -213,6 +213,8 @@ still work in UE text form, and for the other types:
 - A float or double property reads a string made of an optional sign, digits
   and at most one dot, such as `"0.5"`. Any other string fails with
   `Failed to set numeric property '<p>'`.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
 - **An integer or byte property, a `TEnumAsByte` enum included, accepts any
   string.** The read is into an `int64`: a string counts by its leading
   digits, and one without any is stored as 0, with no error. An enum value's
@@ -221,6 +223,8 @@ still work in UE text form, and for the other types:
   and `false`, `no`, `off` count in any case; every other string is `false`
   unless it starts with a non-zero integer. A typo writes `false`, so
   `Failed to set bool property …` is left for `null`, an array or an object.
+  The editor language's words for True, Yes, False and No count as well
+  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
 - An FString or FName property stores a JSON number or boolean as its text,
   `5` or `true`.
 

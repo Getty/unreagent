@@ -185,7 +185,10 @@ Sets the default value of one user parameter on the system asset.
   which cannot report a failure: a missing component reads as 0, and so does
   `null`, an array, an object or a string that is not numeric. `true` and
   `false` read as 1 and 0, and a string made of an optional sign, digits and
-  at most one dot as that number. A colour without `a` gets alpha 0. The only
+  at most one dot as that number.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  A colour without `a` gets alpha 0. The only
   trace of a missing or unreadable component is a `LogJson` line in the
   editor log
   (`FJsonObject::GetField` in
@@ -202,9 +205,14 @@ Sets the default value of one user parameter on the system asset.
   into a `double`, and `TryGetBoolField`; same source and version as above).
   For `float` and `int`, a string made of an optional sign, digits and at most
   one dot, such as `"2.5"`, passes as a number, and so do `true` and `false`,
-  as 1 and 0; an `int` is rounded. **For `bool`, any string and any number
+  as 1 and 0; an `int` is rounded.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  **For `bool`, any string and any number
   passes**: `true`, `yes`, `on` and `false`, `no`, `off` count in any case,
   and every other string is `false` unless it starts with a non-zero integer.
+  The editor language's words for True, Yes, False and No count as well
+  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
   A typo sets `false`, and `must be a boolean` is left for `null`, an array or
   an object. Send the JSON types from the table.
 - **Any other type** fails with

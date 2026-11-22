@@ -44,8 +44,10 @@ are read as 1 and 0, so `true` goes to slot 1. **Any other value, such as
 0 without an error** (`FJsonObject::GetField` in
 `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, `FJsonValue::AsNumber`
 in `JsonValue.cpp` beside it; read in the UE 5.8.4 source, not run, while the
-toolkit targets UE 5.6 and 5.7). `slot` in the result is the slot that was
-written.
+toolkit targets UE 5.6 and 5.7).
+A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+(`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+`slot` in the result is the slot that was written.
 
 ## What the tool cannot do
 
@@ -128,9 +130,11 @@ The tool's own examples use asset paths such as `/Game/Materials/MI_Glow`.
 - A number written as a string, such as `"0.4"`, does count as a number in
   `scalars` and inside a `vectors` object: the read takes a string made of an
   optional sign, digits and at most one dot, and `true` and `false` as 1 and
-  0. Any other string, such as `"0.4f"` or `"1e-2"`, is skipped. In
-  `textures`, a number or a boolean is read as its text and then fails as a
-  path, `Failed to load texture: 5` (`TJsonValueString::TryGetNumber` in
+  0. Any other string, such as `"0.4f"` or `"1e-2"`, is skipped.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  In `textures`, a number or a boolean is read as its text and then fails
+  as a path, `Failed to load texture: 5` (`TJsonValueString::TryGetNumber` in
   `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`,
   `FJsonValueNumber::TryGetString` in `Private/Dom/JsonValue.cpp`; same
   source and version as under `material_slot`). Send the JSON types above.

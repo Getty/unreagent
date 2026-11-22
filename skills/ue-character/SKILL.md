@@ -74,8 +74,10 @@ Which class the game spawns: `game_framework` `inspect_game_mode` (skill
   `"1e3"`, is skipped, and so is `null`, an array or an object
   (`TJsonValueString::TryGetNumber`,
   `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7). Send JSON
-  numbers, and check `modified_params`.
+  source, not run, while the toolkit targets UE 5.6 and 5.7).
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  Send JSON numbers, and check `modified_params`.
 - **No undo.** The change is not recorded as an editor transaction. Restore
   the values you read in step 1.
 

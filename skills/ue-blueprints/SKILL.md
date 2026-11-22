@@ -158,10 +158,14 @@ number and boolean parameters through `ExtractOptionalNumber` and `ExtractOption
 - A number is also read from a string made of an optional sign, digits and at
   most one dot, such as `"5"`, and from `true` and `false` as 1 and 0. Any
   other string falls back to the default.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
 - **A boolean is read from any string and any number, so it never falls back
   to the default.** `true`, `yes`, `on` and `false`, `no`, `off` count in any
   case; every other string is `false` unless it starts with a non-zero
   integer. A typo reads as `false`, also where the default is `true`.
+  The editor language's words for True, Yes, False and No count as well
+  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
 
 This holds for the parameters at the top level of a call. The fields of a
 node spec in `add_nodes` (`pos_x`, `pos_y`, `num_outputs`) and `num_outputs`

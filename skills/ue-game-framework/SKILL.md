@@ -244,7 +244,10 @@ value through `ExtractOptionalBool` (`MCPToolBase.h`), which calls the
 engine's `FJsonObject::TryGetBoolField`, and that reads any string and any
 number. `true`, `yes`, `on` and `false`, `no`, `off` count in any case; every
 other string is `false` unless it starts with a non-zero integer, and a
-number is `true` when it is not 0. So `"false"` is read as `false`, and a
+number is `true` when it is not 0.
+The editor language's words for True, Yes, False and No count as well
+(`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
+So `"false"` is read as `false`, and a
 typo such as `"ture"` is read as `false` too. Only `null`, an array or an
 object is not read, and then the default `true` applies without an error
 (`TJsonValueString::TryGetBool`,

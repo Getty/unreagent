@@ -15,8 +15,11 @@ Reads one bone track at chosen frames. It changes nothing.
   read as a `double` with the engine's `FJsonValue::TryGetNumber` and then
   truncated. That read also takes a string made of an optional sign, digits
   and at most one dot, such as `"12"`, and `true` and `false` as 1 and 0. Any
-  other entry is skipped, and when none is left, `[0, -1]` is used. Send JSON
-  numbers. The main document names the engine source this rests on.
+  other entry is skipped, and when none is left, `[0, -1]` is used.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  Send JSON numbers. The main document names the engine source this rests
+  on.
 
 Returns `animation` (the asset name), `bone`, `total_frames` and `frames`, one
 entry per sampled frame with `frame`, `position` `{x, y, z}`, `rotation`

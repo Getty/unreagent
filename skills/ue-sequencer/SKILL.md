@@ -157,7 +157,10 @@ What the success does not prove:
   (`FJsonObject::GetField` in
   `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
   `FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7). Pass all six.
+  source, not run, while the toolkit targets UE 5.6 and 5.7).
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  Pass all six.
 - **A failed scrub is swallowed**, and so is a `frame` the tool cannot read
   as a number. `open` still succeeds; the result just has no `frame` and the
   message no ` at frame`. The read is the engine's
@@ -169,8 +172,13 @@ What the success does not prove:
   (`FJsonValueBoolean::TryGetNumber` in
   `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
   `TJsonValueString::TryGetNumber` in `Public/Dom/JsonValue.h`; read in the
-  UE 5.8.4 source, not run). When `frame` is present it is the number that
-  was read, not a value read back from the Sequencer.
+  UE 5.8.4 source, not run).
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
+  When `frame` is present it is the number that was read, fraction
+  included, not a value read back from the Sequencer: `12.9` scrubs to frame
+  12 and the message says ` at frame 12`, but `frame` is 12.9. `scrub`
+  returns the truncated number instead.
 - **The camera may not stay where you put it.** The scrub comes after the
   camera call. Whether evaluating the sequence, for example one with a camera
   cut track, takes the viewport camera over has not been verified. Compare
@@ -192,13 +200,17 @@ number at the sequence's display rate, as the Sequencer's timeline shows it.
 The code converts it to the sequence's tick resolution and sets the time
 directly.
 
-- `frame` is required and must be a number: `Missing required parameter:
-  frame` otherwise. A fraction is cut off towards zero (`12.9` becomes 12).
+- `frame` is required, and it is read like `open`'s `frame`: `true` scrubs
+  to frame 1 and `"12"` to frame 12. Only a missing `frame`, or one that
+  read rejects (`null`, an array, an object, any other string), returns
+  `Missing required parameter: frame`. A fraction is cut off towards zero
+  (`12.9` becomes 12).
 - **The frame is not checked against the playback range.** A frame before the
   start or after the end is sent to the Sequencer as it is; what the Sequencer
   does with it has not been verified. Take the range from `get_state`.
-- The result's `frame` is the truncated number you sent. To see where the
-  playhead is, call `get_state`.
+- The result's `frame` is the truncated number you sent, unlike `open`,
+  which returns the fraction with it. To see where the playhead is, call
+  `get_state`.
 - A success says the time was set. It does not say that the viewport has drawn
   that frame; skill `ue-viewport`, "Freshness", covers what a capture reads.
 

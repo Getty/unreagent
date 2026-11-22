@@ -29,6 +29,8 @@ All four return `montage` (its path) and `curves`, each with `name` and
   an array, an object, an empty string, or a string that is not an optional
   sign, digits and at most one dot. Such a string is read as that number
   (`"0.5"` as 0.5), and `true` and `false` as 1 and 0; those keys are added.
+  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
+  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
   The read is the engine's `FJsonObject::TryGetNumberField` into a `double`
   (`FJsonValueBoolean::TryGetNumber` in
   `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
@@ -41,8 +43,12 @@ All four return `montage` (its path) and `curves`, each with `name` and
   **An unknown value becomes `Linear` or `Auto`** without an error. An absent
   one leaves the engine's default for a new key; `get_curves` shows what was
   set.
-- `arrive_tangent` and `leave_tangent` are numbers. What the engine does with
-  them under each tangent mode is not covered here.
+- `arrive_tangent` and `leave_tangent` are numbers, read the same way as
+  `time` and `value`. **One the tool cannot read is dropped without an error,
+  and the key is still added** without that tangent
+  (`ParseKeysFromJson` in the toolkit's `MCPTool_MontageModify.cpp`); compare
+  the returned `keys`. What the engine does with the tangents under each
+  tangent mode is not covered here.
 
 ## Operations
 
