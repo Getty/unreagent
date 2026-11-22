@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-11-22T04:26:34Z
+claimed_by: unreagent-doc-writer
+class: standard
+completed: 2026-11-22T04:25:12Z
+created: 2026-11-22T03:59:06Z
+id: 216
+priority: high
+started: 2026-11-22T04:01:20Z
+status: done
+tags:
+- docs
+- unreal-mcp
+title: 'README: reference project is on UE 5.8; correct the Unreal MCP section against
+  the 5.8.4 source'
+updated: 2026-11-22T04:26:34Z
+---
+
+Owner: unreagent-doc-writer. Paths: README.md, unreagent.example.yaml (comments only).
+Sources: scout read of the UE 5.8.4 engine source on 2026-11-22 (paths relative to the engine root; cite path and symbol, copy no engine code); Getty/unreagent-example at ec68a2b.
+1. The reference project moved to UE 5.8 (C++ module, toolkit fork Getty/ue-llm-toolkit branch ue-5.8). Fix the rows and sentences that still say 5.7 (README around 186, 446, 459, example engineRoot paths) and 'unreagent has not been tested against 5.8' only as far as the example README supports it.
+2. Unreal MCP section (README ~453-545, unreagent.example.yaml ~229-242) disagrees with Engine/Plugins/Experimental/ModelContextProtocol: (a) the plugin is EnabledByDefault false (ModelContextProtocol.uplugin); (b) bAutoStartServer is false (ModelContextProtocolSettings.h) — the server starts only with -ModelContextProtocolStartServer on the editor command line or that setting; -ModelContextProtocolPort=N sets the port; (c) with tool search on (the default) a client sees three tools: list_toolsets, describe_toolset, call_tool (ModelContextProtocolToolSearch.h); (d) no 'Agentic Workflows' menu path exists in the source — give the settings class name instead or mark the path unverified. Loopback only, no auth, default http://127.0.0.1:8000/mcp. AllToolsets does not include LiveCodingToolset, MVVMToolset, ChaosClothAssetToolset. Unverified and to be labelled so: whether a Launcher build ships these NoRedist plugins.
+3. -unattended section (README ~680-690): re-checked for 5.8. Suppressed: crash reporter UI (WindowsPlatformCrashContext.cpp 777), package restore prompt (PackageAutoSaver.cpp 673-690), disaster recovery (DisasterRecoveryClientModule.cpp 382). Not suppressed: direct FPlatformMisc::MessageBoxExt prompts (e.g. 'Target Upgrade Required', LaunchEngineLoop.cpp 6668, 6736) and Slate modal windows. Missing or incompatible modules: exit 1 with 'Incompatible or missing module', no dialog, under -unattended or -stdout (LaunchEngineLoop.cpp ~6705). A plugin whose EngineVersion differs in major.minor is skipped silently under -unattended (PluginManager.cpp 2688-2715).
+Acceptance: no sentence left that the source above contradicts; everything not grounded is labelled unverified; English only.
+
+README.md and unreagent.example.yaml: reference project on 5.8; Unreal MCP section rewritten against the 5.8.4 source (plugins off by default, start flag, three meta-tools, coverage, unreal.args replace note); Option B warns about EngineVersion 5.6.0 (k214) and npm 10.9.2 (k215); -unattended section corrected (restore skipped not discarded; missing module slow under -unattended, measured). Unverified labelled: NoRedist in Launcher builds, settings menu path, empty toolsets, offscreen, Claude Code session recovery.
+
+Ready for review; docs only, nothing committed.
+
+Review verdict (unreagent-reviewer, 2026-11-22): round one changes needed (seven text findings), round two ready. Full check green. Files: README.md, unreagent.example.yaml (comments). Claims spot-checked against the UE 5.8.4 plugin descriptors and settings, PackageAutoSaver.cpp, PluginManager.cpp and the notes on k202, k208, k214, k215. Two optional wording points left: the top intro says Unreal MCP 'covers other ground (Niagara, UMG …)' although the toolkit covers those too; one comment line in unreagent.example.yaml breaks early after the rewrap.
+
+Committed as 7d229e2.
