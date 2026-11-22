@@ -170,7 +170,7 @@ engine every `Load` fails unless `unreal.editor` is set literally — the
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the `.uproject`'s `EngineAssociation` (version → Launcher registry / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds) → highest installed version, compared numerically (Launcher registry + Epic default paths), with a WARN via `Info.Warnings` when an association was set (step 6); see `internal/config/engine.go` |
+| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the `.uproject`'s `EngineAssociation` (version → Launcher installs / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds) → highest installed version, compared numerically (Launcher installs + Epic default paths), with a WARN via `Info.Warnings` when an association was set (step 6). Launcher installs: the `UE_<ver>` entries of `%ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat` (what the engine reads), then the `HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>` keys as the fallback (`launcherEngines`); see `internal/config/engine.go` and skill `unreagent-ue` |
 | `${PROJECT}` | full path to the `.uproject`: `unreal.project` if set, else the first `*.uproject` next to the config (step 5) |
 | `${PROJECT_DIR}` | its directory |
 | `${PROJECT_NAME}` | its filename without extension |

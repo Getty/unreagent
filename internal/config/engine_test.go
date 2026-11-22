@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -202,6 +203,273 @@ func TestSourceBuilds(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("sourceBuilds =\n%#v\nwant\n%#v", got, want)
+	}
+}
+
+// launcherInstalledFixture is cut down from a real LauncherInstalled.dat
+// (k211): engines next to marketplace and Fab plugins, which the Launcher
+// lists under their own AppNames (one of them ending in _5.8), and an engine
+// entry whose AppVersion lags behind the installed 5.8.4.
+const launcherInstalledFixture = `{
+	"InstallationList": [
+		{
+			"InstallLocation": "C:\\EpicGames\\UE_5.7",
+			"NamespaceId": "89efe5924d3d467c839449ab6ab52e7f",
+			"ItemId": "066124cd12464764b6b56e5d1a0567c4",
+			"ArtifactId": "MagicNod90a5feb629feV16",
+			"AppVersion": "5.7.0-48543606+++UE5+Dev-Marketplace-Windows",
+			"AppName": "MagicNod90a5feb629feV16"
+		},
+		{
+			"InstallLocation": "C:\\EpicGames\\UE_5.8",
+			"NamespaceId": "ue",
+			"ItemId": "c5c30696e4e0482f9c0a170873975230",
+			"ArtifactId": "FabPlugin_5.8",
+			"AppVersion": "5.8.0-55116800+++UE5+Release-5.8-0.0.22-60393117-Windows",
+			"AppName": "FabPlugin_5.8"
+		},
+		{
+			"InstallLocation": "C:\\EpicGames\\UE_5.7",
+			"NamespaceId": "ue",
+			"ItemId": "7299c1cd206b4bb58658a98199b66860",
+			"ArtifactId": "UE_5.7",
+			"AppVersion": "5.7.4-51494982+++UE5+Release-5.7-Windows",
+			"AppName": "UE_5.7"
+		},
+		{
+			"InstallLocation": "C:\\EpicGames\\UE_5.8",
+			"NamespaceId": "ue",
+			"ItemId": "18b3b415bc434c5b974f50488360ca31",
+			"ArtifactId": "UE_5.8",
+			"AppVersion": "5.8.3-58210709+++UE5+Release-5.8-Windows",
+			"AppName": "UE_5.8"
+		}
+	]
+}`
+
+func TestParseLauncherInstalled(t *testing.T) {
+	want := []engineCandidate{
+		{"5.7", `C:\EpicGames\UE_5.7`},
+		{"5.8", `C:\EpicGames\UE_5.8`}, // from AppName, not AppVersion's 5.8.3
+	}
+	if got := parseLauncherInstalled([]byte(launcherInstalledFixture)); !reflect.DeepEqual(got, want) {
+		t.Errorf("parseLauncherInstalled(fixture) =\n%#v\nwant\n%#v", got, want)
+	}
+	if got := parseLauncherInstalled([]byte("\xef\xbb\xbf" + launcherInstalledFixture)); !reflect.DeepEqual(got, want) {
+		t.Errorf("parseLauncherInstalled(fixture with utf-8 bom) =\n%#v\nwant\n%#v", got, want)
+	}
+
+	// Entries unreagent skips; the one good entry after them still counts.
+	// The engine drops these too: no case-sensitive "UE_" prefix (ue_5.9,
+	// XUE_5.9), an empty or missing InstallLocation or AppName. It keeps
+	// "UE_" and "UE_Custom" as the identifiers "" and "Custom"; unreagent
+	// skips them, since an association that is no version is looked up among
+	// the source builds only. The rest are not an object of strings.
+	skipped := `{"InstallationList": [
+		{"AppName": "ue_5.9", "InstallLocation": "C:/lower/UE_5.9"},
+		{"AppName": "UE_", "InstallLocation": "C:/bare"},
+		{"AppName": "UE_Custom", "InstallLocation": "C:/custom"},
+		{"AppName": "XUE_5.9", "InstallLocation": "C:/prefixed"},
+		{"AppName": "UE_5.6", "InstallLocation": ""},
+		{"AppName": "UE_5.6"},
+		{"InstallLocation": "C:/no-name"},
+		{"AppName": 5.6, "InstallLocation": "C:/number"},
+		{"AppName": "UE_5.6", "InstallLocation": ["C:/array"]},
+		"UE_5.6",
+		null,
+		{"AppName": "UE_5.10", "InstallLocation": "E:/UE/UE_5.10"}
+	]}`
+	want = []engineCandidate{{"5.10", "E:/UE/UE_5.10"}}
+	if got := parseLauncherInstalled([]byte(skipped)); !reflect.DeepEqual(got, want) {
+		t.Errorf("parseLauncherInstalled(skipped) =\n%#v\nwant\n%#v", got, want)
+	}
+
+	// Malformed: no candidates, so auto-detection goes on without the file.
+	for _, in := range []string{
+		"",
+		"not json",
+		`{"InstallationList": [{"AppName": "UE_5.8", "InstallLocation": "C:/UE_5.8"}`, // truncated
+		`{}`,
+		`{"InstallationList": null}`,
+		`{"InstallationList": "UE_5.8"}`,
+		`[{"AppName": "UE_5.8", "InstallLocation": "C:/UE_5.8"}]`,
+	} {
+		if got := parseLauncherInstalled([]byte(in)); len(got) != 0 {
+			t.Errorf("parseLauncherInstalled(%q) = %#v; want none", in, got)
+		}
+	}
+}
+
+func TestLauncherInstalledPath(t *testing.T) {
+	if got := launcherInstalledPath(""); got != "" {
+		t.Errorf("launcherInstalledPath(\"\") = %q; want empty (no ProgramData, no file)", got)
+	}
+	root := t.TempDir()
+	want := filepath.Join(root, "Epic", "UnrealEngineLauncher", "LauncherInstalled.dat")
+	if got := launcherInstalledPath(root); got != want {
+		t.Errorf("launcherInstalledPath(%q) = %q; want %q", root, got, want)
+	}
+}
+
+// writeLauncherInstalled writes a LauncherInstalled.dat holding content under
+// the ProgramData directory programData.
+func writeLauncherInstalled(t *testing.T, programData, content string) {
+	t.Helper()
+	path := launcherInstalledPath(programData)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// launcherInstalledJSON renders a LauncherInstalled.dat listing entries, each
+// an AppName and its InstallLocation.
+func launcherInstalledJSON(t *testing.T, entries ...[2]string) string {
+	t.Helper()
+	type entry struct {
+		InstallLocation, AppVersion, AppName string
+	}
+	var list struct{ InstallationList []entry }
+	for _, e := range entries {
+		list.InstallationList = append(list.InstallationList, entry{e[1], "0.0.0-0+++UE5+Release-Windows", e[0]})
+	}
+	b, err := json.MarshalIndent(list, "", "\t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestLauncherEnginesOrder pins how the two Launcher sources combine: the
+// LauncherInstalled.dat (what the engine reads) first, the HKLM registry
+// subkeys after it as the fallback — for a version both list, the registry's
+// directory counts only when the .dat's has no editor.
+func TestLauncherEnginesOrder(t *testing.T) {
+	programData := t.TempDir()
+	writeLauncherInstalled(t, programData, launcherInstalledJSON(t,
+		[2]string{"UE_5.8", "C:/dat/UE_5.8"},
+		[2]string{"UE_5.9", "C:/dat/UE_5.9"},
+	))
+	registry := []engineCandidate{
+		{"5.7", "C:/reg/UE_5.7"},
+		{"5.8", "C:/reg/UE_5.8"},
+	}
+	launcher := launcherEngines(programData, registry)
+	want := []engineCandidate{
+		{"5.8", "C:/dat/UE_5.8"},
+		{"5.9", "C:/dat/UE_5.9"},
+		{"5.7", "C:/reg/UE_5.7"},
+		{"5.8", "C:/reg/UE_5.8"},
+	}
+	if !reflect.DeepEqual(launcher, want) {
+		t.Fatalf("launcherEngines =\n%#v\nwant\n%#v", launcher, want)
+	}
+
+	cases := []struct {
+		name, assoc string
+		hasEditor   func(string) bool
+		want        string
+	}{
+		{"both list it: the .dat wins", "5.8", editorIn("C:/dat/UE_5.8", "C:/reg/UE_5.8"), "C:/dat/UE_5.8"},
+		{"the .dat's has no editor: the registry's", "5.8", editorIn("C:/reg/UE_5.8"), "C:/reg/UE_5.8"},
+		{"only the registry lists it", "5.7", editorIn("C:/dat/UE_5.8", "C:/reg/UE_5.7"), "C:/reg/UE_5.7"},
+		{"no association, tie on the version: the .dat wins", "", editorIn("C:/dat/UE_5.8", "C:/reg/UE_5.8"), "C:/dat/UE_5.8"},
+	}
+	for _, c := range cases {
+		got, warning := chooseEngine(c.assoc, launcher, nil, nil, c.hasEditor)
+		if got != c.want || warning != "" {
+			t.Errorf("%s: got %q, warning %q; want %q, none", c.name, got, warning, c.want)
+		}
+	}
+
+	// Without a usable .dat the registry alone is what is left — the
+	// detection as it was before the .dat was read.
+	broken := t.TempDir()
+	writeLauncherInstalled(t, broken, `{"InstallationList": [`)
+	unreadable := t.TempDir()
+	if err := os.MkdirAll(launcherInstalledPath(unreadable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, pd := range map[string]string{
+		"no ProgramData":      "",
+		"no .dat":             t.TempDir(),
+		"malformed .dat":      broken,
+		".dat is a directory": unreadable,
+	} {
+		if got := launcherEngines(pd, registry); !reflect.DeepEqual(got, registry) {
+			t.Errorf("%s: launcherEngines = %#v; want the registry's %#v", name, got, registry)
+		}
+	}
+}
+
+// TestLauncherInstalledOnDisk is the k211 machine as a test: the Launcher
+// installed 5.7 and 5.8 and lists both in its LauncherInstalled.dat, but
+// wrote an HKLM subkey only for 5.7, and neither directory matches a default
+// path. A 5.8 project used to get 5.7 and a warning.
+func TestLauncherInstalledOnDisk(t *testing.T) {
+	root := t.TempDir()
+	e57 := installTestEngine(t, filepath.Join(root, "EpicGames", "UE_5.7"))
+	e58 := installTestEngine(t, filepath.Join(root, "EpicGames", "UE_5.8"))
+	programData := filepath.Join(root, "ProgramData")
+	writeLauncherInstalled(t, programData, launcherInstalledJSON(t,
+		[2]string{"FabPlugin_5.8", e58},
+		[2]string{"UE_5.7", e57},
+		[2]string{"UE_5.8", e58},
+	))
+	registry := []engineCandidate{{"5.7", e57}}
+
+	before, warning := chooseEngine("5.8", registry, nil, nil, hasEditor)
+	if before != filepath.ToSlash(e57) || warning == "" {
+		t.Fatalf("registry only: got %q, warning %q; want %q with a warning (the k211 bug as the baseline)", before, warning, filepath.ToSlash(e57))
+	}
+
+	launcher := launcherEngines(programData, registry)
+	if got, warning := chooseEngine("5.8", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e58) || warning != "" {
+		t.Errorf("association 5.8: got %q, warning %q; want %q, none", got, warning, filepath.ToSlash(e58))
+	}
+	if got, warning := chooseEngine("5.7", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e57) || warning != "" {
+		t.Errorf("association 5.7: got %q, warning %q; want %q, none", got, warning, filepath.ToSlash(e57))
+	}
+	if got, _ := chooseEngine("", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e58) {
+		t.Errorf("no association: got %q; want the highest, %q", got, filepath.ToSlash(e58))
+	}
+}
+
+// installTestEngine makes dir an engine root with an editor binary and
+// returns it.
+func installTestEngine(t *testing.T, dir string) string {
+	t.Helper()
+	bin := filepath.Join(dir, "Engine", "Binaries", "Win64")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "UnrealEditor.exe"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestAutodetectEngineReadsLauncherInstalled runs the whole auto-detection,
+// the wiring included: %ProgramData% points at a temp directory whose
+// LauncherInstalled.dat lists UE_99.9, and the project is associated with
+// 99.9. No machine has a 99.9 in its registry or default paths, so only the
+// .dat under this ProgramData can find it, and the host's engines cannot
+// change the result.
+func TestAutodetectEngineReadsLauncherInstalled(t *testing.T) {
+	root := t.TempDir()
+	engine := installTestEngine(t, filepath.Join(root, "Engines", "UE_99.9"))
+	programData := filepath.Join(root, "ProgramData")
+	writeLauncherInstalled(t, programData, launcherInstalledJSON(t, [2]string{"UE_99.9", engine}))
+	t.Setenv("ProgramData", programData)
+	project := filepath.Join(root, "Game.uproject")
+	if err := os.WriteFile(project, []byte(`{"FileVersion": 3, "EngineAssociation": "99.9"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, warning := autodetectEngine(project); got != filepath.ToSlash(engine) || warning != "" {
+		t.Errorf("autodetectEngine = %q, warning %q; want %q, none", got, warning, filepath.ToSlash(engine))
 	}
 }
 

@@ -4,8 +4,9 @@ package config
 // and 2, env UE_ROOT and engineRoot, are in resolveEngine).
 //
 // The decisions (version order, association matching, parsing `reg query`
-// output) are pure functions; only regQuery touches the Windows registry, by
-// running reg.exe.
+// output and LauncherInstalled.dat) are pure functions; only regQuery touches
+// the Windows registry, by running reg.exe, and only datLauncherInstalls reads
+// the Launcher's install list.
 
 import (
 	"bytes"
@@ -21,8 +22,19 @@ import (
 )
 
 const (
+	// launcherInstalledFile is the Epic Launcher's list of what it installed,
+	// relative to the ProgramData directory, which unreagent takes from
+	// %ProgramData%. The engine reads its Launcher installs from it (UE 5.8.4:
+	// FDesktopPlatformBase::ReadLauncherInstallationList, under
+	// FPlatformProcess::ApplicationSettingsDir, the known folder
+	// FOLDERID_ProgramData plus "/Epic/"). Only when the file does not exist
+	// does it look for the UE 4.0 and 4.1 manifests in
+	// UnrealEngineLauncher/Data/Manifests instead; unreagent does not.
+	launcherInstalledFile = `Epic/UnrealEngineLauncher/LauncherInstalled.dat`
 	// launcherRegKey holds one subkey per Epic Launcher install, named by its
-	// version ("5.8"), with an InstalledDirectory value.
+	// version ("5.8"), with an InstalledDirectory value. The engine does not
+	// read it, and the Launcher does not always write it (k211); it is the
+	// fallback after launcherInstalledFile.
 	launcherRegKey = `HKLM\SOFTWARE\EpicGames\Unreal Engine`
 	// buildsRegKey holds one value per source build registered by
 	// UnrealVersionSelector: name = build identifier (usually "{GUID}"),
@@ -31,7 +43,7 @@ const (
 )
 
 // defaultEnginePatterns are the standard Epic installation paths, searched in
-// addition to the registry.
+// addition to the Launcher's install list and the registry.
 var defaultEnginePatterns = []string{
 	`C:/Program Files/Epic Games/UE_*`,
 	`D:/Program Files/Epic Games/UE_*`,
@@ -57,15 +69,28 @@ func autodetectEngine(project string) (root, warning string) {
 	if kind, _ := classifyAssociation(assoc); kind == assocBuild {
 		builds = registrySourceBuilds()
 	}
-	return chooseEngine(assoc, registryLauncherInstalls(), globEngines(defaultEnginePatterns), builds, hasEditor)
+	launcher := launcherEngines(os.Getenv("ProgramData"), registryLauncherInstalls())
+	return chooseEngine(assoc, launcher, globEngines(defaultEnginePatterns), builds, hasEditor)
+}
+
+// launcherEngines lists the Launcher installs: first those in the
+// LauncherInstalled.dat under the ProgramData directory programData — the
+// list the engine reads — then registry, the launcherRegKey subkeys, as the
+// fallback. For a version both name, chooseEngine takes the .dat's directory
+// and the registry's only if the .dat's has no editor. Without a usable .dat
+// (programData "", the file missing, unreadable or malformed) the registry is
+// all there is, as before the .dat was read.
+func launcherEngines(programData string, registry []engineCandidate) []engineCandidate {
+	return append(datLauncherInstalls(launcherInstalledPath(programData)), registry...)
 }
 
 // chooseEngine picks the engine root from the gathered candidates:
 //
 //  1. the engine the project's EngineAssociation names: a version ("5.8") is
-//     looked up among the Launcher installs, then the default paths (UE_5.8);
-//     any other identifier (a source build's "{GUID}") among the registered
-//     source builds, case-insensitively and with or without braces;
+//     looked up among the Launcher installs (launcherEngines), then the
+//     default paths (UE_5.8); any other identifier (a source build's
+//     "{GUID}") among the registered source builds, case-insensitively and
+//     with or without braces;
 //  2. otherwise — no association, or it names no usable engine — the highest
 //     version among the Launcher installs and default paths, compared
 //     numerically (5.10 > 5.9).
@@ -246,6 +271,72 @@ func globEngines(patterns []string) []engineCandidate {
 // hasEditor reports whether dir is an engine root with an UnrealEditor.exe.
 func hasEditor(dir string) bool {
 	return fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe"))
+}
+
+// --- LauncherInstalled.dat (Windows) ---
+
+// launcherInstalledPath returns the path of the Launcher's install list under
+// the ProgramData directory programData; "" if programData is "", as it is
+// off Windows.
+func launcherInstalledPath(programData string) string {
+	if programData == "" {
+		return ""
+	}
+	return filepath.Join(programData, filepath.FromSlash(launcherInstalledFile))
+}
+
+// datLauncherInstalls lists the Launcher installs in the LauncherInstalled.dat
+// at path; none if path is "" or the file cannot be read.
+func datLauncherInstalls(path string) []engineCandidate {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return parseLauncherInstalled(b)
+}
+
+// parseLauncherInstalled turns LauncherInstalled.dat JSON into candidates:
+// every InstallationList entry whose AppName is "UE_" plus a version, with ID
+// that version ("UE_5.8" → "5.8") and Dir its InstallLocation. The engine
+// strips the "UE_" case-sensitively, so "ue_5.8" is no engine, and keeps any
+// rest as an identifier ("UE_Custom" → "Custom"); unreagent takes only a
+// version, since an association that is no version is looked up among the
+// source builds only. The other entries are what the Launcher installed
+// besides engines — marketplace and Fab plugins, under their own AppNames —
+// and are skipped, as are entries without an InstallLocation or with a field
+// that is not a string. AppVersion is not read: it can lag behind the
+// installed engine (5.8.3 listed for a 5.8.4, k211). A UTF-8 BOM is
+// tolerated; JSON that is not an object with an InstallationList array yields
+// none.
+func parseLauncherInstalled(b []byte) []engineCandidate {
+	var list struct {
+		InstallationList []json.RawMessage `json:"InstallationList"`
+	}
+	if json.Unmarshal(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), &list) != nil {
+		return nil
+	}
+	var out []engineCandidate
+	for _, raw := range list.InstallationList {
+		var e struct {
+			AppName         string `json:"AppName"`
+			InstallLocation string `json:"InstallLocation"`
+		}
+		if json.Unmarshal(raw, &e) != nil || e.InstallLocation == "" {
+			continue
+		}
+		ver, ok := strings.CutPrefix(e.AppName, "UE_")
+		if !ok {
+			continue
+		}
+		if _, ok := parseEngineVersion(ver); !ok {
+			continue
+		}
+		out = append(out, engineCandidate{ID: ver, Dir: e.InstallLocation})
+	}
+	return out
 }
 
 // --- registry (Windows) ---

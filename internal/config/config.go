@@ -14,8 +14,9 @@
 //
 // Engine resolution (priority): env UE_ROOT → engineRoot (usually local.yaml) →
 // the engine named by the .uproject's EngineAssociation → the highest version
-// installed (Epic Launcher registry entries and standard installation paths,
-// compared numerically). See engine.go.
+// installed, compared numerically. Both of the last two look for engines in
+// the Epic Launcher's LauncherInstalled.dat, then its registry entries as the
+// fallback, then the standard installation paths. See engine.go.
 package config
 
 import (

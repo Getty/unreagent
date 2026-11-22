@@ -472,6 +472,13 @@ Revision history for unreagent
     mark PowerShell writes in front of the stream no longer turns
     'quit' | unreagent.exe into "Unknown command" with the launcher left
     running.
+  - ${ENGINE} auto-detection reads the Epic Launcher's LauncherInstalled.dat
+    (%ProgramData%\Epic\UnrealEngineLauncher) first, as the engine itself
+    does, and keeps the HKLM "Unreal Engine" registry key as the fallback. A
+    Launcher install without a registry subkey is found, instead of an older
+    engine and a WARN that the .uproject's EngineAssociation names no usable
+    engine. For a version both list, the .dat's directory is used unless it
+    has no editor binary.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

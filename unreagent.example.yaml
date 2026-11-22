@@ -11,10 +11,17 @@
 #                     engineRoot (usually in local.yaml), the .uproject's
 #                     EngineAssociation (Launcher version or a registered
 #                     source build), then the highest installed version with
-#                     an editor binary, found via the registry / Epic default
-#                     paths (this last step logs a WARN when the
-#                     EngineAssociation names no usable engine: not
-#                     installed, or installed without an editor binary)
+#                     an editor binary. Launcher installs are looked up in
+#                     %ProgramData%\Epic\UnrealEngineLauncher\
+#                     LauncherInstalled.dat (entries named UE_<version>), then
+#                     in the HKLM\SOFTWARE\EpicGames\Unreal Engine\<version>\
+#                     InstalledDirectory registry key as a fallback, then in
+#                     the Epic default install paths. For a version listed in
+#                     both, the .dat's directory is used unless it has no
+#                     editor binary, then the registry's. The highest-version
+#                     step logs a WARN when the EngineAssociation names no
+#                     usable engine (not installed, or installed without an
+#                     editor binary).
 #    ${PROJECT}       full path to the .uproject: unreal.project if set,
 #                     otherwise the first .uproject next to this file
 #    ${PROJECT_DIR}   directory containing the .uproject
