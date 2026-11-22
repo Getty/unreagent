@@ -34,6 +34,9 @@ placeholder system exists.
    the config directory and lands in placeholders and permission rules: a
    relative `-config` once made `${PROJECT_DIR}` `.`, and
    `Write(${PROJECT_DIR}/*)` then matched anything.
+   No `-config` and neither candidate there is not an error: `load` sets
+   `Info.Defaults` and takes the **defaults path** (section "Without a config
+   file" below), which replaces step 2 and tightens steps 3 and 5.
 2. Decode `unreagent.yaml`. Unknown keys are an error (`KnownFields(true)`,
    typo protection); an empty file is fine. In it and in the overlay, a
    second YAML document, even one holding only a comment, is an error naming
@@ -79,7 +82,8 @@ placeholder system exists.
    `unreal.project` is absolute or relative to the **config directory** and
    must exist as a file (missing, or a directory, is a load error). Without
    one, the first `*.uproject` in the config directory (sorted); none at all is
-   not an error — the project values are then empty.
+   not an error — the project values are then empty. Both hold only with a
+   config file: the defaults path has already insisted on exactly one.
 6. `resolveEngine` — env `UE_ROOT` (trimmed), then `engineRoot`; a relative
    value is made absolute against the **working directory**, not the config
    directory (unlike `unreal.project`). Otherwise `autodetect(project)`, which
@@ -172,6 +176,83 @@ engine every `Load` fails unless `unreal.editor` is set literally — the
 `hermes-setup` sub-command included, which calls `config.Load` as well.
 `example/unreagent.yaml` (`editor: ping`) loads without one; that is pinned by
 `TestExampleDemoConfigLoads`.
+
+## Without a config file — the defaults path (k227)
+
+Started next to a `.uproject` with no config, the launcher runs on built-in
+defaults instead of failing. Code: `internal/config/defaults.go`, the branch
+on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
+
+- **When.** Only with an empty `explicitPath` and when the path `findConfig`
+  falls back to is not there (`configPresent`). Everything else is still a
+  config-file start or an error: a `-config` that does not exist
+  (`TestExplicitMissingConfigStillFails`), a broken `unreagent.yaml` link
+  (`TestBrokenConfigLinkIsNotDefaults`), and an empty `unreagent.yaml`, which
+  is a config file that switches nothing on (`TestConfigFileStartIsUnchanged`).
+- **`Info.Defaults`** is true on this path and nowhere else. `Info.ConfigPath`
+  is then the absolute path of the `unreagent.yaml` that was looked for and is
+  **not there** — do not read or stat it on the strength of `ConfigPath`
+  alone. Its directory is still the config directory, so the overlay name and
+  everything in steps 5 to 7 derive from it as usual. `run()` logs the path
+  and, on `Info.Defaults`, one INFO line per entry of `defaultsNotice(cfg)`
+  (`cmd/launcher/main.go`): what the defaults switch on, then that unreagent
+  applies no permission policy on this path. The second is dropped when the
+  overlay enabled permissions, so the notice is one or two lines
+  (`TestDefaultsNoticeSaysNoPermissionPolicy`).
+- **Exactly one `.uproject`** in that directory (`loadDefaults`): none, or
+  several, is a load error naming the directory or the files, because there is
+  no `unreal.project` to choose with. This rule is the defaults path's alone;
+  step 5 keeps its lenient reading for a start with a config file.
+- **`DefaultYAML(projectDir)`** returns
+  `(doc []byte, bridges, warnings []string, err error)`: the defaults as a
+  YAML document, the bridge entry points it found, and what kept the bridge
+  search from looking everywhere, each warning a complete message for the
+  caller to report. The document holds only what differs from
+  `applyDefaults` (`defaultDoc`): `agent.enabled`, `agent.claudeIntegration`
+  and `mcp.enabled` on, and the toolkit's `mcp.extraServers` entry
+  (`ToolkitServerName`) when a bridge was found. Permissions are not in it, so
+  they stay off. It is portable: the bridge path is written with
+  `${PROJECT_DIR}`, which step 7 resolves like any extra-server string, and
+  the entry's `node` command makes it a node-started server for bridge
+  preparation (`hasNodeExtraServer`). `DefaultYAML` does not check for a
+  `.uproject` itself — that check is `loadDefaults`'.
+- **Decoded like a file.** `loadDefaults` hands those bytes to `decodeDoc`,
+  the decoder behind `decodeYAML`, and steps 4 to 8 then run unchanged. There
+  is no second way to build the default `Config`, so `unreagent init` (k228)
+  can write the same bytes and get the same configuration; a start on the
+  defaults and a start on the written document are compared whole in
+  `TestDefaultYAMLRoundTrips`, which also pins the document's text. A default
+  **value** that should differ on a start without a file goes into
+  `defaultDoc`, never into a branch on `Info.Defaults` further down. The rule
+  is about values, not checks: a check that refuses something on this path
+  may branch on `Info.Defaults`, as the `unreal.project` refusal in the next
+  bullet does.
+- **The overlay still applies** (step 3): `unreagent.local.yaml` next to the
+  executable is decoded over the defaults, so `engineRoot` there works without
+  a config file (`TestDefaultsTakeLocalOverlay`). One key is refused: a
+  non-blank `unreal.project` after the overlay is a load error naming the
+  local file — without a config file the project is the `.uproject` next to
+  the launcher, and the setting belongs in an `unreagent.yaml`.
+- **Bridge search** (`findBridges`): a level-by-level walk below
+  `projectDir/Plugins` for a directory holding `bridgeEntry`, bounded by
+  `bridgeSearchDepth`; a directory that has the entry is a plugin and is not
+  searched further. Results are relative to the project directory with
+  forward slashes, the shallowest first and by name within a depth. The
+  document uses the first; more than one is the caller's to report, and
+  `loadDefaults` does so through `Info.Warnings`. The search never makes the
+  load fail: every problem it meets — a `Plugins` that is not a directory, a
+  directory it cannot read — becomes an `Info.Warnings` entry, and the
+  launcher starts with whatever bridge it still found, or none. Which
+  directories the walk skips is in `findBridges` (`bridgeSearchSkips`) and the
+  cases of `TestDefaultsToolkitDetection`; unreadable directories are pinned
+  in `TestDefaultsUnsearchablePluginsWarns`, links to a plugin directory in
+  `TestDefaultsToolkitBehindSymlink` — read the names, the depth and the
+  wording there.
+
+`load(explicitPath, dir)` is `Load` with the executable's directory as a
+parameter (`Load` passes `exeDir()`), and the entry point for every test of
+this path: `load("", t.TempDir())` after `writeUProject`, with `UE_ROOT` set
+or `noEngine(t)`.
 
 ## Placeholders
 
