@@ -49,5 +49,8 @@ other program first.
    task in `agent.args`); see the Permission layer in the main
    [README](../README.md).
 3. For a real UE project: remove `unreal.editor`/`args` (the defaults from
-   `${ENGINE}` take over) and place the files next to the `.uproject`. Details
+   `${ENGINE}` take over) and the `unattended: false` line (it only exists
+   because `ping` rejects the `-unattended` switch the launcher appends by
+   default; left in place, a real editor would start without `-unattended`),
+   and place the files next to the `.uproject`. Details
    in the main [README](../README.md).

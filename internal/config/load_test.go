@@ -270,6 +270,15 @@ func TestExampleDemoConfigLoads(t *testing.T) {
 	if c.Unreal.Editor != "ping" || c.Commands["hello"].Command != "cmd" {
 		t.Errorf("demo config: editor %q, hello %q", c.Unreal.Editor, c.Commands["hello"].Command)
 	}
+	// k236: ping is not UnrealEditor and rejects -unattended, which the
+	// launcher appends unless unreal.unattended is off — the demo then gave up
+	// on its "editor" after three failed starts.
+	if c.Unreal.Unattended == nil || *c.Unreal.Unattended {
+		t.Error("demo config: unreal.unattended is on, so -unattended is appended to ping's arguments")
+	}
+	if want := []string{"-n", "999999", "127.0.0.1"}; !reflect.DeepEqual(c.Unreal.Args, want) {
+		t.Errorf("demo config: unreal.args = %q, want %q", c.Unreal.Args, want)
+	}
 }
 
 // k47 item 2, documented limitation: 0 (or unset) means the default delay —

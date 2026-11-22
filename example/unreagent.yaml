@@ -13,6 +13,11 @@ unreal:
   # Placeholder instead of a real UnrealEditor.exe:
   editor: ping
   args: ["-n", "999999", "127.0.0.1"]
+  # The launcher appends -unattended to the editor's arguments by default.
+  # That is an UnrealEditor switch: ping rejects it and exits at once, and
+  # the launcher gives up on the "editor" after three quick failures. Off for
+  # the placeholder only — leave it out (default: on) for a real editor.
+  unattended: false
   restart: on-failure
 
 agent:
