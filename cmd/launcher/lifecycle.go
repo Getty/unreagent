@@ -588,6 +588,36 @@ func crashReporterKillers() [][]string {
 	return [][]string{{"pkill", "-f", "^([^ ]*/)?CrashReportClient(Editor)?( |$)"}}
 }
 
+// editorArgs is the editor's argument list: the project, unreal.args, and
+// -unattended unless unreal.unattended is off or the args already carry it.
+func editorArgs(u config.UnrealConfig, logger func(string)) []string {
+	args := append([]string{}, u.Args...)
+	if u.Project != "" {
+		args = append([]string{u.Project}, args...)
+	}
+	if boolVal(u.Unattended) && !hasEditorSwitch(args, "unattended") {
+		args = append(args, "-unattended")
+		logger("Unreal: -unattended active (no crash dialog, no recovery prompt)")
+	}
+	return args
+}
+
+// hasEditorSwitch reports whether args carry the editor switch name the way
+// the engine reads its command line (FParse::Param): "-" or "/" in front, the
+// name without regard to case, and nothing after it — "-name=1" is not the
+// switch. Editor arguments only; an agent's flags are case-sensitive (hasArg).
+func hasEditorSwitch(args []string, name string) bool {
+	for _, a := range args {
+		if a == "" || (a[0] != '-' && a[0] != '/') {
+			continue
+		}
+		if strings.EqualFold(a[1:], name) {
+			return true
+		}
+	}
+	return false
+}
+
 // cleanRecovery removes recovery/crash artefacts for a clean start.
 // PackageRestoreData.json goes on every start: its restore dialog would block
 // an unattended restart. Saved/Crashes is emptied only on a start that does

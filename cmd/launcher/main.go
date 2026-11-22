@@ -205,14 +205,7 @@ func run() error {
 	sup := supervisor.New(logger)
 
 	// --- unreal service ---
-	ueArgs := append([]string{}, cfg.Unreal.Args...)
-	if cfg.Unreal.Project != "" {
-		ueArgs = append([]string{cfg.Unreal.Project}, ueArgs...)
-	}
-	if boolVal(cfg.Unreal.Unattended) && !hasArg(ueArgs, "-unattended") {
-		ueArgs = append(ueArgs, "-unattended")
-		logger("Unreal: -unattended active (no crash dialog, no recovery prompt)")
-	}
+	ueArgs := editorArgs(cfg.Unreal, logger)
 	ueProjectDir := ""
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)

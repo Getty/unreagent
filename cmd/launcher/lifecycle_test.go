@@ -1533,3 +1533,58 @@ func waitRunning(t *testing.T, sup *supervisor.Supervisor, name string) int {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// The engine matches a switch without regard to case and takes "/" as well as
+// "-" in front of it (FParse::Param, UE 5.8.4 Parse.cpp), so unreal.args that
+// already carry the switch in any of those spellings get no second one (k207).
+// "-unattended=1" is not that switch to the engine, so the default still goes
+// on.
+func TestEditorArgsAddsUnattendedOnlyWhenTheEngineWouldMissIt(t *testing.T) {
+	on, off := true, false
+	cases := []struct {
+		name       string
+		args       []string
+		unattended *bool
+		want       []string
+	}{
+		{"absent", []string{"-stdout"}, &on, []string{"-stdout", "-unattended"}},
+		{"exact", []string{"-unattended", "-stdout"}, &on, []string{"-unattended", "-stdout"}},
+		{"other case", []string{"-Unattended"}, &on, []string{"-Unattended"}},
+		{"upper case", []string{"-UNATTENDED"}, &on, []string{"-UNATTENDED"}},
+		{"slash form", []string{"/Unattended"}, &on, []string{"/Unattended"}},
+		{"with a value", []string{"-unattended=1"}, &on, []string{"-unattended=1", "-unattended"}},
+		{"longer switch", []string{"-unattendedfoo"}, &on, []string{"-unattendedfoo", "-unattended"}},
+		{"no prefix", []string{"unattended"}, &on, []string{"unattended", "-unattended"}},
+		{"switched off", []string{"-stdout"}, &off, []string{"-stdout"}},
+		{"unset", []string{"-stdout"}, nil, []string{"-stdout"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logged []string
+			got := editorArgs(config.UnrealConfig{Args: tc.args, Unattended: tc.unattended},
+				func(s string) { logged = append(logged, s) })
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("editorArgs(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+			if added := len(got) > len(tc.args); added != (len(logged) == 1) {
+				t.Errorf("added=%v but logged %q", added, logged)
+			}
+		})
+	}
+}
+
+// The project goes in front of unreal.args, and the caller's slice is left
+// alone.
+func TestEditorArgsPutsTheProjectFirst(t *testing.T) {
+	on := true
+	args := make([]string, 1, 4)
+	args[0] = "-stdout"
+	got := editorArgs(config.UnrealConfig{Project: "/p/Game.uproject", Args: args, Unattended: &on}, func(string) {})
+	want := []string{"/p/Game.uproject", "-stdout", "-unattended"}
+	if !slices.Equal(got, want) {
+		t.Errorf("editorArgs = %q, want %q", got, want)
+	}
+	if len(args) != 1 || args[0] != "-stdout" {
+		t.Errorf("unreal.args changed: %q", args)
+	}
+}

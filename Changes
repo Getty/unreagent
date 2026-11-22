@@ -443,6 +443,10 @@ Revision history for unreagent
     Each such sentence now says what the tool does and what is unverified, or
     names its source. ue-context documents the plugin bridge's own status tool
     and how it differs from unreagent's status.
+  - -Unattended or /unattended in unreal.args no longer gets a second
+    -unattended appended: the launcher now compares the editor's switches the
+    way the engine does (leading - or /, case-insensitive, whole argument).
+    -unattended=1 is not the switch, so the default is still added there.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
