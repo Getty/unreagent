@@ -9,9 +9,16 @@
 #  substituted via placeholders:
 #    ${ENGINE}        UE installation root. Resolved in this order: env UE_ROOT,
 #                     engineRoot (usually in local.yaml), the .uproject's
-#                     EngineAssociation (Launcher version or a registered
-#                     source build), then the highest installed version with
-#                     an editor binary. Launcher installs are looked up in
+#                     EngineAssociation (a Launcher version; a registered
+#                     source build; a value with / or \ is an engine root,
+#                     relative to the .uproject's folder or absolute; blank,
+#                     missing or not a string means the engine tree the
+#                     project sits in, the nearest folder above the .uproject's
+#                     folder with Engine/Binaries and Engine/Build; the .uproject may be
+#                     UTF-8 with or without BOM, or UTF-16 LE/BE with BOM),
+#                     then the highest installed version with an editor
+#                     binary (unreagent's own fallback, for a project outside
+#                     any engine tree). Launcher installs are looked up in
 #                     %ProgramData%\Epic\UnrealEngineLauncher\
 #                     LauncherInstalled.dat (entries named UE_<version>), then
 #                     in the HKLM\SOFTWARE\EpicGames\Unreal Engine\<version>\
@@ -19,9 +26,11 @@
 #                     the Epic default install paths. For a version listed in
 #                     both, the .dat's directory is used unless it has no
 #                     editor binary, then the registry's. The highest-version
-#                     step logs a WARN when the EngineAssociation names no
-#                     usable engine (not installed, or installed without an
-#                     editor binary).
+#                     step logs a WARN when the project names an engine that is
+#                     not usable (not installed, installed without an editor
+#                     binary, a path that is no engine root, or an engine tree
+#                     without an editor binary): the editor then opens the
+#                     project with the engine picked, not the one it names.
 #    ${PROJECT}       full path to the .uproject: unreal.project if set,
 #                     otherwise the first .uproject next to this file
 #    ${PROJECT_DIR}   directory containing the .uproject

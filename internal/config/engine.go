@@ -5,11 +5,13 @@ package config
 //
 // The decisions (version order, association matching, parsing `reg query`
 // output and LauncherInstalled.dat) are pure functions; only regQuery touches
-// the Windows registry, by running reg.exe, and only datLauncherInstalls reads
-// the Launcher's install list.
+// the Windows registry, by running reg.exe, only datLauncherInstalls reads
+// the Launcher's install list, and only readEngineAssociation, globEngines,
+// isEngineRoot and hasEditor look at the project and the engine directories.
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 const (
@@ -64,13 +67,19 @@ type engineCandidate struct {
 // may be empty) and the warning chooseEngine gives for it; chooseEngine
 // documents the order.
 func autodetectEngine(project string) (root, warning string) {
-	assoc := readEngineAssociation(project)
+	assoc, ok := readEngineAssociation(project)
 	var builds []engineCandidate
 	if kind, _ := classifyAssociation(assoc); kind == assocBuild {
 		builds = registrySourceBuilds()
 	}
+	// A .uproject the engine cannot read as JSON has no association to it,
+	// and it does not search the project's surroundings then either.
+	var tree string
+	if ok {
+		tree = projectEngineRoot(project, assoc, isEngineRoot)
+	}
 	launcher := launcherEngines(os.Getenv("ProgramData"), registryLauncherInstalls())
-	return chooseEngine(assoc, launcher, globEngines(defaultEnginePatterns), builds, hasEditor)
+	return chooseEngine(assoc, tree, launcher, globEngines(defaultEnginePatterns), builds, hasEditor)
 }
 
 // launcherEngines lists the Launcher installs: first those in the
@@ -86,25 +95,41 @@ func launcherEngines(programData string, registry []engineCandidate) []engineCan
 
 // chooseEngine picks the engine root from the gathered candidates:
 //
-//  1. the engine the project's EngineAssociation names: a version ("5.8") is
-//     looked up among the Launcher installs (launcherEngines), then the
-//     default paths (UE_5.8); any other identifier (a source build's
-//     "{GUID}") among the registered source builds, case-insensitively and
-//     with or without braces;
-//  2. otherwise — no association, or it names no usable engine — the highest
-//     version among the Launcher installs and default paths, compared
-//     numerically (5.10 > 5.9).
+//  1. the engine the project names. A version association ("5.8") is looked
+//     up among the Launcher installs (launcherEngines), then the default
+//     paths (UE_5.8); a path association ("../UE") and a blank one name
+//     tree, the engine root projectEngineRoot found for the project ("" for
+//     none); any other identifier (a source build's "{GUID}") is looked up
+//     among the registered source builds, case-insensitively and with or
+//     without braces;
+//  2. otherwise — the project names no engine, or none that is usable — the
+//     highest version among the Launcher installs and default paths,
+//     compared numerically (5.10 > 5.9). This step is unreagent's: the
+//     engine has no such fallback and leaves the project without one
+//     (GetEngineIdentifierForProject, DesktopPlatformBase.cpp 454-498).
 //
 // Only directories for which hasEditor is true count; "" if none qualifies.
-// When an association names no usable engine and step 2 picks one, warning
-// says so: the editor would open the project in another engine and may offer
-// to convert it (k88).
-func chooseEngine(assoc string, launcher, defaults, builds []engineCandidate, hasEditor func(dir string) bool) (root, warning string) {
+// That holds for tree too, unreagent's choice (k203): the engine takes an
+// engine tree without an editor binary, but unreagent has no editor to start
+// there, so a blank or path association then goes on to step 2 as an
+// uninstalled version does, with a warning.
+//
+// When the project names an engine that is not usable and step 2 picks one,
+// warning says so (k88): the editor then opens the project with that engine,
+// not the one the project names. It claims nothing beyond that: an editor
+// started on a .uproject does not act on the association — in the UE 5.8.4
+// source only GetEngineIdentifierForProject resolves it, and the editor calls
+// that from its project browser and home screen only.
+func chooseEngine(assoc, tree string, launcher, defaults, builds []engineCandidate, hasEditor func(dir string) bool) (root, warning string) {
 	installed := append(append([]engineCandidate(nil), launcher...), defaults...)
 
 	kind, id := classifyAssociation(assoc)
 	var named []engineCandidate
 	switch kind {
+	case assocNone, assocPath:
+		if tree != "" {
+			named = append(named, engineCandidate{Dir: tree})
+		}
 	case assocVersion:
 		for _, c := range installed {
 			if c.ID == id {
@@ -124,9 +149,20 @@ func chooseEngine(assoc string, launcher, defaults, builds []engineCandidate, ha
 		}
 	}
 	best := highestEngine(installed, hasEditor)
-	if kind != assocNone && best.Dir != "" {
-		warning = fmt.Sprintf("the .uproject's EngineAssociation %q names no usable engine (not installed, or installed without an editor binary) — using the highest usable one instead, %s at %s, and the editor may offer to convert the project; install or build the associated engine, or pin one with engineRoot in unreagent.local.yaml (or env UE_ROOT)",
-			strings.TrimSpace(assoc), best.ID, best.Dir)
+	if best.Dir == "" {
+		return "", ""
+	}
+	const instead = "using the highest usable one instead, %s at %s, so the editor opens the project with that engine, not the one the project names; %s, or pin one with engineRoot in unreagent.local.yaml (or env UE_ROOT)"
+	switch {
+	case kind == assocNone && tree != "":
+		warning = fmt.Sprintf("the .uproject's EngineAssociation names no engine (blank, missing or not a string), so its engine is the engine tree it lies in, %s, which has no editor binary — "+instead,
+			tree, best.ID, best.Dir, "build the editor there")
+	case kind == assocPath:
+		warning = fmt.Sprintf("the .uproject's EngineAssociation %q names no usable engine (no engine root at that path, a relative one taken from the project's directory, or one without an editor binary) — "+instead,
+			strings.TrimSpace(assoc), best.ID, best.Dir, "correct the path or build the editor there")
+	case kind != assocNone:
+		warning = fmt.Sprintf("the .uproject's EngineAssociation %q names no usable engine (not installed, or installed without an editor binary) — "+instead,
+			strings.TrimSpace(assoc), best.ID, best.Dir, "install or build the associated engine")
 	}
 	return best.Dir, warning
 }
@@ -199,16 +235,21 @@ func compareEngineVersions(a, b []int) int {
 type associationKind int
 
 const (
-	assocNone    associationKind = iota // empty: no association
+	assocNone    associationKind = iota // blank: the engine tree the project lies in
 	assocVersion                        // Launcher install, e.g. "5.8"
 	assocBuild                          // source build, e.g. "{GUID}"
+	assocPath                           // engine root, e.g. "../UE": relative to the project's directory
 )
 
 // classifyAssociation classifies a .uproject EngineAssociation and returns the
-// identifier to match: a version as is, anything else normalized by
-// normalizeBuildID.
+// identifier to match: a path — any value with a / or \, as the engine tells
+// one apart (DesktopPlatformBase.cpp 468-480) — and a version as they are,
+// anything else normalized by normalizeBuildID.
 func classifyAssociation(assoc string) (associationKind, string) {
 	assoc = strings.TrimSpace(assoc)
+	if strings.ContainsAny(assoc, `/\`) {
+		return assocPath, assoc
+	}
 	if _, ok := parseEngineVersion(assoc); ok {
 		return assocVersion, assoc
 	}
@@ -224,29 +265,110 @@ func normalizeBuildID(id string) string {
 	return strings.ToLower(strings.Trim(strings.TrimSpace(id), "{}"))
 }
 
-// readEngineAssociation returns the project's EngineAssociation, "" if there is
-// no project or it cannot be read.
-func readEngineAssociation(project string) string {
+// readEngineAssociation returns the project's EngineAssociation as
+// parseEngineAssociation does; "", false if there is no project or it cannot
+// be read.
+func readEngineAssociation(project string) (assoc string, ok bool) {
 	if project == "" {
-		return ""
+		return "", false
 	}
 	b, err := os.ReadFile(project)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	return parseEngineAssociation(b)
 }
 
-// parseEngineAssociation extracts EngineAssociation from .uproject JSON; ""
-// if it is missing or the JSON is invalid. A UTF-8 BOM is tolerated.
-func parseEngineAssociation(b []byte) string {
-	var p struct {
-		EngineAssociation string `json:"EngineAssociation"`
+// parseEngineAssociation extracts EngineAssociation from the .uproject's
+// bytes b, decoded by decodeUEText. ok is false when they hold no JSON object
+// — the engine then has no association for the project at all. A value that
+// is missing or not a string reads as "", as blank: the engine takes only a
+// string (DesktopPlatformBase.cpp 466-467). The engine reads the file with
+// its TJsonReader (LoadProjectFile, 1661-1678), which refuses a trailing
+// comma in an object as encoding/json does — unlike the RapidJSON reader its
+// plugin and project descriptors go through.
+func parseEngineAssociation(b []byte) (assoc string, ok bool) {
+	var p *struct {
+		EngineAssociation json.RawMessage `json:"EngineAssociation"`
 	}
-	if json.Unmarshal(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), &p) != nil {
+	if json.Unmarshal(decodeUEText(b), &p) != nil || p == nil {
+		return "", false
+	}
+	var s string
+	if json.Unmarshal(p.EngineAssociation, &s) != nil {
+		return "", true
+	}
+	return strings.TrimSpace(s), true
+}
+
+// decodeUEText returns the text file content b as UTF-8, decoded as the
+// engine decodes a text file: UTF-16 little or big endian when b has an even
+// length and starts with that byte order mark, UTF-8 otherwise, a UTF-8 byte
+// order mark dropped (FFileHelper::BufferToString,
+// Runtime/Core/Private/Misc/FileHelper.cpp 145-185).
+func decodeUEText(b []byte) []byte {
+	var order binary.ByteOrder
+	switch {
+	case len(b) < 2 || len(b)%2 != 0:
+	case b[0] == 0xff && b[1] == 0xfe:
+		order = binary.LittleEndian
+	case b[0] == 0xfe && b[1] == 0xff:
+		order = binary.BigEndian
+	}
+	if order == nil {
+		return bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
+	}
+	units := make([]uint16, 0, len(b)/2-1)
+	for i := 2; i < len(b); i += 2 {
+		units = append(units, order.Uint16(b[i:]))
+	}
+	return []byte(string(utf16.Decode(units)))
+}
+
+// projectEngineRoot returns the engine root the project's place on disk
+// names, as the engine finds it (GetEngineIdentifierForProject,
+// DesktopPlatformBase.cpp 454-498), isEngineRoot telling engine roots apart.
+// For a path association (classifyAssociation) it is the directory
+// associationPath resolves it to, if that is one; nothing else is searched
+// then, as the engine searches nothing else. For a blank association it is
+// the nearest engine root above the project's directory, up to the root of
+// the drive; the project's directory itself is not searched. "" for any other
+// association, for no project, and when there is none.
+func projectEngineRoot(project, assoc string, isEngineRoot func(dir string) bool) string {
+	if project == "" {
 		return ""
 	}
-	return strings.TrimSpace(p.EngineAssociation)
+	switch kind, _ := classifyAssociation(assoc); kind {
+	case assocPath:
+		if dir := associationPath(project, assoc); isEngineRoot(dir) {
+			return dir
+		}
+	case assocNone:
+		dir := filepath.Dir(filepath.Clean(project))
+		for parent := filepath.Dir(dir); parent != dir; dir, parent = parent, filepath.Dir(parent) {
+			if isEngineRoot(parent) {
+				return filepath.ToSlash(parent)
+			}
+		}
+	}
+	return ""
+}
+
+// associationPath resolves the path association assoc against the directory
+// of project, with forward slashes. As in the engine, \ counts as a
+// separator, and a value that starts with / or \\ or a drive letter and a
+// colon is taken as it is, anything else relative to the project's directory
+// (FPaths::ConvertRelativePathToFull and FPaths::IsRelative,
+// Runtime/Core/Private/Misc/Paths.cpp 123-148, 1265-1280).
+func associationPath(project, assoc string) string {
+	assoc = strings.TrimSpace(assoc)
+	rooted := strings.HasPrefix(assoc, "/") || strings.HasPrefix(assoc, `\\`) ||
+		len(assoc) >= 2 && assoc[1] == ':' && ('a' <= assoc[0]|0x20 && assoc[0]|0x20 <= 'z')
+	p := filepath.FromSlash(strings.ReplaceAll(assoc, `\`, "/"))
+	if !rooted {
+		p = filepath.Join(filepath.Dir(project), p)
+	}
+	return filepath.ToSlash(filepath.Clean(p))
 }
 
 // globEngines lists the directories matching patterns; the ID is the version
@@ -271,6 +393,20 @@ func globEngines(patterns []string) []engineCandidate {
 // hasEditor reports whether dir is an engine root with an UnrealEditor.exe.
 func hasEditor(dir string) bool {
 	return fileExists(filepath.Join(dir, "Engine", "Binaries", "Win64", "UnrealEditor.exe"))
+}
+
+// isEngineRoot reports whether dir is an engine root by the engine's own
+// test: it has an Engine/Binaries and an Engine/Build directory
+// (FDesktopPlatformBase::IsValidRootDirectory, DesktopPlatformBase.cpp
+// 401-421). It need not hold an editor binary; that is hasEditor's test.
+func isEngineRoot(dir string) bool {
+	for _, sub := range []string{"Binaries", "Build"} {
+		st, err := os.Stat(filepath.Join(dir, "Engine", sub))
+		if err != nil || !st.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // --- LauncherInstalled.dat (Windows) ---

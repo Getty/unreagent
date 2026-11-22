@@ -84,11 +84,18 @@ placeholder system exists.
    value is made absolute against the **working directory**, not the config
    directory (unlike `unreal.project`). Otherwise `autodetect(project)`, which
    returns `(root, warning)`; finding nothing is an empty engine, not an error
-   by itself. The warning comes from `chooseEngine` when an `EngineAssociation`
-   names no usable engine and the highest-installed fallback picks one; `Load`
-   appends it to `Info.Warnings`, and `run()` logs each entry as a WARN after
-   the `Engine:` line (`hermes-setup` does not). `UE_ROOT` and `engineRoot`
-   never warn.
+   by itself. For a blank (or non-string) `EngineAssociation` it searches above
+   the project first: the nearest directory, starting at the one above the
+   `.uproject`'s directory, that has `Engine/Binaries` and `Engine/Build`
+   (`projectEngineRoot`). A value with `/` or `\` is that engine root,
+   relative to the `.uproject`'s directory unless absolute. A `.uproject` that
+   is not a JSON object is searched for nothing. The warning comes from
+   `chooseEngine` when the project names an engine that is not usable — an
+   association that names no usable engine, or a blank one inside an engine
+   tree without an editor binary — and the highest-installed fallback picks
+   one; `Load` appends it to `Info.Warnings`, and `run()` logs each entry as a
+   WARN after the `Engine:` line (`hermes-setup` does not). `UE_ROOT` and
+   `engineRoot` never warn.
 7. Write the resolved project path back into `unreal.project`, then
    `substitute(...)` (next section). It drops a built-in command that needs an
    unresolved placeholder and returns its name in `Info.SkippedCommands`
@@ -170,7 +177,7 @@ engine every `Load` fails unless `unreal.editor` is set literally — the
 
 | Placeholder | Resolution |
 |---|---|
-| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the `.uproject`'s `EngineAssociation` (version → Launcher installs / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds) → highest installed version, compared numerically (Launcher installs + Epic default paths), with a WARN via `Info.Warnings` when an association was set (step 6). Launcher installs: the `UE_<ver>` entries of `%ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat` (what the engine reads), then the `HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>` keys as the fallback (`launcherEngines`); see `internal/config/engine.go` and skill `unreagent-ue` |
+| `${ENGINE}` | env `UE_ROOT` → `engineRoot` (usually local.yaml) → the engine the `.uproject` names by its `EngineAssociation` (version → Launcher installs / `UE_<ver>` default path; other id e.g. `{GUID}` → registered source builds; a path → that engine root; blank → the engine tree above the `.uproject`) → highest installed version, compared numerically (Launcher installs + Epic default paths), with a WARN via `Info.Warnings` when the named engine is not usable (step 6). Launcher installs: the `UE_<ver>` entries of `%ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat` (what the engine reads), then the `HKLM\SOFTWARE\EpicGames\Unreal Engine\<ver>` keys as the fallback (`launcherEngines`); see `internal/config/engine.go` and skill `unreagent-ue` |
 | `${PROJECT}` | full path to the `.uproject`: `unreal.project` if set, else the first `*.uproject` next to the config (step 5) |
 | `${PROJECT_DIR}` | its directory |
 | `${PROJECT_NAME}` | its filename without extension |

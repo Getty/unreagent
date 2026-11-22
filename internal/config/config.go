@@ -13,10 +13,15 @@
 //	${PROJECT_NAME}  – file name of the .uproject without the extension
 //
 // Engine resolution (priority): env UE_ROOT → engineRoot (usually local.yaml) →
-// the engine named by the .uproject's EngineAssociation → the highest version
-// installed, compared numerically. Both of the last two look for engines in
-// the Epic Launcher's LauncherInstalled.dat, then its registry entries as the
-// fallback, then the standard installation paths. See engine.go.
+// the engine the .uproject names → the highest version installed, compared
+// numerically. The .uproject names it by its EngineAssociation: a version is
+// looked up in the Epic Launcher's LauncherInstalled.dat, then its registry
+// entries as the fallback, then the standard installation paths — the places
+// the highest-version step searches as well; a source build's identifier only
+// among the builds registered in the HKCU registry; a path (with / or \) is
+// an engine root, relative to the .uproject's directory or, if absolute,
+// taken as written; a blank association names the engine tree the .uproject
+// lies in, if any. See engine.go.
 package config
 
 import (
@@ -304,8 +309,9 @@ type Info struct {
 	// because a placeholder they need resolved to nothing — sorted.
 	SkippedCommands []string
 	// Warnings are what Load noticed without failing, each a complete message
-	// for the launcher to log as a WARN line: today only an EngineAssociation
-	// that names no usable engine (see chooseEngine).
+	// for the launcher to log as a WARN line: today only that the engine the
+	// .uproject names — by its EngineAssociation, or by lying in an engine
+	// tree — is not usable (see chooseEngine).
 	Warnings []string
 }
 

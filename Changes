@@ -479,6 +479,15 @@ Revision history for unreagent
     engine and a WARN that the .uproject's EngineAssociation names no usable
     engine. For a version both list, the .dat's directory is used unless it
     has no editor binary.
+  - A blank, missing or non-string EngineAssociation in the .uproject selects
+    the engine tree the project sits in (the nearest directory above it with
+    Engine/Binaries and Engine/Build), as the engine does, instead of the
+    highest installed engine; that stays the fallback for a project outside
+    any engine tree. A value with / or \ is an engine root path (relative to
+    the .uproject's directory, or absolute) instead of a source-build id. A
+    .uproject saved as UTF-16 is read. A project inside an engine tree
+    without an editor binary gets a WARN, and the EngineAssociation WARN no
+    longer says the editor may offer to convert the project.
 
 0.0.9    2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

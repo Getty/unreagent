@@ -1,12 +1,16 @@
 package config
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // editorIn returns a hasEditor stand-in that is true for exactly dirs.
@@ -79,6 +83,11 @@ func TestClassifyAssociation(t *testing.T) {
 		{"{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", assocBuild, "6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c"},
 		{"6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c", assocBuild, "6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c"},
 		{"My Fork", assocBuild, "my fork"},
+		// A / or \ anywhere makes it a path, kept as written (k203).
+		{"../../UE", assocPath, "../../UE"},
+		{` ..\Engines\UE_Fork `, assocPath, `..\Engines\UE_Fork`},
+		{"D:/Source/UnrealEngine", assocPath, "D:/Source/UnrealEngine"},
+		{"{6A3B8C2E/1F4D}", assocPath, "{6A3B8C2E/1F4D}"},
 	}
 	for _, c := range cases {
 		kind, id := classifyAssociation(c.in)
@@ -88,21 +97,58 @@ func TestClassifyAssociation(t *testing.T) {
 	}
 }
 
+// utf16Text encodes s as UTF-16 in byte order order, after a byte order mark
+// when bom is set — the way the engine may write a .uproject.
+func utf16Text(s string, order binary.ByteOrder, bom bool) []byte {
+	units := utf16.Encode([]rune(s))
+	if bom {
+		units = append([]uint16{0xfeff}, units...)
+	}
+	b := make([]byte, 2*len(units))
+	for i, u := range units {
+		order.PutUint16(b[2*i:], u)
+	}
+	return b
+}
+
 func TestParseEngineAssociation(t *testing.T) {
+	// The non-BMP rune takes a surrogate pair in UTF-16.
+	const path = `{"FileVersion": 3, "EngineAssociation": "../Ünreal 🚀/UE"}`
 	cases := []struct {
-		name, json, want string
+		name string
+		in   []byte
+		want string
+		ok   bool
 	}{
-		{"launcher version", `{"FileVersion": 3, "EngineAssociation": "5.8", "Category": ""}`, "5.8"},
-		{"source build", `{"EngineAssociation": "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}"}`, "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}"},
-		{"utf-8 bom", "\xef\xbb\xbf{\"EngineAssociation\": \"5.9\"}", "5.9"},
-		{"empty", `{"EngineAssociation": ""}`, ""},
-		{"missing", `{"FileVersion": 3}`, ""},
-		{"not a string", `{"EngineAssociation": 5.8}`, ""},
-		{"invalid json", `{"EngineAssociation": "5.8",`, ""},
+		{"launcher version", []byte(`{"FileVersion": 3, "EngineAssociation": "5.8", "Category": ""}`), "5.8", true},
+		{"source build", []byte(`{"EngineAssociation": "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}"}`), "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", true},
+		{"utf-8 bom", []byte("\xef\xbb\xbf{\"EngineAssociation\": \"5.9\"}"), "5.9", true},
+		{"utf-16 le bom", utf16Text(path, binary.LittleEndian, true), "../Ünreal 🚀/UE", true},
+		{"utf-16 be bom", utf16Text(path, binary.BigEndian, true), "../Ünreal 🚀/UE", true},
+		{"utf-16 le, blank", utf16Text(`{"EngineAssociation": ""}`, binary.LittleEndian, true), "", true},
+		// The engine takes UTF-16 only behind its byte order mark and with an
+		// even length; anything else is read as UTF-8 and is no JSON then.
+		{"utf-16 le without bom", utf16Text(`{"EngineAssociation": "5.9"}`, binary.LittleEndian, false), "", false},
+		{"utf-16 le bom, odd length", append(utf16Text(`{"EngineAssociation": "5.9"}`, binary.LittleEndian, true), 0), "", false},
+		// Blank, as the engine reads it: then it searches the parent
+		// directories (ok true).
+		{"empty", []byte(`{"EngineAssociation": ""}`), "", true},
+		{"missing", []byte(`{"FileVersion": 3}`), "", true},
+		{"null", []byte(`{"EngineAssociation": null}`), "", true},
+		{"a number", []byte(`{"EngineAssociation": 5.8}`), "", true},
+		{"a bool", []byte(`{"EngineAssociation": true}`), "", true},
+		{"an array", []byte(`{"EngineAssociation": ["5.8"]}`), "", true},
+		{"an object", []byte(`{"EngineAssociation": {"Version": "5.8"}}`), "", true},
+		// No project file to the engine: no association, no search (ok false).
+		{"invalid json", []byte(`{"EngineAssociation": "5.8",`), "", false},
+		{"trailing comma", []byte(`{"EngineAssociation": "5.8",}`), "", false},
+		{"top-level null", []byte(`null`), "", false},
+		{"top-level array", []byte(`[{"EngineAssociation": "5.8"}]`), "", false},
+		{"empty file", nil, "", false},
 	}
 	for _, c := range cases {
-		if got := parseEngineAssociation([]byte(c.json)); got != c.want {
-			t.Errorf("%s: got %q; want %q", c.name, got, c.want)
+		if got, ok := parseEngineAssociation(c.in); got != c.want || ok != c.ok {
+			t.Errorf("%s: got %q, %v; want %q, %v", c.name, got, ok, c.want, c.ok)
 		}
 	}
 }
@@ -113,14 +159,210 @@ func TestReadEngineAssociation(t *testing.T) {
 	if err := os.WriteFile(project, []byte(`{"EngineAssociation": "5.8"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := readEngineAssociation(project); got != "5.8" {
-		t.Errorf("got %q; want 5.8", got)
+	if got, ok := readEngineAssociation(project); got != "5.8" || !ok {
+		t.Errorf("got %q, %v; want 5.8, true", got, ok)
 	}
-	if got := readEngineAssociation(""); got != "" {
-		t.Errorf("no project: got %q; want empty", got)
+	utf16Project := filepath.Join(dir, "Utf16.uproject")
+	if err := os.WriteFile(utf16Project, utf16Text(`{"EngineAssociation": "5.9"}`, binary.LittleEndian, true), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got := readEngineAssociation(filepath.Join(dir, "Missing.uproject")); got != "" {
-		t.Errorf("unreadable project: got %q; want empty", got)
+	if got, ok := readEngineAssociation(utf16Project); got != "5.9" || !ok {
+		t.Errorf("utf-16 project: got %q, %v; want 5.9, true", got, ok)
+	}
+	if got, ok := readEngineAssociation(""); got != "" || ok {
+		t.Errorf("no project: got %q, %v; want empty, false", got, ok)
+	}
+	if got, ok := readEngineAssociation(filepath.Join(dir, "Missing.uproject")); got != "" || ok {
+		t.Errorf("unreadable project: got %q, %v; want empty, false", got, ok)
+	}
+}
+
+// engineTree makes dir an engine root by the engine's test (Engine/Binaries
+// and Engine/Build), with an editor binary if editor is set, and returns it.
+func engineTree(t *testing.T, dir string, editor bool) string {
+	t.Helper()
+	if editor {
+		installTestEngine(t, dir)
+	} else if err := os.MkdirAll(filepath.Join(dir, "Engine", "Binaries", "Win64"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "Engine", "Build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestIsEngineRoot(t *testing.T) {
+	root := t.TempDir()
+	full := engineTree(t, filepath.Join(root, "Full"), true)
+	unbuilt := engineTree(t, filepath.Join(root, "Unbuilt"), false)
+	// An editor binary alone is not the engine's test: the Engine/Build
+	// directory is missing (what the engine says filters out the Launcher).
+	noBuild := installTestEngine(t, filepath.Join(root, "NoBuild"))
+	buildFile := installTestEngine(t, filepath.Join(root, "BuildFile"))
+	if err := os.WriteFile(filepath.Join(buildFile, "Engine", "Build"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	noBinaries := filepath.Join(root, "NoBinaries")
+	if err := os.MkdirAll(filepath.Join(noBinaries, "Engine", "Build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]bool{
+		full:                          true,
+		unbuilt:                       true,
+		noBuild:                       false,
+		buildFile:                     false,
+		noBinaries:                    false,
+		filepath.Join(root, "None"):   false,
+		filepath.ToSlash(full):        true,
+		filepath.Join(full, "Engine"): false,
+	} {
+		if got := isEngineRoot(dir); got != want {
+			t.Errorf("isEngineRoot(%q) = %v; want %v", dir, got, want)
+		}
+	}
+}
+
+func TestAssociationPath(t *testing.T) {
+	const project = "C:/Games/Demo/Demo.uproject"
+	unc := "//server/share/UE"
+	if runtime.GOOS != "windows" {
+		unc = "/server/share/UE" // filepath.Clean folds the leading // off Windows
+	}
+	cases := []struct{ assoc, want string }{
+		{"../UE", "C:/Games/UE"},
+		{`..\..\Engines\UE_Fork`, "C:/Engines/UE_Fork"},
+		{"./Engine/../UE/", "C:/Games/Demo/UE"},
+		{"D:/Source/UnrealEngine", "D:/Source/UnrealEngine"},
+		{`d:\Source\UnrealEngine`, "d:/Source/UnrealEngine"},
+		{"/Source/UnrealEngine", "/Source/UnrealEngine"},
+		{`\\server\share\UE`, unc},
+		// One leading backslash is relative to the engine (FPaths::IsRelative
+		// checks for two), so it lands below the project directory.
+		{`\UE`, "C:/Games/Demo/UE"},
+	}
+	for _, c := range cases {
+		if got := associationPath(project, c.assoc); got != c.want {
+			t.Errorf("associationPath(%q) = %q; want %q", c.assoc, got, c.want)
+		}
+	}
+}
+
+// TestProjectEngineRoot pins the engine's search for a project's engine by
+// its place on disk (k203): for a blank association the nearest directory
+// above the project's own that is an engine root, for a path association that
+// path; real directories, judged by the real isEngineRoot. A walk that leaves
+// the temp root goes on through the host's own directories, so above root
+// the stand-in answers no and only records the question: the host's
+// directories cannot change the result.
+func TestProjectEngineRoot(t *testing.T) {
+	root := t.TempDir()
+	var above []string // what the walk asked about outside root, in order
+	bounded := func(dir string) bool {
+		if rel, err := filepath.Rel(root, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			above = append(above, dir)
+			return false
+		}
+		return isEngineRoot(dir)
+	}
+	tree := engineTree(t, filepath.Join(root, "UE"), true)
+	inner := engineTree(t, filepath.Join(tree, "Nested", "UE_Inner"), true)
+	unbuilt := engineTree(t, filepath.Join(root, "Unbuilt"), false)
+	// An editor binary without Engine/Build is no engine root: the search goes
+	// on above it.
+	noBuild := installTestEngine(t, filepath.Join(tree, "NoBuild"))
+	slash := filepath.ToSlash
+
+	in := filepath.Join(tree, "Samples", "Games", "Demo", "Demo.uproject")
+	cases := []struct {
+		name, project, assoc, want string
+	}{
+		{"blank inside an engine tree", in, "", slash(tree)},
+		{"blank, the nearest engine root wins", filepath.Join(inner, "Games", "Demo", "Demo.uproject"), "", slash(inner)},
+		{"blank, inside an engine tree without an editor", filepath.Join(unbuilt, "Games", "Demo", "Demo.uproject"), "", slash(unbuilt)},
+		{"blank, a directory without Engine/Build is passed over", filepath.Join(noBuild, "Demo", "Demo.uproject"), "", slash(tree)},
+		// The engine starts above the project's directory: a project in the
+		// engine root itself is not inside the tree.
+		{"blank, the project directory itself is not searched", filepath.Join(tree, "Demo.uproject"), "", ""},
+		{"blank outside any engine tree", filepath.Join(root, "Projects", "Demo", "Demo.uproject"), "", ""},
+		{"a version is no place on disk", in, "5.8", ""},
+		{"a build id is no place on disk", in, "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", ""},
+		{"relative path", filepath.Join(root, "Projects", "Demo", "Demo.uproject"), "../../UE", slash(tree)},
+		{"relative path, backslashes", filepath.Join(root, "Projects", "Demo", "Demo.uproject"), `..\..\Unbuilt`, slash(unbuilt)},
+		{"absolute path", filepath.Join(root, "Projects", "Demo", "Demo.uproject"), slash(inner), slash(inner)},
+		// A path to no engine root is no association to the engine, and it
+		// does not search the parent directories then.
+		{"path to no engine root", in, "../../../NoBuild", ""},
+		{"path to nothing", in, "../Missing", ""},
+		{"no project", "", "", ""},
+	}
+	for _, c := range cases {
+		above = nil
+		if got := projectEngineRoot(c.project, c.assoc, bounded); got != c.want {
+			t.Errorf("%s: got %q; want %q", c.name, got, c.want)
+		}
+		// A blank association that finds nothing searches up to the root of
+		// the file system (the drive's, on Windows), and no further.
+		if c.assoc == "" && c.want == "" && c.project != "" {
+			if len(above) == 0 {
+				t.Errorf("%s: the search stopped inside the temp root", c.name)
+			} else if last := above[len(above)-1]; filepath.Dir(last) != last {
+				t.Errorf("%s: the search stopped at %q, not at the root of the file system", c.name, last)
+			}
+		}
+	}
+}
+
+// TestAutodetectEngineSearchesAboveTheProject runs the whole auto-detection
+// for a project inside an engine tree (k203): blank, missing or non-string
+// associations, UTF-16 project files, and a path association. The tree wins
+// before the highest-version step, so the host's engines cannot change the
+// result; ProgramData points at an empty directory all the same.
+func TestAutodetectEngineSearchesAboveTheProject(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ProgramData", filepath.Join(root, "ProgramData"))
+	tree := engineTree(t, filepath.Join(root, "UE_Tree"), true)
+	// Each case's project is <base>/<case number>/Demo.uproject: two levels
+	// below the tree for inTree, so "../../UE_Tree" reaches it from outside.
+	inTree := filepath.Join(tree, "Games")
+	outside := filepath.Join(root, "Projects")
+
+	cases := []struct {
+		name, base string
+		content    []byte
+	}{
+		{"blank", inTree, []byte(`{"FileVersion": 3, "EngineAssociation": ""}`)},
+		{"missing", inTree, []byte(`{"FileVersion": 3}`)},
+		{"not a string", inTree, []byte(`{"FileVersion": 3, "EngineAssociation": 5.8}`)},
+		{"utf-16 le, blank", inTree, utf16Text(`{"FileVersion": 3, "EngineAssociation": ""}`, binary.LittleEndian, true)},
+		{"utf-8 bom, blank", inTree, []byte("\xef\xbb\xbf{\"FileVersion\": 3, \"EngineAssociation\": \"\"}")},
+		{"relative path", outside, []byte(`{"FileVersion": 3, "EngineAssociation": "../../UE_Tree"}`)},
+		{"relative path, utf-16 be", outside, utf16Text(`{"FileVersion": 3, "EngineAssociation": "..\\..\\UE_Tree"}`, binary.BigEndian, true)},
+	}
+	for i, c := range cases {
+		project := filepath.Join(c.base, strconv.Itoa(i), "Demo.uproject")
+		if err := os.MkdirAll(filepath.Dir(project), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(project, c.content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, warning := autodetectEngine(project); got != filepath.ToSlash(tree) || warning != "" {
+			t.Errorf("%s: autodetectEngine = %q, warning %q; want %q, none", c.name, got, warning, filepath.ToSlash(tree))
+		}
+	}
+
+	// A .uproject that is no JSON object gives the engine no association,
+	// and it does not search the parent directories then either.
+	broken := filepath.Join(inTree, "Broken", "Demo.uproject")
+	if err := os.MkdirAll(filepath.Dir(broken), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(broken, []byte(`{"EngineAssociation": "",`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := autodetectEngine(broken); got == filepath.ToSlash(tree) {
+		t.Errorf("broken .uproject: autodetectEngine = %q, the tree it lies in; want no search above it", got)
 	}
 }
 
@@ -378,7 +620,7 @@ func TestLauncherEnginesOrder(t *testing.T) {
 		{"no association, tie on the version: the .dat wins", "", editorIn("C:/dat/UE_5.8", "C:/reg/UE_5.8"), "C:/dat/UE_5.8"},
 	}
 	for _, c := range cases {
-		got, warning := chooseEngine(c.assoc, launcher, nil, nil, c.hasEditor)
+		got, warning := chooseEngine(c.assoc, "", launcher, nil, nil, c.hasEditor)
 		if got != c.want || warning != "" {
 			t.Errorf("%s: got %q, warning %q; want %q, none", c.name, got, warning, c.want)
 		}
@@ -420,19 +662,19 @@ func TestLauncherInstalledOnDisk(t *testing.T) {
 	))
 	registry := []engineCandidate{{"5.7", e57}}
 
-	before, warning := chooseEngine("5.8", registry, nil, nil, hasEditor)
+	before, warning := chooseEngine("5.8", "", registry, nil, nil, hasEditor)
 	if before != filepath.ToSlash(e57) || warning == "" {
 		t.Fatalf("registry only: got %q, warning %q; want %q with a warning (the k211 bug as the baseline)", before, warning, filepath.ToSlash(e57))
 	}
 
 	launcher := launcherEngines(programData, registry)
-	if got, warning := chooseEngine("5.8", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e58) || warning != "" {
+	if got, warning := chooseEngine("5.8", "", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e58) || warning != "" {
 		t.Errorf("association 5.8: got %q, warning %q; want %q, none", got, warning, filepath.ToSlash(e58))
 	}
-	if got, warning := chooseEngine("5.7", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e57) || warning != "" {
+	if got, warning := chooseEngine("5.7", "", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e57) || warning != "" {
 		t.Errorf("association 5.7: got %q, warning %q; want %q, none", got, warning, filepath.ToSlash(e57))
 	}
-	if got, _ := chooseEngine("", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e58) {
+	if got, _ := chooseEngine("", "", launcher, nil, nil, hasEditor); got != filepath.ToSlash(e58) {
 		t.Errorf("no association: got %q; want the highest, %q", got, filepath.ToSlash(e58))
 	}
 }
@@ -568,31 +810,54 @@ func TestChooseEngine(t *testing.T) {
 		"D:/Epic Games/UE_5.9", "D:/Epic Games/UE_5.6", "D:/Source/UnrealEngine",
 	)
 
+	// tree is the engine root the project's place on disk names
+	// (projectEngineRoot): the one it lies in for a blank association, the
+	// path for a path association.
+	const tree = "E:/Engines/UE_Tree"
+	withTree := editorIn(
+		"C:/Program Files/Epic Games/UE_5.7", "C:/Program Files/Epic Games/UE_5.8",
+		"D:/Epic Games/UE_5.9", "D:/Epic Games/UE_5.6", "D:/Source/UnrealEngine", tree,
+	)
+
 	// warn is the version of the fallback the warning names, "" for no
-	// warning: one is due exactly when the association names an engine and
-	// another one is chosen (k88). With nothing chosen, the launcher's own
-	// "engine not found" warning says enough.
+	// warning: one is due exactly when the project names an engine — by its
+	// association, or by lying in an engine tree — and another one is chosen
+	// (k88, k203). With nothing chosen, the launcher's own "engine not found"
+	// warning says enough. mentions is what else the warning must name.
 	cases := []struct {
 		name      string
 		assoc     string
+		tree      string
 		launcher  []engineCandidate
 		hasEditor func(string) bool
 		want      string
 		warn      string
+		mentions  []string
 	}{
-		{"no association: highest", "", launcher, all, "D:/Epic Games/UE_5.9", ""},
-		{"association beats a higher version", "5.7", launcher, all, "C:/Program Files/Epic Games/UE_5.7", ""},
-		{"association found via default path", "5.6", launcher, all, "D:/Epic Games/UE_5.6", ""},
-		{"association found via default path without registry", "5.9", nil, all, "D:/Epic Games/UE_5.9", ""},
-		{"association not installed: highest", "5.5", launcher, all, "D:/Epic Games/UE_5.9", "5.9"},
-		{"association without editor: highest", "5.7", launcher, editorIn("C:/Program Files/Epic Games/UE_5.8"), "C:/Program Files/Epic Games/UE_5.8", "5.8"},
-		{"source build guid", "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", launcher, all, "D:/Source/UnrealEngine", ""},
-		{"source build guid lower case, no braces", "6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c", launcher, all, "D:/Source/UnrealEngine", ""},
-		{"source build unknown: highest", "{00000000-0000-0000-0000-000000000000}", launcher, all, "D:/Epic Games/UE_5.9", "5.9"},
-		{"nothing installed", "5.8", nil, editorIn(), "", ""},
+		{"no association: highest", "", "", launcher, all, "D:/Epic Games/UE_5.9", "", nil},
+		{"association beats a higher version", "5.7", "", launcher, all, "C:/Program Files/Epic Games/UE_5.7", "", nil},
+		{"association found via default path", "5.6", "", launcher, all, "D:/Epic Games/UE_5.6", "", nil},
+		{"association found via default path without registry", "5.9", "", nil, all, "D:/Epic Games/UE_5.9", "", nil},
+		{"association not installed: highest", "5.5", "", launcher, all, "D:/Epic Games/UE_5.9", "5.9", nil},
+		{"association without editor: highest", "5.7", "", launcher, editorIn("C:/Program Files/Epic Games/UE_5.8"), "C:/Program Files/Epic Games/UE_5.8", "5.8", nil},
+		{"source build guid", "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", "", launcher, all, "D:/Source/UnrealEngine", "", nil},
+		{"source build guid lower case, no braces", "6a3b8c2e-1f4d-4e5a-9b7c-0d1e2f3a4b5c", "", launcher, all, "D:/Source/UnrealEngine", "", nil},
+		{"source build unknown: highest", "{00000000-0000-0000-0000-000000000000}", "", launcher, all, "D:/Epic Games/UE_5.9", "5.9", nil},
+		{"nothing installed", "5.8", "", nil, editorIn(), "", "", nil},
+
+		// k203: the project's place on disk.
+		{"blank inside an engine tree: the tree beats a higher version", "", tree, launcher, withTree, tree, "", nil},
+		{"blank inside an engine tree without an editor: highest", "", tree, launcher, all, "D:/Epic Games/UE_5.9", "5.9", []string{"EngineAssociation names no engine (blank, missing or not a string)", tree, "no editor binary"}},
+		{"blank inside an engine tree without an editor, nothing else installed", "", tree, nil, editorIn(), "", "", nil},
+		{"path association", "../../UE_Tree", tree, launcher, withTree, tree, "", nil},
+		{"path association, backslashes", `..\..\UE_Tree`, tree, launcher, withTree, tree, "", nil},
+		{"path association to no engine root: highest", "../../UE_Tree", "", launcher, withTree, "D:/Epic Games/UE_5.9", "5.9", []string{"from the project's directory"}},
+		{"path association without editor: highest", "../../UE_Tree", tree, launcher, all, "D:/Epic Games/UE_5.9", "5.9", nil},
+		{"a version association passes over the tree", "5.7", tree, launcher, withTree, "C:/Program Files/Epic Games/UE_5.7", "", nil},
+		{"a build association passes over the tree", "{6A3B8C2E-1F4D-4E5A-9B7C-0D1E2F3A4B5C}", tree, launcher, withTree, "D:/Source/UnrealEngine", "", nil},
 	}
 	for _, c := range cases {
-		got, warning := chooseEngine(c.assoc, c.launcher, defaults, builds, c.hasEditor)
+		got, warning := chooseEngine(c.assoc, c.tree, c.launcher, defaults, builds, c.hasEditor)
 		if got != c.want {
 			t.Errorf("%s: got %q; want %q", c.name, got, c.want)
 		}
@@ -602,12 +867,21 @@ func TestChooseEngine(t *testing.T) {
 			}
 			continue
 		}
-		// "no usable engine", not "no installed engine": the case without an
-		// editor binary has the associated engine installed.
-		for _, w := range []string{`"` + c.assoc + `" names no usable engine`, c.warn + " at " + c.want, "engineRoot", "UE_ROOT"} {
+		mentions := append([]string{c.warn + " at " + c.want, "engineRoot", "UE_ROOT"}, c.mentions...)
+		if c.assoc != "" {
+			// "no usable engine", not "no installed engine": the case without
+			// an editor binary has the associated engine installed.
+			mentions = append(mentions, `"`+c.assoc+`" names no usable engine`)
+		}
+		for _, w := range mentions {
 			if !strings.Contains(warning, w) {
 				t.Errorf("%s: warning %q does not mention %q", c.name, warning, w)
 			}
+		}
+		// An editor started on a .uproject does not act on its association,
+		// so nothing backs a conversion offer tied to it (k203).
+		if strings.Contains(warning, "convert") {
+			t.Errorf("%s: warning %q claims a conversion offer", c.name, warning)
 		}
 	}
 }
@@ -648,11 +922,11 @@ func TestDefaultPathsOnDisk(t *testing.T) {
 			t.Errorf("ID %q does not match dir %q", c.ID, c.Dir)
 		}
 	}
-	if got, _ := chooseEngine("", nil, found, nil, hasEditor); got != filepath.ToSlash(want) {
+	if got, _ := chooseEngine("", "", nil, found, nil, hasEditor); got != filepath.ToSlash(want) {
 		t.Errorf("got %q; want %q", got, filepath.ToSlash(want))
 	}
 	e56 := filepath.ToSlash(filepath.Join(root, "E", "Epic Games", "UE_5.6"))
-	if got, _ := chooseEngine("5.6", nil, found, nil, hasEditor); got != e56 {
+	if got, _ := chooseEngine("5.6", "", nil, found, nil, hasEditor); got != e56 {
 		t.Errorf("association 5.6: got %q; want %q", got, e56)
 	}
 }

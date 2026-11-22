@@ -363,8 +363,8 @@ func TestRunAppliesMCPAllowedOrigins(t *testing.T) {
 }
 
 // k88: an EngineAssociation that names no usable engine fell back to the
-// highest installed one silently — the editor then opens the project in a
-// newer engine and offers to convert it. run() now warns, naming the
+// highest installed one silently — the editor then opens the project with
+// an engine it is not associated with. run() now warns, naming the
 // association, the engine chosen and how to pin one.
 //
 // The engine is found for real: off Windows the Epic default paths
