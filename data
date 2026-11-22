@@ -1,0 +1,29 @@
+---
+claimed_at: 2026-11-22T06:46:12Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-22T06:46:12Z
+created: 2026-11-22T04:49:30Z
+id: 222
+priority: low
+started: 2026-11-22T06:37:53Z
+status: done
+tags:
+- skills
+title: 'Skills: three JSON-read statements left outside k218'
+updated: 2026-11-22T06:46:28Z
+---
+
+Owner: unreagent-skill-author. Seen by the author during k218 (1ea8353) and left alone as outside that diff; same sources as k218 (toolkit 9f6a0f7, UE 5.8.4 Json module).
+1. skills/ue-sequencer/SKILL.md ~159, 'so is a frame that is not a number': the read is TryGetNumberField, so true scrubs to frame 1 and the string 12 to frame 12.
+2. skills/ue-anim-montage/curves.md ~26, 'An entry without either … is skipped': a key whose time or value is a non-numeric string is skipped too.
+3. MCPTool_Asset.cpp 328-460 reads save, mark_dirty, include_properties, recursive and limit with non-Try getters; nobody checked what skills/ue-assets says about wrong types for them.
+Acceptance: each sentence states what the accessor does, read not run; go test ./internal/skills green.
+
+2026-11-22 06:41 Done, three places, skill text only, uncommitted, Changes untouched. Sources: toolkit 9f6a0f7, UE 5.8.4 Json module, read not run. 1) ue-sequencer/SKILL.md open pitfall: frame is read by FJsonObject::TryGetNumberField into double (MCPTool_Sequencer.cpp ExecuteOpen); true/false scrub to 1/0, a numeric string to its number, null/array/object/empty/non-numeric string are not read and no scrub is tried. 2) ue-anim-montage/curves.md Keys: ParseKeysFromJson (MCPTool_MontageModify.cpp) reads time and value the same way; an unreadable one skips the entry, true/false and numeric strings are added as numbers. 3) ue-assets/SKILL.md: save, mark_dirty, include_properties, recursive go through HasField + FJsonObject::GetBoolField (GetField -> FJsonValue::AsBool): never an error; number true unless 0, string by FString::ToBool, null/array/object false with a LogJson line, default only when the key is absent; so a wrong-typed save skips the save (stated under save_asset). limit goes through GetIntegerField = (int32)GetNumberField then Clamp 1..1000: unreadable value reads 0 and lists one asset, not 25; fraction truncated. Verified: go test -count=1 ./internal/skills ./cmd/launcher ok, TestToolkitToolsExistInToolkit ran (PASS, not skipped). The tree also holds uncommitted edits to cmd/launcher/lifecycle.go and internal/config/engine.go that are not from this card.
+
+2026-11-22 06:42 Also found, left alone (outside the three places): (a) skills/ue-sequencer/SKILL.md, 'scrub' section, '`frame` is required and must be a number': same TryGetNumberField read (MCPTool_Sequencer.cpp ExecuteScrub), so true scrubs to frame 1 and the string 12 to frame 12; only null, array, object, empty or non-numeric string give 'Missing required parameter: frame'. (b) skills/ue-anim-montage/curves.md, 'arrive_tangent and leave_tangent are numbers': same read in ParseKeysFromJson, a value that cannot be read is dropped silently and the key is still added. (c) FString::IsNumeric accepts a lone sign or a lone dot ('-', '.'), which then reads as 0; the settled wording 'optional sign, digits and at most one dot' does not say so.
+
+Review (unreagent-reviewer): READY. Files: skills/ue-sequencer/SKILL.md, skills/ue-anim-montage/curves.md, skills/ue-assets/SKILL.md (k202 edits in lifecycle.go/engine.go excluded). Check run: gofmt -l empty, go vet ./..., go test ./... (all ok, internal/skills and cmd/launcher not cached), make windows -> dist/unreagent.exe; exit 0. Every new statement checked against toolkit 9f6a0f7 (MCPTool_Sequencer.cpp ExecuteOpen, MCPTool_MontageModify.cpp ParseKeysFromJson, MCPTool_Asset.cpp save_asset/get_asset_info/list_assets) and UE 5.8.4 Json/Core source (TryGetNumberField, GetBoolField->GetField<None>->AsBool, GetIntegerField=(int32)GetNumberField, FJsonValueBoolean::TryGetNumber, FJsonValueNumber::TryGetBool, TJsonValueString::TryGetNumber via IsNumeric+Atod, TryGetBool via ToBool/FToBoolHelper, ErrorMessage); all hold, read not run. limit: true->1, false->0->Clamp 1, unreadable->0->1: correct. save null/array/object/maybe -> false, bMarkDirty defaults to !bSave -> marked dirty: correct. Wording matches k218. Statuses say read not run; no home paths, no copied engine code, English only. Non-blocking notes for a follow-up card: (1) FString::IsNumeric accepts a lone sign or dot (-, +, ., -.), read as 0, so 'any other string is not read' is wrong for those in the new sequencer/curves/limit sentences, same as the k218 wording everywhere (author's note c). (2) FToBoolHelper also matches the localized True/Yes/False/No core texts; the bool rule (here and in k218) names only the English words. (3) open with frame 12.9 scrubs to 12 but returns frame 12.9 (SetNumberField of the double); 'the number that was read' is accurate, but the scrub section says its result frame is truncated, and the difference is unstated. (4) Author's notes (a) scrub 'frame must be a number' and (b) tangents dropped silently remain open.
+
+Committed as f6f8452.
