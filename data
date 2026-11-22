@@ -1,0 +1,296 @@
+---
+class: standard
+completed: 2026-11-22T08:27:37Z
+created: 2026-11-22T02:28:26Z
+id: 214
+priority: high
+started: 2026-11-22T06:35:13Z
+status: done
+tags:
+- ue
+- toolkit
+- bug
+- windows
+title: UE LLM Toolkit at upstream HEAD is refused under -unattended (uplugin EngineVersion
+  5.6.0)
+updated: 2026-11-22T08:27:56Z
+---
+
+Found on Windows 2026-11-22 (Windows 11 Pro 26H2 build 26300.9711, unreagent d4edd23 built with Go 1.27.0) while setting up the UE 5.8 example project.
+
+The Toolkit's upstream HEAD 9f6a0f7 (2026-04-02, "restore UE 5.6 support ... uplugin 5.6.0"; also the commit unreagent-example pins) sets "EngineVersion": "5.6.0" in UELLMToolkit.uplugin. FPluginManager::IsPluginCompatible (UE 5.8 Runtime/Projects/Private/PluginManager.cpp:2688) treats a set EngineVersion that differs from FEngineVersion::CompatibleWith() as incompatible and calls PromptToLoadIncompatiblePlugin, a Yes/No message box. Under -unattended (the launcher's default) the box is answered No and the plugin is not loaded.
+
+Measured:
+- UE 5.8.4 (CL 58902052), unreagent -no-agent on the example project: log "Message dialog closed, result: No, title: 'UELLMToolkit' is Incompatible, text: The 'UELLMToolkit' plugin was designed for build 5.6.0. Attempt to load it anyway?"; port 3000 never opened.
+- UE 5.7.4 (CL 51494982), disposable project, editor started directly with -unattended, the plugin's .uplugin set to "EngineVersion": "5.6.0": "LogPluginManager: Warning: Plugin 'UELLMToolkit' requires engine version '5.6.0' and may not be compatible with the current current engine version '5.7.0-47537391+++UE5+Release-5.7'", the same dialog answered No, no port 3000. With "5.7.0" on 5.7.4 it loads (all earlier probe runs).
+- UE 5.8.4 with the EngineVersion line removed: plugin mounted, GET /mcp/status 200 with 43 tools 13 s after start, the bridge lists 45 tools over MCP, unreal_status answers connected, engine 5.8.4.
+
+So the reference setup (unreagent-example on 5.7, submodule at 9f6a0f7) had no in-editor MCP under unreagent's defaults. The bridge smoke test still passes (it does not need the editor); only the 5-minute endpoint watch warns, and since the watch is a bare TCP connect (k205) nothing names the cause. README "Option B: UE LLM Toolkit" ("drop the plugin into the Plugins/ folder - done") does not hold for this plugin version.
+
+Candidates for the owner (unreagent-worker, docs after): a startup check that reads the .uplugin of the Toolkit (or of every enabled project plugin) and warns when EngineVersion is set and its major.minor differs from the engine's, naming the fix (remove the field or set it to the engine version); the README Option B steps to say so. The unreagent-example 5.8 port removes the field; where that port lives (fork, upstream PR) is Getty's decision.
+
+Upstream state 2026-11-22: ColtonWilley/ue-llm-toolkit PR #14 (Getty) drops the EngineVersion line on its own, open; upstream PR #13 (another contributor, open since 2026-07-10, mergeable) ports the source to 5.8 and keeps "5.6.0". Measured for #14: UE 5.7.4 with the field removed and -unattended: no dialog, plugin loads, /mcp/status lists 43 tools (run 46; the same on 5.8.4 with the port). Until upstream merges, unreagent-example pins the fork Getty/ue-llm-toolkit branch ue-5.8 (9fc7d4f, no EngineVersion). The launcher check this card asks for still matters: any other Toolkit checkout, and any plugin that sets an EngineVersion, hits the same silent refusal.
+
+2026-11-22 06:54 unreagent-worker: scope and rule (my choice, as the brief allowed).
+
+Scope: every project plugin under <Project>/Plugins that the .uproject leaves enabled, not the Toolkit alone. Reason: the parse and the comparison are the same either way; finding "the Toolkit" needs either its name hard-coded or the bridge's directory layout, both brittle; and any plugin that sets an EngineVersion (a Fab plugin copied in from another engine version above all) is refused the same silent way. Enabled is approximated by what decides it for a project plugin in the common case: the .uproject's Plugins entry for the name (first one, case-insensitive), else the .uplugin's EnabledByDefault (absent = enabled). Not modelled, so no warning there (a miss, never a false alarm): target/platform allow and deny lists, a plugin enabled only as another plugin's dependency, plugins outside <Project>/Plugins (engine plugins, platform-extension and AdditionalPluginDirectories), plugins reached through a junction or symlink (Go's ReadDir reports a junction as irregular, not a directory; following links would need a loop guard).
+
+Rule, read in the UE 5.8.4 source (E/ = Engine/Source/):
+- E/Runtime/Projects/Private/PluginManager.cpp 1860-1864: every enabled plugin goes through IsPluginCompatible; on false, PromptToLoadIncompatiblePlugin (2709-2715, a YesNo FMessageDialog) decides; No -> "Skipping load of".
+- PluginManager.cpp 2688-2706 IsPluginCompatible: an empty EngineVersion is compatible; one FEngineVersion::Parse rejects is compatible (warning "could not be parsed"); otherwise incompatible unless GetNewest(CompatibleWith(), declared) == Neither.
+- E/Runtime/Core/Private/Misc/EngineVersion.cpp 162-197 Parse: three numbers (_tcstoui64, so leading white space and a sign are taken, no digits read 0) separated by '.', optional -CL, optional +branch, anything after the patch number ignored. "5.6" does not parse, so the engine loads that plugin.
+- EngineVersion.cpp 56-91 GetNewest: major, minor, patch differ -> incompatible; changelists only when both carry one and both or neither are licensee changelists (bit 31).
+- EngineVersion.cpp 199-208 CompatibleWith: (major, minor, licensee ? patch : 0, compatible CL | licensee bit). So on 5.8.4 "5.8.0" passes and "5.8.4" is refused; the fix to name is major.minor.0 (major.minor.patch on a licensee build), without a CL.
+- Engine values: Engine/Build/Build.version, the file UnrealBuildTool compiles in (E/Programs/UnrealBuildTool/System/BuildVersion.cs 77 EffectiveCompatibleChangelist, 137-160 TryParse; E/Runtime/BuildSettings/BuildSettings.Build.cs 26-38). The installed 5.7.4 gives 5.7.0-47537391, which is what the measured log printed.
+- Unattended answer: E/Runtime/Core/Private/Misc/MessageDialog.cpp 89-135 (YesNo defaults to No), 153-174 (under FApp::IsUnattended no box, the default is returned and "Message dialog closed, result: No" logged); App.cpp 274-279 (IsUnattended = -unattended or automation testing).
+- Descriptor reading: E/Runtime/Projects/Private/RapidJsonPluginLoading.cpp 15-33 (first member matching case-insensitively), 200-234 (a number or bool converts to a string, which never parses as a version); E/Runtime/Json/Private/JsonUtils/RapidJsonUtils.cpp 9 (trailing commas accepted); E/Runtime/Core/Private/Misc/FileHelper.cpp BufferToString (UTF-16 LE/BE with BOM, else UTF-8 with or without BOM).
+- Discovery: PluginManager.cpp 1120-1225 FindPluginsInDirectory (breadth-first; a directory holding a *.uplugin is a plugin and nothing below it is searched; directories named Content are skipped). Enabled: 421-435 IsEnabledByDefault (project plugin: unset = enabled), 1720-1756 (.uproject references first, then the enabled-by-default ones).
+
+The card's candidate "major.minor differs" is too weak: the patch counts (5.8.4 is refused on 5.8.4). README Option B and the troubleshooting line say "major.minor" too: doc follow-up.
+
+2026-11-22 07:05 Done (unreagent-worker): a startup check warns about each project plugin the editor will refuse for its EngineVersion; the launcher keeps starting.
+
+Changed:
+- cmd/launcher/uplugin.go (new, the concern "project plugins checked before the editor starts"): checkPluginEngineVersions, engineDirOf, findProjectPlugins, readPluginDescriptor, projectPluginSwitches, pluginEnabled, ueVersion/parseUEVersion/strtou/accepts, compatibleEngineVersion, readUEJSON/dropTrailingCommas/firstMembers. The file comment and each function cite the 5.8.4 source lines they mirror (see my earlier note on this card for the rule).
+- cmd/launcher/main.go run(): one call right after editorArgs, with -unattended taken from the editor's final args (hasEditorSwitch(ueArgs, "unattended")) and the logger wrapped in alertWarnings, so in window mode the WARN reaches stderr too.
+- cmd/launcher/uplugin_test.go (new): temp trees for 5.6.0 (with and without -unattended), a matching version, no field, an empty or unparsable one ("5.6"), malformed, not an object, trailing data, trailing commas, BOMs (UTF-8, UTF-16 LE/BE), key case and duplicate keys, .uproject switches and EnabledByDefault, an unreadable Build.version, several plugins, no project; the engine side through real Build.version contents of 5.7.4 and 5.8.4 (the measured rows) plus licensee and changelist cases; discovery (stop below a plugin, skip Content, case-sensitive extension).
+
+Engine version source: <Engine>/Build/Build.version (the launcher knew only the engine root, no version); the Engine directory is taken from unreal.editor when it has the <root>/Engine/Binaries/<platform>/<exe> shape, else from the resolved engine root. The installed 5.7.4 file yields 5.7.0-47537391, the string the editor printed in the measured run.
+
+Message (under -unattended, the default): WARN plugin 'UELLMToolkit': its EngineVersion "5.6.0" does not match the engine's compatible version 5.8.0-55116800, so the editor asks whether to load it anyway, and under -unattended the answer is No: the editor starts without it. Remove "EngineVersion" from <path>, or set it to "5.8.0".
+Without -unattended the middle reads "asks on every start whether to load it anyway and waits for an answer (No starts it without the plugin)". The Build.version is read only once a plugin declares a parsable version; unreadable: one WARN saying the version is not checked, with the cause.
+
+Verification (Windows 11 Pro, native, Go 1.27.0, so go test here is a real Windows run):
+- gofmt -l: empty; go vet ./...: clean; GOOS=windows CGO_ENABLED=0 build of dist/unreagent.exe: ok; GOOS=linux CGO_ENABLED=0 go build ./... and vet: ok.
+- go test ./...: config, mcp, skills, supervisor ok; the new tests pass. cmd/launcher FAILS on Windows with 8 failures that are pre-existing: the identical set fails on an untouched export of main 1ea8353 (TestRunWarnsWhenTheEngineAssociationIsNotInstalled and its 2 subtests, TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess, TestUEStartAndRestartFailWhenTheEditorDoesNotStart).
+- Mutation check with go test -overlay (tree untouched): 18 mutants of the new code (patch, licensee and changelist rules, Build.version patch and effective changelist, first-member lookup, Content skip, stop below a plugin, trailing commas, UTF-16, trailing data, .uproject switches and first entry, the unattended wording, strtou white space, sign and no-digit, null handling): 17 killed; the 18th survived because the quote check in jsonString could not be observed (a null Name or EngineVersion reads as "", which names nothing), so I removed that check.
+- Real files, read-only copies in scratch: the upstream 9f6a0f7 .uplugin and the example .uproject against the installed 5.7.4 and 5.8.4 Build.version: warned on both (5.7.0-47537391, 5.8.0-55116800); the fork's .uplugin (9fc7d4f, no field): nothing.
+- The built unreagent.exe once on that scratch copy: unreal.manualStart true, agent off, MCP on 127.0.0.1:18814, no extraServers, runtimes off, so nothing on 3000/8000/8765, no npm, no editor. The WARN came right after "Unreal: -unattended active" and the launcher went on to "MCP server listening".
+
+Not verified (source only, no editor run): the wording without -unattended (the box waiting); "5.8.4 is refused on 5.8.4 and 5.8.0 loads" (the advice to set major.minor.0 rests on it); the licensee case. If Getty's session wants to confirm the patch rule: the fork's .uplugin with "EngineVersion": "5.8.4", then "5.8.0", on 5.8.4 with -unattended, expecting the refusal, then a load.
+Not tested: the run() wiring line. run()-level tests skip on Windows (startLauncherCmd), so one written here could not run; suggestion for unreagent-test-writer on Linux: a .uproject plus Plugins/X/X.uplugin with "5.6.0", UE_ROOT on a temp engine with Build.version, asserting the WARN on stdout and, in window mode, on stderr.
+
+Proposed commit subject: Warn at startup about a project plugin the editor refuses for its EngineVersion (k214)
+
+Doc follow-ups (other owners):
+- README (unreagent-doc-writer), Option B step 1, the troubleshooting item "plugin not loaded" and the bullet "A plugin is skipped silently": "major.minor differs" is too weak. The engine compares major, minor and patch with its compatible version (patch 0 on an Epic build), and the changelist when both carry one; "5.8.4" is refused on 5.8.4. The fix to name is "<major>.<minor>.0" or no field. Add the launcher's new startup WARN (console, or unreagent.log plus stderr in window mode) and what it does not cover: plugins outside <Project>/Plugins, behind a junction or symlink, excluded by target/platform lists or enabled only as a dependency.
+- unreagent-ue skill (unreagent-skill-author), the EngineVersion row: "Code that depends on it" is now checkPluginEngineVersions (cmd/launcher/uplugin.go). Add the facts read for this: Parse grammar (EngineVersion.cpp 162-197; "5.6" does not parse and the plugin loads), MessageDialog.cpp 89-135/153-174 and App.cpp 274-280 (the default No under -unattended), RapidJsonPluginLoading.cpp 15-33 and 192-234 (first case-insensitive member, numbers and bools converted), RapidJsonUtils.cpp 9 (trailing commas), PluginManager.cpp 1120-1225, 421-435 and 1704-1756 (discovery, enabled by default, .uproject first), BuildVersion.cs 77 and 140-160 plus BuildSettings.Build.cs 26-38 (Build.version compiled in; 5.7.4 gives 5.7.0-47537391 as measured).
+- unreagent-core skill (unreagent-skill-author): a row for cmd/launcher/uplugin.go in the wiring file table.
+- .claude/rules/unreagent-rules.md (main): the k93 file list in Hazards gains uplugin.go.
+
+Also found (for the dispatcher, not acted on): on Windows, cmd/launcher has 8 pre-existing test failures (listed above) and every run()-level test skips (startLauncherCmd), so go test ./... is red on the product platform; TestMaterializeTwoRunsAtOnce failed once in the k214 tree ("Access denied" on a rename in round 12) and passed on the next full run; three runs on the base export passed, so the flake was not reproduced there. The k214 change does not touch skills.go or its test.
+
+unreagent-doc-writer: README.md only. Option B step 1 now states the rule (major, minor and patch must equal the engine's compatible version, patch 0 on Epic builds; two-part values do not parse and load), the measured rows (5.6.0 refused on 5.7.4/5.8.4, 5.7.0 loads on 5.7.4), marks 5.8.4-refused-on-5.8.4 as source-only, names the fix (remove the field or <major>.<minor>.0), describes the new startup WARN and its non-coverage. Troubleshooting item "plugin not loaded" and bullet "A plugin is skipped silently" say the same in short. No upstream PRs or forks named as the fix. No go/skill/rules files touched.
+
+Measured on Windows 2026-11-22 (UE 5.8.4 CL 58902052 Launcher build; disposable clone of unreagent-example with the toolkit fork at 9fc7d4f; the k214 worktree build dist/unreagent.exe -no-agent, default -unattended; one start per value, .uplugin restored afterwards; raw: C:\Temp\unreagent-probe\runs\53-k214-enginever on that machine):
+- "EngineVersion": "5.8.4": REFUSED. Editor log: Message dialog closed, result: No, title: 'UELLMToolkit' is Incompatible, text: The 'UELLMToolkit' plugin was designed for build 5.8.4. Attempt to load it anyway? Editor up (Unreal MCP on :8000) at 11.1 s, :3000 never opened. The new check warned right after the -unattended line: WARN plugin 'UELLMToolkit': its EngineVersion "5.8.4" does not match the engine's compatible version 5.8.0-55116800, so the editor asks whether to load it anyway, and under -unattended the answer is No: the editor starts without it. Remove "EngineVersion" from <path>, or set it to "5.8.0". Prediction and editor agree.
+- "EngineVersion": "5.8.0": LOADS (LogPluginManager: Mounting Project plugin UELLMToolkit; :3000 at 10.6 s); no WARN.
+- "EngineVersion": "5.8" (two parts): LOADS as well (:3000 at 10.6 s); no WARN. So the editor does not refuse an EngineVersion it cannot parse as three numbers, and the check stays silent on it too.
+So on a Launcher 5.8.4 only the exact patch-0 value or no field loads; the suggested "5.8.0" is right. Side fact: Epic's own Engine/Plugins/Fab/Fab.uplugin on this 5.8.4 install declares "EngineVersion": "5.8.0" and is enabled by default.
+
+2026-11-22 07:14 unreagent-skill-author: project skills updated for k214 (worktree k214, uncommitted; no shipped skills/ change, so no go test needed).
+
+Changed:
+- .claude/skills/unreagent-ue/SKILL.md, section "Editor launch and -unattended": the one EngineVersion row is now three rows. (1) The refusal and the -unattended answer. (2) Parse and the comparison. (3) CompatibleWith() from Version.h and Build.version. "Code that depends on it" now names checkPluginEngineVersions, parseUEVersion / ueVersion.accepts and compatibleEngineVersion / engineDirOf (cmd/launcher/uplugin.go), and says what the check does not cover. Each fact was re-read in the UE 5.8.4 source (E/ = Engine/Source/):
+  - PluginManager.cpp 1859-1864 (MarkEnabledPlugins, modular builds only), 2688-2707, 2709-2715.
+  - The configuration order: PluginManager.cpp 2042-2053, with FindCommandLinePlugins 1469-1602 running before FindTargetPlugins 1604-1763 (target list 1614-1702, .uproject 1721-1737, enabled by default 1741-1756).
+  - EngineVersion.cpp 34-44, 56-91, 162-197, 199-209.
+  - MessageDialog.cpp 89-135, 153-174; App.cpp 274-280.
+  - Launch/Resources/Version.h 58-60.
+  - UnrealBuildTool BuildVersion.cs 77, 100-103, 140-160; BuildSettings.Build.cs 26-38; BuildSettings.cpp 9-11, 39-41.
+  - RapidJsonPluginLoading.cpp 35-71.
+  Status labels:
+  - Measured on this card: 5.6.0 is refused on 5.7.4 and 5.8.4; 5.7.0 loads on 5.7.4; no field loads on both; the 5.7.4 editor printed 5.7.0-47537391.
+  - Source only: 5.8.4 refused and 5.8.0 loading on 5.8.4 (an editor run is pending); a two-part "5.6" loading; the changelist and licensee cases; the dialog without -unattended; the 5.8.4 compatible version 5.8.0-55116800 (read from the file only).
+- .claude/skills/unreagent-core/SKILL.md: a uplugin.go row in the cmd/launcher wiring table; the alertWarnings sentence (invariant 6) now names checkPluginEngineVersions as one of its users.
+- Grep of .claude/skills/unreagent-* and skills/: no other "major.minor" claim. skills/unreagent-iterate/SKILL.md line 441 states the rule correctly (<major>.<minor>.0, 5.8.0 not 5.8.4, licensee aside). skills/ue-retarget/SKILL.md line 262 only says that 9f6a0f7 declares 5.6.0. Neither was changed.
+
+Also found (the source goes past the worker's comments; not acted on, for the dispatcher):
+1. uplugin.go, the compatibleEngineVersion comment says "The values come from Build/Build.version". The source disagrees for part of it: CompatibleWith() takes its major, minor and patch from Version.h's ENGINE_*_VERSION (EngineVersion.cpp 205-208, Version.h 58-60). Only the licensee flag and the compatible changelist come from Build.version, through BuildSettings. The two files agree on both installed engines (5.7.4 and 5.8.4), so the prediction holds; only the comment overstates.
+2. The pluginEnabled comment says "the .uproject entries are applied first (1720-1756)", and the file comment's "Not modelled" list leaves out two sources the engine configures before the .uproject (PluginManager.cpp 2042-2053): -EnablePlugins= / -DisablePlugins= / -EnableAllPlugins on the command line (FindCommandLinePlugins 1469-1602), and the target's own plugin list (receipt or UBT_TARGET_ENABLED_PLUGINS, 1614-1702). With -DisablePlugins=UELLMToolkit in unreal.args the launcher still warns. That is a false alarm, against this card's "a miss, never a false alarm".
+3. EnabledByDefault or Enabled given as a number or a string: the engine converts it (TryGetBoolField, RapidJsonPluginLoading.cpp 35-71; PluginDescriptor.cpp 362; PluginReferenceDescriptor.cpp 138). The launcher reads it as absent, so "EnabledByDefault": 0 gets a warning about a plugin the editor disables. Another false alarm. The code comment says the value "counts as absent", but not what follows from it.
+4. The findProjectPlugins comment says "the first such file in name order is its descriptor". The engine takes the first .uplugin that IterateDirectory reports, in the platform's order, and stops there (PluginManager.cpp 1162-1167). This matters only for a directory with two .uplugin files.
+5. .claude/agents/unreagent-worker.md lines 39-41 list the cmd/launcher files without skills.go and uplugin.go. That file is the main agent's.
+
+unreagent-doc-writer: README Option B step 1 now states the measured patch case on 5.8.4 with -unattended (5.8.4 refused, 5.8.0 loads, two-part 5.8 loads) instead of 'not confirmed in an editor run'. Nothing else changed.
+
+2026-11-22 07:15 unreagent-skill-author: after the 5.8.4 editor run noted above, the unreagent-ue rows are relabelled.
+- Now measured (k214): "5.8.4" is refused on 5.8.4. "5.8.0" and a two-part "5.8" load on 5.8.4. The launcher's check agreed: a WARN for 5.8.4 naming 5.8.0, and none for 5.8.0 or 5.8. On 5.8.4 the compatible patch is 0.
+- The two-part example is now "5.8", the value that was run.
+- Epic's own Engine/Plugins/Fab/Fab.uplugin (5.8.4) declaring "5.8.0" and enabled by default is added. I checked it in the installed file, lines 13-14.
+- Still source only: the "could not be parsed" log line, the changelist and licensee cases, the box without -unattended, and the 5.8.4 compatible changelist 55116800 (read from Build.version only).
+Items 1-5 of my previous note stand.
+
+2026-11-22 07:39 unreagent-worker, review findings settled (skill-author, against the UE 5.8.4 source):
+
+1. compatibleEngineVersion comment corrected: major, minor and patch come from Version.h (EngineVersion.cpp 205-208), the changelist and licensee flag from BuildSettings, compiled from Build.version (BuildSettings.cpp 9-11, 39-41; BuildVersion.cs 77, 100-103, 140-160). The launcher reads all of it from Build.version, the only file with the changelist and the flag. That is enough while both files carry the same numbers: they do on 5.7.4 and 5.8.4, and UpdateLocalVersion keeps them in step.
+2. -DisablePlugins= in the editor's final args (ueArgs, now passed to the check) is honoured. It works as FParse::Value/Strifind read it: case-insensitive, no ASCII letter or digit in front, comma list, value in the next argument when the "=" ends one, and * / ? as FString::MatchesWildcard matches them. A -DisablePlugins= entry naming a .txt list file turns the check off, with one plain info line, when a warning would otherwise follow. -NoEnginePlugins skips the check (FindTargetPlugins 1607-1759). Not modelled, in the file comment: -EnablePlugins=, -EnableAllPlugins, and the target's own plugin list (receipt/UBT defines, 1614-1702). The target's list is the one gap that can still warn wrongly. The pluginEnabled comment now gives the real order (2042-2053): command line, then target, then .uproject, then EnabledByDefault.
+3. Enabled and EnabledByDefault are converted the way TryGetBoolField does it (RapidJsonPluginLoading.cpp 35-70):
+   - a bool;
+   - a number, true unless it is 0;
+   - a string through ToBool (CString.cpp 123-153): True/Yes/On in any case, else Atoi != 0.
+   The culture's localized words are not modelled. A number past the double range reads as false: RapidJSON refuses that whole file.
+4. The findProjectPlugins comment now says the engine takes the first .uplugin its directory listing returns, in the platform's order (1162-1167). The launcher keeps name order.
+
+Tests (uplugin_test.go): new rows in TestCheckPluginEngineVersions for the number and string conversions, -DisablePlugins (plain, case, wildcard, next argument, beats .uproject, other names, -NoDisablePlugins, .txt list) and -NoEnginePlugins. New TestUEBool, TestDisabledPlugins and TestUEWildcard. ueWildcard agreed with a line-for-line port of MatchesWildcardRecursive on 238729 random pairs. 18 mutants of the new code were all killed (both via go test -overlay, no tree edits).
+
+Verification (Windows 11 dev box): gofmt -l clean, go vet ./... clean. go test -count=1 ./... fails only in cmd/launcher: the 8 known base failures plus TestMaterializeTwoRunsAtOnce. With -skip of the 8 base failures everything is green. Windows and Linux builds (CGO_ENABLED=0) are ok.
+
+Drift, for this board: TestMaterializeTwoRunsAtOnce flakes on Windows (rename "Access denied") on base 1ea8353 too: 2 of 6 runs failed there. Not k214.
+
+Docs: honouring -DisablePlugins / -NoEnginePlugins and the bool conversion makes the unreagent-ue SKILL.md plugin row ("Not read either ...") and possibly the README "does not cover" sentences stale. Spots listed in my report. Card stays in review.
+
+unreagent-doc-writer: README (Option B step 1, plugin-not-loaded item, 'skipped silently' bullet) now says -DisablePlugins= in unreal.args is honoured (.txt list file switches the check off), -NoEnginePlugins skips it, and -EnablePlugins= and the target's plugin list are not read.
+
+2026-11-22 07:44 unreagent-skill-author: updated the skills for the worker's 07:39 fixes. I re-read everything against the current uplugin.go and the UE 5.8.4 source.
+- .claude/skills/unreagent-ue/SKILL.md:
+  - Line 52 (the code column): the check takes the editor's final args. It applies -DisablePlugins= first, then the .uproject, then EnabledByDefault, and converts number and string values (ueBool). -NoEnginePlugins skips the check. A .txt list file turns the first warning into one info line and ends the check. -EnablePlugins= and -EnableAllPlugins can only cause a missed warning.
+  - New line 55, "Which project plugins the editor enables". It covers the configuration order and the -DisablePlugins= reading (FParse::Value, Strifind, .txt lists, MatchesWildcard where ? matches one character or none). It also covers -NoEnginePlugins, the reference allow/deny lists, and TryGetBoolField / ToBool. Source (UE 5.8.4), not run.
+  - The TryGetBoolField citation is corrected to RapidJsonPluginLoading.cpp 35-70.
+- .claude/skills/unreagent-core/SKILL.md line 64: the check takes the editor's final args.
+Also found, against the new uplugin.go file comment ("the one gap that can warn wrongly is the target's own plugin list"): there is a second way to get a wrong warning. If a .uproject entry has "Enabled": true but platform, target or configuration allow/deny lists that exclude the editor (Win64, Editor, Development), the engine ignores that entry. The name still counts as decided, so EnabledByDefault does not enable it either (PluginManager.cpp 2424-2429 and 2599 with 1708-1715; PluginReferenceDescriptor.cpp 41-108). The launcher reads only Name and Enabled, so it warns about a plugin the editor never loads. The skill row says so. The fix in the code or in the comment is the worker's call.
+
+2026-11-22 07:50 unreagent-worker: the second wrong-warning path (skill-author note 07:44) is fixed.
+
+A .uproject entry that carries any of the reference limit fields now reads as "not enabled here", so the plugin gets no warning: a miss, not a false alarm. The field names come from PluginReferenceDescriptor.cpp 152-169:
+- the six list fields, each also under its deprecated name the reader still accepts: PlatformAllowList/WhitelistPlatforms, PlatformDenyList/BlacklistPlatforms, TargetConfigurationAllowList/WhitelistTargetConfigurations, TargetConfigurationDenyList/BlacklistTargetConfigurations, TargetAllowList/WhitelistTargets, TargetDenyList/BlacklistTargets;
+- HasExplicitPlatforms: true with no allow list leaves out every platform (IsEnabledForPlatform, 41-61);
+- TargetsToExplicitlyLoad: the editor ignores an entry that lists its target (PluginManager.cpp 2385-2389).
+
+The lists are not evaluated. Field names match case-insensitively, and the first entry per name still decides, so EnabledByDefault does not apply (1708-1715). SupportedTargetPlatforms is left out on purpose: the editor ignores it (2431; LOAD_PLUGINS_FOR_TARGET_PLATFORMS from bIncludePluginsForTargetPlatforms, true for an editor target).
+
+uplugin.go file comment: a plugin whose .uproject entry carries such lists now sits in the "never warned about" list. The target's own plugin list is named as the last source of a wrong warning.
+
+Tests: 6 new rows in TestCheckPluginEngineVersions:
+- an allow list, a deprecated name in another case, TargetsToExplicitlyLoad, and a limited first entry beating a plain later one with EnabledByDefault true: no warning;
+- a limited later entry, and SupportedTargetPlatforms: warning.
+4 mutants of the new code were all caught.
+
+Verification on Windows: gofmt clean, vet clean, both builds (CGO_ENABLED=0) ok.
+- go test -count=1 ./cmd/launcher/ with the 8 known base failures skipped had one failure: the base flake TestMaterializeTwoRunsAtOnce (Access denied, see the earlier drift note).
+- With that test also skipped, the run is green, and the test passed 2 runs on its own.
+
+Card stays in review.
+
+2026-11-22 07:52 unreagent-skill-author: unreagent-ue now matches the referenceLimits change. I checked it against uplugin.go (referenceLimits, projectPluginSwitches) and the UE 5.8.4 source.
+- Line 52: a .uproject entry with any limiting field counts as not enabling its plugin. It is never warned about, but its refusal can be missed. The target's own plugin list is now named as the last source of a wrong warning.
+- Line 55 (fact): when the engine ignores an entry. That is the six allow/deny lists and their Whitelist*/Blacklist* names, HasExplicitPlatforms, and TargetsToExplicitlyLoad (load on demand). SupportedTargetPlatforms does not count in the editor.
+- Line 55 (code): projectPluginSwitches with referenceLimits. Fields are matched in any case, the first entry per name decides, and EnabledByDefault then does not apply.
+- Line 55 (sources): PluginManager.cpp 2385-2389, 2424-2429, 2431-2435; PluginReferenceDescriptor.cpp 41-108, 152-169; Projects.Build.cs 54-61; TargetRules.cs 1554-1556 (bIncludePluginsForTargetPlatforms defaults to true for an editor target).
+
+2026-11-22 08:03 unreagent-reviewer: verdict CHANGES NEEDED. The gate is met. Findings 1 and 2 go back to unreagent-worker, and the doc and skill rows follow from them.
+
+Reviewed: worktree k214 (base 1ea8353), uncommitted. cmd/launcher/uplugin.go and uplugin_test.go (new), cmd/launcher/main.go (one call in run()), README.md, .claude/skills/unreagent-ue/SKILL.md, .claude/skills/unreagent-core/SKILL.md, .claude/rules/unreagent-rules.md, .claude/agents/unreagent-worker.md. Every edit stays in the lane OWNERS gives it. English only.
+
+Check, run natively on Windows 11 with Go 1.27.0, so go test is a real Windows run (Linux: built and vetted only):
+- gofmt -l over the tracked files and the two new ones: empty. go vet ./...: clean, also with GOOS=linux.
+- GOOS=windows CGO_ENABLED=0 go build of unreagent.exe: ok. GOOS=linux CGO_ENABLED=0 go build ./...: ok.
+- go test -count=1 ./...: only cmd/launcher fails, with exactly the 6 known base failures (TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled, TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess, TestUEStartAndRestartFailWhenTheEditorDoesNotStart). TestMaterializeTwoRunsAtOnce passed in this run. With -skip of those 7, every package is ok.
+- The card's 9 tests with -v: 108 PASS lines, no FAIL.
+- Landing: git apply --check of the diff onto main 053148f (in a scratch index) is clean. There is no textual overlap with k211/k213: their README line 232 and the engine-detection rows of unreagent-ue are other hunks. main exported to scratch plus k214's three Go files: vet, the Windows build and the -skip run are all green.
+- Live, with no editor and no Claude agent: the built exe on a scratch copy (upstream 9f6a0f7 .uplugin with "5.6.0", engineRoot UE_5.8, manualStart, MCP on 127.0.0.1:18914). The WARN came right after the -unattended line, then "MCP server listening". In window mode (ping as a stand-in agent, window: true, claudeIntegration: false) the WARN is in unreagent.log and on stderr as "unreagent: WARN plugin 'UELLMToolkit': ...".
+- The rule against the UE 5.8.4 source: IsPluginCompatible and PromptToLoadIncompatiblePlugin (PluginManager.cpp 2688-2715); the check at 1859-1864, which sits outside the Modules block; Parse, GetNewest and CompatibleWith (EngineVersion.cpp 56-91, 162-208); MessageDialog.cpp 89-174; BuildVersion.cs 77 and 140-160; BuildSettings.Build.cs 26-38; FindPluginsInDirectory 1120-1225; FindCommandLinePlugins 1469-1602; Strifind; ToBool; TryGetBoolField; the reference Read 152-169. The code does what it cites. The editor run on this card (5.8.4 refused, 5.8.0 and 5.8 load, and the WARN agreed) fits that reading.
+
+Findings, most important first:
+
+1. [unreagent-worker, medium] There are two more paths to a wrong warning, so "the last gap that can warn wrongly is the target's own plugin list" is false: uplugin.go:47-51, the unreagent-ue row at line 52, and README 641-643.
+   a. Two plugins with the same name under <Project>/Plugins. The engine keeps one plugin per name: the higher descriptor "Version"; at equal Version the first one found (it logs "second location will be ignored"); a .uproject "Version" request can pick another (PluginManager.cpp 1261-1328 CreatePluginObject, 2440-2472). checkPluginEngineVersions (uplugin.go:74-106) warns about every .uplugin it finds. Probe via go test -overlay, tree untouched: Plugins/new/UELLMToolkit (Version 2, no field) next to Plugins/old/UELLMToolkit (Version 1, "5.6.0") gives one WARN telling the user to edit old/..., which the editor never loads. This setup is likely right here: a fork checkout next to the upstream submodule.
+   b. A .uproject entry with "Optional": true is ignored when the target receipt's BuildPlugins does not list the plugin (PluginManager.cpp 2544-2548, non-shipping; AllowedOptionalDependencies comes from FindCompileTimePlugins 1431-1466). Its name still counts as configured, so EnabledByDefault does not apply either. The launcher warns (probe: one WARN). Whether it happens depends on the receipt: source only.
+   Fix, in the file's own "err towards no warning" style: warn about a name only when exactly one .uplugin carries it, and add "Optional" to referenceLimits (uplugin.go:299). Add one test row each. The file comment, unreagent-ue row 52 (skill-author) and README (doc-writer) then follow.
+
+2. [unreagent-worker, medium: proportionality] The -DisablePlugins= emulation is out of proportion to what it buys. It is disabledPlugins, next, isASCIIAlnum and ueWildcard (uplugin.go:330-409, about 80 lines), plus TestDisabledPlugins, TestUEWildcard and 12 table rows (about 100 test lines), for a switch no config here sets (the default unreal.args is -stdout -FullStdOutLogOutput). It also adds a matcher without memoization that branches twice on every "?". Measured: "?" x24 + "X" against UELLMToolkit took 64 ms and grows about 10x per four more "?", synchronously before the editor starts. Only pathological input gets there, but it has no bound.
+   Simpler, and just as free of wrong warnings: when any editor argument contains "DisablePlugins=" in any case, handle it like the .txt branch already at uplugin.go:95-99 (one info line when a warning would follow, then return). The cost is a missed warning for someone who disables some other plugin, the same trade the check already makes for every limited .uproject entry.
+   Optional, in the same spirit: ueBool's number and string conversion (uplugin.go:184-223) could become "a JSON bool; anything else, no warning for that plugin".
+   The README's three places, unreagent-ue rows 52 and 55 and the core row then shrink to one sentence each.
+
+3. [unreagent-doc-writer, low; after 1 and 2 settle] README Option B step 1 (README.md:608-646) has grown into a 35-line step. It carries the check's -DisablePlugins, .txt, -NoEnginePlugins and target-list details, and the same limits come again at 733-738 and 841-848. Say them once, in step 1, and point there from the other two places. Drop the second statement of the two-part case at 619-620 ("the two-part 5.8 loads too). A two-part value such as 5.6 does not parse..."). Line 848 is not wrapped (113 chars).
+
+4. Nits:
+   - uplugin.go:87 (worker): the "engine's version is unknown" WARN says "under -unattended" even when the editor runs without it, though the flag is known at that point.
+   - unreagent-ue SKILL.md:55 (skill-author): FParse::Value "read up to white space" leaves out the quoted form. A value that starts with " is read up to the closing quote (Parse.cpp 275-287). Moot if 2 is taken.
+   - .claude/agents/unreagent-worker.md:41 (main): the edited line is not rewrapped (103 chars).
+
+Not findings: no test covers the run() wiring (that is k237); the live run above covers the console and stderr paths. The engine-side facts stay as measured on this card (5.7.4 and 5.8.4 Launcher builds). The licensee and changelist cases are labelled source only, correctly.
+
+2026-11-22 08:15 unreagent-worker: the review decisions of 08:03 are carried out.
+
+Removed:
+- disabledPlugins, next, isASCIIAlnum, ueWildcard (no more wildcard matcher on the start path), ueBool and asciiLower;
+- TestDisabledPlugins, TestUEWildcard, TestUEBool, and the -DisablePlugins and number/string conversion rows.
+
+Added:
+1. Duplicate names: a plugin name found more than once under <Project>/Plugins (case-insensitive) gets no warning (CreatePluginObject 1261-1328; a .uproject Version can pick another copy, 2440-2472). Rows: the reviewer's case (new/ Version 2 next to old/ Version 1 "5.6.0"), the same name in another case, and an unrelated name that still warns.
+2. "Optional" is in referenceLimits (2544-2548). Row added.
+3. Any argument holding "DisablePlugins=" in any case turns the check off: one plain line, only where a warning would follow (an unknown engine version included), then return. -NoEnginePlugins still skips the check.
+4. Enabled, EnabledByDefault and bIsPluginExtension count only as JSON true/false:
+   - a .uproject Enabled of any other type, or a missing one, means "not enabled";
+   - an EnabledByDefault of any other type reads as false, so only a .uproject entry can enable that plugin (it then warns, and the engine enables it too);
+   - a bIsPluginExtension that is true or no boolean skips the plugin.
+5. Found on the re-check: a plugin extension (bIsPluginExtension true) is merged into its parent and never checked as a plugin (1266-1270, 946 on). It is now skipped instead of warned about.
+6. The engine-unknown WARN uses the same refusal text as the real WARN: under -unattended it mentions -unattended, without it the box on every start. Rows for both.
+
+File comment re-checked against the source. "Never warned about" now lists the command line, limit/Optional entries, non-boolean fields, plugin extensions, duplicates, dependency-only plugins, plugins outside <Project>/Plugins, junctions and unreadable files. "Can still warn wrongly" does NOT end with the target list alone. There are two more:
+- a same-name plugin in another plugin directory (<Project>/Platforms/*/Plugins, Mods, AdditionalPluginDirectories, Enterprise) can take the name over: the higher descriptor Version wins, else the one found first (1300-1326). An engine plugin of the same name gives way to the project's (1280-1285).
+- an engine whose Build.version and Version.h disagree (compatibleEngineVersion).
+Closing the first needs more directory scanning, so it is left as a decision for the coordinator.
+
+Lines: uplugin.go 645 -> 566, uplugin_test.go 504 -> 428 (1149 -> 994). 17 mutants of the new code were all caught (go test -overlay).
+
+Verification on Windows: gofmt clean, go vet ./... clean, both builds (CGO_ENABLED=0) ok.
+- go test -count=1 ./... with the 8 known base failures skipped: cmd/launcher failed only on the base flake TestMaterializeTwoRunsAtOnce; with that test also skipped it is green.
+- A plain go test -count=1 ./cmd/launcher/ fails exactly on the known base set.
+
+Doc spots now stale are listed in my report: README 638-643, 737-738 and 847-848; unreagent-ue SKILL.md rows 52 and 55; unreagent-core SKILL.md 64. Card stays in review.
+
+unreagent-doc-writer: README reworked after review finding 3 and the simplified check. Option B step 1 now holds the rule, measured facts, fix and the check's limits once (not covered / may warn wrongly; any argument containing DisablePlugins= switches the check off, -NoEnginePlugins skips it); the 'plugin not loaded' item and the 'skipped silently' bullet are two-line pointers to it. Two-part case stated once, long line wrapped.
+
+2026-11-22 08:20 unreagent-skill-author: the skills now match the simplified check (worker, 08:15). I checked them against the current uplugin.go and the UE 5.8.4 source.
+- unreagent-ue line 52 (code column):
+  - -NoEnginePlugins skips the check, and so does any argument holding DisablePlugins= in any case, with one info line where a warning would follow.
+  - Never warned about (a refusal can be missed): -EnablePlugins= / -EnableAllPlugins; entries with a limit field or Optional; non-boolean Enabled / EnabledByDefault; plugin extensions; duplicate names; dependency-only plugins; plugins outside <Project>/Plugins (including Mods); junctions; unreadable files.
+  - Can still warn wrongly, three cases: the target's own list, a same-name plugin in another plugin directory, and Build.version vs Version.h.
+- unreagent-ue line 55:
+  - Fact column: adds Optional, one plugin per name (CreatePluginObject 1261-1328, the .uproject Version 2440-2472) and plugin extensions (1266-1270, merged from 946). The TryGetBoolField conversion is cut down to one clause.
+  - Code column: pluginEnabled, projectPluginSwitches with referenceLimits, readPluginDescriptor.
+  - Removed the citations that no longer back any code: FParse::Value value reading, MatchesWildcard, ToBool, and Strifind's full rule. This also settles the reviewer's "up to white space" nit.
+  - Kept one citation, Parse.cpp 265 (Strifind, any case), because it backs the case-insensitive test.
+- unreagent-core line 64: -NoEnginePlugins or any DisablePlugins= switches the check off.
+
+2026-11-22 08:24 unreagent-reviewer, re-review after the 08:15-08:20 rounds: verdict READY. The gate is met. One low finding and one nit are below; neither blocks the commit.
+
+Reviewed: worktree k214 (base 1ea8353), uncommitted. cmd/launcher/uplugin.go (566 lines) and uplugin_test.go (428 lines), both new; cmd/launcher/main.go (the one call in run()); README.md; .claude/skills/unreagent-ue/SKILL.md (rows 52-55); .claude/skills/unreagent-core/SKILL.md; .claude/rules/unreagent-rules.md; .claude/agents/unreagent-worker.md (line 41 is rewrapped now). Every edit stays in the lane OWNERS gives it. English only.
+
+Check, run natively on Windows 11 with Go 1.27.0 (Linux: built and vetted only):
+- gofmt -l over the tracked files and the two new ones: empty. go vet ./...: clean, also with GOOS=linux.
+- GOOS=windows CGO_ENABLED=0 go build of unreagent.exe: ok. GOOS=linux CGO_ENABLED=0 go build ./...: ok.
+- go test -count=1 ./...: only cmd/launcher fails, with exactly the 6 known base failures (TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled, TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess, TestUEStartAndRestartFailWhenTheEditorDoesNotStart). With -skip of those plus TestMaterializeTwoRunsAtOnce, every package is ok.
+- The card's 6 test functions with -v: 91 PASS lines, no FAIL.
+- Landing on main 8cca509: git apply --check of the diff (in a scratch index) is clean. main.go is identical on 1ea8353 and 8cca509. 8cca509 exported to scratch plus k214's three Go files: vet, the Windows and Linux builds and the -skip run are all green.
+- Live, with no editor and no agent: the new exe on a scratch copy (upstream .uplugin with "5.6.0", engineRoot UE_5.8, manualStart, MCP on 127.0.0.1:18914). The WARN came right after the -unattended line. With "-DisablePlugins=Other" in unreal.args, only the line "Plugins: the EngineVersion check is skipped: the editor's arguments carry -DisablePlugins=, ..." appeared. Both runs went on to "MCP server listening". The window-mode stderr path was shown in the first review and is unchanged in main.go.
+- Against the UE 5.8.4 source:
+  - the field names bIsPluginExtension and EnabledByDefault (PluginDescriptor.cpp 308, 361-365);
+  - extensions named <Parent>_<x>.uplugin and merged (PluginManager.cpp 946-960, 1266-1270);
+  - one plugin per name (1261-1328);
+  - Optional (2544-2548);
+  - -NoEnginePlugins (1607).
+  The code and the "never warned about" list match.
+
+Previous findings: 1a duplicates, 1b Optional, 2 the -DisablePlugins cut, 3 README consolidated, and the nits (line 87 wording, the Parse nit through the removed citations, line 41) are all settled. The three accepted wrong-warning sources are worded correctly in uplugin.go:56-63, README (Option B step 1, "May warn wrongly") and unreagent-ue row 52.
+
+Findings:
+1. [low] One more wrong-warning source, not in the three-case list. When unreal.editor does not have the <root>/Engine/Binaries/<platform>/<exe> shape (a wrapper script, or a bare name found on PATH; TestEngineDirOf rows "a wrapper" and "a name on PATH"), engineDirOf (uplugin.go:147-156) compares against the resolved engine root's Build.version. If that editor starts a different engine, the check can warn wrongly, and it can also miss a refusal. Rare, and the remedy is wording only: one clause in uplugin.go:56-63 (worker), README "May warn wrongly" (doc-writer) and unreagent-ue row 52 (skill-author). It can be folded in before the commit or carried as its own card; the coordinator decides.
+2. [nit, doc-writer] The README "Not covered" list leaves out a non-boolean Enabled or EnabledByDefault. The file comment and the skill do name it.
+
+Not findings: no test covers the run() wiring (that is k237). The editor-side facts stay as measured on this card (5.7.4 and 5.8.4 Launcher builds). The licensee and changelist cases are labelled source only.
+
+unreagent-doc-writer: README Option B step 1 limits: added the non-boolean Enabled/EnabledByDefault case to 'Not covered' and the wrapper-script/bare-name editor (engine root version read) case to 'May warn wrongly'.
+
+2026-11-22 08:25 unreagent-worker: re-review finding (08:24) folded in, comment only.
+
+The "what can still warn wrongly" list in the uplugin.go file comment gains a fourth case. An unreal.editor that is not of the <root>/Engine/Binaries/<platform>/<exe> shape (a wrapper script, or a bare name on PATH) makes engineDirOf take the resolved engine root's Build.version. If that editor starts another engine, the check can warn wrongly or miss a refusal (TestEngineDirOf rows "a wrapper" and "a name on PATH").
+
+No code change. gofmt -l and go vet ./cmd/launcher/ are clean. Card stays in review.
+
+2026-11-22 08:25 unreagent-skill-author: added the re-review point to unreagent-ue line 52. The list of cases that can warn wrongly now has a fourth one. If unreal.editor is not of the <root>/Engine/Binaries/<platform>/<exe> shape (a wrapper script, or a bare name on PATH), engineDirOf (uplugin.go 147-156) reads the Build.version of the resolved engine root. If that editor starts a different engine, the check can warn wrongly or miss a refusal. Labelled as this repo's code, not engine source. Nothing else changed.
+
+Committed as 362d9af on local main (Changes entry included); not pushed.
