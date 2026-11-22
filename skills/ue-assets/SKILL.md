@@ -232,10 +232,29 @@ Some types cannot be set here at all:
 - other structs, and the UE text form `"(X=1,…)"`;
 - `enum class` properties.
 
-All of these fail with `Unsupported property type for: <path>`. So does any
-value the tool cannot read as the property's type, such as a name for a
-`TEnumAsByte`. Which JSON types the engine's JSON classes convert is not
-verified, so send the JSON type the property has.
+All of these fail with `Unsupported property type for: <path>`. So does a
+value the tool cannot read as the property's type. It reads `value` with the
+engine's `FJsonValue::TryGetNumber`, `TryGetBool` and `TryGetString`, and
+those accept more than the matching JSON type
+(`Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`, and
+`TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4 source,
+not run, while the toolkit targets UE 5.6 and 5.7):
+
+- **An integer or byte property, a `TEnumAsByte` included, accepts any
+  string.** The read is into an `int64`: a string counts by its leading
+  digits, and one without any is stored as 0, with no error. An enum value's
+  name therefore writes 0. Send the number.
+- **A `bool` property accepts any string and any number.** `true`, `yes`,
+  `on` and `false`, `no`, `off` count in any case; every other string is
+  `false` unless it starts with a non-zero integer. A typo writes `false`.
+- A `float` or `double` property also takes `true` and `false` as 1 and 0,
+  and a string made of an optional sign, digits and at most one dot, such as
+  `"0.5"`. Any other string fails with the error above.
+- An `FString` or `FName` property stores a number or a boolean as its text.
+
+So send the JSON type the property has: a wrong string in an integer or
+`bool` property is a wrong write, not an error. Read the value back with
+`get_asset_info` and `include_properties: true`.
 `set_property` (skill `ue-level-actors`) accepts more value forms, but for
 placed actors only.
 

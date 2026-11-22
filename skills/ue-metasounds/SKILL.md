@@ -235,8 +235,14 @@ Sets the default value of one input pin on one node.
   `int32` reads an integer; `bool` is true only for `true` (any case) or `1`.
   **`int` is not `int32`**: it stores the text as a string. Pick the type that
   matches the pin's `type` in `get_graph`.
-- Whether a JSON number in `value` is converted to a string depends on the
-  engine's JSON classes, which this skill has not verified. Send a string.
+- A JSON number or boolean in `value` is converted to its text: the tool
+  reads `value` with the engine's `FJsonObject::TryGetStringField`, which
+  turns `440` into `"440"`, `0.5` into `"0.5"` and `true` into `"true"`
+  (`FJsonValueNumber::TryGetString` and `FJsonValueBoolean::TryGetString`,
+  `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`; read in the UE
+  5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7).
+  `data_type` then applies to that text as above. `null`, an array or an
+  object counts as missing. Send a string, so the text is yours.
 - Errors: `Input not found: <name> on node <id>`, and
   `Failed to set default on input '<name>'` when the engine refuses the value.
 

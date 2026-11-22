@@ -77,9 +77,20 @@ whole list.
 - **References are not validated.** `skeletal_mesh` and `anim_blueprint` are
   stored as given; a path that names nothing still succeeds.
 - **Values are clamped silently**, and a parameter the tool cannot read as
-  the type it expects is skipped, not rejected. Whether a value of another
-  JSON type converts (a numeric string to a number, a number to a string)
-  depends on the engine's JSON classes, which this skill has not verified.
+  the type it expects is skipped, not rejected. The fields are read with the
+  engine's `FJsonObject::TryGetNumberField` (into a `double`),
+  `TryGetStringField` and `TryGetBoolField`, and those convert
+  (`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, and
+  `TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4
+  source, not run, while the toolkit targets UE 5.6 and 5.7):
+  - a number field also reads `true` and `false` as 1 and 0, and a string
+    made of an optional sign, digits and at most one dot, such as `"600"`;
+    any other string is skipped;
+  - a string field stores a number or a boolean as its text, `5` or `true`;
+  - **`is_player_character` reads any string and any number**: `true`, `yes`,
+    `on` and `false`, `no`, `off` in any case, and every other string as
+    `false` unless it starts with a non-zero integer. A typo writes `false`.
+
   Send strings, numbers and booleans as those JSON types.
   `update_character_data` with no readable field still saves and succeeds.
   Compare the returned `config` or `row`.

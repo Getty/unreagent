@@ -87,9 +87,15 @@ by column type:
 | struct | a JSON object with the struct's field names as keys, each value in the form of its own type; or one string in UE text form, `"(X=1.0,Y=2.0,Z=3.0)"` | a string that is not that struct's text form: `Failed to ImportText struct '<col>' from string`; a value that is neither an object nor readable as a string: `Struct property '<col>' requires a JSON object or string` |
 | array, map, set | **one string in UE text form**, such as `"(Sword,Shield)"` for an array of names | a JSON array or object: `Cannot convert JSON to property '<col>' (type: <type>)` |
 
-Whether a number or boolean is read as a string, for a text or struct
-column, depends on the engine's JSON classes, which this skill has not
-verified. Send each value in the JSON type the table names.
+The tool asks the engine's `FJsonValue::TryGetString` for every value, and
+that also reads a JSON number or boolean, as its text: `5`, `0.5`, `true`.
+A text column stores that text. A struct column hands it to the engine's text
+import like any other string. The two "requires" errors are left for `null`, an array and, for a text
+column, an object (`FJsonValueNumber::TryGetString` and
+`FJsonValueBoolean::TryGetString`,
+`Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`; read in the UE 5.8.4
+source, not run, while the toolkit targets UE 5.6 and 5.7). Send each value
+in the JSON type the table names.
 
 So an array or map read with `get_row` cannot be sent back as it came: turn
 it into UE text form first. A string is handed to the engine's text import

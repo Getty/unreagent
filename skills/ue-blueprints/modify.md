@@ -205,10 +205,24 @@ Errors name the expected form: `Failed to set numeric property '<p>'`,
 `Failed to load class '<v>' for property '<p>'`.
 
 Through the bridge, `value` is listed as a string, because the tool declares
-it `any`. The tool reads the JSON type. If your client sends only strings,
-struct values still work in UE text form. Whether a numeric or boolean string
-converts depends on the engine's JSON classes, which this skill has not
-verified.
+it `any`. The tool reads `value` with the engine's `FJsonValue::TryGetNumber`,
+`TryGetBool` and `TryGetString` (main document, "Errors common to both
+tools", for the engine source). If your client sends only strings, struct values
+still work in UE text form, and for the other types:
+
+- A float or double property reads a string made of an optional sign, digits
+  and at most one dot, such as `"0.5"`. Any other string fails with
+  `Failed to set numeric property '<p>'`.
+- **An integer or byte property, a `TEnumAsByte` enum included, accepts any
+  string.** The read is into an `int64`: a string counts by its leading
+  digits, and one without any is stored as 0, with no error. An enum value's
+  name therefore writes 0.
+- **A bool property accepts any string and any number.** `true`, `yes`, `on`
+  and `false`, `no`, `off` count in any case; every other string is `false`
+  unless it starts with a non-zero integer. A typo writes `false`, so
+  `Failed to set bool property …` is left for `null`, an array or an object.
+- An FString or FName property stores a JSON number or boolean as its text,
+  `5` or `true`.
 
 By the plugin's domain notes, class defaults reach only actors spawned later,
 and actors already placed in a level keep their saved values (main document,

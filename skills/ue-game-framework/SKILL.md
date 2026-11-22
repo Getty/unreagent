@@ -239,11 +239,18 @@ requested and the message `Game paused` or `Game unpaused`.
 **`set_mouse_cursor`** — `show_cursor`, default `true`. The result has
 `show_cursor`.
 
-For both, **send a JSON boolean, `true` or `false`.** A value the tool cannot
-read as a boolean is not an error: the default `true` applies. Whether a
-string such as `"false"` is read as a boolean depends on the engine's JSON
-classes, which this skill has not verified, so with a string you cannot tell
-which state you get. Read `paused` or `show_cursor` in the result.
+For both, **send a JSON boolean, `true` or `false`.** The tool reads the
+value through `ExtractOptionalBool` (`MCPToolBase.h`), which calls the
+engine's `FJsonObject::TryGetBoolField`, and that reads any string and any
+number. `true`, `yes`, `on` and `false`, `no`, `off` count in any case; every
+other string is `false` unless it starts with a non-zero integer, and a
+number is `true` when it is not 0. So `"false"` is read as `false`, and a
+typo such as `"ture"` is read as `false` too. Only `null`, an array or an
+object is not read, and then the default `true` applies without an error
+(`TJsonValueString::TryGetBool`,
+`Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
+source, not run, while the toolkit targets UE 5.6 and 5.7). Read `paused` or
+`show_cursor` in the result.
 
 ## DataTables
 

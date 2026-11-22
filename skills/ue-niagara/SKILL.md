@@ -181,16 +181,32 @@ Sets the default value of one user parameter on the system asset.
 | `color` | `{"r": …, "g": …, "b": …, "a": …}` |
 
 - **Pass every component.** The tool gives no component a default, `a`
-  included. What the engine's JSON classes return for a missing one has not
-  been verified for this skill; expect a wrong value rather than an error.
+  included, and reads each with the engine's `FJsonObject::GetNumberField`,
+  which cannot report a failure: a missing component reads as 0, and so does
+  `null`, an array, an object or a string that is not numeric. `true` and
+  `false` read as 1 and 0, and a string made of an optional sign, digits and
+  at most one dot as that number. A colour without `a` gets alpha 0. The only
+  trace of a missing or unreadable component is a `LogJson` line in the
+  editor log
+  (`FJsonObject::GetField` in
+  `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
+  `FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
+  source, not run, while the toolkit targets UE 5.6 and 5.7).
 - **A value of the wrong kind fails** and names the expected form, with two
   hyphens:
   `Parameter '<name>' is float -- 'value' must be a number`. The same pattern
   covers `int`, `bool` (`must be a boolean`), `vector2`
   (`must be an object {x,y}`), `vector3` (`{x,y,z}`), `vector4`
-  (`{x,y,z,w}`) and `color` (`{r,g,b,a}`). Whether a number or boolean
-  written as a string counts is up to the engine's JSON classes and has not
-  been verified: send the JSON types from the table.
+  (`{x,y,z,w}`) and `color` (`{r,g,b,a}`).
+- **The check is looser than those messages** (`FJsonObject::TryGetNumberField`
+  into a `double`, and `TryGetBoolField`; same source and version as above).
+  For `float` and `int`, a string made of an optional sign, digits and at most
+  one dot, such as `"2.5"`, passes as a number, and so do `true` and `false`,
+  as 1 and 0; an `int` is rounded. **For `bool`, any string and any number
+  passes**: `true`, `yes`, `on` and `false`, `no`, `off` count in any case,
+  and every other string is `false` unless it starts with a non-zero integer.
+  A typo sets `false`, and `must be a boolean` is left for `null`, an array or
+  an object. Send the JSON types from the table.
 - **Any other type** fails with
   `Unsupported parameter type '<type>' for parameter '<name>'`. Read the type
   with `get_parameters` first.

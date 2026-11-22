@@ -7,9 +7,22 @@ key. Any other key is ignored without an error.
 
 Rules for every table:
 
-- **Pass the JSON type shown.** A key whose value cannot be read as that type
-  is skipped like an unknown key. How the engine's JSON reader treats a
-  near miss, such as a number sent as a string, has not been verified.
+- **Pass the JSON type shown.** The tool reads each key with the engine's
+  `FJsonObject::TryGetNumberField` (into a `double`), `TryGetBoolField`,
+  `TryGetStringField` or `TryGetObjectField`, and a key that call cannot read
+  is skipped like an unknown key. What those calls accept besides the type
+  shown (`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, and
+  `TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4 source,
+  not run, while the toolkit targets UE 5.6 and 5.7):
+  - A number key also reads `true` and `false` as 1 and 0, and a string made
+    of an optional sign, digits and at most one dot, such as `"0.5"`. Any
+    other string, such as `"1e3"` or `"5 lux"`, is skipped.
+  - **A boolean key reads any string and any number, and never skips one.**
+    `true`, `yes`, `on` and `false`, `no`, `off` count in any case; every
+    other string is `false` unless it starts with a non-zero integer, so a
+    typo sets `false` and the key is still listed as applied. A number is
+    `true` when it is not 0.
+  - A string key reads a number or a boolean as its text, `5` or `true`.
 - **Check the result.** `properties_set` or `settings_applied` lists the keys
   that were applied. `spawn_light` and `spawn_post_process_volume` return no
   list; inspect afterwards.

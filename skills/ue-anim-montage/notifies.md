@@ -84,15 +84,32 @@ There is no operation to change a notify's time; remove it and add it again.
   stops the call: `Property '<key>' not found on <class>`.
 - An untyped notify has no object to set:
   `Notify at index <n> has no UObject (untyped notify)`.
-- **Supported values**, each checked against the property's type:
+- **Supported values.** The tool picks the read by the property's type, and
+  most reads accept more than the matching JSON type, so a wrong type is
+  often a wrong write, not an error:
 
-| Property type | JSON value | Error on a mismatch |
-|---|---|---|
-| bool | `true` / `false` | `Property '<key>' expects bool` |
-| integer or float | a number (integers are truncated) | `Property '<key>' expects number` |
-| name, string | a string | `Property '<key>' expects string` |
-| enum | the value's name as a string | `Property '<key>' expects string (enum name)`, `Enum value '<v>' not found in <enum>` |
-| object | `{"_class": "<class path>", …}` | `Property '<key>' expects object with _class`, `Property '<key>' object missing _class` |
+| Property type | Send | Also accepted, without an error | Fails |
+|---|---|---|---|
+| bool | `true` / `false` | any number (`true` unless it is 0) and **any string**: `true`, `yes`, `on` and `false`, `no`, `off` count in any case, and every other string is `false` unless it starts with a non-zero integer | `null`, an array or an object: `Property '<key>' expects bool` |
+| integer, float, byte (a `TEnumAsByte` included) | a number (an integer property truncates it) | `true` and `false`, as 1 and 0; a string made of an optional sign, digits and at most one dot, such as `"1.5"` | any other string, `null`, an array or an object: `Property '<key>' expects number` |
+| name, string | a string | a number or a boolean, stored as its text, `5` or `true` | `null`, an array or an object: `Property '<key>' expects string` |
+| `enum class` | the value's name as a string | — | a name the enum does not have, and a number or a boolean, which is looked up as its text: `Enum value '<v>' not found in <enum>`; `null`, an array or an object: `Property '<key>' expects string (enum name)` |
+| object | `{"_class": "<class path>", …}` | — | a value that is not an object: `Property '<key>' expects object with _class`; an object without `_class`: `Property '<key>' object missing _class` |
+
+- **A typo in a bool value writes `false`**, and a number sent for a name or
+  string property is stored as text. Neither is reported; read the notify
+  back.
+- **A `TEnumAsByte` property takes its numeric value, not the value's name.**
+  The tool tests for a numeric property before it tests for a byte enum, and
+  a byte property is a numeric one, so the name fails with
+  `Property '<key>' expects number`. Only an `enum class` property takes the
+  name.
+- Source for the table: `SetPropertiesOnObject` in the plugin's
+  `MontageEditor.cpp`; `FJsonValueNumber` and `FJsonValueBoolean` in
+  `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`, `TJsonValueString`
+  in `Public/Dom/JsonValue.h`, and `FByteProperty` in
+  `Engine/Source/Runtime/CoreUObject/Public/UObject/UnrealType.h`; read in the
+  UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7.
 
 - **An object value always creates a new object** of `_class`, owned by the
   notify, and sets the other keys of that JSON object on it. The class must

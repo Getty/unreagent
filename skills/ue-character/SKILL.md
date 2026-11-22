@@ -67,9 +67,15 @@ Which class the game spawns: `game_framework` `inspect_game_mode` (skill
   and `modified_params` still names the parameter.
 - **A value the tool cannot read as a number is skipped, not rejected.** It
   does not appear in `modified_params`, and the call still succeeds when
-  another one was applied. Whether a numeric string such as `"800"` can be
-  read as a number depends on the engine's JSON classes, which this skill has
-  not verified. Send JSON numbers, and check `modified_params`.
+  another one was applied. The tool reads each value as a `double` with the
+  engine's `FJsonObject::TryGetNumberField`, which also takes a string made
+  of an optional sign, digits and at most one dot, such as `"800"`, and
+  `true` and `false` as 1 and 0. Any other string, such as `"800.0f"` or
+  `"1e3"`, is skipped, and so is `null`, an array or an object
+  (`TJsonValueString::TryGetNumber`,
+  `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
+  source, not run, while the toolkit targets UE 5.6 and 5.7). Send JSON
+  numbers, and check `modified_params`.
 - **No undo.** The change is not recorded as an editor transaction. Restore
   the values you read in step 1.
 

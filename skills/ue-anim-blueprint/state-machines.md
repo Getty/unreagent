@@ -195,9 +195,16 @@ and binds the variables. Returns `state_name`, `animation_type`,
 Runs several state and transition operations, then compiles once. Needs an
 `operations` array (`operations array required for batch mode`). Each entry
 is `{"type": "<operation>", "params": {…}}`; `type` is matched ignoring
-case. Inside `params` the tool reads its fields without
-defaults; what a missing field reads as is up to the engine's JSON classes,
-so send every field.
+case. Inside `params` the tool reads its fields with the engine's
+`FJsonObject::GetStringField`, `GetNumberField` and `GetBoolField`, which
+cannot report a failure. A missing field reads as an empty string, 0 or
+`false`, and so does a value the call cannot convert, such as a non-numeric
+string for `x`; the only trace is a `LogJson` line in the editor log
+(`FJsonObject::GetField` in
+`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, `FJsonValue::AsNumber`,
+`AsString` and `AsBool` in `JsonValue.cpp` beside it; read in the UE 5.8.4
+source, not run, while the toolkit targets UE 5.6 and 5.7). So send every
+field, in its JSON type.
 
 | `type` | `params` fields |
 |---|---|

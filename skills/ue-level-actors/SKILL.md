@@ -316,9 +316,25 @@ Some types and values are traps:
   map** is not supported, and neither is an array inside an array.
 - **A JSON value the tool cannot read as the property's type** also ends in
   `Unsupported property type '<type>' for: <path>`, even when the type itself
-  is supported. Which conversions the engine's JSON classes make, such as a
-  numeric string for a number, is not verified, so send the JSON type from the
-  table before you conclude the type cannot be set.
+  is supported. Send the JSON type from the table before you conclude the
+  type cannot be set.
+- **A value of the wrong JSON type is often accepted instead.** The tool
+  reads `value` with the engine's `FJsonValue::TryGetNumber`, `TryGetBool`
+  and `TryGetString` (`Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
+  and `TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4
+  source, not run, while the toolkit targets UE 5.6 and 5.7):
+  - **An integer or byte property, a `TEnumAsByte` included, accepts any
+    string.** The read is into an `int64`: a string counts by its leading
+    digits, and one without any is stored as 0, with no error. An enum
+    value's name therefore writes 0, at the top level as inside an array.
+  - **A `bool` property accepts any string and any number.** `true`, `yes`,
+    `on` and `false`, `no`, `off` count in any case; every other string is
+    `false` unless it starts with a non-zero integer. A typo writes `false`.
+  - A `float` or `double` property also takes `true` and `false` as 1 and 0,
+    and a string made of an optional sign, digits and at most one dot, such
+    as `"0.5"`. Any other string ends in the error above.
+  - An `FString` or `FName` property stores a number or a boolean as its
+    text, `5` or `true`.
 
 Other value errors:
 
@@ -370,7 +386,7 @@ engine infrastructure.
 | `Property not found: <part> on <class>`, and the class is not where the part lives | a misspelt middle part was skipped, and the walk stayed on the outer object | check every part against `level_query info` |
 | a write landed one level above the component you named | the same skip, and the outer object has a property of that name | set the old value back, then fix the path |
 | `Unsupported property type '…' for: …` | an `enum class`, an unsupported container, or a value the tool could not read as the property's type | check the JSON type. An `enum class` is not settable through this tool |
-| a byte enum element came out as its first value | a name string was stored as 0 | pass the numeric value |
+| a byte enum, or a byte enum element, came out as value 0 | a name string was stored as 0 | pass the numeric value |
 | `Error: Task timed out after …ms (task_id: …)` | the bridge stopped waiting, but the editor may still be working on the call | read the state back before you retry |
 | the editor goes away during a spawn with `name` | probably a name that was already taken, which UE's default name mode treats as fatal (unverified) | look the name up before you pass it, or omit `name` |
 

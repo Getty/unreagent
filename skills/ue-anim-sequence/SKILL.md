@@ -70,10 +70,16 @@ A missing or empty required string returns
 - **`asset_paths` is a JSON array of strings.** A single `asset_path` does not
   take its place in `adjust_track`, `resample` and `replace_skeleton`. A missing
   or empty array returns
-  `Missing required parameter: asset_paths (non-empty array)`. Entries the tool
-  cannot read as a non-empty string are skipped; when none is left, the call
-  returns `asset_paths contains no valid paths`. Whether the engine's JSON
-  classes read a number as a string is not verified, so send strings.
+  `Missing required parameter: asset_paths (non-empty array)`. Each entry is
+  read with the engine's `FJsonValue::TryGetString`. An empty string, `null`,
+  an array or an object is skipped; when nothing is left, the call returns
+  `asset_paths contains no valid paths`. **A number or a boolean is not
+  skipped**: it is read as its text, `5` or `true`, and goes on as a path that
+  names no asset. Send strings. (`FJsonValueNumber::TryGetString`,
+  `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`; read in the UE
+  5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7. The
+  number reads in the sections rest on the same file and on
+  `TJsonValueString` in `Public/Dom/JsonValue.h`.)
 - **Vectors and rotations are objects**: `{x, y, z}` and
   `{pitch, yaw, roll}`. A component you leave out is 0. That matters for
   `scale_override` (section `sequences`) and `set_ref_pose` (section `meshes`).

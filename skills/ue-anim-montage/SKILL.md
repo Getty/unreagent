@@ -111,9 +111,25 @@ absent.
 
 A missing or empty string parameter returns
 `Missing required parameter: <name>`, and so does a missing number such as
-`segment_index`. Send numbers and booleans as JSON numbers and booleans;
-whether a string such as `"0.3"` is read as a number depends on the engine's
-JSON classes, which this skill has not verified.
+`segment_index`. Send numbers and booleans as JSON numbers and booleans.
+
+The tool reads the number parameters of an operation, those in the table
+above and in the sections' tables, as a `double`, through
+`ExtractOptionalNumber` (`MCPToolBase.h`) or the engine's
+`FJsonObject::TryGetNumberField` directly, and truncates an index to an
+integer afterwards. That read also takes a string made of an optional sign,
+digits and at most one dot, such as `"0.3"`, and `true` and `false` as 1 and
+0. **Any other string, such as `"1e3"` or `"0.3s"`, counts as absent**: a
+required number returns `Missing required parameter: <name>`, and an optional
+one keeps its default without an error (`TJsonValueString::TryGetNumber`,
+`Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
+source, not run, while the toolkit targets UE 5.6 and 5.7).
+
+This holds for the operation's own parameters only. A value inside a notify's
+`properties` is checked against the property's type, and a string that is not
+numeric fails there with `Property '<key>' expects number` (section
+`notifies`). A curve key whose `time` or `value` cannot be read is skipped
+(section `curves`).
 
 Most writes return the whole montage, shaped like `get_info`, as their data.
 The curve operations return the curves instead, `set_blend_in` and

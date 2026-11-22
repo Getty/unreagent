@@ -84,9 +84,23 @@ A missing or empty string parameter returns
 `axis_index` that is absent or negative. The blend space is loaded before
 these indices are checked, so a bad path is reported first.
 
-Send numbers and booleans as JSON numbers and booleans. Whether a string such
-as `"150"` or `"true"` is read as one depends on the engine's JSON classes,
-which this skill has not verified.
+Send numbers and booleans as JSON numbers and booleans. What the tool reads
+otherwise (`ExtractOptionalNumber` and `ExtractOptionalBool` in
+`MCPToolBase.h`, and the engine's `FJsonObject::TryGetNumberField` and
+`TryGetBoolField` in `set_axis` and `batch`; the engine side is
+`TJsonValueString` in `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`,
+read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
+5.7):
+
+- Every number is read as a `double`, and an index is truncated afterwards.
+  The read also takes a string made of an optional sign, digits and at most
+  one dot, such as `"150"`, and `true` and `false` as 1 and 0. Any other
+  string counts as absent: the default applies without an error, and a
+  `sample_index` or `axis_index` is reported as missing.
+- **A boolean is read from any string and any number.** `true`, `yes`, `on`
+  and `false`, `no`, `off` count in any case; every other string is `false`
+  unless it starts with a non-zero integer. A typo in `snap_to_grid`,
+  `wrap_input` or `recursive` therefore sets `false`, with no error.
 
 ## Reading
 

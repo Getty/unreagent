@@ -249,8 +249,19 @@ same key there. `attenuation_overrides` works only inside `properties`.
   `create_attenuation`).
 - **Keys the engine's JSON classes cannot read as the listed type, unknown
   keys and unknown `distance_algorithm` names are skipped without an
-  error.** Which strings those classes read as a number or a boolean is not
-  verified, so send JSON numbers and booleans. Check `properties_set` in the
+  error.** The tool reads the keys with the engine's
+  `FJsonObject::TryGetNumberField` (into a `double`), `TryGetBoolField` and
+  `TryGetStringField`. A number key also reads `true` and `false` as 1 and 0,
+  and a string made of an optional sign, digits and at most one dot, such as
+  `"0.5"`; any other string is skipped. **A boolean key reads any string and
+  any number, and never skips one**: `true`, `yes`, `on` and `false`, `no`,
+  `off` count in any case, and every other string is `false` unless it starts
+  with a non-zero integer, so a typo sets `false` and still shows up in
+  `properties_set`. A string key reads a number or a boolean as its text.
+  (`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, and
+  `TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4
+  source, not run, while the toolkit targets UE 5.6 and 5.7.) Send JSON
+  numbers and booleans. Check `properties_set` in the
   result: it lists what was applied, such as `"volume=0.50"`.
   `Set 0 properties …` means nothing changed.
 - **Any `attenuation_overrides` object switches the component's own

@@ -149,9 +149,15 @@ What the success does not prove:
   code sets the camera of the level editor's first active viewport and ignores
   whether there was one.
 - **A key left out of a camera object is not the current value.** The code
-  reads all six keys without a default of its own. The engine's JSON reader
-  is expected to give 0 for a missing one; that has not been verified. Pass
-  all six.
+  reads all six keys with the engine's `FJsonObject::GetNumberField`, without
+  a default of its own. That call cannot report a failure: a missing key
+  reads as 0, and so does `null`, an array, an object or a string that is not
+  numeric. `true` and `false` read as 1 and 0, and a string made of an
+  optional sign, digits and at most one dot as that number
+  (`FJsonObject::GetField` in
+  `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
+  `FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
+  source, not run, while the toolkit targets UE 5.6 and 5.7). Pass all six.
 - **A failed scrub is swallowed**, and so is a `frame` that is not a number.
   `open` still succeeds; the result just has no `frame` and the message no
   ` at frame`. When `frame` is present it is the number you sent, not a value

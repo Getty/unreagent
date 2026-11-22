@@ -36,8 +36,16 @@ plus ` Did you mean '<x>'?` when a valid name is close.
 
 Through the bridge, `material_slot` is listed as a string, because the tool
 declares it `integer`, a type the bridge does not map. Send a JSON number.
-Whether a numeric string converts depends on the engine's JSON classes, which
-this skill has not verified.
+The tool reads the slot with the engine's `FJsonObject::GetIntegerField`,
+which cannot report a failure: a string made of an optional sign, digits and
+at most one dot is read as that number and truncated, and `true` and `false`
+are read as 1 and 0, so `true` goes to slot 1. **Any other value, such as
+`"one"`, `null`, an array or an object, reads as 0, so the call goes to slot
+0 without an error** (`FJsonObject::GetField` in
+`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, `FJsonValue::AsNumber`
+in `JsonValue.cpp` beside it; read in the UE 5.8.4 source, not run, while the
+toolkit targets UE 5.6 and 5.7). `slot` in the result is the slot that was
+written.
 
 ## What the tool cannot do
 
@@ -107,8 +115,9 @@ The tool's own examples use asset paths such as `/Game/Materials/MI_Glow`.
   not check that the parent has a parameter of that name.** It hands the value
   to the engine's `Set…ParameterValueEditorOnly`. What the engine does with a
   name the parent does not define has not been verified for this skill.
-- `scalars` take JSON numbers. A value the engine's JSON classes cannot read
-  as a number, such as an object, is skipped without an error.
+- `scalars` take JSON numbers. The tool reads each one with the engine's
+  `FJsonValue::TryGetNumber`, into a `double`; a value that call cannot read,
+  such as an object, is skipped without an error.
 - `vectors` take objects with `r`, `g`, `b` and `a`. The tool defaults `a` to
   1 and nothing else: pass `r`, `g` and `b`. A value that is not an object is
   skipped without an error.
@@ -116,9 +125,15 @@ The tool's own examples use asset paths such as `/Game/Materials/MI_Glow`.
   `Failed to load texture: <path>`; several failures are joined with `; `. A
   value that cannot be read as a string, such as an object, is skipped without
   an error.
-- Whether a number written as a string, such as `"0.4"`, counts as a number
-  is up to the engine's JSON classes and has not been verified. Send the JSON
-  types above.
+- A number written as a string, such as `"0.4"`, does count as a number in
+  `scalars` and inside a `vectors` object: the read takes a string made of an
+  optional sign, digits and at most one dot, and `true` and `false` as 1 and
+  0. Any other string, such as `"0.4f"` or `"1e-2"`, is skipped. In
+  `textures`, a number or a boolean is read as its text and then fails as a
+  path, `Failed to load texture: 5` (`TJsonValueString::TryGetNumber` in
+  `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`,
+  `FJsonValueNumber::TryGetString` in `Private/Dom/JsonValue.cpp`; same
+  source and version as under `material_slot`). Send the JSON types above.
 - Any other key in `parameters` is ignored.
 
 ## create_material_instance
