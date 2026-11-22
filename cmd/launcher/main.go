@@ -91,6 +91,9 @@ func run() error {
 		return err
 	}
 	logger(fmt.Sprintf("unreagent %s — Config: %s", version, info.ConfigPath))
+	if info.Defaults {
+		logger("INFO no config file there — running on built-in defaults: agent and MCP server on, permissions off, the UE LLM Toolkit bridge if the plugin is below Plugins/")
+	}
 	if info.LocalPath != "" {
 		logger("Local overlay: " + info.LocalPath)
 	}

@@ -309,10 +309,15 @@ type Info struct {
 	// because a placeholder they need resolved to nothing — sorted.
 	SkippedCommands []string
 	// Warnings are what Load noticed without failing, each a complete message
-	// for the launcher to log as a WARN line: today only that the engine the
+	// for the launcher to log as a WARN line: today that the engine the
 	// .uproject names — by its EngineAssociation, or by lying in an engine
-	// tree — is not usable (see chooseEngine).
+	// tree — is not usable (see chooseEngine), and on the defaults path a
+	// toolkit bridge chosen among several (loadDefaults).
 	Warnings []string
+	// Defaults is true when there was no config file and the configuration is
+	// the built-in one (DefaultYAML). ConfigPath then names the file that was
+	// looked for and is not there.
+	Defaults bool
 }
 
 // Load reads the configuration. explicitPath is optional; if it is empty,
@@ -320,15 +325,32 @@ type Info struct {
 // (findConfig). An unreagent.local.yaml sitting beside it is overlaid on top.
 // A symlink in any of these places that leads to no file is an error, not a
 // file that is not there. Each file holds one YAML document.
+//
+// With no explicitPath and neither file there, the launcher runs on the
+// built-in defaults (DefaultYAML) for the one .uproject next to the
+// executable, and Info.Defaults says so; no .uproject there, or several, is an
+// error. An unreagent.local.yaml is overlaid on the defaults as on a file,
+// except that it cannot set unreal.project. An explicitPath that does not
+// exist stays an error.
 func Load(explicitPath string) (*Config, Info, error) {
+	return load(explicitPath, exeDir())
+}
+
+// load is Load with the executable's directory as a parameter.
+func load(explicitPath, dir string) (*Config, Info, error) {
 	var info Info
 
 	path := explicitPath
 	if path == "" {
 		var err error
-		if path, err = findConfig(exeDir()); err != nil {
+		if path, err = findConfig(dir); err != nil {
 			return nil, info, err
 		}
+		present, err := configPresent(path)
+		if err != nil {
+			return nil, info, err
+		}
+		info.Defaults = !present
 	}
 	// Absolute, because every project path derives from the config directory
 	// and lands in placeholders: a relative "-config unreagent.yaml" made
@@ -342,7 +364,15 @@ func Load(explicitPath string) (*Config, Info, error) {
 	baseDir := filepath.Dir(path)
 
 	var c Config
-	if err := decodeYAML(path, &c); err != nil {
+	if info.Defaults {
+		warning, err := loadDefaults(&c, path)
+		if err != nil {
+			return nil, info, err
+		}
+		if warning != "" {
+			info.Warnings = append(info.Warnings, warning)
+		}
+	} else if err := decodeYAML(path, &c); err != nil {
 		return nil, info, err
 	}
 	local := localPathFor(path)
@@ -354,6 +384,9 @@ func Load(explicitPath string) (*Config, Info, error) {
 		info.LocalPath = local
 		if err := decodeYAML(local, &c); err != nil {
 			return nil, info, err
+		}
+		if info.Defaults && strings.TrimSpace(c.Unreal.Project) != "" {
+			return nil, info, fmt.Errorf("unreal.project in %s needs an unreagent.yaml beside it: without a config file the project is the .uproject next to the launcher — move the setting into an unreagent.yaml", filepath.Base(local))
 		}
 	}
 
@@ -1140,13 +1173,19 @@ func decodeYAML(path string, c *Config) error {
 	if err != nil {
 		return fmt.Errorf("config not readable (%s): %w", path, err)
 	}
+	return decodeDoc(filepath.Base(path), b, c)
+}
+
+// decodeDoc is decodeYAML for a document already read; name stands for it in
+// errors.
+func decodeDoc(name string, b []byte, c *Config) error {
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true) // unknown fields = error (typo protection)
 	if err := dec.Decode(c); err != nil {
 		if err == io.EOF {
 			return nil // an empty file is fine
 		}
-		return fmt.Errorf("%s: %w", filepath.Base(path), err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	for {
 		var next yaml.Node
@@ -1155,10 +1194,10 @@ func decodeYAML(path string, c *Config) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("%s: %w", filepath.Base(path), err)
+			return fmt.Errorf("%s: %w", name, err)
 		}
 		if !EmptyDocument(&next) {
-			return fmt.Errorf("%s: it holds more than one YAML document (another one starts at line %d); refusing to drop all but the first", filepath.Base(path), next.Line)
+			return fmt.Errorf("%s: it holds more than one YAML document (another one starts at line %d); refusing to drop all but the first", name, next.Line)
 		}
 	}
 }

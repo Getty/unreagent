@@ -511,6 +511,11 @@ Revision history for unreagent
     entry. ue-assets: how the bool parameters (save, mark_dirty,
     include_properties, recursive) and limit read a wrong-typed value; a
     wrong-typed save skips the save.
+  - Started next to exactly one .uproject with no unreagent.yaml, the launcher
+    now runs on built-in defaults instead of failing: agent and MCP server on,
+    permissions off, and the UE LLM Toolkit bridge when the plugin is found
+    below Plugins/. None or several .uproject files is an error naming them.
+    A start with a config file is unchanged.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
