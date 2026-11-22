@@ -1,0 +1,28 @@
+---
+claimed_at: 2026-11-22T04:26:17Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T04:24:37Z
+created: 2026-11-21T23:07:18Z
+id: 207
+priority: medium
+started: 2026-11-22T04:01:53Z
+status: done
+tags:
+- config
+- bug
+title: 'hasArg compares exactly: -Unattended in unreal.args gets a second -unattended'
+updated: 2026-11-22T04:26:17Z
+---
+
+Found in k198. hasArg compares argument strings exactly, so a user who writes -Unattended (UE flags are case-insensitive) in unreal.args gets the default -unattended appended as well. Harmless today, but the same check guards every default argument. Owner: unreagent-worker. Small. Done when: the comparison is case-insensitive for editor flags, pinned by a test.
+
+Correction (k198 review, 2026-11-21): the body states 'UE flags are case-insensitive' as fact. No source establishes it; the unreagent-ue skill marks it unverified. The code change is harmless either way, but treat the premise as unverified.
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). Premise confirmed: engine flags are case-insensitive (Engine/Source/Runtime/Core/Private/Misc/Parse.cpp 325-351, FParse::Param; App.cpp 275-281). A flag needs - or / after whitespace and whitespace or end after it, so -unattended=1 does not count as -unattended. hasArg should compare case-insensitively.
+
+Editor switch check now reads like the engine (FParse::Param): new hasEditorSwitch in cmd/launcher/lifecycle.go matches '-' or '/' prefix, name case-insensitive, whole argument only ('-unattended=1' is not the switch, default still appended). The inline argument assembly moved out of run() into editorArgs (lifecycle.go) so it is testable; hasArg stays exact and is now used only by hasPromptArg (agent flags -p/--print are case-sensitive). Tests: TestEditorArgsAddsUnattendedOnlyWhenTheEngineWouldMissIt (red before the fix on -Unattended, -UNATTENDED, /Unattended), TestEditorArgsPutsTheProjectFirst. Check green on Linux: gofmt, go vet, go test -count=1 ./..., make windows. Platform-neutral code; Windows build compiled only, not run. Files: cmd/launcher/main.go, lifecycle.go, lifecycle_test.go. Not covered: one unreal.args element holding several switches separated by spaces is compared as a whole.
+
+Review verdict (unreagent-reviewer, 2026-11-22): ready. Full check green on the working tree (gofmt, vet, go test -count=1 ./..., make windows). The new test fails on three cases with the old exact compare put back (other case, upper case, slash form). hasEditorSwitch matches FParse::Param (UE 5.8.4 Parse.cpp 325-351). Files: cmd/launcher/lifecycle.go, lifecycle_test.go, main.go. Windows path compiled only. Not covered: one unreal.args element holding several switches.
+
+Committed as e742501.
