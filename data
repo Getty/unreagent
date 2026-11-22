@@ -1,0 +1,39 @@
+---
+claimed_at: 2026-11-22T21:53:23Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-22T21:53:23Z
+created: 2026-11-22T06:45:40Z
+id: 223
+priority: low
+started: 2026-11-22T21:45:00Z
+status: done
+tags:
+- skills
+- ue
+title: 'Skills: JSON-read wording misses lone sign/dot strings, localized bool words
+  and two sequencer/montage reads'
+updated: 2026-11-22T21:53:39Z
+---
+
+Left over from the k222 review (UE 5.8.4 source and toolkit 9f6a0f7, read not run). Owner: unreagent-skill-author.
+
+1. FString::IsNumeric accepts a lone sign or dot ("-", "+", ".", "-."), which then reads as 0. The k218/k222 wording "any other string is not read" / "optional sign, digits and at most one dot" is wrong for those strings: skills/ue-sequencer/SKILL.md (open, frame), skills/ue-anim-montage/curves.md (keys), the limit paragraph in skills/ue-assets/SKILL.md, and the same phrase across the k218 skills.
+2. FToBoolHelper also accepts the editor-localized True/Yes/False/No words; the bool rule names only the English ones.
+3. ue-sequencer: open with frame 12.9 scrubs to 12 but returns 12.9 (it stores the double it read); the scrub section says its returned frame is truncated. Nothing says the two differ.
+4. ue-sequencer scrub: "frame is required and must be a number" rests on the same TryGetNumberField read, so true scrubs to 1 and "12" to 12; only unreadable values give "Missing required parameter: frame".
+5. ue-anim-montage/curves.md: arrive_tangent and leave_tangent use the same read; an unreadable value is dropped silently and the key is still added.
+
+Not verified: LogJson verbosity at runtime; a limit outside the int32 range.
+
+2026-11-22 21:50 Done, all five points, skills/ue-* only (17 files, uncommitted, Changes untouched). Read in the UE 5.8.4 source and toolkit 9f6a0f7, not run.
+1. Lone sign/dot: TCString::IsNumeric (Engine/Source/Runtime/Core/Public/Misc/CString.h; FString::IsNumeric in Core/Private/Containers/String.cpp.inl rejects only the empty string and delegates) skips one leading sign, then accepts digits and one dot with no digit required; TJsonValueString::TryGetNumber(double) then calls Atod. One sentence, same wording, added at all 21 places that state the "optional sign, digits and at most one dot" rule (ue-anim-montage SKILL/curves/notifies, ue-anim-sequence/sequences, ue-assets x2, ue-audio, ue-blend-space, ue-blueprints SKILL/modify, ue-character, ue-character-data, ue-level-actors, ue-lighting/properties, ue-materials x2, ue-niagara x2, ue-sequencer x2).
+2. Localized bool words: FToBoolHelper::FromCStringWide/FromCStringUtf8 (Core/Private/Misc/CString.cpp) compare against FCoreTexts True/Yes/False/No; On/Off have no localized form. One sentence added at all 12 places that state the bool rule.
+3+4. MCPTool_Sequencer.cpp ExecuteOpen scrubs static_cast<int32>(FrameDouble) but returns FrameDouble; ExecuteScrub returns the int32 and gives "Missing required parameter: frame" only when TryGetNumberField fails. Both sections now say so.
+5. ParseKeysFromJson (MCPTool_MontageModify.cpp): arrive_tangent/leave_tangent via TryGetNumberField, assigned only on success, Keys.Add either way. curves.md says so; the default tangent value of a new FRichCurveKey was not read and is not stated.
+Not verified: that Atod returns 0 for a lone sign or dot rests on the C runtime strtod/_tcstod behind FPlatformString::Atod, not on engine code; LogJson verbosity; a limit outside int32.
+Checks: go test -count=1 ./internal/skills ./cmd/launcher both ok (with the concurrent worker edits in the tree); TestToolkitToolsExistInToolkit ran against the checkout and passed. make windows not run (no Go touched).
+
+Review (unreagent-reviewer): READY. Files: the 17 skills/ue-* Markdown files in the tree (k238 Go and k239 .claude/skills not reviewed here). Check run: gofmt -l cmd internal skills empty, go vet ./..., go test ./... (all ok, internal/skills uncached), make windows ok - green. Sources read, not run (UE 5.8.4, toolkit 9f6a0f7): (1) TCString::IsNumeric skips one sign, accepts digits and one dot with no digit required, FString::IsNumeric rejects only empty; TJsonValueString::TryGetNumber(double) -> Atod -> _tcstod/wcstod; 'reads as 0' holds by the C standard rule for strtod (no conversion -> 0). All 21 sentences identical after whitespace folding; every site is a double read (TryGetNumber/TryGetNumberField double, AsNumber, GetIntegerField->AsNumber), none on the int32/int64 LexFromString reads. (2) FToBoolHelper Wide/Utf8 compare FCoreTexts True/Yes/False/No case-insensitively; On/Off have none; 12 identical sentences, all bool-rule sites covered. (3)(4) ExecuteOpen returns FrameDouble while message and scrub use static_cast<int32>; ExecuteScrub errors only when TryGetNumberField fails and returns the int32 - text matches. (5) ParseKeysFromJson assigns tangents only on success and adds the key regardless - matches. Nits, non-blocking: ue-assets/SKILL.md:166-168 a full sentence inside a semicolon list ends in ';'; ue-game-framework/SKILL.md:248-250 the inserted sentence splits 'a number is true when not 0' from its 'So ...' conclusion. Repetition: acceptable - skills load one at a time, so each site stays self-contained; a second copy inside the same file (ue-assets, ue-materials, ue-niagara, ue-sequencer) could say 'same source as above', as those files already do - optional.
+
+Committed as 54767c9 (17 skills/ue-* files plus Changes entry).
