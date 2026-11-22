@@ -1,0 +1,16 @@
+---
+class: standard
+created: 2026-11-22T07:08:21Z
+id: 231
+priority: medium
+status: backlog
+tags:
+- onboarding
+- skills
+title: 'Shipped skill: bring owned Fab content into the project'
+updated: 2026-11-22T07:08:21Z
+---
+
+Part of k224. Owner: unreagent-skill-author. Blocked by k225 (button labels, login behaviour and landing paths must be measured first).
+
+Content: there is no callable way to download Fab content — do not invent one; ask the human for the one click per listing in the Fab tab (measured labels per listing type), or the Launcher for complete projects; then finish the on-disk part: verify the landing path, enable missing plugins, restart or compile for a plugin, check the log lines and that assets load. No unofficial downloaders. The list/copy-tool decision (D3 on k224) follows k225.
