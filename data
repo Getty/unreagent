@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-22T21:54:25Z
+claimed_by: unreagent-worker
+class: standard
+completed: 2026-11-22T21:54:25Z
+created: 2026-11-22T07:20:01Z
+id: 238
+priority: medium
+started: 2026-11-22T21:44:26Z
+status: done
+tags:
+- onboarding
+- launcher
+title: 'Defaults path follow-ups: plainer permissions line, hermes-setup hint, bridge
+  search edges'
+updated: 2026-11-22T21:54:41Z
+---
+
+From the k227 review; none blocked its commit. Owner: unreagent-worker. Part of k224.
+
+1. The INFO line on the defaults path says only "permissions off". It should say plainly that unreagent applies no policy on this path and Claude Code own prompts decide; consider a WARN. The default itself (permissions off) is the main agent proposal and still open for the maintainer.
+2. cmd/launcher/hermes.go: without a config the hint says "Set it in unreagent.yaml" — creating that file with only the hermes setting leaves the defaults path, so agent and MCP turn off. Point to unreagent.local.yaml (overlaid on the defaults) or to init once k228 exists.
+3. internal/config/defaults.go bridge search: add tests for a plugin exactly at the depth limit and for a symlinked plugin directory; skip Content/, Source/ and Saved/ inside plugins; a Plugins entry that is a file or unreadable should warn, not stop the start. Windows junctions are unverified.
+
+All three items done; full check green on Linux (gofmt, go vet, go test -count=1 ./..., make windows) — Windows behaviour compiled, not run.
+1. main.go: defaults-path notice is now defaultsNotice(cfg), two INFO lines; the second says unreagent applies no permission policy on built-in defaults and Claude Code's own prompts and settings alone decide. Worker's choice: INFO only, no WARN — it is the designed default state at every such start, and a WARN goes to the console alert in window mode. The line is dropped when unreagent.local.yaml enables permissions (it would be false then).
+2. hermes.go: hermesEnableHint(info) — on the defaults path points to unreagent.local.yaml (full path) and warns against an unreagent.yaml holding only this setting. Mention of 'unreagent init' left for k228.
+3. defaults.go: findBridges no longer returns an error; Plugins that is a file, or any directory the search cannot read, becomes an Info.Warnings entry and the start continues. Content/, Source/, Saved/ skipped. Links are followed only when they lead to a directory; also accepts ModeIrregular entries so a Windows junction is followed — UNVERIFIED on Windows. DefaultYAML signature changed to (doc, bridges, warnings, err). Tests: depth limit, skips, symlinked plugin dir, Plugins as file, Plugins unreadable, one plugin dir unreadable (none skipped here, uid != 0).
+Drift for the dispatcher: .claude/skills/unreagent-config may describe 'an unreadable Plugins is an error' and the old DefaultYAML signature — skill text, not touched.
+
+Review (unreagent-reviewer): READY. Files: cmd/launcher/main.go, cmd/launcher/hermes.go, internal/config/defaults.go, internal/config/config.go, internal/config/defaults_test.go, cmd/launcher/hermes_test.go, cmd/launcher/main_test.go - all in the worker's OWNERS lane, no German. Check run on the combined tree (k238+k239+k223 Markdown): gofmt -l empty, go vet ./... ok, go test ./... ok, make windows ok. Windows junction handling is UNVERIFIED (cross-compiled only). linksToDir/ModeIrregular verified against stdlib os/types_windows.go (go.mod go 1.26, winsymlink=1 default since 1.23): a junction is a name-surrogate reparse point, so DirEntry.Type() has neither ModeDir nor ModeSymlink but ModeIrregular; os.Stat follows it. Cannot misfire on Linux: dirents never carry ModeIrregular there, and the os.Stat+IsDir guard admits only directories anyway. WARN-not-error for unreadable dirs at any depth matches item 3 of the card and is acceptable. INFO-only permissions line accepted as the worker's choice (WARN still the maintainer's call). bridgeSearchDepth comment (1 flat, 3 submodule, limit 4) reads right, pinned by the at-the-depth-limit case. Non-blocking: (1) defaults.go findBridges/linksToDir - the depth limit is the only cycle guard; a link back up (Plugins/x -> Plugins) yields the same plugin at depths 1-4 and a spurious 'several bridges' WARN, a link to a large tree reads up to 4 levels of it; dedupe by real path if this ever matters. (2) main.go defaultsNotice - line 2 follows the overlay, line 1 still says 'agent and MCP server on' even when unreagent.local.yaml turns either off. (3) Tests cover the helper text only; the call sites are one-line loops, acceptable.
+
+Committed as 246a2b8. Windows junction handling unverified (cross-compiled only).
