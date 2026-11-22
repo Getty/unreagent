@@ -199,21 +199,185 @@ unreagent-MCP and the in-editor MCP together — clone the standalone
 git clone --recursive https://github.com/Getty/unreagent-example
 ```
 
+## New project (quick start)
+
+From nothing to a first agent session with the editor supervised, without
+leaving this section. **Nothing here has been run on Windows yet.** The launcher
+is cross-compiled from Linux; the config load, the defaults and `unreagent init`
+are tested on Linux only. Windows-specific behaviour below (the PATH lookup for
+`claude`, `node` and `npm`, Visual Studio, the editor itself) is unverified,
+except where a line says it was measured.
+
+**What you need first** (details in [What the machine must have](#what-the-machine-must-have)):
+Unreal Engine 5.7 or newer (5.8 for the reference project), Claude Code with
+`claude` on PATH, Node.js 18 or newer (for the toolkit's bridge) and Visual
+Studio 2022 or 2026 with the "Game development with C++" workload (the toolkit
+is C++ source and is built once).
+
+1. **Get a project.** Create one in Unreal Editor (File -> New Project), or take
+   [`Getty/unreagent-example`](https://github.com/Getty/unreagent-example) as
+   the template: `git clone --recursive https://github.com/Getty/unreagent-example`.
+   Its README says what it already contains. The folder with the `.uproject`
+   in it is the project folder below.
+2. **Put `unreagent.exe` next to the `.uproject`** (from the
+   [release](https://github.com/Getty/unreagent/releases); add it to
+   `.gitignore`). No config file is needed.
+3. **Start it** (double-click or from a console in that folder). With no
+   `unreagent.yaml` the launcher runs on built-in defaults and says so in its
+   first log lines, `no config file there — running on built-in defaults`.
+4. **Tell the agent to set up the rest.** Claude Code opens in the window. Ask
+   it, for example: *"Look at this project and set up unreagent for it: write
+   an unreagent.yaml, check that the UE LLM Toolkit is in Plugins/, and tell me
+   what is missing."* The agent has unreagent's MCP tools (builds, logs,
+   scripts) and Claude Code's own tools in the project folder; it asks you where
+   it cannot tell. Nothing ships yet that scripts this for it.
+5. **Write the defaults out and check the setup:** `unreagent init` (see
+   [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup)).
+   `init` looks next to the `unreagent.exe` it runs from, not in the console's
+   folder, so the .exe must sit next to the `.uproject` (step 2). It never
+   changes an existing config.
+
+### What a start without a config does
+
+| | Built-in default |
+|---|---|
+| Project | the one `.uproject` next to `unreagent.exe` |
+| Agent | on: `claude`, started in the window, with `agent.claudeIntegration` (the launcher hands it the MCP config) |
+| MCP server | on, as `mcp.address` defaults (`127.0.0.1:8765`) |
+| UE LLM Toolkit | its bridge is added to `mcp.extraServers` when the plugin is found below `Plugins/` (see below), otherwise there is none |
+| Permissions | **off** |
+| Everything else | the defaults of the [configuration reference](#configuration-quick-reference) |
+
+**Permissions off means unreagent applies no policy.** It neither allows nor
+denies a tool call; Claude Code's own permission prompts and settings alone
+decide what the agent may do, the same as running `claude` yourself. The
+launcher logs this at start (`unreagent applies no permission policy on
+built-in defaults`). Turning `permissions.enabled` on does not by itself change
+that for an interactive agent, see [Permission layer](#permission-layer).
+
+**The config is looked for next to the executable, not in the working
+directory.** `unreagent.yaml`, or `unreagent.yml` when there is no
+`unreagent.yaml`; `-config <path>` names one elsewhere (a `-config` that does
+not exist is an error and does not fall back to the defaults). Starting
+`unreagent.exe` from another directory therefore still looks next to the .exe.
+
+**Exactly one `.uproject` next to the executable.** There is no
+`unreal.project` to choose with, so without a config file:
+
+```
+no unreagent.yaml and no .uproject in <dir>: without a config file the launcher runs on built-in defaults for the project next to it — put the launcher next to your .uproject, or write an unreagent.yaml that sets unreal.project (-config <path> names a config elsewhere)
+no unreagent.yaml in <dir> and several .uproject files there (A.uproject, B.uproject): without a config file the launcher cannot tell which project is meant — put the launcher next to your .uproject, or write an unreagent.yaml that sets unreal.project
+```
+
+Both end the start with exit 1 before anything runs.
+
+**How the toolkit is found.** The launcher looks below `Plugins/` for a plugin
+directory that holds `Resources/mcp-bridge/index.js`, up to four levels deep, so
+both `Plugins/UELLMToolkit` and the submodule layout
+`Plugins/ue-llm-toolkit/Plugin/UELLMToolkit` work. It does not enter hidden
+directories or `node_modules`, `Binaries`, `Intermediate`, `Content`, `Source`
+and `Saved`; it follows links to directories and reads each real directory once.
+Shallowest first, then by name. With several, it uses the first and logs a
+`WARN` listing all of them; write an `unreagent.yaml` to choose another. A
+`Plugins` that is not a directory, or a directory it cannot read, is a `WARN`
+too, and the start goes on without the toolkit.
+
+**`unreagent.local.yaml` still overlays the defaults**, by the same rule as over
+a file: a list replaces the default list, a map merges by key with each given
+entry replaced whole. Use it for `engineRoot` or `agent.command`. It must not
+set `unreal.project` while there is no `unreagent.yaml`: that is a load error
+(`unreal.project in unreagent.local.yaml needs an unreagent.yaml beside it`),
+because without a config file the project is the `.uproject` next to the
+launcher. Move the setting into an `unreagent.yaml`.
+
+### `unreagent init`: write the defaults and check the setup
+
+```
+unreagent init [-check] [-config <path>]
+```
+
+Run the `unreagent.exe` that sits next to the `.uproject`; the console's working
+directory does not matter. It writes the built-in defaults as
+`unreagent.yaml` (no machine paths: the toolkit's bridge, if found, is written
+as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
+
+- **It never overwrites.** With an `unreagent.yaml` or `unreagent.yml` already
+  there, it writes nothing and prints the preflight for that config. The file
+  is created exclusively, so a config that appears meanwhile is not replaced
+  either, and a link at the target is never written through.
+- `-check` writes nothing even where there is no config; the preflight is for
+  the defaults then.
+- `-config <path>` preflights the config at that path and never writes to it.
+- The preflight lists the project, engine (with its version), the agent command
+  on PATH, the toolkit (bridge path, `node`, `npm`, the bridge's dependencies),
+  whether a project plugin's `EngineVersion` would make the editor refuse it,
+  whether the project's modules look built, and what permissions off means. Each
+  finding is `ok`, `info`, `WARN` or `BLOCKING`, and names its fix.
+- **No or several `.uproject`, or a config that does not load, end `init` with
+  the load error** (`Error: ... (unreagent init wrote nothing)`) and **no
+  preflight**. **BLOCKING** lines appear only for a config that loads but has no
+  project or no engine (one that does not use `${ENGINE}` or `${PROJECT}`);
+  they keep the editor from starting. Everything else is a `WARN`: the
+  launcher starts without it and the finding says what is missing then.
+- **Exit codes:** `0` when nothing is blocking (and for `-h`), `1` for a
+  blocking finding or a config that does not load, `2` for a usage error (an
+  unknown flag, or a word after the flags).
+- **With no engine found, `init` prints only the load error** and exits 1,
+  writing and checking nothing: on the built-in defaults a missing engine is a
+  load error (`${ENGINE} is unresolved (engine not found — set UE_ROOT or
+  engineRoot in unreagent.local.yaml) but used by unreal.editor`), so there is
+  no preflight to print. Fix the engine first: set `UE_ROOT`, or `engineRoot` in
+  a git-ignored `unreagent.local.yaml`, then run `init` again.
+- **When the toolkit is missing**, `init` prints the command to add it:
+  `git submodule add -b ue-5.8 https://github.com/Getty/ue-llm-toolkit Plugins/ue-llm-toolkit`
+  (`git clone -b ue-5.8 ...` for a project that is no git repository). That
+  is the `ue-5.8` branch of a **fork**, made for UE 5.8; the upstream project is
+  [ColtonWilley/ue-llm-toolkit](https://github.com/ColtonWilley/ue-llm-toolkit).
+  For another engine version `init` says the branch is not made for it and
+  that unreagent does not know which toolkit version is. Add the plugin, build
+  the project's editor target once, and run `init` again.
+- **The module-built check is a heuristic.** It reads the `.uproject`'s
+  `Modules` and looks for `Binaries/Win64/UnrealEditor-<Name>.dll`; a module
+  the editor target does not build, or another build configuration, would be
+  reported wrongly, and it has not been checked against a real project. What is
+  measured (UE 5.7.4 and 5.8.4, Windows): an editor started on a `.uproject`
+  that names a module without a binary exits at startup, and the launcher gives
+  up on it after a few quick failures.
+
+### What can go wrong on the first start
+
+- **No engine found:** `${ENGINE} is unresolved` (above). Set `UE_ROOT` or
+  `engineRoot`.
+- **The toolkit is not loaded** (port 3000 never opens): the editor refused the
+  plugin over its `EngineVersion`, or its module is not built. The launcher
+  warns about the `EngineVersion` case at start and `init` reports it; the
+  mechanics and the fix are under [Option B](#option-b-ue-llm-toolkit).
+- **The bridge's `npm install` fails:** the launcher retries once with
+  `--legacy-peer-deps` by itself; see [Option B](#option-b-ue-llm-toolkit).
+- **Claude Code reports the toolkit server as failed
+  (`Failed to reconnect: -32000`):** see
+  [the troubleshooting chain](#troubleshooting-failed-to-reconnect--32000).
+- **Windows shows "Unknown Publisher":** see
+  [Windows: metadata & "Unknown Publisher"](#windows-metadata--unknown-publisher).
+
 ## Setup
 
-The launcher is **dropped into the UE project** and the config is **committed**:
+This is the same path for a project whose configuration you want to **commit**:
+the launcher is dropped into the UE project, the config is committed. Start with
+[New project](#new-project-quick-start); once you want your own settings:
 
-1. Put `unreagent.exe` (from the release) next to the `.uproject` — gitignored.
-2. Rename `unreagent.example.yaml` -> **`unreagent.yaml`**, place it next to
-   the `.uproject` and **commit it to the repo**. This file is portable.
-3. Start `unreagent.exe` (double-click or console). It reads `unreagent.yaml`
-   next to the .exe, or `unreagent.yml` when there is no `unreagent.yaml`;
-   alternative config path via `-config <path>`. The .exe opens no file
-   passed to it: dropping a file onto it ends with a usage error (exit 2)
-   instead of starting.
+1. Put `unreagent.exe` next to the `.uproject` — gitignored.
+2. Run `unreagent init` (or rename `unreagent.example.yaml` -> **`unreagent.yaml`**),
+   place the file next to the `.uproject` and **commit it to the repo**. This
+   file is portable.
+3. Start `unreagent.exe`. It reads the config as described under
+   [New project](#new-project-quick-start); the .exe opens no file passed to
+   it: dropping a file onto it ends with a usage error (exit 2) instead of
+   starting.
 
 `unreagent.yaml` contains **no machine-specific paths**. Editor, `compile` and
-`package` are auto-derived. A minimal config is enough:
+`package` are auto-derived. The config file is optional and a minimal one is
+enough:
 
 ```yaml
 agent:       { enabled: true, command: claude, claudeIntegration: true }
@@ -286,8 +450,8 @@ Two exceptions never fail the load:
   `WARN skills not written: skills.dir names a placeholder that is unresolved — set unreal.project or skills.dir`.
 
 Without an engine and with the default `unreal.editor`, the launcher therefore
-stops at load, and so does `unreagent hermes-setup`, although it does not start
-the editor. Point `UE_ROOT` / `engineRoot` at an installation, or set
+stops at load, and so do `unreagent hermes-setup` and `unreagent init`, although
+they do not start the editor. Point `UE_ROOT` / `engineRoot` at an installation, or set
 `unreal.editor` to a literal path.
 
 Machine-specific overrides go in a **git-ignored `unreagent.local.yaml`**,
@@ -409,11 +573,12 @@ as after an exit; `/M` only with an explicit `maxRestarts`).
 
 | Exit | When |
 |---|---|
-| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup`, which prints the usage and starts nothing |
+| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup` or `init`, which print the usage and start nothing; also `unreagent init` when its preflight has no blocking finding |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
+| `1` | `unreagent init` when the config does not load (no or several `.uproject`, no engine, ...) or the preflight has a `BLOCKING` finding; a start without a config file that finds no or several `.uproject` next to the executable |
 | `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 and a host that is empty, an IP address or a plain name (see `mcp` in the configuration quick reference; checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up. The order does not matter: MCP that stops serving after such a give-up ends the launcher too, unless the editor was started again in between |
-| `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
+| `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments; `init` likewise for any flag but `-config`, `-check` and `-h`, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
 
 An agent that fails and **is** restarted produces no exit code until it stops
 failing or gives up. With the default `restart: on-failure`, a headless agent
@@ -467,7 +632,7 @@ done".
 | Visual Studio 2022 17.14+ or Visual Studio 2026 18.0+ ("Game development with C++" workload) | **only for the Toolkit**: builds the plugin once | UE 5.8 lists VS 2022 17.14+ and VS 2026 18.0+ (2026 recommended); the plugin ships as C++ source, UE asks "rebuild?" on first start. Not needed for Unreal MCP |
 | Node.js >= 18 | the Toolkit's stdio bridge, and `run_node` | `npm install` for the bridge is done by the launcher automatically. Not needed for Unreal MCP |
 | Claude Code | the agent | `claude` on PATH; otherwise `agent.command` in local.yaml. Install: [setup docs](https://code.claude.com/docs/en/setup) (native installer; on Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`) |
-| `unreagent.exe` + `unreagent.yaml` | this launcher | see [Setup](#setup) |
+| `unreagent.exe` (+ `unreagent.yaml`, optional) | this launcher | see [New project](#new-project-quick-start) and [Setup](#setup) |
 
 ### Option A: Unreal MCP (UE 5.8+, built in, experimental)
 
@@ -606,8 +771,10 @@ Things to know:
 
 #### Steps
 
-1. **Drop the plugin into the project** — copy or clone the repo/folder to
-   `<Project>/Plugins/UELLMToolkit/`. The `.uplugin` has
+1. **Drop the plugin into the project** — the quickest way is the submodule
+   command `unreagent init` prints (see
+   [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup));
+   copying or cloning it to `<Project>/Plugins/UELLMToolkit/` works as well. The `.uplugin` has
    `EnabledByDefault: true` and activates its own engine dependencies
    (EditorScriptingUtilities, Niagara, ControlRig, IKRig, ...) — nothing
    to change on the `.uproject`. **But check its `EngineVersion` field.**
@@ -628,7 +795,8 @@ Things to know:
    The launcher warns about this at startup: one `WARN` per enabled plugin
    under `<Project>/Plugins` that the editor will refuse, naming the plugin,
    the value and the fix (console, or `unreagent.log` and stderr in window
-   mode); it keeps starting. It predicts from the files, so its limits are:
+   mode), and `unreagent init` reports the same; it keeps starting. It
+   only warns, it does not edit the `.uplugin`. It predicts from the files, so its limits are:
    - *Not covered:* plugins outside `<Project>/Plugins`, behind a junction or
      symlink, enabled only as a dependency or by `-EnablePlugins=`; plugin
      extensions; a name found twice; `.uproject` entries with a list or
@@ -649,8 +817,11 @@ Things to know:
    The build needs Visual Studio (once; afterwards the binaries live in the
    plugin). Alternatively ahead of time via the launcher: console -> `c compile`.
 3. **Wire it up.** Once the plugin is loaded, its HTTP server starts with the
-   editor automatically on port `3000`. The launcher forwards the bridge via `--mcp-config` to the
-   agent — for that, in `unreagent.yaml`:
+   editor automatically on port `3000`. The launcher forwards the bridge via
+   `--mcp-config` to the agent. Without a config file it adds the entry itself
+   when it finds the plugin (see [New project](#new-project-quick-start)); with
+   an `unreagent.yaml`, add it there (`unreagent init` prints it when the file
+   lacks it):
 
    ```yaml
    mcp:
@@ -667,7 +838,7 @@ Things to know:
    plugin **"Python Editor Script Plugin"** (Edit -> Plugins) — the other
    tools don't need it.
 
-**The bridge's `npm install` can fail, and the launcher retries.** With npm
+**The bridge's `npm install` can fail; the launcher retries by itself.** With npm
 10.9.2 (Node 22.17.1) a plain `npm install` in the Toolkit's `mcp-bridge`
 folder exits 1 with `Cannot read properties of null (reading 'edgesOut')`
 while npm resolves peer dependencies of the bridge's dev dependencies
@@ -680,15 +851,14 @@ errors (network, registry, file access, install scripts) are not retried.
 entry asks for (a peer that is also a regular dependency of another package is
 installed anyway); on the Toolkit bridge that is only `hono` (a peer of
 `@hono/node-server`), which nothing loads. The warning and the success line
-name the npm command that ran. Should the retry fail too, install by hand in
-that folder:
+name the npm command that ran. Only if the retry fails too, install by hand
+in that folder:
 
 ```bash
 npm install --omit=dev --legacy-peer-deps
 ```
 
-(the bridge needs its runtime dependencies only); `npx npm@11.21.3 install`
-also worked. The launcher keeps an existing `node_modules` and lets the smoke
+(the bridge needs its runtime dependencies only). The launcher keeps an existing `node_modules` and lets the smoke
 test decide. Upstream's
 `package-lock.json` does not match its `package.json`, so every successful
 install rewrites the tracked lock file and leaves a git checkout of the plugin
@@ -1592,20 +1762,23 @@ gone once the list is set), or a different extension id. Uppercase is fine.
 
 | Sub-command | Purpose |
 |---|---|
+| `unreagent init` | Writes the built-in defaults as `unreagent.yaml` next to the `.uproject` (never over an existing config) and prints a preflight; flags `-check`, `-config <path>`. See [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup). |
 | `unreagent hermes-setup` | One-shot merge of the unreagent MCP server into Hermes Agent's `config.yaml` (idempotent; auto-generates `mcp.token` if missing; needs a resolvable engine, like a normal start). See "Hermes Agent" above. |
 
 The sub-command is the first argument that is neither a flag nor a flag's
 value. Flags may stand before or after it and all go to the sub-command.
-`hermes-setup` takes only `-config` and `-h`. Any other flag, a launcher flag
+`hermes-setup` takes only `-config` and `-h`; `init` takes only `-config`,
+`-check` and `-h`, and a stray word is a usage error for it as well. Any other flag, a launcher flag
 such as `-no-agent` included, is a usage error (exit 2) on either side of the
-word, printed with `hermes-setup`'s usage; a flag the launcher does not know at
+word, printed with that sub-command's own usage (`Usage of init`, `Usage of
+hermes-setup`); a flag the launcher does not know at
 all, put before the word, is refused by the launcher instead, with its own
 usage. A word after the sub-command is a usage error too, printed as one line:
-`hermes-setup takes flags only, not "<word>"`. `unreagent -h` prints the
+`hermes-setup takes flags only, not "<word>"` (`init takes flags only ...` for `init`). `unreagent -h` prints the
 launcher's usage with one line per sub-command, `unreagent hermes-setup -h`
 that of `hermes-setup`; both exit 0. A first word that names no sub-command
 is a usage error (exit 2) that names it and lists the sub-commands:
-`unknown sub-command "<word>" (sub-commands: hermes-setup)`. If
+`unknown sub-command "<word>" (sub-commands: hermes-setup, init)`. If
 the word is an existing path, as for a file dropped onto the .exe, the message
 says instead that unreagent does not open files passed to it and reads
 `unreagent.yaml` next to the .exe, or the file given with `-config <path>`.

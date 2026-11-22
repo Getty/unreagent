@@ -1,9 +1,29 @@
 # ============================================================
 #  unreagent — committable project configuration
 #
-#  Rename this file to  unreagent.yaml  and place it next to the
-#  .uproject (and next to unreagent.exe). It is portable and belongs
-#  in the project repo.
+#  This file is OPTIONAL. Without an unreagent.yaml (or unreagent.yml) next
+#  to unreagent.exe, the launcher runs on built-in defaults for the one
+#  .uproject next to it: agent on (claude, in the window, claudeIntegration),
+#  MCP server on, the UE LLM Toolkit bridge added to mcp.extraServers when the
+#  plugin is found below Plugins/, permissions OFF.
+#  The bridge is found by looking for Resources/mcp-bridge/index.js in a plugin
+#  directory up to four levels below Plugins/ (so Plugins/UELLMToolkit and
+#  Plugins/ue-llm-toolkit/Plugin/UELLMToolkit both work); hidden directories
+#  and node_modules, Binaries, Intermediate, Content, Source and Saved are not
+#  entered; shallowest first, then by name; with several, the first is used and
+#  a WARN lists them all.
+#  Permissions off means unreagent applies no permission policy; Claude Code's
+#  own prompts and settings decide.
+#  The config is looked for next to the executable, not in the working
+#  directory. No .uproject there, or several, is a load error. An
+#  unreagent.local.yaml still overlays the defaults, but must not set
+#  unreal.project without an unreagent.yaml.
+#
+#  `unreagent init` writes those defaults out as an unreagent.yaml (it never
+#  overwrites one) and prints a preflight. Or rename THIS file to
+#  unreagent.yaml and place it next to the .uproject (and next to
+#  unreagent.exe). It is portable and belongs in the project repo. The
+#  README's "New project" section walks through both.
 #
 #  NO machine-specific paths here! They are resolved automatically and
 #  substituted via placeholders:
