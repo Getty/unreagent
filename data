@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-11-22T04:01:04Z
+created: 2026-11-22T03:59:55Z
+id: 219
+priority: medium
+started: 2026-11-22T04:01:04Z
+status: archived
+tags:
+- bridge
+title: 'Bridge install: a failing npm install on a clean checkout drops the bridge'
+updated: 2026-11-22T04:01:04Z
+---
+
+Owner: unreagent-worker. ensureBridgeModules (cmd/launcher/bridge.go ~140-247) runs a plain npm install; when it fails and no node_modules existed, the bridge is dropped (~233). The reference project's README reports that npm 10 crashes on the UE LLM Toolkit bridge's dev-dependency peers ('Cannot read properties of null (reading edgesOut)') and works around it in its setup script with --omit=dev --legacy-peer-deps. Unverified here: nobody reproduced the npm crash on this machine. First step: reproduce it against Plugin/UELLMToolkit/Resources/mcp-bridge of the toolkit checkout. If it reproduces, decide whether the launcher installs runtime dependencies only (--omit=dev) — a bridge needs no test tools.
+
+Duplicate of k215, which the Windows agent filed with the measured failure (npm 10.9.2, --legacy-peer-deps as the working flag). Work happens on k215.
