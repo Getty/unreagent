@@ -1,0 +1,83 @@
+---
+class: standard
+completed: 2026-11-22T07:10:50Z
+created: 2026-11-22T00:34:50Z
+id: 213
+priority: low
+started: 2026-11-22T06:35:42Z
+status: done
+tags:
+- windows
+- bug
+- console
+title: Console commands piped from Windows PowerShell 5.1 arrive with a BOM
+updated: 2026-11-22T07:10:50Z
+---
+
+Found on Windows 2026-11-22 (Windows 11 26H2 build 26300.9711, Windows PowerShell 5.1, unreagent d4edd23) while probing k204.
+
+Piping a console command into the launcher from Windows PowerShell 5.1  'quit' | unreagent.exe -config ...  reached the command loop with a byte order mark in front: the launcher answered "Unknown command: ?quit" (printed as "?quit") and kept running. On this machine $OutputEncoding of that PowerShell session is UTF-8 with BOM, so every stdin stream PowerShell writes to a native program starts with EF BB BF. Typed input in a console is not affected.
+
+Fix candidate: strip a leading U+FEFF from the first line the command loop reads (cmd/launcher/lifecycle.go, the readLine in the console loop). Owner: unreagent-worker, with a test that feeds "\xef\xbb\xbfq\n". Low priority: it only bites scripted control from PowerShell.
+
+2026-11-22 06:52 Measured on this machine (Windows PowerShell 5.1, piping into od.exe): with -NoProfile the session's $OutputEncoding is us-ascii and nothing carries a mark; with $OutputEncoding = [Text.Encoding]::UTF8, PowerShell writes EF BB BF exactly once, at byte 0 of the pipe. That holds for 'quit','status' and also for three objects sent 700 ms apart (& { 'quit'; Start-Sleep; 'status'; Start-Sleep; 'q' } | od): one mark, then CRLF lines.
+
+Decision (mine): only the first line the console reader returns can carry the mark, so only that line loses it. A U+FEFF anywhere later is passed through as input. The fix lives in lineReader.readLine (cmd/launcher/lifecycle.go), not in commandLoop. lineReader is the session's one reader of the console input, so the exit prompt (promptAgentExit) gets the fix too: a piped 'k' or 'r' that is the first thing on stdin is no longer misread. If the foreground agent reads stdin first, it takes byte 0 and the mark with it, and the reader's first line has none to drop, so the strip does nothing.
+
+Mechanics: a 'started' flag on lineReader. The first readLine drops the three bytes when they are exactly EF BB BF at the start of its line. It drops one mark only, and EOF semantics stay intact: a stream that is nothing but the mark reads as EOF ("", false), not as an empty line.
+
+2026-11-22 06:52 Also found (outside this card, for the dispatcher):
+
+1. The shipped demo is broken on Windows, for the example/ board lane (unreagent-doc-writer): example/unreagent.yaml runs ping as the editor, and unreal.unattended defaults to true, so the launcher appends -unattended to ping's args. ping rejects it ("invalid option -unattended"), exits 1 three times within 10 s, and the launcher gives up on the editor ("failed 3 times in a row ... giving up"). Fix candidate: unattended: false under unreal: in the demo. Seen while running the k213 repro with the demo config (port changed only).
+
+2. cmd/launcher tests that fail natively on Windows, on the untouched base 1ea8353 as well as on this branch (same set), for unreagent-test-writer:
+   - TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart: exec.Error quotes the program path with %q, so on Windows LastError holds doubled backslashes and strings.Contains(lastErr, path) misses.
+   - TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled: fixture joins an absolute "C:\Program Files\Epic Games\UE_5.9\..." onto t.TempDir(), and mkdir fails on Windows.
+   - TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess: the script reports its own file path as the working directory, not the directory.
+   - TestMaterializeTwoRunsAtOnce: failed once on base after 43 s and passed in both runs on this branch, so it looks timing-dependent on Windows.
+
+2026-11-22 06:52 Done. Changed: cmd/launcher/lifecycle.go and cmd/launcher/console_test.go (the console reader's tests live there, next to TestConsoleReaderTakesNoMoreThanItsLine).
+- lifecycle.go: lineReader gets a 'started' flag and the const utf8BOM. The first readLine drops a leading EF BB BF (one mark, first line only, see the decision note above). Covers the launcher console and the exit prompt, which share the reader.
+- console_test.go: TestConsoleQuitsOnAPipedLineAfterAByteOrderMark feeds "\xef\xbb\xbfq\n" through a real OS pipe into commandLoop and requires stop(). TestConsoleReaderDropsTheByteOrderMarkOfTheStream is a table: LF, PowerShell's CRLF lines, no line end, nothing but the mark (EOF), once per stream (a second U+FEFF stays), no mark. Both were written first and failed before the fix: "Unknown command: ?q", and every BOM case returned "?...".
+
+Verification, natively on Windows 11 (this is a real Windows test run, not a cross-compile):
+- gofmt -l: empty. go vet ./...: clean.
+- go test ./...: config, mcp, skills and supervisor ok. cmd/launcher: the new tests pass, and 6 tests fail that fail identically on the untouched base 1ea8353 (Windows test-portability, see the drift note). No new failure.
+- GOOS=windows CGO_ENABLED=0 build of dist/unreagent.exe: ok. GOOS=linux CGO_ENABLED=0 go build ./...: ok.
+
+Real repro: Windows PowerShell 5.1, $OutputEncoding = [Text.Encoding]::UTF8; 'quit' | & dist\unreagent.exe -config <demo copy>. The config is the demo with MCP on 127.0.0.1:18813 and the agent off, so nothing bound 3000, 8000 or 8765.
+- Before (base build): "Unknown command: <EF BB BF>quit". The launcher kept running until the 25 s timeout killed the run (exit 124).
+- After: "Stopping ", "Stopping all processes ", "Bye.", exit code 0 within 1 s. 'status','quit' piped the same way prints the status JSON, then stops, exit code 0.
+- No unreagent or ping process of the run was left behind.
+
+2026-11-22 07:06 Review (unreagent-reviewer): READY. Tree: worktree .claude/worktrees/k213, branch k213 on 1ea8353, uncommitted. Changed: cmd/launcher/lifecycle.go and cmd/launcher/console_test.go, nothing else (git status, git diff HEAD; dist/ is ignored). Both paths are owned by unreagent-worker in OWNERS.
+
+Check, run natively on Windows 11 (go1.27.0 windows/amd64), so this is a real Windows test run, not only a compile:
+- gofmt -l on all non-vendor .go files: empty. go vet ./...: clean.
+- GOOS=windows CGO_ENABLED=0 build of the exe (written to my scratch dir, not dist/): ok. GOOS=linux CGO_ENABLED=0 go build ./...: ok.
+- go test -count=1 ./...: config, mcp, skills, supervisor ok. cmd/launcher has the 6 failures below, all pre-existing.
+- go test -count=1 -skip <the 6 below + TestMaterializeTwoRunsAtOnce> ./...: all packages ok.
+- go test -race (Strawberry gcc) on cmd/launcher with the same -skip: ok, no DATA RACE. The new 'started' write is ordered across the readers by the k71 handover (the prompt goroutine hands off over ch / go, and the console returns under mu).
+- New tests, run against the unfixed 1ea8353 in a throwaway worktree: both fail ("Unknown command: <EF BB BF>q", every case with a mark returns it). With the fix they pass.
+- Real repro: Windows PowerShell 5.1.26100, $OutputEncoding=UTF8 (preamble 3 bytes), 'quit' piped into a copy of the demo config (MCP on 127.0.0.1:18947, unattended: false). Base exe: "Unknown command: EF BB BF quit" (bytes checked with od), kept running until the 25 s timeout. k213 exe: "Stopping ... Bye.", exit 0 in 1 s. 'status','quit': status JSON, then exit 0. No ping or unreagent process was left behind. Nothing bound 3000/8000/8765.
+
+Edge cases, checked by reading the code and with throwaway tests (not in the tree): partial mark "\xef\xbbq" is kept as is; a first line shorter than 3 bytes or an empty one, then a marked line: the mark stays (first line only); two marks: exactly one is dropped; mark+CRLF and mark+LF give ""; U+FF01 (EF BC 81) as the first char is kept; nothing but the mark gives EOF, also when EOF comes with the last byte (iotest.DataErrReader); the reader still never reads past its line with a mark in front (k71). The exit prompt shares the reader: main.go:419 newConsole hands the same *lineReader to makeAgentExitHandler (main.go:422) and commandLoop. English only, surgical, no Job Object or supervisor change.
+
+Findings (minor, not blocking; for unreagent-worker, to fold in before the commit or as a follow-up):
+1. cmd/launcher/console_test.go:123-130: three claims of the decision note are not pinned, so the table still passes when the logic changes. I checked this with mutants in the throwaway worktree:
+   a) 'started' set only once 3 bytes are seen: a first line under 3 bytes ("q\n", "\n") lets the next line lose its mark. No test catches it. Case to add: {"first line without the mark", "q\n\xef\xbb\xbfs\n", {"q", "\xef\xbb\xbfs"}}.
+   b) dropping repeated marks: "one mark only" is untested. Case to add: {"two marks", "\xef\xbb\xbf\xef\xbb\xbfq\n", {"\xef\xbb\xbfq"}}.
+   c) dropping any 3 bytes that start with EF: partial marks and other EF-led characters are untested. Case to add: {"partial mark", "\xef\xbbq\n", {"\xef\xbbq"}} (a U+FF01 case also covers it).
+   Only "strip every line" (killed by "once per stream") and "no strip" are caught today.
+2. The exit prompt (lifecycle.go:443) is covered by construction only. No test pipes a marked 'k'/'r' into promptAgentExit. That is acceptable, since it is the same reader, but the report's "covers the exit prompt" is reasoning, not a test.
+
+Pre-existing, not findings of this card (same set and messages on base 1ea8353 and k213; only the console_test.go line numbers shift by +62):
+- TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart (the %q-quoted path in exec.Error doubles the backslashes); TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled (both subtests); TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess.
+- TestMaterializeTwoRunsAtOnce (skills_test.go:1379, "rename ... unreagent-.tmp-...: Access denied"): it failed in 3 of 4 isolated base runs (-count=4) and in 1 of my 2 k213 runs, and passed in both full-suite runs. That is more than "failed once": it looks like a real Windows rename race in skill materialization (cmd/launcher/skills.go), for the dispatcher. It does not touch lineReader.
+
+2026-11-22 07:09 Review findings closed. Only tests changed; the logic in lifecycle.go is unchanged (same SHA-1 before and after).
+1. TestConsoleReaderDropsTheByteOrderMarkOfTheStream has three new cases: "first line without the mark" (q, then a marked s: the mark stays), "two marks" (only one dropped), and "partial mark" (EF BB q stays as it is). Each turns red on its wrong variant, which I made and then reverted: started set only after 3 bytes fails only the first case; repeated marks stripped fails only "two marks"; any 3 bytes starting with EF dropped fails only "partial mark".
+2. New TestPromptTakesAChoiceAfterAByteOrderMark (subtests k and r). The false agent runs on a real OS pipe, and one write ahead of the prompt sends mark + choice + "\nq\n". k must show "Editor keeps running.", r must show "Restarting agent", then q ends the session. With no strip at all, both subtests are red: the marked choice fell through to "stop everything".
+Check on Windows: gofmt -l prints nothing; go vet ./... is clean; go test -count=1 ./cmd/launcher/ passes, run with -skip for the 6 known base failures plus TestMaterializeTwoRunsAtOnce.
+
+2026-11-22 07:10 Committed as f4a906c on local main (ff-merge of k213): lineReader drops a leading BOM from the first line, tests and Changes entry included. Not pushed, no tag.
