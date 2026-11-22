@@ -155,6 +155,23 @@ With `include_properties`, `properties[]` lists each editable property with
 A Blueprint asset reports the properties of the Blueprint object, not the
 defaults of the class it generates.
 
+**A wrong JSON type for `include_properties` is never an error.** The tool
+reads it, like `recursive` in `list_assets` and `save` and `mark_dirty` in
+`save_asset`, with the engine's `FJsonObject::GetBoolField`, which cannot
+report a failure. The default applies only when the key is absent:
+
+- a number is `true` unless it is 0;
+- a string is `true` for `true`, `yes` and `on` and `false` for `false`, `no`
+  and `off`, in any case; every other string is `false` unless it starts with
+  a non-zero integer;
+- `null`, an array or an object is `false`, whatever the default is. The
+  engine writes a line to the editor log and the call goes on.
+
+(`FJsonValue::AsBool` and `FJsonValueNumber::TryGetBool` in
+`Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
+`TJsonValueString::TryGetBool` in `Public/Dom/JsonValue.h`; read in the UE
+5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7.)
+
 ### list_assets
 
 Lists one folder. It is the quick alternative to `asset_search` when you know
@@ -172,6 +189,19 @@ The result holds `directory`, `count`, `total_found` and `assets[]` (`name`,
 `total_found` counts the whole folder **before**
 the class filter, so it does not tell you how many matches remain. Use
 `asset_search` when you need to page.
+
+**A `limit` the tool cannot read as a number lists one asset, not 25.** The
+read is the engine's `FJsonObject::GetIntegerField`, which cannot report a
+failure: `null`, an array, an object, an empty string or a string that is not
+numeric reads as 0, and the tool then raises it to 1. `false` reads as 0 and
+`true` as 1, so both list one asset too. A string made of an optional sign,
+digits and at most one dot is read as that number, and a fraction is cut off
+towards zero. The default 25 applies only when the key is absent
+(`FJsonObject::GetIntegerField`
+in `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
+`FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
+source, not run). A wrong type for `recursive` is not an error either: see
+`include_properties` under "get_asset_info".
 
 ### set_asset_property
 
@@ -279,6 +309,13 @@ Neither shows a dialog.
 `{"save": false}` marks the asset dirty without saving it. The result holds
 `asset_path`, `saved` and `marked_dirty`. A failed save gives `Failed to save
 asset: <path>`.
+
+**A wrong JSON type for `save` can skip the save without an error.** Both
+parameters are read as `include_properties` is, under "get_asset_info":
+`null`, an array, an object or a string such as `"maybe"` for `save` reads as
+`false`: the package is not written, and it is marked dirty unless
+`mark_dirty` reads as `false`. `saved` in the result says which happened;
+check it.
 
 `save_all` takes no parameters. It saves every dirty package in memory except
 transient ones and those under `/Temp/` or `/Engine/`. That covers levels,

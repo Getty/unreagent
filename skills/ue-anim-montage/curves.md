@@ -24,8 +24,18 @@ All four return `montage` (its path) and `curves`, each with `name` and
 ```
 
 - `time` (seconds) and `value` are required in each key. **An entry without
-  either, or one that is not an object, is skipped without an error.** Compare
-  the count in the message, or the returned `keys`, with what you sent.
+  either, or one that is not an object, is skipped without an error.** So is
+  an entry whose `time` or `value` the tool cannot read as a number: `null`,
+  an array, an object, an empty string, or a string that is not an optional
+  sign, digits and at most one dot. Such a string is read as that number
+  (`"0.5"` as 0.5), and `true` and `false` as 1 and 0; those keys are added.
+  The read is the engine's `FJsonObject::TryGetNumberField` into a `double`
+  (`FJsonValueBoolean::TryGetNumber` in
+  `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
+  `TJsonValueString::TryGetNumber` in `Public/Dom/JsonValue.h`; read in the
+  UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7).
+  Compare the count in the message, or the returned `keys`, with what you
+  sent.
 - `interp_mode`: `Linear`, `Constant`, `Cubic` or `None`. `tangent_mode`:
   `Auto`, `User`, `Break`, `SmartAuto` or `None`. Both are case-insensitive.
   **An unknown value becomes `Linear` or `Auto`** without an error. An absent

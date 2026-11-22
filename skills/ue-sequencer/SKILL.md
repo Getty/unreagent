@@ -158,10 +158,19 @@ What the success does not prove:
   `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
   `FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
   source, not run, while the toolkit targets UE 5.6 and 5.7). Pass all six.
-- **A failed scrub is swallowed**, and so is a `frame` that is not a number.
-  `open` still succeeds; the result just has no `frame` and the message no
-  ` at frame`. When `frame` is present it is the number you sent, not a value
-  read back.
+- **A failed scrub is swallowed**, and so is a `frame` the tool cannot read
+  as a number. `open` still succeeds; the result just has no `frame` and the
+  message no ` at frame`. The read is the engine's
+  `FJsonObject::TryGetNumberField` into a `double`, and it accepts more than
+  a JSON number: `true` and `false` scrub to frame 1 and 0, and a string made
+  of an optional sign, digits and at most one dot scrubs to that number
+  (`"12"` to frame 12). `null`, an array, an object, an empty string and any
+  other string are not read, so no scrub is tried
+  (`FJsonValueBoolean::TryGetNumber` in
+  `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
+  `TJsonValueString::TryGetNumber` in `Public/Dom/JsonValue.h`; read in the
+  UE 5.8.4 source, not run). When `frame` is present it is the number that
+  was read, not a value read back from the Sequencer.
 - **The camera may not stay where you put it.** The scrub comes after the
   camera call. Whether evaluating the sequence, for example one with a camera
   cut track, takes the viewport camera over has not been verified. Compare
