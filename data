@@ -1,0 +1,34 @@
+---
+claimed_at: 2026-11-22T00:28:49Z
+claimed_by: unreagent-skill-author
+class: standard
+completed: 2026-11-22T00:28:49Z
+created: 2026-11-22T00:12:42Z
+id: 212
+priority: medium
+started: 2026-11-22T00:13:02Z
+status: done
+tags:
+- skills
+- ue
+title: 'Class A skills: hedge 40 engine-behaviour sentences, cover the bridge tool
+  status'
+updated: 2026-11-22T00:28:49Z
+---
+
+Scout audit 2026-11-22 of the 19 Class A skills for the defect the Class C reviews found: engine behaviour stated as fact where only toolkit source was read. 40 unhedged sentences in 17 skills, none high severity, none contradicted by the toolkit source (9f6a0f7). ue-context and ue-tasks are clean. One card, not seven: the fixes are one-sentence hedges.
+
+Owner: unreagent-skill-author. Accepted hedge wording: skills/ue-blueprints/SKILL.md:152-156 (JSON types), skills/ue-anim-sequence/SKILL.md:121-122 (dirty and save). Line numbers are from HEAD d4edd23 plus the local k206 commit; find by text if they drifted.
+
+1. JSON type conversion (values are read through the engine JSON classes; conversion across types is unverified; tell the agent to send real JSON types): ue-anim-sequence SKILL.md:74, :178, sequences.md:14-15; ue-assets SKILL.md:235-236, :557; ue-audio SKILL.md:251-252, :411; ue-blueprints graphs.md:127; ue-level-actors SKILL.md:317-319, :370; ue-materials SKILL.md:266.
+2. Dirty and save state resting on an engine call or on the absence of one: ue-anim-sequence SKILL.md:110, :195; ue-audio SKILL.md:76, :285, :413; ue-blueprints SKILL.md:130-132; ue-levels SKILL.md:70-71, :131, :152-154; ue-materials SKILL.md:171-173.
+3. Internal contradictions (a row or sentence asserts what the same skill set calls unverified): ue-audio SKILL.md:416 against :299-303; ue-enhanced-input SKILL.md:233-235 against ue-pie-testing/input.md:11-26; ue-blueprints modify.md:212-213 against SKILL.md:169.
+4. Engine defaults and names (delete the clause or say the tool sets nothing and to read it back): ue-anim-montage SKILL.md:150-152; ue-assets SKILL.md:438; ue-audio SKILL.md:335, :338, :258-259; ue-blend-space SKILL.md:179; ue-blueprints modify.md:97; ue-level-actors SKILL.md:155.
+5. Observed-behaviour statements nobody ran (attribute or hedge): ue-anim-blueprint state-machines.md:120; ue-anim-sequence meshes.md:~39; ue-assets SKILL.md:350-354, :487; ue-enhanced-input SKILL.md:228-229; ue-level-actors SKILL.md:52, :80; ue-metasounds SKILL.md:282-283, :319; ue-niagara SKILL.md:221; ue-pie-testing SKILL.md:62, :63-65, :225, input.md:58, input.md:128-129; ue-python SKILL.md:223; ue-viewport SKILL.md:129-130; ue-widgets SKILL.md:149-150, events.md:28.
+6. Bridge tool status: defined by the mcp-bridge as unreal_status (Resources/mcp-bridge/index.js:219-282; the lint strips the prefix). Returns connected, project, engine, context_system, tool_summary, total_tools, message, plus broken_tools; not connected it returns connected: false with reason as an error, and then it is the only tool in the list (:75-100). Add status to toolkit_tools of ue-context and say there that it is not unreagent own status tool (the one unreagent-iterate and ue-tasks use).
+
+Acceptance: each listed sentence either carries a short hedge in the accepted style, is attributed to its source, or is removed; no hedge is added to a statement the toolkit source establishes; the practical guidance stays; skills do not turn into disclaimers; loader tests and the toolkit lint pass. Not checked by the audit and worth a skim while there: ue-anim-blueprint/transitions.md 60-124 and 240-end, ue-blueprints/query.md outside 40-95, ue-widgets/properties.md 36-94, ue-pie-testing/sequences.md 115-195, ue-tasks SKILL.md 150-235.
+
+unreagent-reviewer 2026-11-22: verdict READY. No hedge was added to something the toolkit source proves; guidance kept everywhere; the three contradictions resolved consistently; ue-context status section matches index.js and lib.js, lint ran (43 registry tools, 2 bridge tools). Full check green (make windows compiled only). Wording points sent to the author, not blocking: ue-enhanced-input/SKILL.md:228-230 ('for a key to fire'), ue-niagara/SKILL.md:221 (keep 'once it has finished'), ue-levels/SKILL.md:118 (parameter text, not description), ue-assets/SKILL.md:236-238 (example, not likely cause), ue-blueprints/modify.md:97-98 (tool sets no ..., read back with get_defaults), ue-context description sentence tightened to name unreal_status. The four open items can stay. Noted for later: meshes.md hedge is understated (skin-weight bone indices are per render section in the engine), a candidate for k132.
+
+2026-11-22 00:28 Committed 880b5a1 (local only, not pushed)
