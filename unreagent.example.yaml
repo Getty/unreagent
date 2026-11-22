@@ -226,10 +226,19 @@ mcp:
   #     args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
   #     env:
   #       UNREAL_MCP_URL: "http://127.0.0.1:3000"
-  #   # Unreal MCP, built into UE 5.8+ (experimental; enable the "Unreal MCP" and
-  #   # "All Toolsets" plugins). Plain HTTP, no Node bridge. Default port 8000 —
-  #   # if you change it (Editor Preferences, or -ModelContextProtocolPort in
-  #   # unreal.args), change the URL too. HTTP / SSE entries get no smoke
+  #   # Unreal MCP, built into UE 5.8+ (experimental). Plain HTTP, no Node bridge.
+  #   # Needs BOTH: the "Unreal MCP" (ModelContextProtocol) and "All Toolsets"
+  #   # plugins enabled (both are off by default) AND the server started: it
+  #   # does not start on its own, only with -ModelContextProtocolStartServer
+  #   # on the editor command line (or its "Auto Start Server" setting).
+  #   # unreal.args REPLACES the default list ["-stdout", "-FullStdOutLogOutput"]
+  #   # as a whole, so write the defaults too (nested YAML, top level):
+  #   #   unreal:
+  #   #     args: ["-stdout", "-FullStdOutLogOutput",
+  #   #            "-ModelContextProtocolStartServer"]
+  #   # Default port 8000 — if you change it (Editor Preferences, or
+  #   # -ModelContextProtocolPort=<port> in unreal.args), change the URL too.
+  #   # HTTP / SSE entries get no smoke
   #   # test, only a reachability watch: after bridge preparation the launcher
   #   # tries a TCP connect to the URL's host and port for 5 minutes and logs
   #   # "is reachable" or a warning (connect only, no MCP session; the agent
@@ -309,7 +318,8 @@ mcp:
 #   restart: on-failure
 #   maxRestarts: 0            # default 0 (5 = give up after 5 restarts)
 #   restartDelaySeconds: 3    # default 3 (0 = default); below 0 is a load error
-#   unattended: true          # -unattended: no crash dialog + no recovery prompt (default on)
+#   unattended: true          # -unattended: no crash dialog, package-restore prompt skipped (default on;
+#                             # the restore offer is kept until a clean exit, not discarded)
 #   killCrashReporter: true   # kill a hanging CrashReportClient(Editor) before a start (default on),
 #                             # except a start that follows a crash (automatic restart, a start
 #                             # issued in place of a pending one, or the first start after the
@@ -332,7 +342,7 @@ mcp:
 # ============================================================
 #  Example  unreagent.local.yaml  (do NOT commit — git-ignored):
 #
-#    engineRoot: "D:/UE/UE_5.7"        # if auto-detect fails (a relative path
+#    engineRoot: "D:/UE/UE_5.8"        # if auto-detect fails (a relative path
 #                                      # resolves against the working directory)
 #    agent:
 #      command: "C:/Path/To/claude.exe"  # claude not in PATH

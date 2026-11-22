@@ -60,12 +60,13 @@ Two MCP servers serve the agent:
 
 - **unreagent-MCP** (this launcher, HTTP) — *process* layer: start / stop /
   restart the editor, compile, logs, run_python / run_node, permissions.
-- **In-editor MCP** (running *inside* the engine) — *content* layer:
-  blueprints, assets, levels, UE Python. Two options:
-  [Unreal MCP](https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor)
-  (built into UE 5.8+, experimental, plain HTTP, no bridge) or the
+- **In-editor MCP** (running *inside* the engine) — *content* layer. Two
+  servers, covering different sets: the
   [UE LLM Toolkit](https://github.com/ColtonWilley/ue-llm-toolkit) plugin
-  (Node stdio bridge). Both can run side by side. Setup:
+  (Node stdio bridge) is the one for blueprints, assets, levels and UE Python;
+  [Unreal MCP](https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor)
+  (built into UE 5.8+, experimental, plain HTTP, no bridge) covers other
+  ground (Niagara, UMG, PCG and more, see Option A). Both can run side by side. Setup:
   [In-editor MCP](#in-editor-mcp-unreal-mcp-or-ue-llm-toolkit-windows).
 
 The launcher hands the agent both via `--mcp-config` (`mcp.extraServers` in
@@ -183,9 +184,9 @@ zip and start `unreagent.exe` — the MCP server will then run on
 
 | | [`example/`](example/) | [unreagent-example](https://github.com/Getty/unreagent-example) |
 |---|---|---|
-| UE editor | none (`ping` as a stand-in) | real UE 5.7 project |
+| UE editor | none (`ping` as a stand-in) | real UE 5.8 project (C++ module) |
 | Agent | off by default | Claude Code |
-| In-editor MCP | not wired | UE LLM Toolkit (submodule) |
+| In-editor MCP | not wired | UE LLM Toolkit (submodule, fork branch `ue-5.8`); Unreal MCP as a commented entry |
 | Purpose | try the MCP server in isolation, no downloads | full reference setup, both MCP servers wired |
 
 Use `example/` to poke at the MCP server without installing UE or an agent.
@@ -293,7 +294,7 @@ which is overlaid on top of `unreagent.yaml`:
 
 ```yaml
 # unreagent.local.yaml  (DO NOT commit)
-engineRoot: "D:/UE/UE_5.7"                 # if auto-detect fails (path is an example)
+engineRoot: "D:/UE/UE_5.8"                 # if auto-detect fails (path is an example)
 agent: { command: "C:/.../claude.cmd" }    # if claude is not on PATH
 ```
 
@@ -437,26 +438,31 @@ launcher run empties them.
 
 ## In-editor MCP: Unreal MCP or UE LLM Toolkit (Windows)
 
-For the agent to work **inside the editor** (blueprints, assets, levels, UE
-Python), the editor needs an in-editor MCP server. Two options, which can also
-run side by side (Toolkit on `:3000`, Unreal MCP on `:8000`):
+For the agent to work **inside the editor**, the editor needs an in-editor MCP
+server. Two servers are available and they cover different sets: the Toolkit is
+the one for blueprints, assets, levels and UE Python (Unreal MCP has no tools
+for those, see Option A); Unreal MCP covers other areas. They can run side by
+side (Toolkit on `:3000`, Unreal MCP on `:8000`):
 
 | | Unreal MCP (built in) | UE LLM Toolkit (plugin) |
 |---|---|---|
-| Engine | UE 5.8 or newer | UE 5.7 (the reference project) |
+| Engine | UE 5.8 or newer | upstream: written for UE 5.6 and 5.7; UE 5.8 needs a source port (the reference project uses a fork branch, see Option B) |
 | Status | experimental (Epic) | third-party plugin |
-| Transport | Streamable HTTP / SSE, `http://127.0.0.1:8000/mcp` | HTTP `:3000` behind a Node stdio bridge |
-| Needs | nothing to install | plugin in `Plugins/`, Visual Studio build once, Node.js |
+| Transport | JSON-RPC over HTTP POST, `http://127.0.0.1:8000/mcp` | HTTP `:3000` behind a Node stdio bridge |
+| Needs | two engine plugins enabled **and** a start flag (see Option A); no bridge | plugin in `Plugins/`, Visual Studio build once, Node.js |
 
-The short version for the Toolkit: **drop the plugin into the `Plugins/`
-folder — done.** No `.uproject` patching, no enabling in the plugin browser.
-For Unreal MCP: enable two plugins and add one `extraServers` entry.
+The short version for the Toolkit: copy the plugin into the `Plugins/` folder,
+build once, and make sure the editor actually loads it — two things can stop
+that (an `EngineVersion` in the `.uplugin`, and the bridge's `npm install`),
+see Option B. For Unreal MCP: enable two plugins, start the server with a
+command-line flag, and add one `extraServers` entry. Neither is "drop it in and
+done".
 
 ### What the machine must have
 
 | Component | What for | Note |
 |---|---|---|
-| Unreal Engine 5.7 or newer | the editor itself | auto-detect (see the `${ENGINE}` row above); otherwise `engineRoot` in `unreagent.local.yaml`. The reference project ([unreagent-example](https://github.com/Getty/unreagent-example)) runs on 5.7; Unreal MCP needs 5.8+. unreagent itself has not been tested against 5.8 |
+| Unreal Engine 5.7 or newer | the editor itself | auto-detect (see the `${ENGINE}` row above); otherwise `engineRoot` in `unreagent.local.yaml`. The reference project ([unreagent-example](https://github.com/Getty/unreagent-example)) runs on 5.8; Unreal MCP needs 5.8+. Package recovery, editor exit codes and the missing-module case were measured on Windows with the Launcher builds 5.7.4 and 5.8.4; the crash reporter UI and disaster recovery are from reading the engine source only, and other versions are unverified |
 | Visual Studio 2022 17.14+ or Visual Studio 2026 18.0+ ("Game development with C++" workload) | **only for the Toolkit**: builds the plugin once | UE 5.8 lists VS 2022 17.14+ and VS 2026 18.0+ (2026 recommended); the plugin ships as C++ source, UE asks "rebuild?" on first start. Not needed for Unreal MCP |
 | Node.js >= 18 | the Toolkit's stdio bridge, and `run_node` | `npm install` for the bridge is done by the launcher automatically. Not needed for Unreal MCP |
 | Claude Code | the agent | `claude` on PATH; otherwise `agent.command` in local.yaml. Install: [setup docs](https://code.claude.com/docs/en/setup) (native installer; on Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`) |
@@ -468,13 +474,42 @@ Source: [Unreal MCP in Unreal Editor](https://dev.epicgames.com/documentation/un
 No Node bridge, no Visual Studio build, no plugin download.
 
 1. **Enable the plugins** (Edit -> Plugins): "Unreal MCP" (identifier
-   `ModelContextProtocol`, enabled by default) and "All Toolsets". Both depend
-   on "Toolset Registry", which is enabled automatically. Restart the editor.
-2. **Server defaults** — "Auto Start Server" is on by default and binds
-   `http://127.0.0.1:8000/mcp`. Port and path live in Editor Preferences ->
-   Agentic Workflows -> Model Context Protocol. On the command line
-   `-ModelContextProtocolPort=<port>` overrides the port and
-   `-ModelContextProtocolStartServer` forces the server to start.
+   `ModelContextProtocol`) and "All Toolsets" (`AllToolsets`). Both are
+   **disabled by default** (`EnabledByDefault: false` in their `.uplugin`
+   files) and marked `NoRedist` and experimental; "Unreal MCP" pulls in
+   "Toolset Registry", which is enabled automatically. To do it in the project
+   file, add these two entries to the `Plugins` array of the `.uproject` (not
+   a whole file) and restart the editor:
+
+   ```json
+   { "Name": "ModelContextProtocol", "Enabled": true },
+   { "Name": "AllToolsets", "Enabled": true }
+   ```
+
+   Whether a Launcher build of the engine ships these `NoRedist` plugins is
+   **unverified** — if they are missing from Edit -> Plugins, that is why.
+2. **Start the server — enabling the plugin does not start it.** The setting
+   "Auto Start Server" (`bAutoStartServer` of `UModelContextProtocolSettings`,
+   shown as "Model Context Protocol" under Editor Preferences, stored in
+   `EditorPerProjectUserSettings`) is **off** by default. The server starts only
+   when the editor command line carries `-ModelContextProtocolStartServer` or
+   that setting is turned on. The launcher can pass the flag for you:
+   `unreal.args` replaces the default list **as a whole**, so give the full
+   list, defaults included:
+
+   ```yaml
+   unreal:
+     args: ["-stdout", "-FullStdOutLogOutput", "-ModelContextProtocolStartServer"]
+   ```
+
+   The default list is `["-stdout", "-FullStdOutLogOutput"]`; the `.uproject`
+   is always prepended and `-unattended` is appended by the `unattended`
+   option. The server then listens on `http://127.0.0.1:8000/mcp` (path and
+   port from the same settings class; `-ModelContextProtocolPort=<port>`
+   overrides the port, a value outside 1-65535 is ignored with a warning). The
+   old spelling `-StartModelContextProtocolServer` still works but is
+   deprecated. The settings menu path is unverified (no menu text was found in
+   the engine source; look for the "Model Context Protocol" section).
 3. **Wire it into unreagent** — `mcp.extraServers` entries are passed through
    to the agent in `.mcp.json` format, so an HTTP entry works as is:
 
@@ -494,11 +529,12 @@ No Node bridge, no Visual Studio build, no plugin download.
 
 4. *Optional:* a different port. `unreal.args` **replaces** the default
    `["-stdout", "-FullStdOutLogOutput"]` (the `.uproject` is always prepended),
-   so give the full list and match the URL:
+   so give the full list (including `-ModelContextProtocolStartServer`) and
+   match the URL:
 
    ```yaml
    unreal:
-     args: ["-stdout", "-FullStdOutLogOutput", "-ModelContextProtocolPort=8010"]
+     args: ["-stdout", "-FullStdOutLogOutput", "-ModelContextProtocolStartServer", "-ModelContextProtocolPort=8010"]
    mcp:
      extraServers:
        unreal-mcp:
@@ -530,14 +566,40 @@ Things to know:
   server is up; unreagent starts editor and agent together. If Claude Code
   reports the `unreal-mcp` server as failed, wait until the editor has
   finished loading and reconnect with `/mcp`.
-- **No authentication.** Unreal MCP is loopback-only by default and checks the
-  `Origin` header against localhost / `127.0.0.1` / `[::1]` plus any extras you
-  configure. See [Access from another machine](#access-from-another-machine)
+- **No authentication.** Unreal MCP listens on loopback by default and has no
+  login; a request without an `Origin` header is accepted, and a browser
+  `Origin` must be `localhost`, `127.0.0.1` or `[::1]`. See [Access from another machine](#access-from-another-machine)
   before changing the bind address.
+- **Three tools, not 278.** With "tool search" on (`bEnableToolSearch`, the
+  default) `tools/list` returns only `list_toolsets`, `describe_toolset` and
+  `call_tool`; the agent discovers a toolset's tools with the first two and
+  invokes them through `call_tool` (`toolset_name` plus the tool name). With
+  it off, every tool registers natively as `<Toolset>.<Function>`. The
+  roughly 278 tools in 21 toolset classes are a count from reading the 5.8.4
+  source, not from a running editor. Consequence for the
+  [permission layer](#permission-layer): every call is seen as
+  `mcp__unreal-mcp__call_tool` (the server key is part of the name); the real
+  tool is in the arguments.
+- **Not a Toolkit replacement.** From the source (nothing run): no tool
+  runs Python or a console command, and there are no tools for blueprint
+  graphs, assets, level actors, materials, animation, sequencer, control rig,
+  retarget or audio. It is deeper than the Toolkit for Niagara and UMG and
+  adds PCG, Dataflow, physics assets, GAS, Slate inspection, automation
+  tests, config settings and plugin management (MVVM needs its own plugin
+  entry, see below). Use it next to the Toolkit, not instead.
+- **`AllToolsets` is not everything.** It leaves out the Live Coding,
+  MVVM, Chaos Cloth Asset, Sequencer Anim Mixer and MetaHumanGenerator
+  toolsets (`LiveCodingToolset`, `MVVMToolset`, `ChaosClothAssetToolset`,
+  `SequencerAnimMixerToolset`, `MetaHumanGenerator`); each is a separate plugin
+  to add to the `.uproject` by name. Some toolset modules
+  (AnimationAssistant, StateTree, AIModule, Conversation)
+  looked empty in source; whether they carry tools in content is unverified.
+- **Sessions end with the editor.** The server hands out an `Mcp-Session-Id`;
+  after an editor restart the old id is answered with 404 ("reinitialize").
+  How Claude Code recovers is unverified; reconnect with `/mcp`.
 - **One call at a time.** Tool calls run sequentially on the game thread.
-  By default `tools/list` returns only four meta-tools (`list_toolsets`,
-  `describe_toolsets`, `describe_tools`, `call_tool`) instead of every tool
-  ("tool search").
+- **Offscreen rendering unverified.** How the server behaves with `-unattended`
+  and offscreen rendering has not been checked.
 
 ### Option B: UE LLM Toolkit
 
@@ -546,13 +608,27 @@ Things to know:
 1. **Drop the plugin into the project** — copy or clone the repo/folder to
    `<Project>/Plugins/UELLMToolkit/`. The `.uplugin` has
    `EnabledByDefault: true` and activates its own engine dependencies
-   (EditorScriptingUtilities, Niagara, ControlRig, IKRig, ...) — **nothing**
-   to change on the `.uproject`.
+   (EditorScriptingUtilities, Niagara, ControlRig, IKRig, ...) — nothing
+   to change on the `.uproject`. **But check its `EngineVersion` field.**
+   Upstream HEAD (9f6a0f7) declares
+   `"EngineVersion": "5.6.0"`; the reference project does not use it but pins a
+   fork branch (see below). If its major.minor differs from your engine's,
+   the editor asks "designed for build 5.6.0, attempt to load it anyway?", and
+   under `-unattended` (the launcher's default) that question is answered No:
+   the plugin is **not loaded** and port 3000 never opens, with no error
+   beyond the editor log line `... is Incompatible` / `Message dialog closed,
+   result: No`. Measured on Windows with 5.7.4 and 5.8.4; the engine side is
+   `Runtime/Projects/Private/PluginManager.cpp` (`IsPluginCompatible`,
+   `PromptToLoadIncompatiblePlugin`). Fix: remove the
+   `EngineVersion` line or set it to your engine's version. On UE 5.8 the
+   plugin also needs a source port (it was written for 5.6 and 5.7); the
+   reference project's fork branch `ue-5.8` carries it and drops the
+   `EngineVersion` field. Whether upstream will carry such a port is open.
 2. **First editor start** — UE reports "Missing Modules ... rebuild?" -> Yes.
    The build needs Visual Studio (once; afterwards the binaries live in the
    plugin). Alternatively ahead of time via the launcher: console -> `c compile`.
-3. **Done.** The plugin's HTTP server starts with the editor automatically on
-   port `3000`. The launcher forwards the bridge via `--mcp-config` to the
+3. **Wire it up.** Once the plugin is loaded, its HTTP server starts with the
+   editor automatically on port `3000`. The launcher forwards the bridge via `--mcp-config` to the
    agent — for that, in `unreagent.yaml`:
 
    ```yaml
@@ -569,6 +645,26 @@ Things to know:
 4. *Optional:* For `unreal_execute_script` with Python scripts, enable the UE
    plugin **"Python Editor Script Plugin"** (Edit -> Plugins) — the other
    tools don't need it.
+
+**The bridge's `npm install` can fail.** With npm 10.9.2 (Node 22.17.1) the
+install in the Toolkit's `mcp-bridge` folder exits 1 with
+`Cannot read properties of null (reading 'edgesOut')` while npm resolves peer
+dependencies of the bridge's dev dependencies (measured on
+Windows; the same with `--omit=dev` and `npm ci`). The launcher then logs the
+warning from the `-32000` chain below and the bridge never starts. Working by
+hand, in that folder:
+
+```bash
+npm install --omit=dev --legacy-peer-deps
+```
+
+(the bridge needs its runtime dependencies only); `npx npm@11.21.3 install`
+also worked. The launcher's own install runs a bare `npm install`, so do this
+once by hand before the first start; the launcher keeps an existing
+`node_modules` and lets the smoke test decide. Upstream's
+`package-lock.json` does not match its `package.json`, so every successful
+install rewrites the tracked lock file and leaves a git checkout of the plugin
+dirty; restore it with `git checkout -- package-lock.json`.
 
 What the launcher does **automatically** on startup (see above): install
 bridge `node_modules`, check binary / script, `initialize` smoke test, wait
@@ -611,7 +707,10 @@ then points to `http://<windows-ip>:3000`.
 suspects, in this order:
 
 1. **Bridge path wrong** (`Cannot find module ...`) — check the path in
-   `extraServers` against the real plugin layout.
+   `extraServers` against the real plugin layout. Related: **plugin not
+   loaded** — the bridge is fine but port 3000 never opens. Search the editor
+   log for `is Incompatible` / `Message dialog closed, result: No`: the
+   `.uplugin`'s `EngineVersion` differs from the engine (see Option B, step 1).
 2. **Node missing** or not on PATH in the agent's session.
 3. **`node_modules` missing, or the install was cut short.** The launcher
    runs `npm install` itself, but gives up after 5 minutes (the whole install,
@@ -622,7 +721,8 @@ suspects, in this order:
    starts, so Claude Code reports the server as failed. Once the bridge
    passes the smoke test, the launcher writes
    `node_modules/.unreagent-installed`; the next start skips the install
-   only if that marker exists. Without it, the launcher runs
+   only if that marker exists. (A failed install whose npm error mentions
+   `edgesOut` is the npm 10.9.2 problem from Option B.) Without it, the launcher runs
    `npm install` over whatever `node_modules` is there — say, one left by an
    install cut short (the timeout, or Ctrl-C) — once the network works, or
    you run `npm install` there by hand (the launcher deletes nothing; npm
@@ -640,11 +740,14 @@ suspects, in this order:
    is fully up; the launcher logs once it is.
 
 For **Unreal MCP** the chain is shorter, because there is no bridge process:
-if Claude Code shows the server as failed, the editor was most likely not up
-yet when the agent started (reconnect with `/mcp`), the "Unreal MCP" /
-"All Toolsets" plugins are not enabled, or the port or path in the
-`extraServers` URL does not match Editor Preferences -> Agentic Workflows ->
-Model Context Protocol (or `-ModelContextProtocolPort`). Since the launcher
+if Claude Code shows the server as failed, the usual suspects are, in this
+order: the `-ModelContextProtocolStartServer` flag is missing from
+`unreal.args` (or you set `unreal.args` and dropped the defaults — it replaces
+the list as a whole), so the plugin loaded but the server never started; the
+"Unreal MCP" / "All Toolsets" plugins are not enabled (off by default); the
+editor was not up yet when the agent started (reconnect with `/mcp`); or the
+port or path in the `extraServers` URL does not match the "Model Context
+Protocol" settings (or `-ModelContextProtocolPort`). Since the launcher
 only watches HTTP entries for reachability (a TCP connect, not an MCP
 check), `unreagent.log` tells you whether the port answered at all: a
 `... is reachable.` line means the editor's server was up (reconnect with
@@ -680,14 +783,44 @@ killed.
 Two UE dialogs otherwise block agent-driven operation: the **crash reporter**
 ("Send and Restart / Close") and the **recovery prompt** on restart
 ("not closed cleanly, restore?"). The launcher therefore starts the editor
-with **`-unattended`** — this suppresses **both** in UE 5.7 code (crash
-dialog and both recovery systems: PackageAutoSaver *and* disaster recovery)
-and discards the unclean state instead of asking. This was verified against
-the UE 5.7 source and **has not been re-checked for UE 5.8 or newer**.
+with **`-unattended`**. Checked against the UE 5.8.4 source
+(paths relative to the engine root) and, for package recovery, measured on
+Windows with 5.7.4 and 5.8.4:
+
+- **Suppressed:** the crash reporter UI
+  (`Runtime/Core/Private/Windows/WindowsPlatformCrashContext.cpp`), the
+  package restore prompt (`Editor/UnrealEd/Private/PackageAutoSaver.cpp`) and
+  disaster recovery (`Plugins/Developer/Concert/.../DisasterRecoveryClientModule.cpp`;
+  source only, not run).
+- **Skipped, not declined.** `-unattended` does not restore the autosaved
+  packages and does not ask, but it also does not discard the offer:
+  `Saved/Autosaves/PackageRestoreData.json` keeps its entry until the editor
+  exits cleanly or the session's first package is dirtied. A crash before
+  either leaves the old offer for the next start, and a later start **without**
+  `-unattended` shows the restore prompt again. `-AutoDeclinePackageRecovery`
+  exists but adds nothing next to `-unattended`; with `unattended: false` it
+  drops a stale offer without a prompt (the file is cleared at start).
+- **Not suppressed:** prompts the engine raises directly as a message box
+  (for example "Target Upgrade Required") and Slate modal windows. A missing
+  project module is the case to know: by the source (`LaunchEngineLoop.cpp`)
+  the editor logs `Incompatible or missing module` and exits 1 without a
+  dialog, and without `-unattended` that is what was measured (exit after about
+  1.5 seconds). **With `-unattended` it was not:** the editor loaded on,
+  answered its own "module not found" message box automatically and exited 1
+  after 12 to 17 seconds when the editor was started directly, and after 9 to 11
+  seconds per attempt when started through the launcher (measured on Windows
+  with 5.7.4 and 5.8.4). A project
+  whose C++ module has not been built yet therefore fails slowly and loops
+  through the restart policy; build first (`c compile`, about 3.5 minutes on a
+  fresh clone of the reference project).
+- **A plugin is skipped silently** when its `.uplugin` `EngineVersion`
+  differs from the engine in major.minor (log `Skipping load of` or the
+  declined "Incompatible" question; `PluginManager.cpp`). See the Toolkit's
+  `EngineVersion` in Option B.
 
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
-| `unattended` | `true` | appends `-unattended` — no crash dialog, no recovery prompt |
+| `unattended` | `true` | appends `-unattended` — no crash dialog, no package-restore prompt (the restore is skipped, not discarded; see above) |
 | `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before a start (belt and suspenders), except a start that follows a crash — an automatic restart, a `ue_start` / `ue_restart` / console `start` / `r` issued in place of a pending automatic restart (during the restart delay, or the retry delay of a failed start), or the first start after the launcher gave up on the editor — where the reporter may still be writing the dump; a `ue_stop` / console `stop` during the restart delay ends the crash episode, so a later start kills the reporter again; off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
 | `cleanOnRestart` | `false` | removes `Saved/Autosaves/PackageRestoreData.json` before every start; empties `Saved/Crashes/` before a start that does not follow a crash: the first start of a launcher run and every other manual start (console `start` / `r`, MCP `ue_start` / `ue_restart`). The crash folder is kept on an automatic restart by the restart policy (including a retry of a failed start), on a start issued in place of a pending automatic restart (during the restart delay after a crash, or the retry delay of a failed start; the log reason reads `start in place of the pending automatic restart`) and on the first start after the launcher gave up on the editor, so the dumps stay readable. A `ue_stop` / console `stop` during the restart delay cancels the pending restart and ends the crash episode, so a later start counts as a fresh manual start and empties the folder. When it holds anything the launcher logs `Recovery: Saved/Crashes kept (…)` with the reason |
 
