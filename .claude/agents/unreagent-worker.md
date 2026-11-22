@@ -38,9 +38,9 @@ Never `git commit`: leave the tree commit-ready and report what changed and why,
 - **`cmd/launcher` is the wiring layer, not a dumping ground.** It is split by
   concern (k93): `main.go` (`run()`, flags, sub-command dispatch), `tools.go`,
   `filetools.go`, `scripts.go`, `bridge.go`, `lifecycle.go`, `mcpconfig.go`,
-  `helpers.go`, `hermes.go`. New logic that has a home in `config`, `mcp` or
-  `supervisor` goes there; new wiring goes into the file of its concern, not
-  back into `main.go`.
+  `helpers.go`, `hermes.go`, `skills.go`, `uplugin.go`. New logic that has a
+  home in `config`, `mcp` or `supervisor` goes there; new wiring goes into the
+  file of its concern, not back into `main.go`.
 - **German leftovers exist** in older comments and in some MCP tool descriptions.
   Translate what you touch; do not open a translation sweep as a side quest.
 - **`example/` must keep working.** The release zip ships `example/unreagent.yaml`

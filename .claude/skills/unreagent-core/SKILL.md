@@ -61,6 +61,7 @@ never calls the supervisor.
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` (each target through `writeFileAtomic(..., true)`: replaced by rename, created 0600, an existing one open to group or others tightened to 0600 and logged, Unix only; `unignoredTokenFile` warns when git does not ignore one holding the token), `writeAgentMCPConfig` / `removeAgentMCPConfig` (the embedded agent's `--mcp-config` file, k181: `mcp-config.json` in an `os.MkdirTemp` directory, written by `writeFileAtomic`, 0600 in 0700 on Unix, the per-user `%TEMP%` on Windows; never inline JSON on its command line, which every local user can read), `redactAgentArgs` for the logged agent command (it shows the launcher's own config path, and replaces every other `--mcp-config` value, a hand-wired path too) |
 | `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt; `agentRetryLine`, the line for a retried failed start), the stdin console loop (`commandLoop`; `console.reply` answers on the console and in the log, `console.show` on the console only and only when the log is elsewhere, for an outcome the supervisor has logged already), the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
+| `uplugin.go` | the startup check of the project plugins' `EngineVersion` (k214): `checkPluginEngineVersions`, called once in `run()` before the editor starts, with the editor's final arguments from `editorArgs` (they decide `-unattended`; `-NoEnginePlugins` or any `DisablePlugins=` switches the check off), warns about each plugin under `<Project>/Plugins` the editor will refuse for its `EngineVersion`, which `-unattended` turns into a silent skip; it never stops the start. The engine's compatible version comes from `<Engine>/Build/Build.version` (`engineDirOf`, `compatibleEngineVersion`); the engine facts it mirrors, and what it does not cover: skill `unreagent-ue` |
 | `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills` (`installSkillDir`, `sweepSkillDirs`), the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers; `writeFileAtomic(path, data, tighten)` and `writeTarget`, the writer of every file that can hold a secret (the MCP configs, hermes-setup's two files; skill `unreagent-config`, "Secrets") |
 | `hermes.go` | the `hermes-setup` sub-command |
@@ -132,8 +133,9 @@ was split by concern.
    `alertWarnings(logger, alert, logPath)` (`main.go`) wraps a logger for
    warnings that can come while the agent's terminal UI owns the console: the
    log gets every line in full, `alert` only a WARN's first line, plus
-   " (the rest is in <logPath>)" when it has more. `run()` hands it to bridge
-   preparation and to `prepareRuntimes`, which it starts with `go` and which
+   " (the rest is in <logPath>)" when it has more. `run()` hands it to the
+   plugin check (`checkPluginEngineVersions`, k214), to bridge preparation and
+   to `prepareRuntimes`, which it starts with `go` and which
    warns on a failed `uv sync` / `npm install` with the cause and the output's
    last 20 lines. Past config load, three deliberate exceptions. The first,
    the MCP bind:

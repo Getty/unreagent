@@ -206,6 +206,12 @@ func run() error {
 
 	// --- unreal service ---
 	ueArgs := editorArgs(cfg.Unreal, logger)
+	// A plugin the editor refuses for its EngineVersion is dropped without
+	// a word under -unattended (k214), so say it before the editor starts,
+	// where the user looks. The editor's own arguments decide -unattended
+	// and which plugins -DisablePlugins= switches off.
+	checkPluginEngineVersions(cfg.Unreal.Project, engineDirOf(cfg.Unreal.Editor, info.EngineRoot),
+		ueArgs, alertWarnings(logger, alert, logPath))
 	ueProjectDir := ""
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)

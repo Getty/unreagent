@@ -610,19 +610,39 @@ Things to know:
    `EnabledByDefault: true` and activates its own engine dependencies
    (EditorScriptingUtilities, Niagara, ControlRig, IKRig, ...) — nothing
    to change on the `.uproject`. **But check its `EngineVersion` field.**
-   Upstream HEAD (9f6a0f7) declares
-   `"EngineVersion": "5.6.0"`; the reference project does not use it but pins a
-   fork branch (see below). If its major.minor differs from your engine's,
+   Upstream HEAD (9f6a0f7) declares `"EngineVersion": "5.6.0"`; the reference
+   project does not use it but pins a fork branch (see below).
+
+   The engine accepts an `EngineVersion` only if major, minor **and patch**
+   equal its own compatible version (patch 0 on an Epic build). On a mismatch
    the editor asks "designed for build 5.6.0, attempt to load it anyway?", and
-   under `-unattended` (the launcher's default) that question is answered No:
-   the plugin is **not loaded** and port 3000 never opens, with no error
-   beyond the editor log line `... is Incompatible` / `Message dialog closed,
-   result: No`. Measured on Windows with 5.7.4 and 5.8.4; the engine side is
-   `Runtime/Projects/Private/PluginManager.cpp` (`IsPluginCompatible`,
-   `PromptToLoadIncompatiblePlugin`). Fix: remove the
-   `EngineVersion` line or set it to your engine's version. On UE 5.8 the
-   plugin also needs a source port (it was written for 5.6 and 5.7); the
-   reference project's fork branch `ue-5.8` carries it and drops the
+   under `-unattended` (the launcher's default) the answer is No: the plugin is
+   **not loaded** and port 3000 never opens, with no error beyond the editor log
+   line `... is Incompatible` / `Message dialog closed, result: No`. A two-part
+   value such as `5.6` does not parse, and the plugin loads anyway. Measured on
+   Windows: `5.6.0` is refused on 5.7.4 and 5.8.4, `5.7.0` loads on 5.7.4; on
+   5.8.4, `5.8.4` is refused, `5.8.0` and `5.8` load. **Fix:** remove the
+   `EngineVersion` line or set it to `<major>.<minor>.0` of your engine.
+
+   The launcher warns about this at startup: one `WARN` per enabled plugin
+   under `<Project>/Plugins` that the editor will refuse, naming the plugin,
+   the value and the fix (console, or `unreagent.log` and stderr in window
+   mode); it keeps starting. It predicts from the files, so its limits are:
+   - *Not covered:* plugins outside `<Project>/Plugins`, behind a junction or
+     symlink, enabled only as a dependency or by `-EnablePlugins=`; plugin
+     extensions; a name found twice; `.uproject` entries with a list or
+     `Optional`; an `Enabled` or `EnabledByDefault` that is not a JSON boolean
+     (`true`/`false`). Any editor argument containing `DisablePlugins=` switches the
+     check off (one info line), `-NoEnginePlugins` skips it.
+   - *May warn wrongly:* a plugin the target's own plugin list disables, a
+     same-named plugin in another plugin directory, an engine whose
+     `Build.version` and `Version.h` disagree, and a start that uses a different
+     engine than the one checked (with `unreal.editor` a wrapper script or a bare
+     name on PATH, the check reads the resolved engine root's version, so it can
+     warn wrongly or miss a refusal).
+
+   On UE 5.8 the plugin also needs a source port (it was written for 5.6 and
+   5.7); the reference project's fork branch `ue-5.8` carries it and drops the
    `EngineVersion` field. Whether upstream will carry such a port is open.
 2. **First editor start** — UE reports "Missing Modules ... rebuild?" -> Yes.
    The build needs Visual Studio (once; afterwards the binaries live in the
@@ -710,7 +730,9 @@ suspects, in this order:
    `extraServers` against the real plugin layout. Related: **plugin not
    loaded** — the bridge is fine but port 3000 never opens. Search the editor
    log for `is Incompatible` / `Message dialog closed, result: No`: the
-   `.uplugin`'s `EngineVersion` differs from the engine (see Option B, step 1).
+   `.uplugin`'s `EngineVersion` does not match the engine (major, minor and
+   patch must equal its compatible version, e.g. `5.8.0`). The launcher warns
+   about this at startup, within the limits listed in Option B, step 1.
 2. **Node missing** or not on PATH in the agent's session.
 3. **`node_modules` missing, or the install was cut short.** The launcher
    runs `npm install` itself, but gives up after 5 minutes (the whole install,
@@ -814,9 +836,11 @@ Windows with 5.7.4 and 5.8.4:
   through the restart policy; build first (`c compile`, about 3.5 minutes on a
   fresh clone of the reference project).
 - **A plugin is skipped silently** when its `.uplugin` `EngineVersion`
-  differs from the engine in major.minor (log `Skipping load of` or the
-  declined "Incompatible" question; `PluginManager.cpp`). See the Toolkit's
-  `EngineVersion` in Option B.
+  does not match the engine's compatible version in major, minor or patch (log
+  `Skipping load of` or the declined "Incompatible" question;
+  `PluginManager.cpp`). A two-part value such as `5.6` does not parse and loads
+  anyway. The launcher warns about this at startup, within the limits listed
+  in Option B, step 1. See the Toolkit's `EngineVersion` there.
 
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
