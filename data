@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-23T01:03:17Z
+id: 249
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- docs
+- example
+- windows
+- onboarding
+title: 'unreagent-example README and setup.ps1: the first start they describe is not
+  what happens on Windows'
+updated: 2026-11-23T02:48:50Z
+---
+
+Work happens in the unreagent-example repository (tracked here, like k233). Found by k226 (Path A, 2026-11-23, Windows 11, UE 5.8.4, unreagent 72beb67, unreagent-example b778e97). Part of k224; overlaps k233 (template work), which may absorb it.
+
+The example's README and scripts/setup.ps1 describe a first start that does not happen that way on Windows:
+1. "powershell -File scripts/setup.ps1" is refused on a default Windows client (effective execution policy Restricted): "Die Datei "<project>\scripts\setup.ps1" kann nicht geladen werden, da die Ausführung von Skripts auf diesem System deaktiviert ist." (UnauthorizedAccess), exit 1. "powershell -ExecutionPolicy Bypass -File scripts/setup.ps1" works (9 s). Neither README mentions the policy.
+2. "Start unreagent.exe and type `c compile` in its console once" (README step 3, setup.ps1's last line): with the example's agent.window: true the console belongs to Claude Code, so `c compile` is a prompt to the agent; the launcher console exists only after the agent exits ([k] at the exit prompt). In the walk-through the agent read it as "compile" and ran ue_stop, run_command compile, ue_start itself. It worked through the agent's reading, not through the instruction.
+3. "Until the build is done, the editor stops ... and the launcher restarts it ... The first restart after the build comes up with the Toolkit." Measured: the launcher gives up after 7 starts, 2:31 after the start ("[ue] failed 3 times in a row, each within 10s of its start  giving up (no automatic restart)"), long before a build finishes, so there is no restart after the build; someone has to start the editor (start ue / ue_start). With k229 the start now warns first, but the README sentence is still wrong.
+4. "about four minutes on a fresh clone": the build took 6:42 here (VS 2022 17.14, project module plus plugin).
+5. "The launcher's own npm install on the first start may still fail the same way: it then keeps the node_modules from the script, the smoke test passes, and later starts skip the install." Since k215 the launcher's install does not fail: it logs "node_modules not marked as working", reinstalls (exit 1, then the --legacy-peer-deps retry, exit 0) and rewrites the bridge's package-lock.json, leaving the submodule dirty, the thing setup.ps1 restores after its own install. So setup.ps1's install is redone on every fresh clone, and the submodule ends up dirty anyway (see k242 for the lock-file decision).
+6. "Local overrides" shows the port override; worth saying when it is needed: a failed bind ends the start before any window text or log can be read (k160, and the preflight card filed with this one).
+
+Done when the example README and setup.ps1 describe what a first start actually does (or the launcher changes so they are true), checked by a fresh-clone run on Windows.
