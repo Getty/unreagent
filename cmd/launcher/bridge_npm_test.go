@@ -182,17 +182,17 @@ func TestPrepareNodeBridgeRetriesWithLegacyPeerDeps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newNpmFixture(t, "1\n"+tc.output, "0\nadded 89 packages\n")
 			ok, log, calls := f.prepare(t)
-			if want := []string{"install", "install --legacy-peer-deps"}; strings.Join(calls, "|") != strings.Join(want, "|") {
+			if want := []string{"install --no-save", "install --no-save --legacy-peer-deps"}; strings.Join(calls, "|") != strings.Join(want, "|") {
 				t.Fatalf("npm calls = %q, want %q:\n%s", calls, want, log)
 			}
 			if !ok || strings.Contains(log, "WARN") {
 				t.Fatalf("the retry installed the bridge, yet it is not usable or got a WARN (ok %v):\n%s", ok, log)
 			}
-			notice := "npm install exit 1 " + tc.named + " — trying once more with --legacy-peer-deps"
+			notice := "npm install --no-save exit 1 " + tc.named + " — trying once more with --legacy-peer-deps"
 			if !strings.Contains(log, notice) || !strings.Contains(log, strings.TrimSpace(strings.SplitN(tc.output, "\n", 2)[0])) {
 				t.Fatalf("the log does not say why the retry ran (%q, with npm's output):\n%s", notice, log)
 			}
-			if !strings.Contains(log, "dependencies installed (npm install --legacy-peer-deps)") {
+			if !strings.Contains(log, "dependencies installed (npm install --no-save --legacy-peer-deps)") {
 				t.Fatalf("the log does not name the install that worked:\n%s", log)
 			}
 		})
@@ -204,10 +204,10 @@ func TestPrepareNodeBridgeRetriesWithLegacyPeerDeps(t *testing.T) {
 func TestPrepareNodeBridgePlainInstallKeepsPeers(t *testing.T) {
 	f := newNpmFixture(t, "0\nadded 90 packages\n")
 	ok, log, calls := f.prepare(t)
-	if !ok || len(calls) != 1 || calls[0] != "install" {
+	if !ok || len(calls) != 1 || calls[0] != "install --no-save" {
 		t.Fatalf("want one plain npm install, got %q (ok %v):\n%s", calls, ok, log)
 	}
-	if !strings.Contains(log, "dependencies installed (npm install)") {
+	if !strings.Contains(log, "dependencies installed (npm install --no-save)") {
 		t.Fatalf("the log does not name the install:\n%s", log)
 	}
 }
@@ -226,7 +226,7 @@ func TestPrepareNodeBridgeNoRetryForOtherErrors(t *testing.T) {
 			if len(calls) != 1 {
 				t.Fatalf("npm calls = %q, want the plain install only:\n%s", calls, log)
 			}
-			if ok || !strings.Contains(log, "WARN MCP server 'toolkit': npm install exit 1 — bridge will not start.") {
+			if ok || !strings.Contains(log, "WARN MCP server 'toolkit': npm install --no-save exit 1 — bridge will not start.") {
 				t.Fatalf("want the failed install reported and the bridge left out (ok %v):\n%s", ok, log)
 			}
 		})
@@ -241,7 +241,7 @@ func TestPrepareNodeBridgeRetryFailsToo(t *testing.T) {
 	if len(calls) != 2 || ok {
 		t.Fatalf("want two npm calls and an unusable bridge, got %q (ok %v):\n%s", calls, ok, log)
 	}
-	warn := "WARN MCP server 'toolkit': npm install --legacy-peer-deps exit 1 — bridge will not start.\n"
+	warn := "WARN MCP server 'toolkit': npm install --no-save --legacy-peer-deps exit 1 — bridge will not start.\n"
 	if !strings.Contains(log, warn+"npm error code ECONNREFUSED") {
 		t.Fatalf("the WARN does not name the retry with its output (%q):\n%s", warn, log)
 	}
@@ -264,13 +264,13 @@ func TestPrepareNodeBridgeRetrySharesTheTimeout(t *testing.T) {
 		warn    func(f *npmFixture) string
 	}{
 		{"plain install times out", []string{"sleep\n"}, 1, func(f *npmFixture) string {
-			return "WARN MCP server 'toolkit': npm install timed out after 2s — bridge will not start. Registry or proxy unreachable? Run npm install in " + dir(f) + " by hand."
+			return "WARN MCP server 'toolkit': npm install --no-save timed out after 2s — bridge will not start. Registry or proxy unreachable? Run npm install --no-save in " + dir(f) + " by hand."
 		}},
 		// The plain install uses 1.5 s of the 2: a retry with a timeout of
 		// its own would end at 3.5 s, past the bound below. The WARN names
 		// the retry, not the plain install that crashes.
 		{"retry times out", []string{"1 1500ms\n" + npmEdgesOut, "sleep\n"}, 2, func(f *npmFixture) string {
-			return "WARN MCP server 'toolkit': npm install --legacy-peer-deps timed out: the plain install and it had 2s together — bridge will not start. Registry or proxy unreachable? Run npm install --legacy-peer-deps in " + dir(f) + " by hand."
+			return "WARN MCP server 'toolkit': npm install --no-save --legacy-peer-deps timed out: the plain install and it had 2s together — bridge will not start. Registry or proxy unreachable? Run npm install --no-save --legacy-peer-deps in " + dir(f) + " by hand."
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -303,7 +303,7 @@ func TestPrepareNodeBridgeNoRetryAfterTimeoutOrCancel(t *testing.T) {
 		bridgeInstallTimeout = time.Second
 		f := newNpmFixture(t, hang)
 		ok, log, calls := f.prepare(t)
-		if ok || len(calls) != 1 || strings.Contains(log, "trying once more") || !strings.Contains(log, "npm install timed out after 1s") {
+		if ok || len(calls) != 1 || strings.Contains(log, "trying once more") || !strings.Contains(log, "npm install --no-save timed out after 1s") {
 			t.Fatalf("a timed-out install must be reported as such, with no retry (calls %q, ok %v):\n%s", calls, ok, log)
 		}
 	})

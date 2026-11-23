@@ -45,6 +45,14 @@ var bridgeInstallTimeout = 5 * time.Minute
 // that is also a regular dependency of another package is installed anyway.
 const legacyPeerDeps = "--legacy-peer-deps"
 
+// noSave is on both installs of a node bridge (k242): the bridge is a
+// plugin's own project, often a tracked submodule whose package-lock.json
+// does not match its package.json, and a plain npm install rewrites that
+// lock. With --no-save npm still installs what the lock pins and adds peers
+// on its own, but writes neither the lock nor package.json (measured by k215
+// on Windows with npm 10.9.2, not by this code's tests).
+const noSave = "--no-save"
+
 // bridgeInstallMarker is the file in a node bridge's node_modules that lets
 // the next start skip npm install. Only a passing smoke test writes it
 // (settleModules).
@@ -219,10 +227,11 @@ func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 	if m.earlier {
 		state = "node_modules not marked as working"
 	}
-	logger(fmt.Sprintf("MCP server '%s': %s — installing dependencies (npm install, at most %s) in %s …", name, state, bridgeInstallTimeout, dir))
+	logger(fmt.Sprintf("MCP server '%s': %s — installing dependencies (npm install %s, at most %s) in %s …", name, state, noSave, bridgeInstallTimeout, dir))
 	ictx, cancel := context.WithTimeout(ctx, bridgeInstallTimeout)
 	defer cancel()
-	install := []string{"install"}
+	install := []string{"install", noSave}
+	retried := false
 	res, err := sup.RunOnceContext(ictx, npm, install, dir, nil, "prepare:mcp:"+name)
 	// One retry with legacyPeerDeps (k215), for a failure that flag can
 	// change: the peer conflict ERESOLVE, whose own message suggests it, or
@@ -238,9 +247,10 @@ func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		if code == "" {
 			code = "no npm error code"
 		}
-		logger(fmt.Sprintf("MCP server '%s': npm install exit %d (%s) — trying once more with %s, which installs no package that only a peerDependencies entry asks for:\n%s",
-			name, res.ExitCode, code, legacyPeerDeps, tailLines(res.Output, 20)))
-		install = []string{"install", legacyPeerDeps}
+		logger(fmt.Sprintf("MCP server '%s': npm %s exit %d (%s) — trying once more with %s, which installs no package that only a peerDependencies entry asks for:\n%s",
+			name, strings.Join(install, " "), res.ExitCode, code, legacyPeerDeps, tailLines(res.Output, 20)))
+		retried = true
+		install = []string{"install", noSave, legacyPeerDeps}
 		res, err = sup.RunOnceContext(ictx, npm, install, dir, nil, "prepare:mcp:"+name)
 	}
 	command := "npm " + strings.Join(install, " ")
@@ -251,7 +261,7 @@ func prepareNodeBridge(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		return bridgeModules{}, false
 	case errors.Is(err, context.DeadlineExceeded):
 		cause = fmt.Sprintf("%s timed out after %s", command, bridgeInstallTimeout)
-		if len(install) > 1 {
+		if retried {
 			cause = fmt.Sprintf("%s timed out: the plain install and it had %s together", command, bridgeInstallTimeout)
 		}
 		hint = " Registry or proxy unreachable? Run " + command + " in " + dir + " by hand."

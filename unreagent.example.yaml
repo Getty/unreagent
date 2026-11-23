@@ -250,8 +250,8 @@ mcp:
   # first line also on stderr):
   #   Binary in PATH? -> Node: script there? node_modules there and marked
   #   (node_modules/.unreagent-installed, written after a passing smoke
-  #   test)? (else npm install, retried once with --legacy-peer-deps on an
-  #   ERESOLVE or code-less failure; if the smoke test still fails, the log
+  #   test)? (else npm install --no-save, retried once with
+  #   --no-save --legacy-peer-deps on an ERESOLVE or code-less failure; if the smoke test still fails, the log
   #   names the repair)
   #   -> smoke test (initialize handshake: only an id-1 result with a
   #   serverInfo object passes; any other id-1 response fails at once (an

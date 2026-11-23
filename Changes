@@ -609,6 +609,10 @@ Revision history for unreagent
     of the agent after an exit gets one line ("unreagent: Agent exited (exit
     N) — restart N[/M] in D"). With agent.onExit leave or shutdown, how the
     agent ended now leads the onExit line. Unverified on Windows.
+  - The launcher's npm install for a node bridge, and its --legacy-peer-deps
+    retry, now pass --no-save: a plugin's tracked package-lock.json is no
+    longer rewritten at the first start, and npm still installs the versions
+    the lock pins. runtimes.node is unchanged.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

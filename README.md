@@ -75,8 +75,8 @@ bridges are fully checked before the agent starts, with each step logged
 loudly, instead of letting the agent run into a meaningless `-32000`
 connect error: binary on PATH? bridge script present? `node_modules` there
 and marked as working (`.unreagent-installed`, written once the bridge passed
-its smoke test; otherwise the launcher runs `npm install` (retried once with
-`--legacy-peer-deps` on an `ERESOLVE` or code-less npm failure), cut off after 5
+its smoke test; otherwise the launcher runs `npm install --no-save` (retried once with
+`--no-save --legacy-peer-deps` on an `ERESOLVE` or code-less npm failure), cut off after 5
 minutes; a failed install is logged as a warning and skips the smoke test,
 but the bridge stays in the agent's config — unless a `node_modules` was
 already there, which is kept and left to the smoke test)? does the bridge
@@ -383,7 +383,7 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
   warns about the `EngineVersion` case at start and `init` reports it; the
   mechanics and the fix are under [Option B](#option-b-ue-llm-toolkit).
 - **The bridge's `npm install` fails:** the launcher retries once with
-  `--legacy-peer-deps` by itself; see [Option B](#option-b-ue-llm-toolkit).
+  `--no-save --legacy-peer-deps` by itself; see [Option B](#option-b-ue-llm-toolkit).
 - **Claude Code reports the toolkit server as failed
   (`Failed to reconnect: -32000`):** see
   [the troubleshooting chain](#troubleshooting-failed-to-reconnect--32000).
@@ -899,9 +899,9 @@ Things to know:
 folder exits 1 with `Cannot read properties of null (reading 'edgesOut')`
 while npm resolves peer dependencies of the bridge's dev dependencies
 (measured on Windows; the same with `--omit=dev` and `npm ci`). The launcher
-runs the plain `npm install` first; if it exits non-zero and npm names no
+runs `npm install --no-save` first; if it exits non-zero and npm names no
 error code (this crash) or `ERESOLVE`, it retries once with
-`npm install --legacy-peer-deps`, within the same 5-minute limit. Other npm
+`npm install --no-save --legacy-peer-deps`, within the same 5-minute limit. Other npm
 errors (network, registry, file access, install scripts) are not retried.
 `--legacy-peer-deps` leaves out a package that only a `peerDependencies`
 entry asks for (a peer that is also a regular dependency of another package is
@@ -916,9 +916,12 @@ npm install --omit=dev --legacy-peer-deps
 
 (the bridge needs its runtime dependencies only). The launcher keeps an existing `node_modules` and lets the smoke
 test decide. Upstream's
-`package-lock.json` does not match its `package.json`, so every successful
-install rewrites the tracked lock file and leaves a git checkout of the plugin
-dirty; restore it with `git checkout -- package-lock.json`.
+`package-lock.json` does not match its `package.json`, and a plain
+`npm install` would rewrite that tracked lock file and leave a git checkout of
+the plugin dirty. The launcher therefore passes `--no-save`: npm still installs
+the versions the lock pins, but writes neither `package-lock.json` nor
+`package.json`, so the first start leaves the checkout clean (measured on
+Windows with npm 10.9.2). A bridge without a lock gets none written either.
 
 What the launcher does **automatically** on startup (see above): install
 bridge `node_modules`, check binary / script, `initialize` smoke test, wait
@@ -977,11 +980,11 @@ suspects, in this order:
    starts, so Claude Code reports the server as failed. Once the bridge
    passes the smoke test, the launcher writes
    `node_modules/.unreagent-installed`; the next start skips the install
-   only if that marker exists. (A plain `npm install` that fails on npm 10.9.2 with
+   only if that marker exists. (An `npm install --no-save` that fails on npm 10.9.2 with
    `edgesOut`, or on `ERESOLVE`, is retried once with `--legacy-peer-deps`,
    see Option B; if that fails too, the warning reads
-   `npm install --legacy-peer-deps exit N`.) Without it, the launcher runs
-   `npm install` over whatever `node_modules` is there — say, one left by an
+   `npm install --no-save --legacy-peer-deps exit N`.) Without it, the launcher runs
+   `npm install --no-save` over whatever `node_modules` is there — say, one left by an
    install cut short (the timeout, or Ctrl-C) — once the network works, or
    you run `npm install` there by hand (the launcher deletes nothing; npm
    itself may remove extraneous packages). If an install fails while a

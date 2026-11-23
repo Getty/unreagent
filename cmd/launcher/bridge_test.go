@@ -302,7 +302,7 @@ func TestPrepareNodeBridgeOfflinePartialModulesStayUnmarked(t *testing.T) {
 func TestPrepareNodeBridgeFailedFreshInstallStaysUnmarked(t *testing.T) {
 	f := newInstallFixture(t, npmOffline, initAnswer)
 	log := f.run(t)
-	if !strings.Contains(log, "npm install exit 1") || !strings.Contains(log, "bridge will not start") {
+	if !strings.Contains(log, "npm install --no-save exit 1") || !strings.Contains(log, "bridge will not start") {
 		t.Fatalf("expected the failed install to be reported:\n%s", log)
 	}
 	if f.marked() {
