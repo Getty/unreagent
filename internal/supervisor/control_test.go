@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -27,6 +28,9 @@ func TestStopWinsOverAnExitReadyWithIt(t *testing.T) {
 	spec.Restart = "never"         // so an exit acted on fires OnExit
 	exits := make(chan Exit, 2)
 	spec.OnExit = func(e Exit) { exits <- e }
+	// k188: nor OnRunEnd, which runs on the loop before the stop is answered.
+	var runEnds atomic.Int32
+	spec.OnRunEnd = func(RunEnd) { runEnds.Add(1) }
 	if err := sup.AddService(spec); err != nil {
 		t.Fatalf("AddService: %v", err)
 	}
@@ -62,6 +66,9 @@ func TestStopWinsOverAnExitReadyWithIt(t *testing.T) {
 	// check needs no wait; OnExit runs in a goroutine of its own and gets one.
 	if out := log.String(); strings.Contains(out, "no automatic restart") || !strings.Contains(out, "stopped (manual)") {
 		t.Fatalf("the exit was acted on instead of the stop:\n%s", out)
+	}
+	if n := runEnds.Load(); n != 0 {
+		t.Fatalf("OnRunEnd fired %d times for a run the stop took", n)
 	}
 	select {
 	case e := <-exits:
@@ -390,5 +397,45 @@ func TestStartOrRestartWinsOverAnExitReadyWithIt(t *testing.T) {
 			case <-time.After(200 * time.Millisecond):
 			}
 		})
+	}
+}
+
+// k188: a run that ends on its own while the launcher shuts down is not
+// reported to OnRunEnd. The restart the policy arms for it never comes —
+// start refuses to start anything once ctx is done (k182) — so the console
+// must not be told one is coming. The log keeps its lines, as before.
+func TestNoRunEndDuringTheShutdown(t *testing.T) {
+	var log lineLog
+	sup := New(log.log)
+	spec, _ := runsSpec(t, "f", 0) // exits 1 at once
+	spec.RestartDelay = time.Hour
+	var runEnds atomic.Int32
+	spec.OnRunEnd = func(RunEnd) { runEnds.Add(1) }
+	if err := sup.AddService(spec); err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	taken := make(chan struct{})
+	var once sync.Once
+	sup.exitTaken = func() {
+		once.Do(func() {
+			cancel() // the shutdown comes while the loop acts on the exit
+			close(taken)
+		})
+	}
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg)
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	select {
+	case <-taken:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the exit was never taken")
+	}
+	wg.Wait()
+	if !strings.Contains(log.String(), "[svc] restart 1 in 1h0m0s") {
+		t.Fatalf("the premise is a restart armed and logged during the shutdown; log:\n%s", log.String())
+	}
+	if n := runEnds.Load(); n != 0 {
+		t.Fatalf("OnRunEnd fired %d times during the shutdown, for a restart that never comes", n)
 	}
 }

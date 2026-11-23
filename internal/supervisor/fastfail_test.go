@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -413,6 +414,72 @@ func TestExitReportsStartFailure(t *testing.T) {
 			})
 			if got := waitExit(t, exits, 10*time.Second, c.name); got != c.want {
 				t.Fatalf("OnExit got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// k188: a run that ended on its own is reported to OnRunEnd, once per run,
+// with how it ended and the restart the policy armed for it — the log's
+// "exited" and "restart N in D" lines — and Restart 0 for the run that is not
+// restarted (a used-up maxRestarts, the fast-fail give-up, a policy that does
+// not restart it). The hook runs on the loop after the restart is decided and
+// logged, and before OnExit, so every call is in by the time OnExit fires.
+func TestOnRunEndReportsEachRunThatEnded(t *testing.T) {
+	const d = 10 * time.Millisecond
+	for _, c := range []struct {
+		name        string
+		pattern     string
+		restart     string
+		maxRestarts int
+		want        []RunEnd
+	}{
+		{"maxRestarts 2", "f", "on-failure", 2, []RunEnd{
+			{Exit: "exit 1", Restart: 1, MaxRestarts: 2, Delay: d},
+			{Exit: "exit 1", Restart: 2, MaxRestarts: 2, Delay: d},
+			{Exit: "exit 1", Restart: 0, MaxRestarts: 2, Delay: d},
+		}},
+		{"the fast-fail give-up", "f", "on-failure", 0, []RunEnd{
+			{Exit: "exit 1", Restart: 1, Delay: d},
+			{Exit: "exit 1", Restart: 2, Delay: d},
+			{Exit: "exit 1", Restart: 0, Delay: d},
+		}},
+		{"exit 0 under on-failure", "o", "on-failure", 0, []RunEnd{
+			{Exit: "exit 0", Restart: 0, Delay: d},
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var log lineLog
+			sup := New(log.log)
+			spec, _ := runsSpec(t, c.pattern, 0)
+			spec.Restart = c.restart
+			spec.MaxRestarts = c.maxRestarts
+			ends := make(chan RunEnd, 8)
+			var logged []string // the log as each call found it
+			spec.OnRunEnd = func(e RunEnd) {
+				logged = append(logged, log.String())
+				ends <- e
+			}
+			exits := startService(t, sup, spec)
+			waitExit(t, exits, 10*time.Second, c.name)
+			if got := len(ends); got != len(c.want) {
+				t.Fatalf("OnRunEnd fired %d times, want %d — once per run; log:\n%s", got, len(c.want), log.String())
+			}
+			for i, want := range c.want {
+				if got := <-ends; got != want {
+					t.Fatalf("run %d reported as %+v, want %+v", i+1, got, want)
+				}
+				// The call for run i+1 finds that run's exit logged, and its
+				// restart line when one follows.
+				if n := strings.Count(logged[i], "[svc] exited ("+want.Exit+")"); n != i+1 {
+					t.Fatalf("run %d: OnRunEnd found %d exit lines in the log, want %d:\n%s", i+1, n, i+1, logged[i])
+				}
+				if want.Restart > 0 {
+					line := fmt.Sprintf("[svc] restart %d%s in %s", want.Restart, maxStr(spec), d)
+					if !strings.Contains(logged[i], line) {
+						t.Fatalf("run %d: OnRunEnd came before the log had %q:\n%s", i+1, line, logged[i])
+					}
+				}
 			}
 		})
 	}

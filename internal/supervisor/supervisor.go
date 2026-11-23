@@ -59,6 +59,25 @@ type ServiceSpec struct {
 	// on the service's loop, before the loop answers anything else: it must
 	// return quickly and must not call the supervisor.
 	OnStartRetry func(Retry)
+	// OnRunEnd fires for every run that ended on its own while the service was
+	// desired, after the restart policy has decided on it, and before OnExit:
+	// RunEnd says how the run ended and which restart follows, if any. A
+	// restart is logged ("restart N in D", or the give-up line) before the
+	// hook; for a run that is not restarted, the "no automatic restart
+	// (policy=...)" line is logged after it. Not for a run that a StopService waiting at the exit takes (it
+	// gets no OnExit either), nor for one that ends once the launcher is
+	// shutting down, whose restart would never come. A StartService or
+	// RestartService waiting at the exit gets it, as the log has the exit and
+	// the restart it then replaces. It is called on the service's loop: it
+	// must return quickly and must not call the supervisor.
+	OnRunEnd func(RunEnd)
+	// OnStartHeld fires when a start is held for the last run's crash
+	// reporter (ReporterGrace), where the log says so (HeldLine): once per
+	// hold, not for a start that takes a held one's place. Start says which
+	// start is held; its AfterGiveUp is not filled in yet. It is called on
+	// the service's loop: it must return quickly and must not call the
+	// supervisor.
+	OnStartHeld func(Start)
 	// ReporterGrace, when above 0, keeps the job of a run that ended with a
 	// failure open while a crash reporter (CrashReportClientEditor.exe,
 	// CrashReportClient.exe) is still in it, for at most this long, so it can
@@ -89,6 +108,25 @@ type Retry struct {
 	Restart     int
 	MaxRestarts int
 	Delay       time.Duration
+}
+
+// RunEnd tells ServiceSpec.OnRunEnd how a run ended and what follows.
+type RunEnd struct {
+	// Exit is how the run ended, as the log's "exited" line and
+	// ServiceStatus.LastExit say it ("exit 1").
+	Exit string
+	// Restart is the number of the restart the policy armed for the run
+	// (ServiceStatus.Restarts), 0 when none follows; MaxRestarts and Delay
+	// are the spec's.
+	Restart     int
+	MaxRestarts int
+	Delay       time.Duration
+}
+
+// HeldLine is the line the supervisor logs for service name when it holds a
+// start for the last run's crash reporter (ServiceSpec.OnStartHeld).
+func HeldLine(name string) string {
+	return "[" + name + "] start held until the last run's crash reporter has finished"
 }
 
 // Start tells ServiceSpec.PreStart which start is coming.
@@ -687,7 +725,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		// start comes at the later of the two, not after their sum.
 		if lingerDone != nil {
 			if held == nil {
-				s.logf("[%s] start held until the last run's crash reporter has finished", spec.Name)
+				s.log(HeldLine(spec.Name))
+				if spec.OnStartHeld != nil {
+					spec.OnStartHeld(pre)
+				}
 			}
 			held = &pre
 			return
@@ -951,11 +992,23 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			takenOver := pending != nil && (pending.kind == ctrlStart || pending.kind == ctrlRestart)
 			restart := desired && shouldRestart(spec, restarts, success)
 			gaveUp := restart && giveUp()
-			if restart && !gaveUp {
+			restarted := restart && !gaveUp
+			if restarted {
 				restarts++
 				s.logf("[%s] restart %d%s in %s", spec.Name, restarts, maxStr(spec), spec.RestartDelay)
 				backoff, backoffAuto = time.After(spec.RestartDelay), true
-			} else if desired {
+			}
+			// On the loop, before OnExit's goroutine: the run's end comes
+			// before what OnExit makes of it. Not once ctx is done: the
+			// restart just armed never comes then (start refuses it).
+			if desired && spec.OnRunEnd != nil && ctx.Err() == nil {
+				re := RunEnd{Exit: exit, MaxRestarts: spec.MaxRestarts, Delay: spec.RestartDelay}
+				if restarted {
+					re.Restart = restarts
+				}
+				spec.OnRunEnd(re)
+			}
+			if !restarted && desired {
 				if !gaveUp { // the give-up has logged its own line
 					s.logf("[%s] no automatic restart (policy=%s)", spec.Name, spec.Restart)
 				}

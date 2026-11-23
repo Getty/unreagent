@@ -580,6 +580,13 @@ in D` (`/M` only with an explicit `maxRestarts`; `D` is a duration such as `5s`
 or `1m30s`). The start the policy gives up on gets no such line; with
 `onExit: ask` the prompt above names it.
 
+Likewise, each automatic restart of the agent after an exit gets one console
+line in window mode: `unreagent: Agent exited (exit N) — restart N[/M] in D`.
+A run that is not restarted gets none; the prompt above or the `onExit` line
+names it. If a stop cancels a restart that was already announced, the console
+does not take the line back (the log has the stop). Windows console behaviour
+is unverified (cross-compiled only).
+
 `r` (and `start agent`) from the launcher console hands the terminal back to
 the agent, see [Manual control](#manual-control-stdin). Without a TTY
 (headless `-p`), it shuts down cleanly instead. Alternatives:
@@ -599,6 +606,19 @@ exact bound and the fast-fail rule does not apply then. It covers both
 `unreal` and `agent`; there is no extra config field. When a failed start is
 retried, the launcher log says so: `[name] restart N[/M] in D` (the same line
 as after an exit; `/M` only with an explicit `maxRestarts`).
+
+In window mode (the log goes to `unreagent.log`, see
+[How the agent runs](#how-the-agent-runs-three-modes)) the editor's automatic
+lines also go to stderr, prefixed `unreagent: `, with the same text as the log:
+`[ue] exited (<exit>)` and, when a restart is scheduled, `[ue] restart N[/M]
+in D`; `[ue] start held until the last run's crash reporter has finished`
+when that restart is held (see [No process zombies](#no-process-zombies-windows));
+a retried failed start as `[ue] start failed: <error>` plus the restart line;
+and, when the editor is given up on, `The editor failed and is not restarted.`
+with its notes. The log itself is unchanged, and other modes print nothing
+new. A Ctrl-C that ends the editor (or the agent) before the launcher has
+begun shutting down can print an exit or restart line just before the
+shutdown lines. Windows console behaviour is unverified (cross-compiled only).
 
 ### Exit codes (CI / headless)
 
@@ -1037,6 +1057,9 @@ says `crash reporter still running — the job stays open …`, and, if the
 reporter does not finish in time, `WARN crash reporter still running after 30s
 — ended with the job; the crash report may lack the call stack`. This is
 cross-compiled only and has not been run on Windows yet.
+In window mode the `[ue] start held until the last run's crash reporter has
+finished` line is also shown on the console (stderr, prefixed `unreagent: `),
+after the `[ue] restart N in D` line that precedes it.
 
 ### Crashes & recovery (unattended)
 
@@ -1887,6 +1910,13 @@ subprocess it won't start. Hence three ways:
    An interactive agent is not subject to the permission policy: with
    `permissions.enabled` the launcher logs a `WARN` at startup, see
    [Permission layer](#permission-layer).
+   The console also carries the launcher's automatic lines on stderr,
+   prefixed `unreagent: `, as the log has them: the startup `WARN`s about
+   `unreal.editor` and about the agent command not in `PATH`, the editor's
+   exits, restarts and give-up, and one line per automatic restart of the
+   agent (see [Restart policy and the fast-fail
+   give-up](#restart-policy-and-the-fast-fail-give-up)). Windows console
+   behaviour is unverified (cross-compiled only).
 2. **Headless / task** (`agent.args: ["-p", "<task>"]`) — one-shot task
    without a window, then the agent exits.
 3. **External** (`-no-agent`) — the launcher does not start an agent; you
@@ -1958,7 +1988,10 @@ answers on the console: `<name> is running (pid N)`, `<name> restarted (pid N)`
 or `<name> stopped`. For a start, stop or restart it carried out, the log has
 the supervisor's own line; a `start` of a service that is already running only
 answers on the console. The `agent.onExit: leave` and `shutdown` lines show
-on the console as well as in the log. (Window-mode console lines are
+on the console as well as in the log; on the console the line starts with how
+the agent ended, for example `Agent crashed. agent.onExit=leave — editor/MCP
+keep running. Ctrl-C stops the launcher.`, while the log keeps its separate
+lines. (Window-mode console lines are
 unverified on Windows.)
 
 ## Manual MCP test

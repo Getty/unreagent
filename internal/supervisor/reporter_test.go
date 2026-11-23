@@ -429,3 +429,49 @@ func TestStartDuringTheWaitForTheCrashReporterIsHeld(t *testing.T) {
 		})
 	}
 }
+
+// k188: a start held for the last run's crash reporter is reported to
+// OnStartHeld where the log says so (HeldLine), once per hold: a start that
+// takes the held one's place while it waits is not held a second time. The
+// restart policy's start comes as Automatic. HeldLine is the log's line, so
+// the launcher's console can show the same.
+func TestOnStartHeldReportsEachHold(t *testing.T) {
+	var log lineLog
+	p := &reporterProbe{}
+	sup := reporterSup(log.log, p)
+	spec, _ := runsSpec(t, "fs", time.Minute) // run 1 fails at once, run 2 keeps running
+	spec.MaxRestarts = 1
+	spec.ReporterGrace = time.Minute
+	held := make(chan Start, 4)
+	spec.OnStartHeld = func(st Start) { held <- st }
+	startService(t, sup, spec)
+
+	var st Start
+	select {
+	case st = <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the restart was never held for the crash reporter; log:\n%s", log.String())
+	}
+	if !st.Automatic {
+		t.Fatalf("the held restart reported as %+v, want Automatic", st)
+	}
+	line := HeldLine("svc")
+	if got := strings.Count(log.String(), line); got != 1 {
+		t.Fatalf("the log has %q %d times at the hold, want once:\n%s", line, got, log.String())
+	}
+	// A start asked for while the restart is held takes its place.
+	if _, err := sup.StartService("svc"); err != nil {
+		t.Fatalf("StartService: %v", err)
+	}
+	p.released.Store(true)
+	waitFor(t, 10*time.Second, "the start once the crash reporter ended", func() bool {
+		s := sup.Status()
+		return len(s) == 1 && s[0].Running
+	})
+	if n := len(held); n != 0 {
+		t.Fatalf("OnStartHeld fired %d more times for the start that took the held one's place, want once per hold", n)
+	}
+	if got := strings.Count(log.String(), line); got != 1 {
+		t.Fatalf("the log has %q %d times, want once per hold:\n%s", line, got, log.String())
+	}
+}

@@ -184,10 +184,13 @@ func run() error {
 		alert = os.Stderr
 	}
 
-	warnIfMissing(logger, "unreal.editor", cfg.Unreal.Editor)
+	// In window mode these come after the switch to unreagent.log, so the
+	// console gets them as well (k192).
+	startupWarn := alertWarnings(logger, alert, logPath)
+	warnIfMissing(startupWarn, "unreal.editor", cfg.Unreal.Editor)
 	if cfg.Agent.Enabled {
 		if _, lookErr := exec.LookPath(cfg.Agent.Command); lookErr != nil {
-			logger("WARN agent command not in PATH: " + cfg.Agent.Command + " (set the full path in unreagent.local.yaml)")
+			startupWarn("WARN agent command not in PATH: " + cfg.Agent.Command + " (set the full path in unreagent.local.yaml)")
 		}
 	}
 	// config.Load rejects an unresolved files.root only when files.enabled is
@@ -260,6 +263,17 @@ func run() error {
 				onEditorExit(e)
 			}
 		},
+		// In window mode the console shows the editor's automatic lines as
+		// the log has them: its exits and the restarts that follow (k188),
+		// a retried failed start (k192), and a restart held for the crash
+		// reporter, which the restart line would otherwise misstate.
+		OnRunEnd: func(e supervisor.RunEnd) {
+			alertLines(alert, runEndLines("ue", e)...)
+		},
+		OnStartRetry: func(r supervisor.Retry) {
+			alertLines(alert, startRetryLines("ue", r)...)
+		},
+		OnStartHeld: alertHeldRestart(alert, "ue"),
 	}); err != nil {
 		return err
 	}
@@ -360,8 +374,13 @@ func run() error {
 			// The supervisor's lines name the retry in the log; in window
 			// mode the console gets one line per retry as well (k152).
 			OnStartRetry: func(r supervisor.Retry) {
-				if alert != nil {
-					fmt.Fprintln(alert, "unreagent: "+agentRetryLine(r))
+				alertLines(alert, agentRetryLine(r))
+			},
+			// So does each restart after an exit (k188); the run that is not
+			// restarted is the exit prompt's or the onExit line's to name.
+			OnRunEnd: func(e supervisor.RunEnd) {
+				if e.Restart > 0 {
+					alertLines(alert, agentRestartLine(e))
 				}
 			},
 		}); err != nil {
@@ -444,7 +463,8 @@ func run() error {
 	}
 
 	con := newConsole(os.Stdin, os.Stdout, logOut)
-	onEditorExit = makeEditorExitHandler(sess, logger, cfg.Agent.Enabled, &mcpServing, &giveUp, cfg.Unreal, ueProjectDir,
+	// Its line, the editor's give-up, goes to the console as well (k192).
+	onEditorExit = makeEditorExitHandler(sess, alertAll(logger, alert), cfg.Agent.Enabled, &mcpServing, &giveUp, cfg.Unreal, ueProjectDir,
 		func(ends bool) string {
 			return giveUpModulesPointer(cfg.Unreal.Project, cfg.Unreal.Editor, compile, routes, ends)
 		})

@@ -372,12 +372,17 @@ func makeAgentExitHandler(ctx context.Context, sess *session, sup *supervisor.Su
 		}
 
 		// The onExit lines go to the console too (k151): in window mode the
-		// agent has handed it back.
+		// agent has handed it back. There they are led by how the agent ended,
+		// which the log has in the line above (k188).
+		onExitLine := func(line string) {
+			logger(line)
+			con.show(withEnded(agentEnded(sup, success), line))
+		}
 		switch cfg.Agent.OnExit {
 		case config.OnExitLeave:
-			con.reply(logger, "agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher.")
+			onExitLine("agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher.")
 		case config.OnExitShutdown:
-			con.reply(logger, "agent.onExit=shutdown — stopping everything.")
+			onExitLine("agent.onExit=shutdown — stopping everything.")
 			stop()
 		default: // ask
 			if !interactive {
@@ -435,11 +440,97 @@ func agentEnded(sup *supervisor.Supervisor, success bool) string {
 // policy gives up on: one per retry, and none for that last one, which the
 // exit prompt names instead.
 func agentRetryLine(r supervisor.Retry) string {
-	limit := ""
-	if r.MaxRestarts > 0 {
-		limit = fmt.Sprintf("/%d", r.MaxRestarts)
+	return fmt.Sprintf("Agent did not start: %s — retry %d%s in %s", r.Err, r.Restart, restartLimit(r.MaxRestarts), r.Delay)
+}
+
+// restartLimit is "/max" for a bounded restart count, "" for none, as the
+// supervisor's restart lines have it.
+func restartLimit(maxRestarts int) string {
+	if maxRestarts > 0 {
+		return fmt.Sprintf("/%d", maxRestarts)
 	}
-	return fmt.Sprintf("Agent did not start: %s — retry %d%s in %s", r.Err, r.Restart, limit, r.Delay)
+	return ""
+}
+
+// restartIn is the supervisor's "restart N[/M] in D" for a restart it armed.
+func restartIn(restart, maxRestarts int, delay time.Duration) string {
+	return fmt.Sprintf("restart %d%s in %s", restart, restartLimit(maxRestarts), delay)
+}
+
+// agentRestartLine is the console's line for an agent run that ended and
+// that the restart policy restarts (k188), worded as agentRetryLine: one per
+// restart, and none for a run that is not restarted, which the exit prompt
+// or the onExit line names instead. Only for e.Restart > 0.
+func agentRestartLine(e supervisor.RunEnd) string {
+	return fmt.Sprintf("Agent exited (%s) — %s", e.Exit, restartIn(e.Restart, e.MaxRestarts, e.Delay))
+}
+
+// runEndLines are the supervisor's log lines for a run of service name that
+// ended (k188): "[name] exited (…)", and "[name] restart N[/M] in D" when a
+// restart follows. In window mode the console shows the editor's as the log
+// has them.
+func runEndLines(name string, e supervisor.RunEnd) []string {
+	lines := []string{fmt.Sprintf("[%s] exited (%s)", name, e.Exit)}
+	if e.Restart > 0 {
+		lines = append(lines, fmt.Sprintf("[%s] %s", name, restartIn(e.Restart, e.MaxRestarts, e.Delay)))
+	}
+	return lines
+}
+
+// startRetryLines are the supervisor's log lines for a failed start of
+// service name that the policy retries (k192): "[name] start failed: …" and
+// its "[name] restart N[/M] in D".
+func startRetryLines(name string, r supervisor.Retry) []string {
+	return []string{
+		fmt.Sprintf("[%s] start failed: %s", name, r.Err),
+		fmt.Sprintf("[%s] %s", name, restartIn(r.Restart, r.MaxRestarts, r.Delay)),
+	}
+}
+
+// alertLines writes lines to alert, each with "unreagent: " in front, the way
+// run() mirrors a line the user must see in window mode (k152); nothing when
+// alert is nil, where the log is the console already.
+func alertLines(alert io.Writer, lines ...string) {
+	if alert == nil {
+		return
+	}
+	for _, line := range lines {
+		fmt.Fprintln(alert, "unreagent: "+line)
+	}
+}
+
+// alertHeldRestart is service name's OnStartHeld in window mode: it shows on
+// alert the log's line (supervisor.HeldLine) for a restart the policy armed
+// and that now waits for the last run's crash reporter, so the console's
+// "restart N in D" before it is not left standing (k188). A start somebody
+// asked for is answered where it was asked (startHeld), so it gets no line.
+func alertHeldRestart(alert io.Writer, name string) func(supervisor.Start) {
+	return func(st supervisor.Start) {
+		if st.Automatic {
+			alertLines(alert, supervisor.HeldLine(name))
+		}
+	}
+}
+
+// alertAll returns a logger that writes every line to logger and to alert
+// (alertLines); logger itself when alert is nil.
+func alertAll(logger func(string), alert io.Writer) func(string) {
+	if alert == nil {
+		return logger
+	}
+	return func(line string) {
+		logger(line)
+		alertLines(alert, line)
+	}
+}
+
+// withEnded joins ended, how the agent ended (agentEnded), and line into one
+// console line, with one full stop between them.
+func withEnded(ended, line string) string {
+	if !strings.HasSuffix(ended, ".") {
+		ended += "."
+	}
+	return ended + " " + line
 }
 
 // promptAgentExit shows the selection menu under ended (agentEnded) on the

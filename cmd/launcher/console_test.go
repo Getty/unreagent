@@ -346,24 +346,67 @@ func TestConsoleShowsTheOutcomeInWindowMode(t *testing.T) {
 			t.Fatalf("the supervisor's line is missing from the log, which is the console here:\n%s", logs)
 		}
 	})
-	for _, tc := range []struct{ onExit, line string }{
-		{config.OnExitLeave, "agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher."},
-		{config.OnExitShutdown, "agent.onExit=shutdown — stopping everything."},
+	// k188: the onExit line on the console did not say how the agent ended;
+	// the log's line for that stayed in the log. On the console the onExit
+	// line is now led by the exit prompt's words for it (agentEnded); the log
+	// keeps both lines as they were.
+	missing := filepath.Join(t.TempDir(), "no-such-agent")
+	for _, tc := range []struct {
+		name, onExit, command string
+		ended, logged, line   string
+	}{
+		{"leave after a crash", config.OnExitLeave, "false",
+			"Agent crashed.", "Agent failed and will not be restarted automatically.",
+			"agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher."},
+		{"shutdown after exit 0", config.OnExitShutdown, "true",
+			"Agent exited.", "Agent exited (exit 0).",
+			"agent.onExit=shutdown — stopping everything."},
+		{"leave after a failed start", config.OnExitLeave, missing,
+			"Agent did not start: ", "Agent failed and will not be restarted automatically.",
+			"agent.onExit=leave — editor/MCP keep running. Ctrl-C stops the launcher."},
 	} {
-		t.Run("onExit "+tc.onExit, func(t *testing.T) {
-			if _, err := exec.LookPath("false"); err != nil {
-				t.Skip("false not on PATH")
-			}
-			fc := newFakeConsole(t)
-			sess, _, logs := agentSessionWith(t, fc.con, tc.onExit, "false")
-			fc.waitOutput(t, tc.line+"\n", 1)
-			if !strings.Contains(logs.String(), tc.line) {
-				t.Fatalf("the launcher log lost %q:\n%s", tc.line, logs)
-			}
-			if tc.onExit == config.OnExitShutdown {
-				waitEnded(t, sess, fc)
-			}
-		})
+		for _, separate := range []bool{true, false} {
+			t.Run(fmt.Sprintf("onExit %s, log separate %v", tc.name, separate), func(t *testing.T) {
+				if tc.command != missing {
+					if _, err := exec.LookPath(tc.command); err != nil {
+						t.Skipf("%s not on PATH", tc.command)
+					}
+				}
+				fc := newFakeConsole(t)
+				fc.con.logSeparate = separate
+				sess, sup, logs := agentSessionWith(t, fc.con, tc.onExit, tc.command)
+				deadline := time.Now().Add(10 * time.Second)
+				for !strings.Contains(logs.String(), tc.line) {
+					if time.Now().After(deadline) {
+						t.Fatalf("the launcher log has no %q:\n%s", tc.line, logs)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if tc.onExit == config.OnExitShutdown {
+					waitEnded(t, sess, fc)
+				}
+				// The log keeps its two lines, each on its own.
+				lines := strings.Split(logs.String(), "\n")
+				for _, want := range []string{tc.logged, tc.line} {
+					if !slices.Contains(lines, want) {
+						t.Fatalf("the launcher log lost its line %q:\n%s", want, logs)
+					}
+				}
+				if !separate {
+					if got := fc.out.String(); got != "" {
+						t.Fatalf("with the log on the console, the onExit line was written beside it:\n%s", got)
+					}
+					return
+				}
+				ended := tc.ended
+				if tc.command == missing {
+					ended += statusOf(t, sup, "agent").LastError + "."
+				}
+				if got, want := fc.out.String(), ended+" "+tc.line+"\n"; got != want {
+					t.Fatalf("console = %q, want %q: one line, how the agent ended, then the onExit line", got, want)
+				}
+			})
+		}
 	}
 }
 

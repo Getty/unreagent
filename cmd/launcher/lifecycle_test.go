@@ -1252,6 +1252,225 @@ func TestRunNamesEachRetriedAgentStartOnTheConsole(t *testing.T) {
 	}
 }
 
+// consoleAlerts returns the lines run() wrote to the console's alert path
+// (stderr, "unreagent: " in front), without that prefix, that start with one
+// of prefixes.
+func consoleAlerts(stderr string, prefixes ...string) []string {
+	var out []string
+	for _, line := range strings.Split(stderr, "\n") {
+		rest, ok := strings.CutPrefix(line, "unreagent: ")
+		if ok && slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(rest, p) }) {
+			out = append(out, rest)
+		}
+	}
+	return out
+}
+
+// logLinesWith returns the lines of a launcher log, without their time, that
+// start with one of prefixes.
+func logLinesWith(logged string, prefixes ...string) []string {
+	var out []string
+	for _, line := range strings.Split(logged, "\n") {
+		line = stampedLine.ReplaceAllString(line, "")
+		if slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(line, p) }) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// k188: in window mode an agent that exited and was restarted by its policy
+// left no launcher line on the console — the restart sat in unreagent.log, and
+// the user saw the agent's screen go and come back. Each automatic restart
+// after an exit now leaves one console line, naming the exit and the restart;
+// the run that is not restarted leaves none (the exit prompt names it). The
+// log keeps its lines. Without window mode the log is the console, and no
+// line is written beside it.
+func TestRunNamesEachAgentRestartOnTheConsole(t *testing.T) {
+	for _, window := range []bool{true, false} {
+		t.Run(fmt.Sprintf("window %v", window), func(t *testing.T) {
+			dir := t.TempDir()
+			l := startLauncherIn(t, dir, launcherYAML("sleep", fmt.Sprintf(`  enabled: true
+  command: "false"
+  window: %v
+  claudeIntegration: false
+  startDelaySeconds: 1
+  restart: on-failure
+  restartDelaySeconds: 1
+  maxRestarts: 2
+`, window)))
+			// Window mode: stdin is empty, the exit prompt reads EOF and stops
+			// everything. Headless: the agent's end ends the session.
+			if code := l.exitCode(t); code != 1 {
+				t.Fatalf("exit code %d, want 1 for an agent that failed:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			logged := l.stdout.String()
+			if window {
+				logged = logContent(t, filepath.Join(dir, "unreagent.log"))
+			}
+			if got := logLinesWith(logged, "[agent] restart "); len(got) != 2 {
+				t.Fatalf("the log has %d restart lines, want 2 (maxRestarts):\n%s", len(got), logged)
+			}
+			got := consoleAlerts(l.stderr.String(), "Agent exited")
+			if !window {
+				if len(got) != 0 {
+					t.Fatalf("with the log on the console, restart lines were written beside it:\n%s", l.stderr.String())
+				}
+				return
+			}
+			want := []string{
+				"Agent exited (exit 1) — restart 1/2 in 1s",
+				"Agent exited (exit 1) — restart 2/2 in 1s",
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("console restart lines = %q, want %q — one per restart, none for the last run:\n%s", got, want, l.stderr.String())
+			}
+		})
+	}
+}
+
+// k188, k192: in window mode the editor's automatic lines — its exits, the
+// restarts that follow, a retried failed start, the give-up line — and the
+// startup WARN about unreal.editor reached unreagent.log only, while the user
+// watched the agent's window. They go to the console as well (stderr,
+// "unreagent: " in front), each as the log has it, word for word: the test
+// compares the two, so a change of wording in either breaks it. Not on the
+// console: the last failed start before the give-up (no hook carries it; the
+// give-up line follows it), and the supervisor's own give-up lines (the
+// give-up line names that end). Without window mode the log is the console,
+// and nothing is written beside it.
+func TestRunShowsTheEditorsAutomaticLinesOnTheConsole(t *testing.T) {
+	const giveUp = "The editor failed and is not restarted."
+	for _, tc := range []struct {
+		name string
+		// editor returns the editor's command, made in dir.
+		editor func(t *testing.T, dir string) string
+		// mirrored are the prefixes of the editor's log lines the console
+		// shows; dropLast drops the last of them, which it does not.
+		mirrored []string
+		dropLast bool
+		warn     string // a startup WARN the console shows, "" for none
+	}{
+		{
+			name:     "exits and restarts",
+			editor:   func(*testing.T, string) string { return "false" },
+			mirrored: []string{"[ue] exited (", "[ue] restart "},
+		},
+		{
+			name: "failed starts",
+			editor: func(t *testing.T, dir string) string {
+				// Not executable: Start fails, and the policy retries it.
+				p := filepath.Join(dir, "editor")
+				if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			mirrored: []string{"[ue] start failed: ", "[ue] restart "},
+			dropLast: true,
+			warn:     "WARN unreal.editor: path is not executable: ",
+		},
+	} {
+		for _, window := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, window %v", tc.name, window), func(t *testing.T) {
+				dir := t.TempDir()
+				l := startLauncherIn(t, dir, fmt.Sprintf(`unreal:
+  editor: "%s"
+  unattended: false
+  restart: on-failure
+  restartDelaySeconds: 1
+  maxRestarts: 1
+mcp:
+  enabled: false
+permissions:
+  enabled: false
+runtimes:
+  python: { enabled: false }
+  node: { enabled: false }
+agent:
+  enabled: true
+  command: sleep
+  args: ["20"]
+  window: %v
+  claudeIntegration: false
+`, tc.editor(t, dir), window))
+				logPath := filepath.Join(dir, "unreagent.log")
+				if window {
+					waitFileLine(t, logPath, giveUp)
+				} else {
+					l.waitLine(t, giveUp)
+				}
+				if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+					t.Fatalf("SIGTERM: %v", err)
+				}
+				if code := l.exitCode(t); code != 0 {
+					t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+				}
+				stderr := l.stderr.String()
+				prefixes := append([]string{giveUp, "WARN unreal.editor"}, tc.mirrored...)
+				if !window {
+					if got := consoleAlerts(stderr, prefixes...); len(got) != 0 {
+						t.Fatalf("with the log on the console, %q were written beside it:\n%s", got, stderr)
+					}
+					return
+				}
+				logged := logContent(t, logPath)
+				want := logLinesWith(logged, tc.mirrored...)
+				if len(want) < 3 {
+					t.Fatalf("the premise is a run, a restart and a second run in the log; it has %q:\n%s", want, logged)
+				}
+				if tc.dropLast {
+					want = want[:len(want)-1]
+				}
+				if got := consoleAlerts(stderr, tc.mirrored...); !slices.Equal(got, want) {
+					t.Fatalf("console lines = %q, want the log's %q:\n%s", got, want, stderr)
+				}
+				for _, p := range []string{giveUp, tc.warn} {
+					if p == "" {
+						continue
+					}
+					got, want := consoleAlerts(stderr, p), logLinesWith(logged, p)
+					if len(want) != 1 || !slices.Equal(got, want) {
+						t.Fatalf("console has %q, want the log's one line %q:\n%s", got, want, stderr)
+					}
+				}
+			})
+		}
+	}
+}
+
+// k192: in window mode the startup WARN that agent.command is not on PATH
+// went to unreagent.log only, while the user watched the window for the
+// agent that never came. It goes to the console as well, as the log has it;
+// without window mode the log is the console.
+func TestRunShowsTheAgentPathWarningOnTheConsole(t *testing.T) {
+	for _, window := range []bool{true, false} {
+		t.Run(fmt.Sprintf("window %v", window), func(t *testing.T) {
+			dir := t.TempDir()
+			l := startLauncherIn(t, dir, launcherYAML("sleep", fmt.Sprintf(`  enabled: true
+  command: no-such-agent-k192
+  window: %v
+  claudeIntegration: false
+`, window)))
+			if code := l.exitCode(t); code != 1 {
+				t.Fatalf("exit code %d, want 1 for an agent that never started:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+			}
+			const warn = "WARN agent command not in PATH: no-such-agent-k192"
+			got := consoleAlerts(l.stderr.String(), warn)
+			if !window {
+				if len(got) != 0 {
+					t.Fatalf("with the log on the console, the WARN was written beside it:\n%s", l.stderr.String())
+				}
+				return
+			}
+			want := logLinesWith(logContent(t, filepath.Join(dir, "unreagent.log")), warn)
+			if len(want) != 1 || !slices.Equal(got, want) {
+				t.Fatalf("console has %q, want the log's one line %q", got, want)
+			}
+		})
+	}
+}
+
 // --- the exit prompt and the launcher console, on a fake console ---
 
 // fakeConsole is a console the test types into line by line. io.Pipe hands a
@@ -1619,4 +1838,28 @@ func TestEditorGiveUpRepeatsTheModulePointer(t *testing.T) {
 		}
 		os.Remove(filepath.Join(dir, "Binaries", "Win64", "UnrealEditor-Game.dll"))
 	}
+}
+
+// k188: after k154 the editor's restart can be held for the last run's crash
+// reporter, and the log then follows "[ue] restart N in D" with the hold. The
+// console, which shows that restart line in window mode, shows the hold as
+// well, word for word the log's (supervisor.HeldLine). This tests only the
+// helper, alertHeldRestart: the hold needs a job to look into and cannot run
+// in a Linux test, so the wiring (OnStartHeld: alertHeldRestart(alert, "ue")
+// in main.go) is not covered by any test. A start somebody
+// asked for gets no line: it is answered where it was asked. Without window
+// mode (alert nil) nothing is written.
+func TestHeldRestartIsShownAsTheLogHasIt(t *testing.T) {
+	var out bytes.Buffer
+	alertHeldRestart(&out, "ue")(supervisor.Start{Automatic: true})
+	if got, want := out.String(), "unreagent: "+supervisor.HeldLine("ue")+"\n"; got != want {
+		t.Fatalf("console = %q, want %q", got, want)
+	}
+	out.Reset()
+	alertHeldRestart(&out, "ue")(supervisor.Start{ReplacesRestart: true})
+	alertHeldRestart(&out, "ue")(supervisor.Start{})
+	if got := out.String(); got != "" {
+		t.Fatalf("a start somebody asked for was shown as held: %q", got)
+	}
+	alertHeldRestart(nil, "ue")(supervisor.Start{Automatic: true}) // must not panic
 }
