@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T23:03:47Z
+id: 201
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- decision
+- security
+title: 'Decide: should an allow rule for a wrapper command cover the wrapped command?'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found while writing the unreagent-permissions skill (k199), confirmed by a probe test. Bash(sudo *) allows sudo rm -rf /. isWrapper is applied on the deny side only (deny sees through sudo/env/timeout), whereas a nested shell script does need its own allow cover. Bash(timeout *) or Bash(env *) are plausible rules a user writes without meaning to allow everything behind them.
+
+Options:
+1. Keep the behaviour and document it in the README Permission layer section: an allow rule for a wrapper allows whatever it wraps.
+2. Require allow cover for the wrapped command as well, as for nested shells. Stricter, and it changes what existing allow rules grant.
+
+Recommendation (main agent): 2 matches the fail-closed stance of the layer, but it is a behaviour change for existing configs, so it is the maintainer call.
+
+Decision 2026-11-21 (maintainer, quoted): 'ok dann die strengere variante'. Option 2: an allow rule for a wrapper command (sudo, env, timeout and the rest of isWrapper) must not grant the wrapped command; the wrapped command needs its own allow cover, as a nested shell script does. Behaviour change for existing configs: needs a Changes entry and a README note. Owner: unreagent-worker, failing table rows first (skill unreagent-permissions). Same file as k127 (in review, rewritten splitter not on main) and k209: runs after k127 lands.
