@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-11-23T03:02:28Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-23T03:02:28Z
+created: 2026-11-21T01:54:31Z
+id: 105
+priority: medium
+started: 2026-11-23T02:53:31Z
+status: done
+tags:
+- docs
+- release
+- decision
+title: Add a LICENSE file for unreagent itself
+updated: 2026-11-23T03:02:44Z
+---
+
+The repository has no LICENSE file at its root and README.md names no license, so the project's own license is neither in the repo nor in the release archives (found while working k92/k103). NOTICE only carries the third-party VibeUE MIT attribution (k19). Maintainer decision: which license. Then add LICENSE, mention it in README, and add it to the release archives in .github/workflows/release.yml next to NOTICE (k103).
+
+Maintainer decision 2026-11-23: MIT. Main agent's choice, not the maintainer's word: copyright holder taken from cmd/launcher/versioninfo.json (conflict.industries digital GmbH, 2026) — to be confirmed.
+
+Added LICENSE (standard MIT text, holder conflict.industries digital GmbH 2026: main agent's choice from versioninfo.json, maintainer to confirm) and README.md License section at the end (lines 1928-1932). release.yml step (LICENSE into the archives next to NOTICE) is still open for the worker.
+
+LICENSE + README License section added; release.yml archive step still open
+
+release.yml: LICENSE added to the cp line (comment extended: project's own license) and to the zip and tar.gz lists, next to NOTICE. Unverified: the workflow cannot run locally. Other places listing archive contents: none in Makefile, ci.yml or tests; README.md:1932 only links NOTICE (doc-writer's path, not changed); Changes:87 says archives include NOTICE (release-manager's entry to extend).
+
+Review (unreagent-reviewer): PASS. Files: LICENSE, README.md (License section), .github/workflows/release.yml, OWNERS. LICENSE: standard MIT text, unmodified (body is word-for-word the same as the MIT text in NOTICE; ASCII, LF). Copyright line '2026 conflict.industries digital GmbH' matches cmd/launcher/versioninfo.json CompanyName and LegalCopyright. The holder is still the main agent's choice and waits for the maintainer to confirm it; the commit must not call it the maintainer's decision. release.yml:62-68: LICENSE is in the cp line and in both the zip and tar.gz lists, consistent with each other. The extracted Package script passes bash -n and the file parses as YAML. The workflow itself was not run (it cannot run locally): unverified. Archive contents described elsewhere: Changes:87 sits under {{$NEXT}} (unreleased, above 0.0.9 at Changes:564), so it is not a past entry. The release-manager should extend it to LICENSE and NOTICE. No other doc lists the archive contents (README.md:1932 is the new section). OWNERS row LICENSE->unreagent-doc-writer is fine. Full check on the combined tree: gofmt, vet both GOOS, go test -count=1 ./..., make windows: green.
+
+Committed as 67a8bf8
