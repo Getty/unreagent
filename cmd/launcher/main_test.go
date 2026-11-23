@@ -554,7 +554,7 @@ func TestEditorGiveUpAfterMCPStoppedServing(t *testing.T) {
 	var serving atomic.Bool
 	serving.Store(true)
 	var log syncLog
-	onEditorExit := makeEditorExitHandler(sess, log.log, false, &serving, new(editorGiveUp), config.UnrealConfig{}, "")
+	onEditorExit := makeEditorExitHandler(sess, log.log, false, &serving, new(editorGiveUp), config.UnrealConfig{}, "", nil)
 
 	serveMCP(&http.Server{Handler: http.NotFoundHandler()}, brokenListener{}, &serving, log.log, nil)
 	if ctx.Err() != nil || sess.result() != nil {
@@ -1470,7 +1470,9 @@ agent:
 			addr := freeLoopbackAddr(t)
 			l := startLauncherIn(t, dir, withMCP(yaml, addr))
 			const warn = "WARN project modules look unbuilt: Demo — no Binaries/Win64/UnrealEditor-<Name>.dll"
-			const fix = "'c compile' in the launcher console"
+			// k247: with the agent in the window there is no launcher
+			// console, so the fix names only the agent route.
+			const fix = "Have the agent run ue_stop, run_command compile, then ue_start."
 			if tc.window {
 				waitFileLine(t, filepath.Join(dir, "unreagent.log"), warn)
 				l.waitStderr(t, "unreagent: "+warn)
@@ -1489,7 +1491,9 @@ agent:
 			if n := strings.Count(stderr, warn); tc.window && n != 1 {
 				t.Errorf("stderr has the module WARN %d times, want once:\n%s", n, stderr)
 			} else if tc.window && !strings.Contains(stderr, fix) {
-				t.Errorf("the WARN on stderr does not name the compile command:\n%s", stderr)
+				t.Errorf("the WARN on stderr does not name the agent's compile route (no console in window mode):\n%s", stderr)
+			} else if tc.window && strings.Contains(stderr, "launcher console") {
+				t.Errorf("the WARN on stderr names a launcher console that window mode does not have:\n%s", stderr)
 			} else if !tc.window && strings.Contains(stderr, "WARN") {
 				t.Errorf("stderr repeats a warning that the log on stdout already shows:\n%s", stderr)
 			}
@@ -1505,5 +1509,89 @@ func TestStartLineSaysWhenThereIsNoConfigFile(t *testing.T) {
 	}
 	if got := startLine(config.Info{ConfigPath: "/p/unreagent.yaml"}); !strings.Contains(got, "Config: /p/unreagent.yaml") {
 		t.Errorf("loaded start line = %q", got)
+	}
+}
+
+// k247 through run(): the wiring of the editor's give-up pointer. An editor
+// stand-in under the engine editor's Windows name that exits at once, on a
+// project with an unbuilt module, never restarted. The give-up line must
+// repeat the compile pointer, with the routes of the running configuration:
+// the console and, only with mcp.enabled, the agent tools; and no route at all
+// when the give-up ends the session. A real Windows editor is untested.
+func TestRunGiveUpRepeatsTheCompilePointer(t *testing.T) {
+	const pointer = "The project's modules still look unbuilt: Demo"
+	for _, tc := range []struct {
+		name  string
+		mcp   bool
+		agent bool
+		ends  bool
+		want  string
+		not   string
+	}{
+		{"MCP on, no agent: console and agent tools", true, false, false,
+			"Build them with 'c compile' in the launcher console (an agent: run_command compile), then 'start ue'.", "start the launcher again"},
+		{"MCP off, an agent: console only", false, true, false,
+			"Build them with 'c compile' in the launcher console, then 'start ue'.", "run_command"},
+		{"MCP off, no agent: the session ends", false, false, true,
+			"Build the project's editor target (Win64, Development) in your IDE, then start the launcher again.", "launcher console"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			editor := filepath.Join(dir, "UE", "Engine", "Binaries", "Win64", "UnrealEditor.exe")
+			if err := os.MkdirAll(filepath.Dir(editor), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(editor, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			project := filepath.Join(dir, "Demo.uproject")
+			mustWriteFile(t, project, `{"Modules": [{"Name": "Demo", "Type": "Runtime"}]}`)
+			yaml := `unreal:
+  editor: ` + editor + `
+  project: ` + project + `
+  unattended: false
+  killCrashReporter: false
+  restart: never
+mcp:
+  enabled: false
+permissions:
+  enabled: false
+runtimes:
+  python: { enabled: false }
+  node: { enabled: false }
+commands:
+  compile: { command: echo }
+agent:
+  enabled: ` + fmt.Sprint(tc.agent) + `
+  command: sleep
+  args: ["20"]
+  window: false
+  claudeIntegration: false
+  startDelaySeconds: 1
+`
+			if tc.mcp {
+				yaml = withMCP(yaml, freeLoopbackAddr(t))
+			}
+			l := startLauncherIn(t, dir, yaml)
+			l.waitLine(t, pointer)
+			if !tc.ends {
+				if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+					t.Fatalf("SIGTERM: %v", err)
+				}
+			}
+			code := l.exitCode(t)
+			if wantCode := map[bool]int{true: 1, false: 0}[tc.ends]; code != wantCode {
+				t.Fatalf("exit code %d, want %d:\n%s\nstderr: %s", code, wantCode, l.stdout, l.stderr.String())
+			}
+			var line string
+			for _, ln := range strings.Split(l.stdout.String(), "\n") {
+				if strings.Contains(ln, pointer) {
+					line = ln
+				}
+			}
+			if !strings.Contains(line, "which fits this failure. "+tc.want) || strings.Contains(line, tc.not) {
+				t.Errorf("give-up line %q, want it to contain %q and not %q", line, "which fits this failure. "+tc.want, tc.not)
+			}
+		})
 	}
 }

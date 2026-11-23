@@ -630,9 +630,11 @@ to retry with, and the launcher ends with exit 1.
 Every editor give-up, with or without an agent, ends its log line with where
 the crash dumps are when `<project>/Saved/Crashes` holds any, for example `The
 editor failed and is not restarted. Crash dumps are in
-<project>/Saved/Crashes.` When nothing was written there (an editor that never
-got going, say because a project module is unbuilt) the line has no dump
-pointer. With `unreal.cleanOnRestart` the
+<project>/Saved/Crashes.` Where the project's modules still look unbuilt the
+line also repeats the
+[unbuilt-module pointer](#crashes--recovery-unattended). When nothing was
+written there (an editor that never got going, say because a project module
+is unbuilt) the line has no dump pointer. With `unreal.cleanOnRestart` the
 line adds what empties them: a retry from the launcher keeps them, a new
 launcher run empties them.
 
@@ -1055,10 +1057,20 @@ Windows with 5.7.4 and 5.8.4:
   fresh clone of the reference project). The launcher warns once before the
   first editor start (once per launcher run, not per restart):
   `WARN project modules look unbuilt: <names> — no Binaries/Win64/UnrealEditor-<Name>.dll
-  for them next to the .uproject ...`, naming the fix: with the editor stopped
+  for them next to the .uproject ...`, naming the fix with only the routes
+  this run has. With a console and an agent: with the editor stopped
   (`stop ue`), `c compile` in the console (an agent: `ue_stop`, then
-  `run_command compile`), then `start ue`; where the launcher offers no
-  `compile` command it names the IDE build instead. It builds nothing itself.
+  `run_command compile`), then `start ue`. With the agent in the launcher's
+  window there is no console: "Have the agent run ue_stop, run_command
+  compile, then ue_start." With neither route, or where the launcher offers
+  no `compile` command, it names the IDE build of the editor target (Win64,
+  Development) and then a `start ue`, the agent's `ue_start` or a new
+  launcher start, whichever the configuration has. It builds
+  nothing itself. When the launcher gives up on the editor and the modules
+  still look unbuilt, the give-up line repeats the pointer (`The project's
+  modules still look unbuilt: ... which fits this failure.`) with the build
+  step, since the editor is already stopped; a give-up that ends the launcher
+  names the IDE build and a new launcher start.
   The check is a heuristic: a C++ module the `.uproject` declares without a
   `Binaries/Win64/UnrealEditor-<Name>.dll`. It stays quiet when `unreal.editor`
   is not the engine's `UnrealEditor.exe` / `UnrealEditor-Cmd.exe` under a

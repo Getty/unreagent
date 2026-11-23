@@ -221,7 +221,12 @@ func run() error {
 	// after every restart, until the launcher gives up on it (k229): name it
 	// and the compile command first. Nothing is built here.
 	_, compile := cfg.Commands["compile"]
-	checkProjectModules(cfg.Unreal.Project, cfg.Unreal.Editor, compile, alertWarnings(logger, alert, logPath))
+	// The routes the fix text may name: no launcher console with an
+	// interactive agent in the window, no agent tools without MCP (k247).
+	// Fixed at startup: after an interactive agent exits and the user keeps a
+	// console with 'k', a later give-up still names no console.
+	routes := editorRoutes{console: !agentInteractive, agent: cfg.MCP.Enabled}
+	checkProjectModules(cfg.Unreal.Project, cfg.Unreal.Editor, compile, routes, alertWarnings(logger, alert, logPath))
 	ueProjectDir := ""
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)
@@ -433,7 +438,10 @@ func run() error {
 	}
 
 	con := newConsole(os.Stdin, os.Stdout, logOut)
-	onEditorExit = makeEditorExitHandler(sess, logger, cfg.Agent.Enabled, &mcpServing, &giveUp, cfg.Unreal, ueProjectDir)
+	onEditorExit = makeEditorExitHandler(sess, logger, cfg.Agent.Enabled, &mcpServing, &giveUp, cfg.Unreal, ueProjectDir,
+		func(ends bool) string {
+			return giveUpModulesPointer(cfg.Unreal.Project, cfg.Unreal.Editor, compile, routes, ends)
+		})
 	if cfg.Agent.Enabled {
 		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, con)
 	}

@@ -40,7 +40,7 @@ func TestCheckProjectModules(t *testing.T) {
 	}
 	check := func(project, editor string, compile bool) []string {
 		var lines []string
-		checkProjectModules(project, editor, compile, func(line string) { lines = append(lines, line) })
+		checkProjectModules(project, editor, compile, editorRoutes{console: true, agent: true}, func(line string) { lines = append(lines, line) })
 		return lines
 	}
 	const two = `{"Modules": [{"Name": "Game"}, {"Name": "GameEditor", "Type": "Editor"}]}`
@@ -87,5 +87,44 @@ func TestCheckProjectModules(t *testing.T) {
 				t.Errorf("lines = %q, want none", lines)
 			}
 		})
+	}
+}
+
+// k247: the fix text names only the routes the running configuration has —
+// the launcher console unless an interactive agent holds the window, the
+// agent tools only with mcp.enabled. At the give-up the editor is stopped
+// already, so the fix starts at the build step.
+func TestModuleFixNamesOnlyExistingRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		compile  bool
+		r        editorRoutes
+		atGiveUp bool
+		want     []string
+		not      []string
+	}{
+		{true, editorRoutes{true, true}, false, []string{"'c compile' in the launcher console", "run_command compile", "'stop ue'", "ue_stop", "'start ue'"}, nil},
+		{true, editorRoutes{true, true}, true, []string{"'c compile' in the launcher console", "run_command compile", "'start ue'"}, []string{"'stop ue'", "ue_stop"}},
+		{true, editorRoutes{true, false}, false, []string{"'c compile' in the launcher console", "'stop ue'", "'start ue'"}, []string{"run_command", "ue_stop", "an agent"}},
+		{true, editorRoutes{true, false}, true, []string{"'c compile' in the launcher console", "'start ue'"}, []string{"run_command", "stop", "an agent"}},
+		{true, editorRoutes{false, true}, false, []string{"Have the agent run ue_stop, run_command compile, then ue_start."}, []string{"console", "'c compile'", "'start ue'"}},
+		{true, editorRoutes{false, true}, true, []string{"Have the agent run run_command compile, then ue_start."}, []string{"console", "ue_stop", "'start ue'"}},
+		{true, editorRoutes{false, false}, false, []string{"IDE", "start the launcher again"}, []string{"'c compile'", "run_command", "'start ue'", "ue_start"}},
+		{true, editorRoutes{false, false}, true, []string{"IDE", "start the launcher again"}, []string{"'c compile'", "run_command", "'start ue'", "ue_start"}},
+		{false, editorRoutes{true, true}, false, []string{"IDE", "'start ue' in the launcher console", "ue_start", "no compile command"}, nil},
+		{false, editorRoutes{true, false}, false, []string{"IDE", "'start ue' in the launcher console"}, []string{"ue_start", "an agent"}},
+		{false, editorRoutes{false, true}, false, []string{"IDE", "have the agent run ue_start"}, []string{"console", "'start ue'"}},
+		{false, editorRoutes{false, false}, false, []string{"IDE", "start the launcher again"}, []string{"console", "ue_start", "'start ue'"}},
+	} {
+		got := moduleFix(tc.compile, tc.r, tc.atGiveUp)
+		for _, w := range tc.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("moduleFix(%v, %+v, %v) = %q, want it to mention %q", tc.compile, tc.r, tc.atGiveUp, got, w)
+			}
+		}
+		for _, n := range tc.not {
+			if strings.Contains(got, n) {
+				t.Errorf("moduleFix(%v, %+v, %v) = %q, must not mention %q", tc.compile, tc.r, tc.atGiveUp, got, n)
+			}
+		}
 	}
 }

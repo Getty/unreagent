@@ -582,6 +582,14 @@ Revision history for unreagent
     demo README no longer list "logs" as a console command, and the quick
     start mentions Claude Code's trust question and a possible login. Not
     verified on Windows.
+  - When the launcher gives up on the editor and the project's modules still
+    look unbuilt, the give-up lines repeat the pointer to the compile step; a
+    give-up that ends the launcher says to build in the IDE and start the
+    launcher again. The restart policy is unchanged. Not verified on Windows.
+  - The unbuilt-modules fix text names only the routes your setup has: the
+    launcher console and the agent tools. With the agent in the launcher's
+    window it tells you to have the agent run the tools.
+
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
     Launcher versions and source-build ids resolve, every registered Launcher

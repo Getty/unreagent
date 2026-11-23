@@ -298,7 +298,7 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 		var log syncLog
 		var serving atomic.Bool
 		serving.Store(c.mcpServing)
-		makeEditorExitHandler(sess, log.log, false, &serving, new(editorGiveUp), config.UnrealConfig{}, "")(c.exit)
+		makeEditorExitHandler(sess, log.log, false, &serving, new(editorGiveUp), config.UnrealConfig{}, "", nil)(c.exit)
 		if ended := ctx.Err() != nil; ended != c.wantErr {
 			t.Fatalf("%+v, mcp %v: session ended = %v, want %v", c.exit, c.mcpServing, ended, c.wantErr)
 		}
@@ -356,7 +356,7 @@ func TestEditorGiveUpLineSaysWhereTheDumpsAre(t *testing.T) {
 		var log syncLog
 		var serving atomic.Bool
 		serving.Store(c.mcpServing)
-		makeEditorExitHandler(newSession(ctx, cancel), log.log, c.agent, &serving, new(editorGiveUp), config.UnrealConfig{CleanOnRestart: c.clean}, c.projectDir)(c.exit)
+		makeEditorExitHandler(newSession(ctx, cancel), log.log, c.agent, &serving, new(editorGiveUp), config.UnrealConfig{CleanOnRestart: c.clean}, c.projectDir, nil)(c.exit)
 		ended := ctx.Err() != nil
 		cancel()
 		got := strings.TrimSpace(log.String())
@@ -1594,5 +1594,70 @@ func TestEditorArgsPutsTheProjectFirst(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != "-stdout" {
 		t.Errorf("unreal.args changed: %q", args)
+	}
+}
+
+// k247: where the project's modules still look unbuilt when the editor is not
+// restarted, the give-up line repeats the compile pointer — asked again at the
+// give-up, so built modules (or an editor the check does not apply to) leave
+// the line as it was. Text only: the session ends exactly as without it.
+func TestEditorGiveUpRepeatsTheModulePointer(t *testing.T) {
+	const editor = "C:/UE_5.8/Engine/Binaries/Win64/UnrealEditor.exe"
+	dir := t.TempDir()
+	project := filepath.Join(dir, "Game.uproject")
+	mustWriteFile(t, project, `{"Modules": [{"Name": "Game"}]}`)
+	routes := editorRoutes{console: true}
+	pointer := func(ends bool) string { return giveUpModulesPointer(project, editor, true, routes, ends) }
+	for _, c := range []struct {
+		name  string
+		exit  supervisor.Exit
+		agent bool
+		serve bool
+		ends  bool
+	}{
+		{"late failure", supervisor.Exit{}, false, false, false},
+		{"failed start, MCP serving", supervisor.Exit{StartFailed: true}, false, true, false},
+		{"failed start, ends", supervisor.Exit{StartFailed: true}, false, false, true},
+		{"with an agent", supervisor.Exit{StartFailed: true}, true, false, false},
+	} {
+		run := func() (string, bool) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var log syncLog
+			var serving atomic.Bool
+			serving.Store(c.serve)
+			makeEditorExitHandler(newSession(ctx, cancel), log.log, c.agent, &serving, new(editorGiveUp), config.UnrealConfig{}, dir, pointer)(c.exit)
+			return log.String(), ctx.Err() != nil
+		}
+		got, ended := run()
+		if ended != c.ends {
+			t.Errorf("%s: session ended = %v, want %v", c.name, ended, c.ends)
+		}
+		// The claim for the ending give-up changed (k247 review): the launcher
+		// is stopping, so no console is named — only the IDE and a new start.
+		fix, not := "Build them with 'c compile' in the launcher console, then 'start ue'.", "start the launcher again"
+		if c.ends {
+			fix, not = "Build the project's editor target (Win64, Development) in your IDE, then start the launcher again.", "launcher console"
+		}
+		for _, want := range []string{"The project's modules still look unbuilt: Game", "which fits this failure. " + fix} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: logged %q, want it to mention %q", c.name, got, want)
+			}
+		}
+		for _, bad := range []string{not, "an agent:", "'stop ue'", "gives up on it after a few tries"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s: logged %q, must not mention %q", c.name, got, bad)
+			}
+		}
+		// Built since the startup check: no pointer, same ending.
+		mustWriteFile(t, filepath.Join(dir, "Binaries", "Win64", "UnrealEditor-Game.dll"), "")
+		got, ended = run()
+		if strings.Contains(got, "look unbuilt") {
+			t.Errorf("%s, built: logged %q, want no module pointer", c.name, got)
+		}
+		if ended != c.ends {
+			t.Errorf("%s, built: session ended = %v, want %v", c.name, ended, c.ends)
+		}
+		os.Remove(filepath.Join(dir, "Binaries", "Win64", "UnrealEditor-Game.dll"))
 	}
 }

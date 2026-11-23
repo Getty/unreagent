@@ -218,8 +218,11 @@ func (s *session) result() error {
 // that user can start the launcher again (see k69). mcpServing is read at the
 // editor's exit, not when the handler is built; a give-up MCP still serves is
 // left in giveUp, which ends the session should MCP stop serving before the
-// editor is started again (k155).
-func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpServing *atomic.Bool, giveUp *editorGiveUp, u config.UnrealConfig, projectDir string) func(supervisor.Exit) {
+// editor is started again (k155). modulesPointer (nil for none) is asked at
+// each failure, with whether the give-up ends the session, and returns the
+// sentence the line ends with when the project's modules look unbuilt then,
+// "" otherwise (k247).
+func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpServing *atomic.Bool, giveUp *editorGiveUp, u config.UnrealConfig, projectDir string, modulesPointer func(ends bool) string) func(supervisor.Exit) {
 	return func(e supervisor.Exit) {
 		if e.Success {
 			return
@@ -242,6 +245,11 @@ func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpSe
 				dumps += " — the next launcher run empties them (unreal.cleanOnRestart)"
 			}
 			dumps += "."
+		}
+		// Where the modules still look unbuilt, the cause the startup WARN
+		// named minutes ago (k247). Text only: the restart policy is unchanged.
+		if modulesPointer != nil {
+			dumps += modulesPointer(ends)
 		}
 		if !gaveUp {
 			logger("The editor failed and is not restarted." + dumps)
