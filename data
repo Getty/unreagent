@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-22T09:20:21Z
+id: 245
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- windows
+- supervisor
+- bug
+title: 'Windows: a command stopped by its context reports exit code 0 from RunOnceContext'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k215 worker on Windows 2026-11-22 (Windows 11 Pro 26H2, native test run). A command run through supervisor RunOnceContext and stopped by its context (timeout or shutdown) reports exit code 0 on Windows, while on Linux it reports -1. The process is stopped through its Job Object (KILL_ON_JOB_CLOSE), and the exit code Windows then hands back is 0.
+
+Today the only caller, bridge preparation (cmd/launcher/bridge.go, prepareNodeBridge), checks the error first, so an aborted npm install is not taken for a success. But any caller that looks at the exit code alone would treat an aborted command as a success. This matters for k75, which gives every tool handler (run_command, run_python, run_node) a context and a timeout.
+
+Done when: either RunOnceContext's result for a context-stopped command cannot read as success on Windows (e.g. a non-zero code or an explicit aborted flag that callers must check), pinned by a test that runs on Windows, or the contract is documented on RunOnceContext and every caller checks the error first. Also check whether the long-running supervised processes (the editor, the agent) see the same exit code 0 when their job is closed, and whether a restart policy reads it; that part touches the area of k208 (another session's card), so note findings there rather than changing restart behaviour here. The Job Object assignment itself stays. Owner: unreagent-worker.
