@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T15:35:06Z
+id: 184
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- security
+- bug
+title: 'Permission splitter: env -S / --split-string hides a nested command from deny
+  rules'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found in the k127 review (finding 5). This is pre-existing: HEAD already lets it through.
+
+**The bug:** `env -S 'bash -c "touch M"'` passes a `Bash(touch *)` deny rule under allow_all, and bash runs the touch. The deny matching looks through `env` at the command it wraps (`internal/config/permission.go`), but `-S` / `--split-string` makes env split its argument into words, and the splitter never sees those words as a command. The same applies to `env -S 'bash -s' <<EOF`.
+
+**Done means:** a command using `env -S` or `--split-string` (also as `-S…` glued or `--split-string=…`) is either read by splitting the argument the way env does, or treated as undecidable, which means fail closed. Pin it with a table test and an overlay mutation, and probe it in real bash with a harmless stand-in.
+
+**Lane:** unreagent-worker, after k127 lands (same file).
+
+Research input 2026-11-21: docs/research/2026-11-21-shell-constructs.md, Bash table (wrappers that take a command, env -S). Unchecked.
