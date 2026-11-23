@@ -1,0 +1,38 @@
+---
+claimed_at: 2026-11-23T03:01:54Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-23T03:01:54Z
+created: 2026-11-23T01:03:41Z
+id: 252
+priority: medium
+started: 2026-11-23T02:50:10Z
+status: done
+tags:
+- init
+- onboarding
+title: 'init preflight: check that mcp.address can be bound'
+updated: 2026-11-23T03:02:09Z
+---
+
+Found by k226 (2026-11-23, Windows 11). Part of k224. Related: k160.
+
+On the walk-through machine 127.0.0.1:8765, unreagent's default mcp.address, is held by another local program. Every default start (the template, the project without a config, the release demo) ended at once with "Error: MCP server cannot listen on 127.0.0.1:8765: ... bind: Normalerweise darf jede Socketadresse ... nur jeweils einmal verwendet werden.  another unreagent or another program may already hold that port ...; set mcp.address to a free host:port (for this machine only: in unreagent.local.yaml)". The text is good, but started by double-click the window closes in 0.3 s and the bind is checked before unreagent.log is written, so nothing at all is left to read (k160).
+
+unreagent init's preflight, the tool meant to catch first-start problems, reported "0 blocking" in the same state: it does not check mcp.address.
+
+Done when the preflight tries to bind mcp.address (and closes it again) and reports a taken port as a finding that names the fix (mcp.address in unreagent.local.yaml), and says so separately when the holder is a running unreagent for this project. Test with a listener on the port.
+
+Preflight now binds mcp.address via listenMCP (cmd/launcher/init.go ~l.199, before the agent finding) and closes it: taken port = BLOCKING with listenMCP's error text (names mcp.address / unreagent.local.yaml), free = [ok], mcp.enabled false = no finding. Test TestInitPreflightChecksMCPAddress (init_test.go, end) with real 127.0.0.1:0 listener, free-port and closed-again cases. 'Holder is a running unreagent for this project' LEFT OUT: the only way in tree is probing the address as an MCP endpoint, which cannot tell this project's unreagent from another (bearer auth may block it too); no lock file invented. Verified on Linux: gofmt, go vet, GOOS=windows go vet, go test -count=1 ./..., make windows. Windows bind behavior unverified. Existing init tests now also bind the default 127.0.0.1:8765, so they fail if a dev box holds it.
+
+Ready for review. Proposed subject: Check in the init preflight that mcp.address can be bound (k252)
+
+Review (unreagent-reviewer): BACK TO WORKER. Files: cmd/launcher/init.go, cmd/launcher/init_test.go. Check run on Linux: gofmt -l empty, go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., make windows: all green. Windows bind behavior: unverified (cross-compiled only). (1) BLOCKING: the existing init tests now bind the real default 127.0.0.1:8765, and they assert on the blocking count and exit error. Reproduced by holding 127.0.0.1:8765 and running go test -run TestInit ./cmd/launcher: FAIL in TestInitWritesTheDefaultsAndACleanPreflight (init_test.go:115, wants 0 blocking), TestInitCheckWritesNothing (:196), TestInitWithoutEnginePrintsTheFullPreflight check_writes_nothing + commands_and_paths... (:244/:256/:273/:283/:317, want exactly 1 blocking), TestInitFindingsNameTheFix two subtests (:437/:465, init must succeed on warnings alone). That is the k226 A4 Windows machine state, so this adds failures on top of k234. Fix: keep these tests off the real port, e.g. stub the existing listen seam (main.go:487, already swapped in lifecycle_test.go:51) in newInitTree, or point mcp.address at 127.0.0.1:0; the new test keeps its real listener. (2) The left-out 'holder is a running unreagent for this project' reason holds: the MCP initialize answer carries only serverInfo name+version (internal/mcp/mcp.go:332), no project; there is no pid/lock file; a token can refuse the probe. At most 'an unreagent answers there' is detectable, which listenMCP's text already names as a possibility. But the card's Done-when still lists it: the main agent should strike it from the card or file a follow-up, not leave it silently unmet. New test TestInitPreflightChecksMCPAddress fails without the fix (no finding found) and checks the port is released: fine. No German, scope inside cmd/launcher.
+
+Main agent 2026-11-23: back to the worker for the reviewer's finding 1 (init tests must not depend on 127.0.0.1:8765 being free). The 'says so separately when the holder is a running unreagent for this project' part of Done-when is dropped, my decision: nothing in the tree can identify the holder's project, and listenMCP's text already names the possibility. No follow-up card.
+
+Review fix: newInitTree (init_test.go) stubs the listen hook to bind 127.0.0.1:0 (restored in t.Cleanup), so the init tests no longer touch 127.0.0.1:8765; TestInitPreflightChecksMCPAddress sets listen = net.Listen again. Proved with a listener holding 127.0.0.1:8765: go test -count=1 -run TestInit ./cmd/launcher passes (11 PASS). Full check green: gofmt, vet both GOOS, go test ./..., make windows.
+
+Review round 2 (unreagent-reviewer): PASS. Files: cmd/launcher/init.go, cmd/launcher/init_test.go. Round-1 finding fixed: with 127.0.0.1:8765 held by another process, go test -count=1 -v -run TestInit ./cmd/launcher passes (all 11 TestInit*), and go test -count=1 ./... passes with the port still held. Hook state: newInitTree saves listen and restores it in t.Cleanup; TestInitPreflightChecksMCPAddress sets listen = net.Listen after newInitTree, so the same cleanup puts back the value it had before the test. No t.Parallel in cmd/launcher; the only other writer of listen is the TestLauncherRunProcess child, a separate process. go test -count=3 -shuffle=on -run 'TestInit|TestLauncher|TestRun' ./cmd/launcher: ok. Full check on the combined tree (with k105): gofmt -l empty, go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., make windows: all green. Windows bind behavior is unverified: cross-compiled only. No German; scope inside cmd/launcher (worker).
+
+Committed as b6d972e
