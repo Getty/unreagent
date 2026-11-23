@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T02:06:02Z
+depends_on:
+- 104
+id: 110
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- mcp
+- decision
+title: Permission rules for the unreagent MCP file tools never meet a real call
+updated: 2026-11-23T02:48:50Z
+---
+
+Found while working k104: the MCP file tools (read_file/write_file/...) take a path relative to files.root, so a rule like the README example mcp__unreagent__write_file(/etc/*) never matches a real call, and since k104 a root-relative allow rule (mcp__unreagent__write_file(Config/*)) no longer grants. Decide: resolve the tool argument against files.root before matching (then absolute rules work), or document that these tools are confined by files.root and per-path rules do not apply. internal/config/permission.go, cmd/launcher/tools.go/filetools.go, README.
+
+From k199 (2026-11-21), probed: deny mcp__unreagent__write_file(/etc/*) does not match path: ../../etc/passwd. The only test row for that rule uses the absolute /etc/passwd, a value the tool never receives.
