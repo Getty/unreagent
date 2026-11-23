@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T16:28:04Z
+id: 185
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- lifecycle
+- security
+title: A Ctrl-C before the signal handler leaves the agent's MCP config directory
+  behind
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k181 review (finding 3), main agent 2026-11-21.
+
+**Where:** cmd/launcher/main.go. Since k181 the launcher writes the agent's MCP config (Bearer token, extra servers' env) to a 0600 file in a MkdirTemp directory before the signal handler is installed (~:253-258 against ~:338). The gap includes writeMCPConfigs, which can wait up to 5s on git check-ignore.
+
+**Failure:** a Ctrl-C in that window kills the launcher without cleanup, and the directory with the token stays in the user's temp dir.
+
+**Unverified, Windows:** closing the console window may leave it behind too, when shutdown takes longer than Windows' grace period of about 5s.
+
+**Done looks like:** the signal handler (or a deferred cleanup that a signal reaches) is in place before the file is written, or the file is written after the handler. A test pins the order. Same class as a hard kill, which k181 accepts, so this is low priority.
+
+Lane: unreagent-worker. main.go runs serially with the other run() cards.
+
+Research input 2026-11-21: docs/research/2026-11-21-windows-processes.md sections 5 and 6 (closing the console window and its deadline, Ctrl-C delivery). Unchecked. Experiments W6 and W7.
