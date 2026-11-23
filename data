@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-08-24T23:44:04Z
+id: 75
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- mcp
+- bug
+title: run_command / run_python / run_node have no timeout and no cancellation
+updated: 2026-11-23T02:48:50Z
+---
+
+main.go:565, :416: sup.RunOnce blocks the handler until the child exits; nothing cancels when the client gives up (ToolHandler carries no ctx; the 4h WriteTimeout from #51 only closes the socket). Trigger: run_python with while True: pass or a script that starts a server, run_command waiting on a UBT mutex -> the process lives until launcher exit (Windows: killed by the job then; Linux: orphaned), the handler goroutine leaks, each retry spawns another.
+Acceptance: optional timeoutSeconds (default for run_python/run_node, generous for run_command) that closes the job on expiry, and r.Context() plumbed into ToolHandler so a disconnect cancels -- needs an internal/mcp signature change, coordinate with #52's tests; tests.
+
+
+**Triage 2026-11-21** (unreagent-scout, HEAD cbb7da9): VALID: scriptAction/run_command call sup.RunOnce without a timeout; mcp.ToolHandler takes no context. Breaking signature change across every AddTool call and mcp_test.go, so run it alone. Size L.
+
+**From k54 (2026-11-21):** prepareRuntimes in cmd/launcher/scripts.go still runs uv sync / npm install through plain RunOnce — no deadline, not cancelled at shutdown (runs in goroutines, so it does not block startup). Migrate it to Supervisor.RunOnceContext (added by k54) along with the tool handlers.
+
+From the k56+k79 review (finding 3), main agent 2026-11-21: scripts.go ~:176-191. prepareRuntimes runs uv sync and npm install without a ctx or a separate process group, so a Ctrl-C reaches the child and the shutdown log gets a false 'WARN Runtime: preparing … failed'. smokeTestMCP already says 'aborted' on shutdown; give prepareRuntimes the same ctx handling as part of this card.
+
+**Follow-up when k75 lands (from k100, 2026-11-21):** the skill-author updates the paragraphs in skills/unreagent-iterate and skills/unreagent-build (and unreagent-runtimes if it says the same) that say run_command / run_python / run_node have no timeout and no cancellation.
