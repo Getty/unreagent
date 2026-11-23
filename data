@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-22T08:19:08Z
+id: 241
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- config
+- ue
+title: WARN when the .uproject does not parse for the EngineAssociation lookup
+updated: 2026-11-23T02:48:50Z
+---
+
+Follow-up from the k203 review (2026-11-22). A .uproject that the engine's TJsonReader refuses (for example one with a trailing comma) gives no EngineAssociation in the engine's own lookup (LoadProjectFile, UE 5.8.4 DesktopPlatformBase.cpp 1661-1678), and unreagent follows that: no association, no walk-up, silent fallback to the highest installed engine. The editor's FProjectDescriptor reads the same file through RapidJSON, which allows trailing commas, so the editor still loads the project, with whatever engine unreagent picked.
+
+Candidate: a WARN when the .uproject exists but does not parse for the association lookup, naming the file and the parse error, so a user sees why the engine choice ignored the project's association. Owner: unreagent-worker. Low priority: only a hand-edited .uproject gets there.
