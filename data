@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T23:03:30Z
+id: 200
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- tests
+title: Pin the allow-side first-present-field rule of matchInner with a test
+updated: 2026-11-23T02:48:50Z
+---
+
+Found while writing the unreagent-permissions skill (k199), confirmed by a probe test. matchInner reads only the first present input field for an allow rule, so Grep(TODO*) grants a pattern-only call and grants nothing once path is present. No row in internal/config/permission_test.go pins this.
+
+Owner: unreagent-test-writer. Small.
+Done when: table rows pin the behaviour for an allow rule on a tool with several candidate fields (pattern only, path only, both), named by shape with this card id in a comment. If the behaviour looks wrong rather than merely unpinned, stop and say so instead of pinning it.
+
+Also unpinned (k199 re-review): a blank command value through stringInput and Decide (a bare Bash allow grants it, a bracketed allow does not, a deny blocks it). TestShellSegments pins blank only at the shellSegments level. Add rows here.
