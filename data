@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-22T08:53:10Z
+id: 243
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- runtimes
+- npm
+title: 'runtimes.node install: share the bridge''s npm retry or stay plain?'
+updated: 2026-11-23T02:48:50Z
+---
+
+Follow-up from k215 (2026-11-22). prepareRuntime for runtimes.node (cmd/launcher/scripts.go) still runs a bare npm install with no retry, unlike the bridge install after k215 (one retry with --legacy-peer-deps on a code-less npm crash or ERESOLVE). That is the user's own package, not hit by the npm 10.9.2 edgesOut crash measured on the Toolkit bridge, so low priority. Decide whether the runtime install should share the bridge's retry (one helper) or stay plain on purpose, and say which in a comment. Owner: unreagent-worker.
