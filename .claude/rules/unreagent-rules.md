@@ -58,7 +58,7 @@ Builds and tests are fine anytime. **Pushing a `v*` tag IS the release** — it 
   mid-task; a new dependency needs a real argument and has to be vendored.
 - `cmd/launcher` is split by concern (k93: `main.go`, `tools.go`, `filetools.go`,
   `scripts.go`, `bridge.go`, `lifecycle.go`, `mcpconfig.go`, `helpers.go`, `hermes.go`,
-  `skills.go`, `uplugin.go`),
+  `skills.go`, `uplugin.go`, `init.go`, `modules.go`),
   but `run()` in `main.go` still wires everything and many cards touch it. Cards that
   edit the same file — `run()` above all — run one after another; fan out only across
   disjoint files, and give parallel Go workers separate worktrees, since a half-edited
