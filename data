@@ -1,0 +1,20 @@
+---
+class: standard
+created: 2026-11-23T01:03:09Z
+id: 248
+priority: medium
+status: backlog
+tags:
+- release
+- docs
+- decision
+title: 'Decide: a release for the quick start (v0.0.9 has no init and no start without
+  a config)'
+updated: 2026-11-23T01:03:09Z
+---
+
+Decision for the maintainer. Found by k226 (2026-11-23, Windows 11, UE 5.8.4). Part of k224.
+
+Both READMEs send a new user to the release for unreagent.exe (unreagent README "New project (quick start)" step 2 and "Try it now"; unreagent-example README "After that" step 1; the last lines of the example's scripts/setup.ps1: "Drop unreagent.exe (from the release) into this directory"). The latest release is v0.0.9 (2026-11-13). It predates the start without a config (k227), unreagent init (k228, k246), the unbuilt-module warning (k229), the bridge npm retry (k215) and the demo fix (k236). Measured: v0.0.9's unreagent.exe does not know the word init. "unreagent.exe init -h" printed "unreagent v0.0.9  Config: <dir>\unreagent.yaml", "Engine: C:/EpicGames/UE_5.7", "WARN no .uproject found next to the config  set unreal.project" and kept running the demo until stopped. So the quick start as written cannot be followed with the binary it points to.
+
+Options: cut a release from current main once k226's findings are triaged, or have the READMEs say "build from source" (README "Building") until then. No release without the maintainer's word.
