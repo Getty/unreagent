@@ -1,0 +1,853 @@
+---
+claimed_at: 2026-11-23T02:47:21Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-23T02:49:44Z
+created: 2026-11-21T05:01:16Z
+depends_on:
+- 113
+id: 127
+priority: high
+started: 2026-11-21T14:49:15Z
+status: archived
+tags:
+- permissions
+- security
+- bug
+title: 'Permission tokenizer: comments, here-doc bodies and backquote escapes let
+  hidden commands through'
+updated: 2026-11-23T02:49:44Z
+---
+
+Found in the k113 re-review (2026-11-21); present in HEAD as well. internal/config/permission.go: (1) quotes inside a # comment are opened: "echo x # it's" + newline + "touch x" passes Bash(echo *); same with #". (2) here-doc bodies are split as commands: with Bash(cat *), "cat <<EOF / echo it's / EOF / touch x" passes. (3) readBackquote drops every backslash, while bash keeps it except before $, backquote and backslash: "echo `echo \' ; touch x`" passes, also the \" and $'\'' variants. Done: each case denied, pinned by a test that runs the probe shape; fail closed where the tokenizer cannot tell. Lane: unreagent-worker; after k113 lands (same file).
+
+From the k113 round-2 worker, gaps that were already on HEAD: (1) inside $(…), a ) that sits inside ${…} closes the command substitution early; no bypass found from it. (2) A double-quoted string inside $(…) or ${…} is read as plain text, so a $(…) or ${…} inside it is not recognised. Same class as this card's comments and backquote escapes (reviewer probes A, AA, AG, C, D, N are still allowed although bash runs them).
+
+From the k113 round-3 re-review (finding 3): shellTokens (internal/config/permission.go ~:1171-1181) drops the backslash before every byte inside double quotes, but bash keeps it except before $ ` " \ and newline. So bash -c "echo \' ; touch M ; echo \'" is allowed under Bash(bash *)+Bash(echo *) and under a Bash(touch *) deny rule, and bash runs the touch.
+
+Main agent 2026-11-21: raised to high. The k113 round-4 probe c1 shows the known backslash-in-double-quotes issue as a deny bypass through a nested bash -c: bash -c "echo \' ; touch M ; echo \'" is ALLOWED under allow_all with deny Bash(touch *), and bash runs touch. Inside double quotes a backslash only escapes $ ` " \ and newline; before anything else it stays. Next after k113 in internal/config.
+
+**Main agent 2026-11-21: decision before handing this to unreagent-worker.** These choices are mine, not the maintainer's.
+
+**Model bash where its rule is short and clear:**
+1. **Comments:** a `#` at the start of a word (at line start, after blanks or after an operator) runs to the end of the line. Nothing inside it opens a quote. A `#` inside a word (`a#b`) is literal.
+2. **Backslash inside double quotes:** it escapes only `$`, backquote, `"`, `\` and newline. Before any other byte it stays. This closes the k113 round-4 probe c1.
+3. **Backslash inside backquotes:** it is dropped only before `$`, backquote and `\`. Before any other byte it stays.
+
+**Here-documents:** the body is data, never split as commands.
+- If the delimiter is quoted (`<<'EOF'`, `<<"EOF"`, `<<\EOF`), the body is skipped whole.
+- If the delimiter is unquoted, the body is expanded. If it contains `$(`, a backquote or `${`, the command is undecidable and is denied. A plain `$VAR` is fine.
+- A delimiter that never comes, or a shape the worker cannot read safely, is undecidable too. That includes `<<-` with mixed indentation, or several here-docs on one line if they get complicated.
+- A here-string `<<<` is not a here-doc: the word after it is an ordinary word.
+- Why: agents build commit messages with `"$(cat <<'EOF' … EOF)"`, so here-docs must not be denied wholesale.
+
+**Double-quoted strings inside `$(…)` or `${…}`:** a `$(…)` or backquote inside them must be seen, and so must a `)` inside `${…}` within `$(…)`. Where the parse cannot tell, fail closed (undecidable means deny, as k113 established).
+
+**Done means:**
+- Every probe shape on this card is denied whenever bash would run the hidden command, under the three k113 probe policies (allowlist `Bash(echo *)`; allow_all with deny `Bash(touch *)`; allowlist `Bash(bash *)` plus `Bash(echo *)`).
+- Ordinary forms stay allowed: a quoted-delimiter here-doc, `echo "a\b"`, a trailing `# comment`.
+- Pinned by table tests in `internal/config`.
+- Shown to fail through overlay mutations.
+- README Permission layer: one sentence per rule change, done by the doc-writer afterwards.
+
+unreagent-worker 2026-11-21: k127 done in internal/config/permission.go and permission_test.go. Nothing else touched. Built on main 602304e. Not committed.
+
+**What changed (permission.go)**
+- **Comments.** splitSegments and readDelimited track whether a word starts. A word starts at line start or after an unquoted, unescaped blank or operator. It does not start after a closed quote, ${…}, $(…), backquotes or an escaped blank. A '#' at a word start skips to the end of the line, and the comment is left out of the segment.
+- **Line continuation.** A backslash-newline is removed outside single quotes: in splitSegments (unquoted and inside double quotes) and in shellTokens. This was a deny bypass on HEAD: `tou\<NL>ch M` and `"tou\<NL>ch" M` passed Bash(touch *). The card's double-quote rule names newline, so I applied the same rule to the unquoted case. That was my choice.
+- **Backslash inside double quotes (shellTokens).** It is dropped only before $ ` " \ and stays before any other byte. This closes c1.
+- **readBackquote(s, start, inDouble).** A backslash is dropped only before $ ` \, and before " when the backquotes stand in double quotes. bash 5.2 does the latter: "`echo \"x" ; touch M ; echo "y\"`" runs the touch.
+- **Here-documents.** New: hereDoc, readHereDocWord, readHereDocs, namesShell.
+  - `<<<` is a here-string; the word after it is ordinary.
+  - `<<` and `<<-` read the delimiter. It is undecidable when there is no word, or when the word has `$`, a backquote, a backslash-newline, an unterminated quote or a backslash inside double quotes.
+  - At the next unquoted newline, the bodies are skipped in order. Each line is compared whole with the delimiter; `<<-` strips leading tabs first, as bash does.
+  - With an unquoted delimiter, a body holding `$(`, `${`, `$[`, a backquote or a line ending in a backslash is undecidable. bash joins `EO\<NL>F` into the delimiter. A plain `$VAR` is fine.
+  - A delimiter line that never comes is undecidable, and so is a body that never starts.
+  - Not on the card, added by me: if a segment on the operator's line names a shell (`bash <<EOF`, `<<EOF bash`, `env sh -s <<EOF`, `cat <<EOF | bash`), the body is split as a nested script. Otherwise "the body is data" would have let `bash <<'EOF'⏎touch M⏎EOF` pass the deny rule, and HEAD denied it.
+- **readDelimited ($(…)).**
+  - It now reads a `$(` inside double quotes as its own substitution, with its own quotes.
+  - It handles comments and here-documents. A `(` or `)` starts a word.
+  - It returns a "visible" text with comments and here-document bodies left out, and that text is what goes into the segment. outputRedirections reads the segment again after normalizeSpace has collapsed the newlines. With the comment or body still in it, the rescan would run past the `)` and miss `> out`. Both cases are tested and killed by M9.
+  - Whether a here-document is readable is left to the nested splitSegments call, which meets the body again and fails closed. A separate ok result here was redundant; mutant M16 survived, so I removed it.
+- **Nested scripts are read from the raw segment, not the collapsed one.** On HEAD, `bash -c 'echo x⏎touch M'` passed Bash(touch *) because the newline had become a blank. With comments modelled, `bash -c 'echo x # c⏎touch M'` would have gotten worse.
+- The segment-break collapse loop is gone. It would have skipped a newline that has pending bodies. It was equivalent otherwise, because flush ignores empty segments.
+
+**Tests (permission_test.go)**
+- New: TestShellComments, TestHereDocuments, TestBackslashEscapes, TestQuotedStringsInsideSubstitutions.
+- Helpers: checkHidden, checkPlain, and the k127Allow / k127AllowShell / k127Deny policies. The k113 policies are widened by cat and git (and sh) so that the here-doc and commit shapes meet an allow rule.
+- Before the fix, the new tests failed 46 subtests (run on the HEAD code through an overlay).
+- Ordinary forms are pinned as allowed:
+  - `git commit -m "$(cat <<'EOF' … It's (a body) with "quotes", ticks and $(no command). … EOF)"`
+  - `echo "a\b"`, `echo x # note`, `cat <<<word`
+  - `cat <<'EOF'` with `$(…)` in the body, `cat <<EOF` with `$HOME`, `<<-` with tabs
+
+**Probe matrix**
+- 97 probes, each run through Decide and in real bash 5.2.37 with stand-ins (`touch M`, `> out`).
+- Policies: A = Bash(echo *)+Bash(cat *)+Bash(git *); D = allow_all with deny Bash(touch *); B = Bash(bash *)+Bash(echo *)+Bash(cat *).
+- HEAD had 30 bypasses: A AA AG B C D N c1 cm1 cm2 cm3 cm16 dq1 dq4 dq5 dq6 dq7 h1 h7 h9 h10 h11 h12 h14 h15 h19 h27 ns1 ns2 ns6 q1. (cm3 and h10 are `> out` under the allowlists.)
+- New: one left, x8 `eval "$(cat <<'EOF'⏎touch M⏎EOF⏎)"`, D=ALLOW (A and B deny). HEAD denied x8 only because it split the body as commands. It belongs to the class HEAD already allows under D: `eval "$(echo touch M)"`, `eval "$(cat f)"` and `echo touch M | bash` are all D=ALLOW on HEAD (checked). This is the "data into an interpreter" gap that denyCommand's comment names.
+- Shapes now allowed that HEAD denied, where bash runs nothing hidden: cm11 `echo x # ; touch M`, cm15 `echo x # c > out`, x6, bq2, h13 h16 h17 h21 h22 h23 h26 h30. This is intended modelling.
+- Files: scratchpad k127-w/: probes.txt, joined-new.tsv, compare-new.txt (HEAD vs new vs bash), matrix.sh, compare.sh.
+
+**Mutations (go test -overlay, tree never edited)**
+- 19 of 19 killed. The mutants:
+  - M1–M3: comments (off in splitSegments, off in readDelimited, `#` anywhere)
+  - M4–M8: here-docs (off in splitSegments, off in readDelimited, no check of the unquoted body, `<<-` strips no tabs, a shell never reads the body)
+  - M9: visible keeps comments and bodies
+  - M10, M11: backquotes drop every backslash; ignore the double-quote context
+  - M12: shellTokens drops every backslash inside double quotes
+  - M13, M20: no line continuation unquoted; none inside double quotes
+  - M14: nested scripts read from the collapsed segment
+  - M15: no `$(` inside double quotes in readDelimited
+  - M17: here-string read as a here-doc
+  - M18: expansion in the delimiter accepted
+  - M19: a missing delimiter line is decidable
+- M16 (readDelimited's ok) survived. It showed that check was dead code, which is now removed. A first M20 survivor led to the test `"tou\<NL>ch" M`.
+- File: scratchpad k127-w/mutations.txt, mutate.py.
+
+**Check (all exit 0):** gofmt -l (empty), go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -race ./internal/config, make linux, make windows. No platform-guarded code was touched; the Windows build is compiled only, nothing ran on Windows.
+
+**Fail-closed side effects (my choices):**
+- `<<` inside arithmetic (`$((1<<2))`, `((x<<=1))`) now reads as a here-doc without a body, so the line is undecidable and denied.
+- A here-doc inside backquotes, or one whose body would lie outside its `$(…)`, is undecidable.
+
+**For the doc-writer (README, Permission layer), one sentence per rule:**
+- A `#` that starts a word comments out the rest of the line; nothing in a comment counts as a command or opens a quote, and a `#` inside a word is literal.
+- A backslash-newline outside single quotes joins the lines, as in bash. Inside double quotes a backslash escapes only `$`, a backquote, `"`, `\` and a newline. Inside backquotes it is dropped only before `$`, a backquote and `\`, and before `"` when the backquotes stand in double quotes.
+- A here-document body is data, not commands: with a quoted delimiter (`<<'EOF'`) it is skipped whole, so `git commit -m "$(cat <<'EOF' … EOF)"` passes with `Bash(git *)` plus `Bash(cat *)`.
+- With an unquoted delimiter, a body holding `$(`, `${`, `$[`, a backquote or a backslash at the end of a line is undecidable and denied. So is a delimiter line that never comes.
+- A here-document on a line that names a shell (`bash <<EOF`, `cat <<EOF | sh`) is checked as that shell's script.
+- `<<<` is a here-string; the word after it is ordinary.
+- Skills: whichever unreagent-* skill describes the permission tokenizer (unreagent-config?) needs the same rules. The skill-author should check.
+
+**Drift, for new cards (unreagent board):**
+1. x8 / eval: `eval "$(…)"`, and data piped into a shell (`echo touch M | bash`), pass a deny rule. This is known and documented as a heuristic gap. Should eval of a substitution's output, or a pipe into a shell, become undecidable?
+2. A `case` pattern's `)` inside `$(…)` closes the substitution early. `echo "$(case x in x) touch M;; esac)"` passes Bash(touch *) on HEAD and still does, and bash runs the touch. The allowlist denies it. This is pre-existing and not k127's shape.
+3. nestedScripts joins every token after -c into the script. bash runs only the first; the rest are $0, $1 and so on. This errs toward more segments, so it is not a bypass. Noted only.
+
+Ready for review: comments, line continuation, backslash in double quotes and backquotes, here-documents and $( in double quotes now read as bash does. permission.go and permission_test.go only. Probe matrix: 30 bypasses on HEAD, 1 left (x8 eval of a substitution, the known class that HEAD already allows). 19 of 19 overlay mutants killed. Full check green, make windows included. Details, README sentences and drift in the previous note.
+
+**Main agent 2026-11-21, on the worker's result:**
+
+**Accepted additions:** line continuation, here-docs handed to a shell checked as its script, nested scripts read from the raw text, and `$((1<<2))` failing closed. All four are my decisions as recorded here. The arithmetic case is also noted on k171.
+
+**Drift:**
+1. `eval "$(…)"` and `… | bash` fall under the documented heuristic gap, so no new card. The README sentence now names them: "or a command's output run as code (`eval "$(...)"`, `... | bash`)".
+2. A `case` pattern's `)` inside `$(…)` gets a new card (see below).
+3. A note only, no card.
+
+**README (main agent, in this worktree):**
+- A new paragraph, "Comments, line continuations, backslashes, here-documents", after the per-segment paragraph.
+- The "Unreadable command lines are denied" list now names the here-doc cases and `$((1<<2))`.
+
+**Skills:** no `unreagent-*` skill describes the splitter (grep for segment / splitSegments / backslash: no hits), so no skill-author pass.
+
+**Next:** unreagent-reviewer.
+
+**Changes entry:** drop the ticket id from the worker's proposal. Changes carries none.
+
+**unreagent-reviewer 2026-11-21: verdict CHANGES NEEDED.** The worktree is based on 602304e. Files reviewed: internal/config/permission.go, internal/config/permission_test.go and README.md. The card's probe shapes are closed, but the new comment and here-document modelling opens new bypasses. HEAD denied every one of them, and bash runs the hidden `touch M` in each. I ran each probe through Decide under A = Bash(echo *)+Bash(cat *)+Bash(git *), D = allow_all with deny Bash(touch *), and B = Bash(bash *)+Bash(echo *)+Bash(cat *). Each probe also ran in bash 5.2 three ways: as a script file, with `bash -c`, and through `eval`. Files: scratchpad k127-rv/ (probes.txt, probes2.txt, compare.txt, compare2.txt, bypasses.txt).
+
+**Findings, most important first (permission.go unless named):**
+
+1. **Allowlist bypass through `\r`** (:887, :913, :706). The splitter takes `\r` as a segment break and a word start, and it ends a here-doc delimiter at `\r`. bash reads `\r` as an ordinary byte.
+   - `echo x\r#;touch M`: A, D and B ALLOW. Inside `$(…)` the same: `echo $(echo x\r#c ; touch M⏎)`.
+   - `cat <<EOF\r⏎EOF\r⏎touch M⏎EOF`, and the same with `<<'EOF'`: A, D and B ALLOW. bash's delimiter is `EOF\r`, so `touch M` runs.
+   - Fix direction: after `\r` no word starts, and the delimiter word does not stop at `\r`. It can stay a segment break if PowerShell needs that. Otherwise fail closed on these shapes.
+2. **A line continuation inside `$(…)` hides a comment from readDelimited** (:1095-1097 with :1123-1125). The backslash case sets wordStart=false. bash joins the lines first, so for bash a following `#` starts a comment, and the `)` after it does not close the substitution.
+   - `echo $(echo x \⏎#c ) <<'E'⏎touch M )⏎E`: A, D and B ALLOW. The same inside double quotes.
+   - The D-only form, with a quote in place of the here-doc, was already allowed on HEAD. It is the card's own class: a comment inside `$(…)`.
+   - Fix: treat a backslash-newline as splitSegments does (:616-618), with wordStart left unchanged.
+3. **`<<` inside arithmetic hides lines when a later line equals the "delimiter"** (:648, :1155). The README calls this case "denied, with no body". That holds only for `$((…))`.
+   - `(( echo <<2 ))⏎touch M⏎2` and `echo $[1<<2]⏎touch M⏎2]`: A, D and B ALLOW.
+   - `((x<<2))⏎touch M⏎2` and `for ((i=0; i<<1; i++)); do :; done⏎touch M⏎1`: D=ALLOW.
+   - Fix direction: a `<<` inside `((…))` or `$[…]` is undecidable whether or not a delimiter line follows.
+4. **namesShell sees a shell only after the operator** (:528-541). The comment says "anywhere on their line", but the flag is set only for segments flushed while the body is pending.
+   - `(bash) <<'EOF'⏎touch M⏎EOF`, `{ bash; } <<'EOF'…`, `if true; then bash; fi <<'EOF'…`, and a group spanning lines, `{ bash⏎} <<'EOF'…`: D=ALLOW.
+   - The README sentence "When the line hands the here-document to a shell" (README.md:751-753) promises more than the code does.
+   - Suggestion: take a body as a script when any segment of the whole command line names a shell.
+5. **Other readers of the body (your call: extend the list or accept as the x8 class).** `source /dev/stdin <<'EOF'`, `. /dev/stdin <<'EOF'` and `env -S 'bash -s' <<'EOF'` with `touch M` in the body: D=ALLOW, and HEAD denied them. `env -S 'bash -c "touch M"'` is D=ALLOW on HEAD as well, because env -S splitting is not followed. That one is drift for a new card, not k127.
+6. **Test gap: reviewer mutant R1 survives.** R1 sets `wordStart = true` after a line continuation (:618). With it, `echo x\⏎#c ; touch M` (the worker's x7, which bash runs) is ALLOWED under A, D and B, and `go test ./internal/config` stays green.
+   - Pin x7 in TestShellComments (permission_test.go:1263ff), and pin x6 `echo x \⏎# c ; touch M` as allowed under the deny rule.
+   - Add the probes from findings 1-4 as table cases.
+7. **README.md:775-779** ("cannot skip safely"). The list leaves out the delimiter-word cases where readHereDocWord fails closed: no word (`cat <<`), a `$` or backquote, a backslash-newline, an unterminated quote, a backslash inside a double-quoted delimiter. It also leaves out a here-document inside backquotes. Minor. Finding 3 changes the arithmetic sentence anyway.
+8. **Scope (note only).** OWNERS gives README.md to unreagent-doc-writer, and the card planned the doc-writer for it. The main agent wrote it, which the delegation rule allows for prose. The worker stayed inside permission.go and permission_test.go.
+
+**What holds:**
+- All card probes stay denied: A, AA, AG, B, C, D, N, c1 and the worker's matrix.
+- My comment edge cases are read as bash reads them: `#` after a quote, after `}` or `{a,b}`, after an escaped blank or tab, inside `$(…)`, and with `$'…'`.
+- Here-documents behave as bash does: `<<-` with tabs (including tab+space mixes), several on one line, `<<E"O"F` and `<<E'O'F`, a delimiter with trailing blanks or a tab, `$(cat <<EOF⏎$(touch M)…)` inside double quotes, `sh -s` and `env bash`.
+- Backslash-newline is handled inside a word, inside double quotes, and in backquotes inside double quotes.
+- Ordinary forms stay allowed:
+  - the git commit here-doc form, with a `# …` line in the body (A, D);
+  - `echo "a\b"`, `echo x # note`, `cat <<<word` (A, D, B);
+  - a multi-line `bash -c '…'` with a comment and a here-doc (B, D).
+- Known and accepted, no finding: the x8 / `eval "$(…)"` / `| bash` class, and k183. `eval "$(cat)" <<'EOF'` is D=ALLOW, but bash runs nothing there.
+- Mutations: the worker's M6, M8 and M12 are killed again. My R2 (namesShell reads only the command word) is killed. R1 survives (finding 6).
+- No German in the added text.
+- Windows: `make windows` compiles. No platform-guarded code was touched. The splitter reads PowerShell lines with bash syntax, and I probed none, so Windows is unverified.
+
+**Check, run by me, all exit 0:** `gofmt -l cmd internal skills` (empty), `go vet ./...`, `GOOS=windows go vet ./...`, `go test -count=1 ./...`, `go test -count=1 -race ./internal/config`, `make linux`, `make windows`.
+
+**Applies on main:** `git apply --3way --cached` of `git diff HEAD` onto main 84bec97 (newer than 1d30fb6, with k157 in) is clean for all three files. I used a scratch index and object dir, so the real index was not touched. No hunk conflicts.
+
+**Subject, confirmed:** "Read comments, here-documents and backslash escapes as bash does (k127)".
+
+**Changes, amended.** This assumes the fixes land.
+- Replace the proposed entry with: "Bash rules read comments, line continuations, here-documents and backslashes inside double quotes and backquotes as bash does, and a nested shell's script keeps its line breaks, so none of them hides a command from an allow or deny rule. A here-document body is data unless the command line hands it to a shell: git commit -m "$(cat <<'EOF' ... EOF)" passes with Bash(git *) and Bash(cat *)."
+- It starts with "Bash rules" to match the 0.0.9 entry. It names the commit form, which HEAD denied under the allowlist, and the nested-script newline fix (ns1).
+- Fold the new denials into the unreleased k113 entry: "(an unfollowable $'...', a non-plain ${...}, process substitution, nesting too deep, a here-document it cannot skip safely, a << inside arithmetic)". Users meet `echo $((1<<2))` being denied, and only that entry says so.
+
+**Next:** back to unreagent-worker for findings 1-4 and 6 (finding 5 after your decision). Then unreagent-doc-writer for README.md:751-753 and :775-779. Then re-review.
+
+**Main agent 2026-11-21: decisions on the review's findings.** These choices are mine, not the maintainer's. Findings 1-6 go back to unreagent-worker.
+
+1. **Carriage return.** In a Bash command, an unquoted or quoted `\r` anywhere makes the command undecidable, and it is denied. bash reads `\r` as an ordinary byte. Modelling that exactly (word starts, delimiters such as `EOF\r`) buys nothing for agent commands, so it fails closed. PowerShell is unchanged; there CR is a line break, as PowerShell reads it. Test both.
+2. **Line continuation inside `$(…)`.** Handle it in `readDelimited` the way `splitSegments` does at ~:616-618: the lines join first, then word starts are decided.
+3. **`<<` inside arithmetic.** A `<<` inside any arithmetic context (`((…))`, `$((…))`, `$[…]`, `for ((…))`) makes the command undecidable. Lifting that, so a shift operator is allowed, is k171's job.
+4. **Here-doc receivers.** When the here-doc is attached to a compound command, the command is undecidable. That covers a subshell `( … )`, a group `{ …; }`, `if`/`fi`, `while`/`until`/`for` … `done`, and `case`/`esac`, including multi-line ones such as `{ bash⏎} <<'EOF'`. The simple-command case stays as it is: the body is data unless a segment on the line names a shell. Fix the code comment at ~:528-541 to say what the code does.
+5. **Other body readers.** `source` and `.` count as shells for the body check, so their body is checked as a script. `env -S` / `--split-string` is a pre-existing gap and gets a card of its own; leave it out here.
+6. **Test gap.** Pin x7 (`echo x\⏎#c ; touch M`) in TestShellComments, plus one probe each for findings 1-4. Show R1 is killed afterwards.
+7. **README list** (`README.md` ~:751-753, ~:775-779). The main agent rewrites it after the worker's round. Its content: the delimiter forms that fail closed, a here-doc inside backquotes, `\r`, compound receivers, and `source`/`.`.
+
+**Changes:** the reviewer's amended entry. The new denials (`\r`, arithmetic `<<`, compound here-doc receivers, unreadable here-docs) fold into the unreleased k113 "unreadable command lines" entry.
+
+**Round 2 (review findings): done, back to review.** Only internal/config/permission.go and permission_test.go changed. README was not touched this round; the tree still carries the round-1 README diff.
+
+**What changed in permission.go**
+
+1. **`\r`.** shellSegments returns nothing (undecidable) for any carriage return.
+   - New: commandSegments(toolName, command). PowerShell is split as before, with `\r` still a line break; every other tool goes through shellSegments.
+   - toolName is now passed down: allowCommand, matchValue(pattern, toolName, key, value, sense) and denyCommand(pattern, toolName, command).
+   - nestedScripts: a script handed to a POSIX shell that holds a `\r` (from `$'\r'`) is undecidable. Scripts for cmd, powershell and pwsh are unchanged (new isWindowsShell).
+2. **Continuation in `$(…)`.** readDelimited joins a backslash-newline before it reads anything else, as splitSegments does. The pair goes into body only, not into visible, and leaves wordStart unchanged.
+3. **`<<` in arithmetic.** Each of these is undecidable:
+   - a `$((…))` whose body holds `<<`;
+   - an unquoted `((` that holds `<<` before its parentheses close (new arithmeticShift; counts depth; covers `((…))` and `for ((…))`);
+   - a `<<` while the segment so far has more `[` than `]` (`$[…]`, `a[1<<2]=3`).
+4. **Compound receivers.** A `<<` is undecidable in either of these cases:
+   - the segment began at a `)` or `}` (afterCompound);
+   - the segment's first word is fi, done or esac, also with a redirection glued on, as in `fi>log` (new closesCompound).
+
+   Simple commands keep the current rule. The comments on pending and hereDoc now say what the code does: only a shell in a segment that ends on the line at or after the operator marks the bodies.
+5. **source and `.`.** namesShell counts `source` and `.` as shells.
+
+**Added by me** (my decision, not in the review). Each comes from a bash check:
+- A line continuation is undecidable right after `$`, `<` or `(` outside quotes, or after `$` inside double quotes. bash joins it into `$(`, `<<` or `((`.
+- So is a continuation inside a `${…}` operator word (readBrace).
+- Probes that pass on HEAD today:
+  - `echo "$\⏎(touch M)"` and `echo ${x:-$\⏎(touch M)}` are ALLOWED under all three policies.
+  - `cat <\⏎<EOF⏎it's⏎EOF⏎touch M` is D=ALLOW.
+- **New finding, a round-1 bypass:** `echo $((1<<2⏎))⏎touch M⏎2` was D=ALLOW because the here-doc swallowed the `))`. The `$((` check closes it, and there is a test for it.
+- The denyCommand comment now names the indirection class for here-docs: `f <<EOF` and `$X <<EOF`.
+
+**Tests**
+- TestShellComments:
+  - hidden: x7, lc1, lc3, lc4;
+  - plain: `echo $(echo x\⏎#c ) <<'E'⏎touch M )⏎E`. Here the continuation joins x and #c, so the `)` closes the substitution. bash runs nothing.
+  - x6 `echo x \⏎# c ; touch M` is allowed under the deny rule.
+- TestHereDocuments:
+  - source/`.`: src1, src2.
+  - Compound receivers: sh1-sh4, `fi>/dev/null`, for…done, case…esac.
+  - Arithmetic: ar1-ar4, `$[ 1 << 2 ]`, `$(( 1 << 2 ))`, nested arithmetic parentheses, an array subscript, the multi-line `$((`.
+  - A here-doc on a simple command inside a loop stays decidable.
+- TestBackslashEscapes:
+  - hidden: a continuation after `$`, after a quoted `$`, inside `<<`, inside `$((1<<2))`, inside `((`, and in a parameter word;
+  - plain: `echo a \⏎  b` and `echo $x\⏎y`.
+- New TestCarriageReturns:
+  - r1-r6 and `bash -c $'echo x\r#;touch M'` are undecidable and denied.
+  - PowerShell:
+    - `echo a\r\necho b` (and with `\r` alone) is allowed under PowerShell(echo *) and under a deny rule;
+    - `echo a\r\nRemove-Item x` is denied by the allowlist and blocked by deny PowerShell(Remove-Item *).
+- **Changed claim:** TestShellSegments row `a\nb\r\nc` used to expect [a b c]. It now expects none, per decision 1. The PowerShell split it pinned now lives in TestCarriageReturns.
+- Run against the round-1 code (HEAD plus the reviewed patch, as an overlay), 30 of the new subtests fail. The rest are pins that round 1 already denied: x7, `$\⏎(`, `$((1<\⏎<2))`, `$[ 1 << 2 ]`, `$(( 1 << 2 ))`.
+
+**Mutations** (go test -overlay, tree never edited)
+- 19 of 19 round-2 mutants killed. The reviewer's **R1** (a continuation always starts a word) is killed by TestShellComments/x7.
+- N1-N18:
+  - the `\r` check off; PowerShell read as Bash; `\r` accepted in a nested shell;
+  - readDelimited with no continuation, or with a continuation that starts a word;
+  - no `$((` check, no `[` check, no `((` check; arithmeticShift stopping at the first `)`;
+  - no `)`/`}` receiver check, no fi/done/esac check, closesCompound without the redirection cut;
+  - no source/`.`, no `.` alone;
+  - no operator check outside quotes, only `$` checked, no `$` check in double quotes, continuation in a `${…}` word accepted.
+- Two mutants survived the first run: N5 and N6. I added the two tests above (the plain substitution, the multi-line `$((`), and they kill both.
+- The round-1 mutants (M1-M20 without M16) were rerun on the final code: 19 of 19 killed.
+
+**Probe matrix**
+- 201 probes: my 96, the reviewer's 70 (probes and probes2), and 35 for round 2.
+- Each went through Decide on HEAD, round 1 and the tree, under three policies:
+  - A: echo/cat/git
+  - D: allow_all + deny touch
+  - B: bash/echo/cat
+- Each ran in real bash three ways: script file, bash -c, eval.
+- Bypasses: HEAD 39, round 1 35, tree 4. No decision is looser than round 1 anywhere.
+- The 4 left:
+  - envS, envS2: now k184.
+  - x8 `eval "$(cat <<'EOF'…)"`: the accepted class (decision note).
+  - `f() { bash; }; f <<'EOF'⏎touch M⏎EOF`: D=ALLOW, A and B deny. **Open for you.** It belongs to the same class as:
+    - `X=bash; $X <<'EOF'…`
+    - `"$(command -v bash)" <<'EOF'…`
+    - `cat <<'EOF' > s.sh … bash s.sh`
+
+    All three are D=ALLOW on the tree. HEAD denied them under D only because it split every body as commands. `cat <<'EOF' | xargs touch` is D=ALLOW on HEAD too. I did not fix this. I recommend accepting it as the heuristic gap. The README's gap sentence could name "a here-document read by a function or by a shell named through a variable". If not, it needs a card.
+- Harmless probes the tree denies:
+  - h6, h28, x1-x3: undecidable here-doc shapes, the same as round 1.
+  - `{ cat; bash; } <<'EOF'` and `sudo source …`: they fail closed by decisions 4 and 5.
+- Known fail-closed side effects of decision 4 (my reading):
+  - a here-doc in a segment that begins at any `)`, so `case x in a) cat <<EOF` on one line, or `cat <(echo) <<EOF`;
+  - an unbalanced `[` before a `<<` ("echo "[" <<EOF").
+
+**README items for your list:**
+- `\r` in a Bash command is denied; PowerShell splits at it.
+- A here-doc attached to a compound command.
+- A `<<` in arithmetic or in an array subscript.
+- A line continuation after `$`, `<` or `(`, or inside a `${…}` word.
+- `source` and `.` read a here-doc as a script.
+
+**Windows:** the PowerShell `\r` path and the toolName passing compile for Windows (GOOS=windows vet, make windows). They ran only on Linux, through the Linux test run. Unverified on Windows.
+
+**Full check, green:**
+- gofmt -l cmd internal skills: empty.
+- go vet ./... and GOOS=windows go vet ./...: clean.
+- go test -count=1 ./...: ok.
+- go test -race ./internal/config: ok.
+- make linux and make windows: ok.
+
+**Proposed commit:**
+- subject: "Read comments, here-documents and escapes as bash does (k127)"
+- Changes entry: "Permission rules read comments, line continuations, backslash escapes and here-documents as bash does, and deny what they cannot follow: a carriage return in a Bash command, a here-document on a compound command, a << in arithmetic (k127)
+
+Round 2 ready for review. All 6 decisions are implemented, plus continuations after $ < ( and inside ${…} words, which are now undecidable. Probe matrix on 201 probes: bypasses HEAD 39, round 1 35, tree 4 (envS/envS2 = k184, x8 = accepted, a function reading a here-doc = open, see note). No decision is looser than round 1. Mutants: 19 of 19 round-2 killed (R1 by x7), 19 of 19 round-1 rerun killed. Full check green, make windows included. README not touched. Details in the previous note.
+
+**Main agent's decision 2026-11-21: the one open bypass in round 2**
+
+The remaining open bypass is a here-document read by a shell the line does not name:
+- `f() { bash; }; f <<'EOF'`
+- `X=bash; $X <<'EOF'`
+- `"$(command -v bash)" <<'EOF'`
+- a script written with `cat <<'EOF' > s.sh` and run later
+
+**Decision:** I accept this as part of the heuristic gap, with no new card. It is the same class as variable indirection and `eval "$(...)"`, which the README already names. A deny list under allow_all is a guard rail. The allowlist (A and B) still denies all four.
+
+The README's gap sentence will name the class. I am writing it myself in this worktree, together with the README list from decision 7:
+- `\r`;
+- compound receivers;
+- `<<` in arithmetic or in an array subscript;
+- a continuation after `$`, `<`, `(` or inside a `${...}` word;
+- `source` and `.` as shells;
+- the delimiter forms that fail closed;
+- a here-document inside backquotes.
+
+**Fail-closed side effects of decision 4, also accepted:** a here-document after a `)` on the same line, and one after an unbalanced `[`. Both are rare in agent commands. Neither gets a card.
+
+**Next:** README by the main agent, then a re-review by unreagent-reviewer.
+
+**unreagent-reviewer 2026-11-21, round 2: verdict CHANGES NEEDED.** Worktree based on 602304e. Files: internal/config/permission.go, internal/config/permission_test.go, README.md. Decisions 1, 2, 4, 5 and 6 hold. Decision 3 (`<<` in arithmetic) has two holes, and both are allowlist bypasses that HEAD denied. Probes ran through Decide under A (echo/cat/git), D (allow_all, deny touch) and B (bash/echo/cat). Each probe also ran in real bash 5.2 three ways: script file, `bash -c` and eval. Files: scratchpad k127-rr2/ (rr2.txt, rr2b.txt, pwsh.txt, *-result.txt, bypasses-*.txt).
+
+**Findings, most important first:**
+
+1. **permission.go:694-695: the `[` balance check is fooled by an earlier `]`.**
+   - Probes, all A, D and B ALLOW, and bash runs `touch M` in each:
+     - `echo ] $[1<<2]⏎touch M⏎2]`
+     - the same with `"]"`, `\]` or `]$[`
+     - `git log --format=] $[1<<2]…`
+     - inside `$(…)`
+   - Under D: `b=] a[1<<2]=3⏎touch M⏎2]=3`.
+   - HEAD denied all of them.
+   - Fix direction: fail closed on any unquoted `[` before the `<<` in the segment (presence, not balance), or read `$[…]` to its `]` as `$((` is read.
+2. **permission.go:869-887: arithmeticShift counts every `)`, including quoted and escaped ones.** bash skips those when it looks for the `))`.
+   - Probes, A, D and B ALLOW: `(( echo ")" ")" <<2 ))⏎touch M⏎2` and `(( echo \) \) <<2 ))…`.
+   - D ALLOW: `(( ')' ')' <<2 ))`, `(( $(echo "))") <<2 ))` and `for (( echo ")" ")" <<2 ;; ))…`.
+   - bash runs `touch M` in each. HEAD denied them.
+   - Fix direction: find the closing parentheses as bash does (skip quotes, backslashes and `$(…)`, e.g. with readDelimited as substitution() does for `$((`). Or fail closed on any `<<` after an unquoted `((`.
+   - Pin probes for findings 1 and 2 in TestHereDocuments.
+3. **permission.go:649 with :530-539: PowerShell lines get bash's `#` comment rule, but PowerShell has `<# … #>` block comments.**
+   - Probes under PowerShell(echo *) and under a deny on PowerShell(Remove-Item *), all ALLOW: `echo x <# c #> ; Remove-Item M`, `echo x <#⏎#> ; Remove-Item M` and `Write-Output a <#c#>; Remove-Item M`.
+   - HEAD denied all three. PowerShell runs the Remove-Item after `#>`.
+   - **Unverified:** there is no pwsh on this host. This follows PowerShell's documented block-comment syntax.
+   - The here-document rule reaches PowerShell too: `echo x <<EOF⏎Remove-Item M⏎EOF` is now ALLOW (HEAD denied it). That is harmless only if PowerShell rejects `<` as reserved, which is also unverified.
+   - Fix direction: for PowerShell, a `<#` (and a `<<`) makes the line undecidable, or the comment and here-document rules apply to Bash only. Pin both.
+4. **README.md:789, "a here-document inside backquotes", claims more than the code denies.**
+   - `` echo `cat <<'EOF'⏎x⏎EOF⏎` `` is allowed under A, D and B, which is correct.
+   - Only one whose body lies outside the backquotes (`` echo `cat <<'EOF'`⏎x⏎EOF ``) is denied. Say that.
+5. **README.md:792, "one after any `)` on the same line", also claims too much.**
+   - `(echo a); cat <<'EOF'…` and `(echo a) && cat <<'EOF'…` are allowed.
+   - The side effect covers only a here-document in the segment that begins at the `)`, e.g. `case x in a) cat <<EOF` or `cat <(echo) <<EOF`.
+6. **README.md:793, "any `<<` inside arithmetic", is not backed until findings 1 and 2 are fixed.**
+7. **README.md:778-780 leaves out a denial (minor).** The code also denies a script handed to a POSIX shell that holds a carriage return: `bash -c $'…\r…'`, and under PowerShell `bash -c '…<CR>…'`. The PowerShell clause says only that the command is split.
+8. **Your decision: a pipeline that continues after the here-document body.**
+   - `cat <<'EOF' |⏎touch M⏎EOF⏎bash`, and the same with `sh`, `|&` or `| (…bash)`: D ALLOW. HEAD denied them. A and B deny.
+   - This is the `... | bash` class the gap sentence names. But README.md:753-754 ("cat <<EOF | sh") reads as if the pipe is followed.
+   - Either accept it and say "a shell named on the operator's line", or fail closed when a line with a pending here-document ends in `|` or `|&`.
+
+**What holds:**
+- All 201 probes from round 1, the worker and round 2 still give 4 bypasses, all accepted: envS and envS2 (k184), x8, and n2fn.
+- Of 96 new probes:
+  - `\r` through `\x0d`, `\015`, `\cM`, `\u000d` and `\U0000000d`, and inside a body handed to a shell: denied.
+  - 18 compound-receiver shapes: all denied. Among them `}<<`, `done<<`, `fi\⏎<<`, `f\⏎i`, `select`, `time {…}`, `coproc`, and multi-line if and for.
+  - source and `.` (`builtin`, `command`, `\.`, quoted, piped): all denied.
+  - Continuations inside `$(…)`, in double quotes and in backquotes, and a comment ending in `\`: read as bash reads them.
+  - `$\⏎(`, `<\⏎<`, `>\⏎(` and `$((`-family shapes: denied or harmless.
+- Accepted class, no finding:
+  - `bash <(cat <<'EOF'…)` and `bash <<<"$(cat <<'EOF'…)"`, a command's output run as code;
+  - `exec 0<<'EOF'…⏎bash`, a shell the line does not name.
+- Ordinary forms stay allowed: the commit here-doc, `[x]` in a body, `$HOME` in an unquoted body.
+- The x7 pin kills R1. With `wordStart = true` at :661, only TestShellComments/x7 fails.
+- The README's heuristic sentence, the `source`/`.` sentence, the continuation item and the first two here-doc items match the code.
+- No German in the added lines. Scope: only the three files. README.md belongs to unreagent-doc-writer in OWNERS; the main agent wrote prose, which the rule allows.
+
+**Drift, not k127:** README.md:777 and the unreleased Changes entry (Changes:333-335) say process substitution is denied. Only one inside a `${…}` word is. `cat <(echo x)` is allowed under A on HEAD and on the tree. That is safe, because the body is a segment of its own. Fix the wording here or on a card.
+
+**Check, run by me, all exit 0:** `gofmt -l cmd internal skills` (empty), `go vet ./...`, `GOOS=windows go vet ./...`, `go test -count=1 ./...`, `go test -count=1 -race ./internal/config`, `make linux`, `make windows`. The tree is unchanged after the run.
+- **Windows:** compiled only. The PowerShell paths (finding 3, the `\r` split) ran only through the Linux tests: unverified.
+- **Applies on main** dae0492: `git apply --cached --check` on a scratch index is clean; README hunks land at offset +17. In a scratch worktree of main with the patch, `go test ./internal/config` and `go vet` pass. The worktree is removed again.
+
+**Changes, proposed.** Fold everything into the k113 entry (Changes:333-335) and replace it with:
+"Bash rules read comments, line continuations, here-documents and backslashes inside double quotes and backquotes as bash does, so none of them hides a command from an allow or deny rule. A here-document body is data unless its line hands it to a shell (bash <<EOF, cat <<EOF | sh, source): git commit -m "$(cat <<'EOF' ... EOF)" passes with Bash(git *) and Bash(cat *). A Bash command the tokenizer cannot read with certainty is denied: an unfollowable $'...', a non-plain ${...}, a process substitution inside ${...}, nesting too deep, a carriage return, a here-document it cannot skip safely or one on a compound command, and a << inside arithmetic ($((1<<2)) included)."
+- "inside ${...}" fixes the drift above.
+- Drop "$((1<<2)) included" if k171 lands first.
+
+**Next:** back to unreagent-worker for findings 1-3. Then README.md:753-754 and :778-793 by you, finding 8 after your decision. Then re-review.
+
+**Main agent's decisions 2026-11-21, round 3** (after the round-2 re-review)
+
+Fail closed rather than balance brackets. k171 lifts shifts in arithmetic properly later.
+
+1. **`[` before `<<` (finding 1).** Inside one simple command, a `<<` that follows an unquoted `[` anywhere earlier in that command is undecidable. That covers `$[…]` and array subscripts, and it holds inside `$(…)` as well. A `[` in a here-document body or after the `<<` does not count. A `[ … ]` test split off by `&&`, `;` or `|` is a separate segment and is not affected.
+2. **`((` before `<<` (finding 2).** A `<<` that follows an unquoted `((` or `$((` anywhere earlier in the same simple command is undecidable, `for ((…))` included. The `)` counting in `arithmeticShift` is dropped where this rule makes it redundant. Keep it only if it still serves another check, and say which one.
+3. **PowerShell (finding 3).** The k127 rules (comments, line continuation, backslash escapes, here-documents) apply to Bash only. PowerShell keeps HEAD's splitting plus the `\r` line break. A PowerShell command holding `<#` is undecidable: block comments are not modelled, and `<# x #>Remove-Item M` passes a deny rule on HEAD as well. Pin these:
+   - `echo x <# c #> ; Remove-Item M`
+   - `Write-Output a <#c#>; Remove-Item M`
+   - `echo x <<EOF⏎Remove-Item M⏎EOF`
+   - `<# x #>Remove-Item M`
+   Each must be denied by PowerShell(echo *) and blocked by a Remove-Item deny rule.
+4. **A pipe after a pending here-document (finding 8).** When a line that opens a here-document ends in `|` or `|&`, the command is undecidable: the pipeline continues after the body (`cat <<'EOF' |⏎touch M⏎EOF⏎bash`). The README will say that the receiving shell must be named on the line that opens the here-document.
+5. **Tests.** Pin every shape from the round-2 review's findings 1-3 and 8 as denied under A, D and B: the `]`/`"]"`/`\]`/`--format=]` variants, the `$(…)` one, `b=] a[1<<2]=3`, the quoted or escaped `)` variants, `for ((…))`, and the pipe form. Each pin must fail on the round-2 code. Show that with an overlay mutation per rule.
+
+**README** is mine, in this worktree, in parallel. The review's items 4-7 are:
+- backquotes;
+- the `)` side effect;
+- the arithmetic wording;
+- `\r` in a nested shell script.
+
+I also correct the process-substitution claim: only one inside `${…}` is denied. Then a narrow re-review follows, and the Changes entry becomes the reviewer's proposed wording.
+
+**Round 3 (decisions 1-5): done, back to review.** Only internal/config/permission.go and permission_test.go changed; README untouched. Not committed. Built on 602304e. Files: scratchpad k127-w3/ (matrix.sh, probes-all.txt, probes-w3.txt, m-all/report.txt, m-pwsh/report.txt, mutate.py, mutations.txt, check.txt, r3-permission.diff).
+
+**permission.go**
+1. **`[` before `<<`.** A per-segment flag (segArith) is set by any unquoted `[`; a `<<` after it in the segment is undecidable. Quoted or escaped `[` does not count, so `echo "[" <<'EOF'` is allowed again (round 2 denied it).
+2. **`((` before `<<`.** An unquoted `((` sets a flag for the rest of the line (arith); a `$((...))` sets segArith. arithmeticShift and its `)` counting are gone entirely: nothing still needed them.
+   - My reading of "same simple command": bash's `((…))`, `$[…]` and `a[…]` run on across `;`, `|` and newlines, and the splitter does not find their end without balancing. bash 5.2 runs the touch in `(( ")" ")" ; <<2 ))⏎touch M⏎2`, `(( 1⏎<<2 ))⏎touch M⏎2`, `a[1⏎<<2]=3⏎touch M⏎2]=3` and `echo $[1⏎<<2]⏎touch M⏎2]`, and round 2 allowed all four under D. So arith lasts to the end of the line. It is set by `((` and by any `[` other than the test words `[` and `[[` (`$[`, `a[`, `a=([`, globs).
+   - **Added by me, same class:** inside arithmetic a `#` is no comment. bash runs the touch in `(( x #)) ; touch M`, `echo $(( 1 #((⏎) )) ; <<2 )⏎touch M⏎2` and `echo $(echo $[ 1 #]) ; touch M⏎)`, and round 2 allowed them under D (and the last one under A and B). Fixes:
+     - a word-start `#` after arith is undecidable;
+     - a `$((` body holding `<<` or a word-start `#` is undecidable (new startsComment; `$(( 16#ff ))` stays allowed);
+     - readDelimited keeps comments in body (not in visible), so the nested split reads them again and fails closed.
+3. **PowerShell.** splitSegments, readDelimited and readBackquote take a `bash` flag. Without it (PowerShell, and scripts handed to cmd, powershell or pwsh), these are off: comments, line continuations, here-docs and here-strings, the `$((` comment check, and readBackquote's backslash rule (every backslash is dropped, as on HEAD). A line holding `<#` is undecidable. `\r` stays a line break.
+   - **Not gated, my call:** shellTokens. Its double-quote backslash rule is shared by pattern matching, has no tool context, and is closer to PowerShell (which has no backslash escape) than HEAD's. Threading the tool through every caller was out of proportion here.
+   - **Not gated:** readBrace's continuation check. It is fail-closed only.
+4. **Pipe.** A newline with pending here-docs is undecidable when the last break on the line was `|` or `|&`, or a `(` or `{` right after one. That covers pl10 `| (…bash)` and `| {`, and a comment after the pipe. `||` does not count.
+
+**Tests (permission_test.go)**
+- New TestArithmeticBeforeHereDocuments, pinned under A, D and B (checkHidden):
+  - ab1-ab6, aB1-aB3, the `$(…)` one (ab4) and `b=] a[1<<2]=3`;
+  - aq1-aq5, aA1-aA4 (`for ((…))` is aA3);
+  - pl1, pl2, pl9, pl10, plus a pipe before `{`, before a comment, and inside a substitution;
+  - the spanning and comment shapes above.
+- Plain under the deny rule and decidable: `[ -f x ] && cat <<'EOF'`, the same split by a newline, `[[ … ]] &&`, `echo "[" <<'EOF'`, `[x] $[1<<2]` inside a body, `echo $((1+2)) # sum`, `$((1+2)) ; cat <<'EOF'`, `$(( 16#ff ))`, `cat <<'EOF' | cat`, `cat <<'EOF' ||`.
+- Undecidable side effects pinned: `echo $((1)) <<'EOF'`, `[ -f x ] <<'EOF'`, `(( n++ ))⏎cat <<'EOF'`, `for ((…)); do cat <<'EOF'…done`, `a[0]=1 ; echo x # note`.
+- New TestPowerShellLines:
+  - the four card shapes plus `echo x <#⏎#> ; Remove-Item M`, `echo x # c ; Remove-Item M` and a backslash-newline before `; Remove-Item M`. Each is denied by PowerShell(echo *) and blocked by deny PowerShell(Remove-Item *).
+  - `pwsh -c '<#…#> ; touch M'` from bash is denied, the readBackquote no-bash case is checked, and `echo x # note` and `Write-Output 'a # b'` stay allowed.
+
+**Fails on round 2.** The round-2 file cannot be overlaid under the new tests: readBackquote's signature changed. The matrix shows the round-2 decisions directly: every pinned bypass shape is ALLOW on round 2 under at least one of A, D and B (m-all/report.txt, "stricter than round 2"). Per rule, 18 overlay mutants were run with go test -overlay; the tree was never edited.
+- **17 of 18 killed.** K3 reverts decision 1 to round 2's `[`/`]` count and kills ab*/aB*. K4 and K5 revert decision 2 (no `((` flag, or a per-segment one) and kill aq*/aA* and the spanning pins. K10-K13 cover decision 3, K15-K18 decision 4, and K1, K2 and K6-K9 the remaining rules.
+- **K14 survives** (readDelimited reads comments for PowerShell). It is equivalent: the comment now stays in body, and the nested split without bash's rules reads it as plain text, so both versions deny the same shapes. I kept the gate so that PowerShell's visible text stays as on HEAD.
+
+**Probe matrix**
+- 342 Bash probes: all201 (my 201), the reviewer's rr2 (87), rr2b (15) and bq3 (3), and 36 new ones of mine (w*, wp*). Each went through Decide on HEAD, round 2 and the tree under A, D and B. Each ran in bash 5.2.37 three ways: file, -c and eval.
+- PowerShell: 16 probes (pwsh.txt plus 7 new ones).
+- **Bypasses:** HEAD 42, round 2 38, tree 7. All 7 are in classes you already accepted: envS and envS2 (k184), n2fn, x8, pl4, pl5 and pl7 (a command's output run as code, or a shell the line does not name).
+- **Looser than round 2:** one probe, wp4 `echo "[" <<'EOF'…`. It is harmless (bash runs nothing), and decision 1 counts only an unquoted `[`.
+- **Harmless shapes newly denied** (bash runs nothing hidden):
+  - aq9 `echo $(( 1 ))<<2…` and wp15 `echo $((1)) <<'EOF'`, by decision 2;
+  - wp9 `(( n++ ))⏎cat <<'EOF'` and wp10 `for ((…)); do cat <<'EOF'…done`, because `((` lasts to the end of the line;
+  - wp11 `a[0]=1 ; echo x # note`, wp12 `for ((…)); do echo; done # loop` and wp14 `ls *.[ch] # sources`: a comment after arith;
+  - w6 `echo a[1⏎<<2]…` (a non-test `[`);
+  - w3, w4, w5: comments inside `$[`, `a[` and `a=([`. bash aborts those lines.
+- **PowerShell:** p1, p2, p6, p8, p9 and q1-q3 were ALLOW on round 2 and are now denied. p7 and q4 (`<#…#>Remove-Item M`) are now denied under D as well, where HEAD and round 2 allowed them.
+
+**Check, all exit 0:**
+- `gofmt -l cmd internal skills`: empty.
+- `go vet ./...` and `GOOS=windows go vet ./...`.
+- `go test -count=1 ./...` and `go test -race ./internal/config`.
+- `make linux` and `make windows`.
+- After a final doc-comment-only edit, `go test ./...`, gofmt, `make linux` and `make windows` were rerun: green.
+
+**Windows:** compiled only. The PowerShell paths ran only through the Linux tests, and there is no pwsh on this host. They follow PowerShell's documented syntax: unverified.
+
+**For the README (main agent):**
+- In a Bash command, a `<<` after an unquoted `[` or a `$((...))` in its command is denied. So is a `<<` or a comment anywhere after an unquoted `((`, or after a `[` other than the test `[`/`[[`, on the same line.
+- A here-document line that ends in `|`/`|&` is denied.
+- PowerShell lines are split without bash's comment, continuation, backslash and here-document rules, and a `<#` makes one undecidable.
+
+**Proposed commit:** subject and Changes entry as in the reviewer's round-2 proposal; extend "a << inside arithmetic" to "a << or a comment that may stand in arithmetic, a here-document line ending in a pipe, and a PowerShell <# block comment".
+
+Correction to the round-3 note:
+- Mutant groups (scratchpad k127-w3/mutations.txt): K1-K3 decision 1 (K3 = round 2's [/] count), K4-K6 decision 2, K7-K9 my added comment rules, K10-K14 decision 3 (K14 the equivalent survivor), K15-K18 decision 4.
+- 'b=] a[1<<2]=3' is pin ab3, not an extra pin.
+- README.md shows as modified in the worktree: that is the main agent's parallel edit; I did not touch it.
+
+Round 3 done: decisions 1-5 in internal/config/permission.go + permission_test.go only, plus a comment-in-arithmetic gap found on the way (same class, pinned). Matrix (342 Bash probes): bypasses 7 (all accepted classes) vs 38 on round 2; one probe looser (echo "[" <<'EOF', harmless, per decision 1); harmless newly denied shapes listed in the note. 17/18 overlay mutants killed, K14 equivalent. Full check green, make windows ok; PowerShell paths unverified on Windows. Not committed.
+
+**unreagent-reviewer 2026-11-21, round 3: verdict CHANGES NEEDED.** Worktree on 602304e. Files: internal/config/permission.go, internal/config/permission_test.go, README.md. Decisions 1-5 are implemented as written, with the worker's additions. One new allowlist bypass stops the commit. HEAD denied it, and it dates from round 1's here-document modelling: my round-1 and round-2 probes missed it. Policies: A = echo/cat/git, D = allow_all with deny touch, B = bash/echo/cat. Each probe ran in bash 5.2 three ways (file, -c, eval). Files: scratchpad k127-rr3/ (rr2m/rr3.txt, rr3b.txt, ps3.txt, rr3-joined.tsv, ps3-joined.tsv, w3m/, fixsketch/).
+
+**Findings, most important first:**
+
+1. **permission.go:733-756: a here-document body starts too early.** splitSegments starts the body at the first unquoted newline after `<<`. bash starts it at the first newline token. A newline inside `((…))`, `$[…]`, an `a[…]` subscript or a process substitution `<(…)`/`>(…)` is not one, because bash reads those raw. `$(…)`, backquotes, `${…}` and quotes are read to their end and agree with bash. So every line until the construct closes is a body to the splitter and commands to bash.
+   - A, D and B ALLOW, bash runs `touch M`: nl1 `cat <<'EOF' ; ((⏎1⏎)) ; touch M⏎x⏎EOF`, nl2 `cat <<'EOF' ; echo $[⏎1⏎] ; touch M⏎x⏎EOF`, nl9 (`$[ 1⏎]`), nl5 `cat <<'EOF' <(⏎echo a⏎) ; touch M⏎x⏎EOF`. A and D: nm6 `git log <<'EOF' <(⏎echo⏎) ; touch M…`.
+   - D ALLOW: nl3 `a[⏎1⏎]=2 ; touch M`, nl6 `for ((⏎…⏎))`, nl8 `(( 1⏎))`, nl4 `cat <<'EOF' > >(⏎bash⏎)⏎touch M⏎EOF` (the procsub is asynchronous; checked by hand with a sleep).
+   - This is not decision 1 or 2. Those cover a `<<` after the `[`/`((`; here the `<<` comes before it.
+   - Fix direction, checked as an overlay sketch with the tree untouched (fixsketch/): a newline with pending here-docs while `arith` is set is undecidable, and so is a `(` after `<` or `>` while here-docs are pending. The suite stays green and all 12 probes are denied. Side effect: harmless `cat <<'EOF' ; echo $[ 1 ]⏎…` is denied too. Pin nl1, nl2, nl3, nl4, nl5 and nl8. Each pin must fail on the tree.
+2. **permission.go:734-740 (afterPipe) with README "or pipes into a `(` or `{`": the pipeline goes on through a compound command.** Decision 4 holds as written: the line ends in `|`/`|&`, or in a `(`/`{` right after one. A compound command opened after the pipe and still open at the newline does the same.
+   - D ALLOW (A and B deny), bash runs `touch M`: pc1 `cat <<'EOF' | { echo;⏎touch M⏎EOF⏎bash; }`, pc2 `| (echo;⏎…bash)`, pc3 `| if true; then⏎…bash; fi`, pc4 `| while true; do⏎…bash; break; done`, pc5 `| { echo⏎…`, pc6 `| for x in 1; do⏎…`. HEAD denied them.
+   - The README sentence claims pc1/pc2 are denied.
+   - Your call: extend the rule, or narrow the README to "ends in `|` or `|&`, or in a `(` or `{` right after one" and accept this as the pl7 class. Extending would make undecidable a pending here-doc at a newline whose pipeline has opened a group, subshell or compound command after a `|` that is still open. I recommend extending: decision 4's reason applies as it stands.
+3. **README.md, the arithmetic item of the unreadable list: claims the code does not back.**
+   - "a comment … after a `$((...))` in the same command": only a `<<` fails there. `echo $((1+2)) # sum` is allowed and pinned as plain.
+   - The same clause leaves out the test `[`/`[[`. Any unquoted `[` marks its command, so `[ -f x ] <<'EOF'` is denied (pinned).
+   - Write it as: "a `<<` after any unquoted `[` or a `$((...))` in the same command".
+   - "up to the end of the line" is wrong: `arith` is never reset, so it lasts to the end of the command. ar1 `(( 1 ))⏎cat <<'EOF'⏎x⏎EOF` and the pinned wp9 are denied. Write "for the rest of the command". The worker should correct the code comments at permission.go:505-509 and :580-590 the same way ("its line", "the rest of the line").
+4. **README.md, PowerShell sentences (minor).**
+   - The `<#` sentence names only a PowerShell command. A `<#` in a script that Bash hands to `powershell`, `pwsh` or `cmd` is denied too (pinned: `pwsh -c '<#…#> ; touch M'`).
+   - "These rules apply to `Bash` only" also covers the double-quote backslash rule. That rule applies to PowerShell matching as well (shellTokens). Narrow it to "The comment, line-continuation and here-document rules".
+5. **Pre-existing PowerShell bypasses, for k114 rather than k127.** Decision 3 keeps HEAD's split, and HEAD gives the same decisions. Unverified: no pwsh here; the reading follows PowerShell's documented syntax.
+   - A, D and B ALLOW:
+     - ps1 `echo x # it's⏎Remove-Item M`: the card's own bug 1, in PowerShell;
+     - ps2 `echo "a\" ; Remove-Item M ; echo "b"`: PowerShell has no backslash escape;
+     - ps4 `echo ${env:-\}; Remove-Item M; echo {}`: readBrace's backslash.
+   - D ALLOW: ps3 `` echo `"a`" ; Remove-Item M `` and ps5, a here-string `@"⏎"⏎"@; Remove-Item M`.
+   - Please add them to k114.
+
+**Judged:**
+- **shellTokens** keeps bash's double-quote backslash rule for PowerShell: accepted. Segment boundaries come from splitSegments, so this cannot open a bypass. It is also closer to PowerShell than HEAD: `"\'"` stays `\'`. The real PowerShell gap is finding 5.
+- **readBrace's ungated continuation check:** accepted. It only returns ok=false. Its backslash escape is ps4, which is pre-existing.
+- **K14:** equivalent, I agree. The comment stays in body, and the nested split without bash's rules reads it as text. visible only drops it from the outer segment, which outputRedirections reads again without it. I found no input where the decisions differ.
+- **Worker additions:**
+  - a non-test `[` counts, to the end of the command, not of the line;
+  - `#` inside arithmetic;
+  - `$((…))` holding `<<` or a word-start `#`;
+  - cmd/powershell/pwsh scripts read the PowerShell way;
+  - a pipe into `(`/`{` right after the pipe.
+  All present and pinned. No German in the added lines. Scope: the three files only.
+
+**Probes:**
+- The worker's matrix, rerun under `timeout 900` into k127-rr3/w3m: 342 Bash probes and 16 PowerShell probes. It gives the same 7 tree bypasses as the worker's report. The joined table is identical except for a bash-side flake on rr2.lq13, which is denied everywhere.
+- The 7 by class:
+  - envS and envS2: k184;
+  - x8: eval and pipe-to-shell;
+  - n2fn: an unnamed shell;
+  - pl4 `bash <(cat <<'EOF'…)` and pl5 `bash <<<"$(cat <<'EOF'…)"`: a command's output run as code, the x8 class. Both are also B ALLOW, as in round 2;
+  - pl7 `exec 0<<'EOF'⏎…⏎bash`: a shell not named on the operator's line, the n2fn class.
+  - No new class. My round-2 files are part of that matrix (rr2, rr2b, bq3, pwsh).
+
+**Check, run by me, all exit 0:**
+- `gofmt -l cmd internal skills` (empty);
+- `go vet ./...` and `GOOS=windows go vet ./...`;
+- `go test -count=1 ./...` and `go test -count=1 -race ./internal/config`;
+- `make linux` and `make windows`.
+- The tree is unchanged after the run.
+- Windows: compiled only; the PowerShell paths are unverified.
+
+**Applies on main:** main is now f0c7132, and nothing since 602304e touches permission*.go. `git apply --cached --check` on a scratch index is clean; README lands at offset +38. In a scratch worktree of main with the patch, `go test ./internal/config ./cmd/launcher` and `go vet ./...` pass. The worktree is removed again.
+
+**Changes, final wording.** It replaces the k113 entry under {{$NEXT}} (Changes:350-352):
+"Bash rules read comments, line continuations, here-documents and backslashes inside double quotes and backquotes as bash does, and a script handed to bash -c keeps its line breaks, so none of them hides a command from an allow or deny rule. A here-document body is data unless the line that opens it hands it to a shell (bash <<EOF, cat <<EOF | sh, source): git commit -m "$(cat <<'EOF' ... EOF)" passes with Bash(git *) and Bash(cat *). A Bash command the tokenizer cannot read with certainty is denied: an unfollowable $'...', a non-plain ${...}, a process substitution inside ${...}, nesting too deep, a carriage return, a here-document it cannot skip safely, one on a compound command or one whose pipeline goes on after its body, and a << or a comment that may stand in arithmetic ($((1<<2)) included). A PowerShell command is split without these rules, and one holding a <# block comment is denied."
+- If finding 2 is narrowed rather than extended, write "or one on a line that ends in a pipe".
+- Drop "($((1<<2)) included)" if k171 lands first.
+
+**Next:**
+1. unreagent-worker: findings 1 and 3 (the code comments), and finding 2 once you decide.
+2. You: README findings 2-4.
+3. Finding 5 to k114.
+4. Then a narrow re-review: the new pins, the matrix, and probes rr3/rr3b.
+
+**Decision 2026-11-21 (main agent), round 4, on the round-3 re-review:**
+
+1. **Finding 1 (body starts too early): fail closed.**
+   - While here-documents are pending, a newline is undecidable when it stands:
+     - inside `((…))`, `$((…))` or `$[…]`;
+     - in a subscript `a[…`;
+     - inside a `<(…)` / `>(…)` that opens on the line.
+   - The reviewer's overlay sketch (scratchpad k127-rr3/fixsketch) is the starting point, not the spec. The worker may simplify, as long as it fails closed.
+   - `git commit -m "$(cat <<'EOF' … EOF)"`, and a here-document inside `$(…)` in general, stays allowed.
+2. **Finding 2 (pipeline goes on after the body through a compound command): extend the rule, don't narrow the README.**
+   - Decision 4's reason fits these cases: the body may be read by a command on a line after it.
+   - A here-document whose opening line pipes into a group or compound command that is still open at that newline is undecidable: `{`, `(`, `if`, `while`, `until`, `for`, `case`, `select`.
+   - Pin the five probe forms denied and the commit-message form allowed.
+3. **Finding 3 (code comments):** say "for the rest of the command", not "line", in the comments at `permission.go:505-509` and `:580-590`. The README is done by the main agent.
+4. **Finding 4: README, main agent.**
+5. **Finding 5: noted on k114.** It is not k127's scope.
+
+Then a narrow re-review: findings 1–3, the probes from rr3/rr3b, the round-3 matrix, and the full check. The Changes wording stays the reviewer's long form.
+
+**unreagent-worker 2026-11-21, round 4: done, for the narrow re-review.** Worktree on 602304e, only internal/config/permission.go and permission_test.go touched (README.md is the main agent's parallel edit). Not committed. Scratch: scratchpad k127-w4/ (probes-r4.txt, m-r4/, m-all/, m-pwsh/, mut/, check.txt, r3-to-r4-*.diff).
+
+**What changed (splitSegments):**
+- **Finding 1, fail closed.** While a here-document is pending, a newline is undecidable:
+  - anywhere after `arith` in the command: `((`, `for ((`, `$[`, `a[`, a non-test `[`. This is coarse, like round 3's arith: the splitter still balances no brackets.
+  - after a compound assignment `=(`, which now sets arith. My addition, same class: bash reads a word-start `[` in `a=( [⏎1⏎]=2 )` as a subscript, raw. Probes nl19, nl20 and nl21 (`declare -A a=( [⏎`) were D ALLOW and RUNS on round 3. ca1 `declare -A a ; a=( [ #]=1 ) ; touch M` also was: a comment in that subscript, no here-document needed. cur holds no line continuation, so `a=\⏎(` counts as well.
+  - inside a `$((…))`: readDelimited's body holds a newline. This one is defensive; bash and readDelimited agree on that extent in every probe.
+  - at a `<(`/`>(` after the operator on the line (the reviewer's sketch, read from cur so that `>\⏎(` counts).
+- **Finding 2, extend.** Per line, `piped` is set at the first `|`/`|&`. After it, `pipeDepth` counts `(` and `{`, and every token if, while, until, for or select, so `grep for` counts as well, which fails closed. It is decremented by `)`, by a `}` that starts a command, and by a segment starting with fi or done, never below 0. A `case` after the pipe sets `pipeCase`, because its pattern's `)` closes nothing. At a newline with pending here-docs, `pipeOpen || arith || pipeDepth > 0 || pipeCase` is undecidable; then all three reset. Round 3's "a `(`/`{` right after a pipe" clause in afterPipe is gone, because pipeDepth covers it (pl10 and "pipe before a group" are still pinned).
+- **Finding 3:** "for the rest of the command" in the shellSegments list and the segArith/arith comment, and the same wording in two test comments (TestArithmeticBeforeHereDocuments).
+
+**Probes** (m-r4/report.txt; HEAD / round 3 / round 4 under A, D and B, bash 5.2 file, -c and eval):
+- **rr3 and rr3b (29 probes):** all 16 round-3 bypasses denied: nl1-6, nl8, nl9, nl11, nm6 and pc1-6.
+- **41 probes of mine** (w4.txt, w4b.txt). On round 3, 15 of them were D ALLOW and RUNS; 14 are denied now:
+  - nl19-21 and ca1: compound assignment;
+  - pc7 until, pc8 select, pc24 `| while true⏎`;
+  - pc9, pc20, pc21: case;
+  - pc10 `| { echo }⏎` (the `}` is an argument);
+  - pc11 `| { cat; } | { echo;⏎`;
+  - pc13: nested if, one of them closed;
+  - pc14 `{ cat <<'EOF' | cat; } | while read l; do⏎`.
+- **One left:** pc27 `{ cat <<'EOF' ;⏎touch M⏎EOF⏎} | bash`, D ALLOW and RUNS. The here-document line holds no pipe, so this is outside the decided rule. It is the pl7/x8 class: the body reaches a shell named on a later line through a command's output. I left it for your call.
+- **Stay allowed:**
+  - the commit form `git commit -m "$(cat <<'EOF'…EOF⏎)"`, A and D (cm1);
+  - `echo $((1+2)) # sum`;
+  - a here-doc inside `$(…)`, also `x=$(cat <<'EOF' | { cat; }⏎…⏎)`;
+  - `cat <<'EOF' | while read -r l; do echo "$l"; done⏎…`, `| { cat; }`, `| (cat)` and `| xargs echo`.
+- **Harmless shapes newly denied:**
+  - `cat <<'EOF' ; echo $[ 1 ] ; echo⏎…`;
+  - `cat <<'EOF' <(echo a)⏎…`;
+  - `a=(1 2) ; echo x # c`;
+  - `cat <<'EOF' | grep -w for⏎…`;
+  - `cat <<'EOF' | { echo; } ; { echo;⏎…` (a pipe anywhere earlier on the line);
+  - `echo | { cat <<'EOF' ;⏎…` (the here-doc inside the piped group);
+  - `cat <<'EOF' ; echo $((1 +⏎2))⏎…`.
+
+**Round-3 matrix** (timeout 900; 342 Bash and 16 PowerShell probes; m-all/, m-pwsh/):
+- Bypasses on round 4: the same 7 as round 3, all in accepted classes: envS and envS2 (k184), n2fn, x8, pl4, pl5 and pl7.
+- No probe is looser than round 3 or stricter than round 3. The PowerShell decisions are identical to round 3.
+- Against the reviewer's rerun (k127-rr3/w3m/m-all/joined.tsv), the tree's decision column is identical on all 342 probes. The only bash-side difference is rr2.lq13 `echo x >\⏎(touch M)` (RUNS here, `-` there), the known async flake; it is denied everywhere.
+- No new case is both allowed and run.
+
+**Pins:**
+- **New test TestHereDocumentBodyStart:**
+  - 30 bypass probes through checkHidden (A, B and D);
+  - 9 allowed under D and decidable;
+  - 6 undecidable side-effect pins.
+- **Against the round-3 code** (overlay, mut/r3-on-new-tests.log): all 36 hidden and undecidable pins fail, and no allowed pin does.
+- **Mutation** (mut/results.txt, `go test -overlay`): 15 mutants, all killed. md5 of both files is unchanged afterwards.
+  - M1 no arith at the pending newline;
+  - M2 no `=(`;
+  - M3 no procsub check;
+  - M4 no `$((` newline check;
+  - M5 no `(`/`{` count;
+  - M6 no keyword count;
+  - M7 no pipeCase;
+  - M8 `}` closes anywhere;
+  - M9 no `> 0` guard;
+  - M10 no fi/done closer;
+  - M11 no newline reset;
+  - M12 keywords counted before the pipe;
+  - M13 `)` closes nothing;
+  - M14 `(`/`{` counted before the pipe (killed by the new allowed pin `{ cat <<'EOF' | cat ;⏎…⏎}`);
+  - M15 no pipeOpen.
+
+**Check, all exit 0 (check.txt):**
+- `gofmt -l cmd internal skills` is empty;
+- `go vet ./...` and `GOOS=windows go vet ./...`;
+- `go test -count=1 -timeout 600s ./...` and `go test -race -timeout 600s ./internal/config`;
+- `make linux` and `make windows`.
+- Windows: compiled only. These are Bash-only paths, and the PowerShell decisions are unchanged.
+
+**For the README (main agent):** the current text says "a line break inside `((...))`, … `<(...)`". The code denies more, and fails closed:
+- a line break with a pending here-doc anywhere after `((`, `$[`, a non-test `[` or `=(` in the command;
+- one after a `<(`/`>(` that follows the operator on its line.
+- A compound assignment `a=(...)` now counts like `((` (also for `<<` and comments).
+- For pipes, a word that only looks like a keyword (`grep for`) counts too, and any `case` after the pipe makes the line undecidable.
+
+**Proposed commit:** the reviewer's round-3 subject and Changes long form unchanged. "one whose pipeline goes on after its body" already covers finding 2. If you want finding 1 named, add "or whose body bash starts later (after arithmetic, a subscript or a process substitution)".
+
+**Decision 2026-11-21 (main agent), round 4:** pc27 `{ cat <<'EOF' ;⏎touch M⏎EOF⏎} | bash` is accepted as the x8 class. cat's output, the body, is piped into bash: a command's output run as code, which the README already names as a heuristic gap. The worker's own addition, a compound assignment `=(` counting like `((`, is accepted, and so are its fail-closed side effects (a keyword-looking word after a pipe, any `case` after the pipe). The main agent has updated the README for round 4: the pipe rule, the line-break item, and `=(` in the arithmetic item. Next: a narrow re-review.
+
+**unreagent-reviewer 2026-11-21, round 4: verdict CHANGES NEEDED.**
+Scope: worktree agent-a0ee04cc2e235186a on 602304e; internal/config/permission.go, permission_test.go, README.md.
+- Round-3 findings 1-3 are fixed.
+- The round-4 rules have gaps: 19 new probes are D ALLOW, bash runs `touch M` in all three modes, and HEAD denies them.
+- A and B deny every one of them. allow_all deny lists are a guard rail by the README, but round-3 finding 2 (D-only) set the bar.
+- Files: scratchpad k127-rr4/ (step1.txt, step3-regressions.txt, step4.txt, step6.txt, m/rr4.txt, m/bypasses-rr4.txt, check-summary.txt).
+
+**Findings, most important first.** Grouped in step3-regressions.txt, with fix directions.
+
+1. **permission.go:625-629, a quoted closer counts.** shellTokens resolves quotes, so `"done"`, `\done`, `d'o'ne` and `$'done'` lower pipeDepth. bash does not close on them.
+   - Probes pd1-pd7, e.g. `cat <<'EOF' | while true; do :; "done"⏎touch M⏎EOF⏎bash; break; done`. Also `{` and `(` forms.
+   - Fix: compare the raw, unquoted first word.
+2. **Breaks inside `[[ ]]`.** isSegmentBreak (:1078, via :767) splits at `||`, `&&`, `(` and `)` inside `[[ ]]`. An operand `done`/`fi` then decrements at :627.
+   - Probes pd8-pd11, e.g. `cat <<'EOF' | while [[ x || done ]]; do⏎…`.
+   - Fix: a `[[` after the pipe makes the pending newline undecidable, like pipeCase.
+3. **permission.go:772-782, extglob patterns.** `@(`, `?(`, `*(`, `+(` and `!(` are read raw by bash, so a newline in them starts no body. This is the round-3 finding-1 class, and extglob is missing from the round-4 list.
+   - Probes eg1-3 and eg6 (after `shopt -s extglob`), eg5 (`[[ a == @(⏎…`, no shopt needed) and pd16.
+   - eg4, `cat <<'EOF' ; echo @(⏎x⏎) ; touch M…`, is ALLOW under A, D and B. It is harmless with extglob off, because bash rejects the line. With extglob on in the agent's shell it would pass A and B: inferred from eg6, not run.
+   - Fix: while here-docs are pending, a `(` right after `@ ? * + !` is undecidable, like `<(` at :781.
+4. **readDelimited :1375-1386, a case pattern's `)` closes `$(` early.**
+   - cs1, `cat <<'EOF' $(case x in x)⏎esac) ; touch M⏎y⏎EOF`: the body starts inside the substitution.
+   - pd17, `| { echo $(case x in x) :;; esac);⏎`: the real `)` decrements, and "$(case" does not set pipeCase.
+   - Pre-existing, not k127: HEAD also allows cs3, cs5 and cs6, e.g. `echo "$(case x in x) touch M;; esac)"`.
+   - Fix: a `$(…)` body holding the word `case` is undecidable. Your call whether k127 takes the pre-existing part or it goes on a new card. cs1 and pd17 need it here.
+5. **README.md:757-760 and :801-806** claim more than the code until 1-4 are fixed: the pipe sentence, and the line-break item, which lacks extglob. Recheck both after the fix.
+   - The round-3 README findings 3 and 4 are fixed. The arithmetic item, `=(`, "for the rest of the command" and the PowerShell sentences match the code.
+
+**Verified:**
+- **Round-3 findings 1+2:** the rr3 and rr3b probes (29) were re-run on HEAD, r3 and the tree, plus bash file/-c/eval. All 16 round-3 bypasses are now denied under A, D and B. The tree has no other bypass there.
+- **Finding 3:** the comments at :505-514 and :585-598 say "for the rest of the command".
+- **Allowed pins:**
+  - al1 `git commit -m "$(cat <<'EOF'…)"`: A and D ALLOW (B has no git).
+  - al2 `echo $((1+2)) # sum` and al3 `cat <<'EOF' | while read -r l; do …; done`: D ALLOW, decidable as pinned. A denies them, as on HEAD.
+- **Controls denied:** quoted or escaped `}`, a comment after `do`, `done#`, `$(`/backquote/nested here-docs with an outer doc pending (sb1-sb4).
+- **Matrix:** 342 Bash probes (k127-w3/probes-all.txt) plus the PowerShell set were re-run on the tree with timeout 900.
+  - Decisions are identical to the worker's m-all and m-pwsh.
+  - The bypasses are the same 7 accepted ones: envS, envS2, n2fn, x8, pl4, pl5 and pl7. That set holds none of the rr4 shapes.
+
+**Check, run by me, all exit 0:**
+- `gofmt -l cmd internal skills` (empty);
+- `go vet ./...` and `GOOS=windows go vet ./...`;
+- `go test -count=1 -timeout 600s ./...` and `go test -race -timeout 600s ./internal/config`;
+- `make linux` and `make windows`.
+- The tree is unchanged: md5 and status match the start.
+- Windows: compiled only, unverified.
+- **Applies:** `git apply --cached --check` on a scratch index is clean on dc53cfe (README +38) and on the current main 65a3f77. Nothing since 602304e touches permission*.go.
+
+**Changes:** the round-3 long form still holds for the fixed tree. If finding 4 is fixed in k127, add "a case pattern inside $(...)" to the denied list.
+
+**Next:** unreagent-worker for findings 1-4, with each new probe pinned under D and shown to fail on the round-4 code. Then README 5 by you, then a narrow re-review.
+
+Main agent 2026-11-21, decisions for fix round 5, after the round-4 re-review:
+
+1. A quoted or escaped closer (`"done"`, `\done`, `d'o'ne`, `$'done'`, the same for `fi`, `esac`, `}` and `)`) does not lower the open-compound count. Only the raw, unquoted word does. (Cause 1: pd1-pd7.)
+2. A `[[` after the pipe, on a line that opens a here-document, makes the pending line break undecidable (fail closed), as `case` already does. (Cause 2: pd8-pd11.)
+3. While a here-document is pending, a `(` directly after `@`, `?`, `*`, `+` or `!` is undecidable, whether extglob is on or not, like `<(`. (Cause 3: eg1-eg6, pd16.)
+4. k183 folds into k127, because the fix is the same and so is the file. A `$(…)` whose body holds `case` in command position fails closed. The pre-existing cs3, cs5 and cs6 go with it, and k183 closes with k127. Only command position counts: the word "case" in a here-document body or in a quoted string inside `$(…)` must not trigger it. Pinned as allowed: `git commit -m "$(cat <<'EOF'` with the body "In this case it fails", then `EOF`, then `)"`. (Cause 4: cs1, cs3, cs5, cs6, pd17.)
+
+Each new probe is pinned as denied under D. Each pin must fail on the round-4 code, shown by overlay. Changes adds "a case pattern inside $(...)" to the list of denied forms. The README is done by the main agent after the fix. Then a narrow re-review.
+
+**unreagent-worker 2026-11-21, fix round 5: all four causes fixed and k183 folded in. Ready for a narrow re-review.**
+Tree: worktree agent-a0ee04cc2e235186a on 602304e, not rebased. Only internal/config/permission.go and permission_test.go changed; README.md is untouched by me. Evidence is in scratchpad k127-w5/ (step*.txt, m-r5final/, m-x/, m-allfinal/, m-pwshfinal/).
+
+**Changes (permission.go):**
+- **:632-645 (flush, cause 1 and cause 2).**
+  - Only the raw first word `fi` or `done` lowers pipeDepth (strings.Fields on the raw segment, :634). shellTokens resolved quotes, so `"done"`, `\done`, `d'o'ne` and `$'done'` used to close the loop.
+  - A `[[` after the pipe sets pipeCase, the same way case does (:641).
+- **:796-805 (the `(` branch, cause 3).** A `(` right after `@ ? * + !` sets `arith`, whether extglob is on or not.
+- **:671-675 (substitution, cause 4 / k183).** It splits the `$(...)` body first, then checks it with opensCase. If the body has case in command position, the substitution is undecidable.
+- **:988-1007 opensCase (new).** It treats case as in command position when it is the first token of a segment, or comes after then, do, else, elif, if, while, until, !, time or -p.
+- **Doc comments.** All comment-only:
+  - shellSegments :507-525 adds case/`[[` after the pipe, extglob and the case-in-`$(...)` rule. I reflowed this paragraph.
+  - segArith/arith :586-601 adds extglob.
+  - The pipe comment at :603-618 adds `[[` and says only the raw closer closes.
+  - readDelimited :1316-1318: it models no case command.
+
+**Decisions of my own:**
+1. **extglob sets arith for the rest of the command, not only while a here-document is pending.**
+   - Why: bash reads a `<<` or a `#` inside a pattern raw too. These all ran `touch M` in bash, were D ALLOW on round 4, and are denied at HEAD:
+     - w5e1 `shopt -s extglob⏎echo @(<<x)⏎touch M⏎x`
+     - w5e2 `echo @( #x) ; touch M` (with extglob)
+     - w5e3 `[[ a == @( #x) ]] ; touch M`
+     - w5e4 `[[ a == @(<<y) ]]⏎touch M⏎y`
+     - w5e5 `!(a|<<x)`
+   - Side effect: any later `<<`, comment or pending newline after such a `(` is undecidable, for example `echo @(x) ; cat <<'EOF'⏎it's⏎EOF`.
+   - `!(` only counts with the `!` right before the `(`, so `ls ! (x)` stays decidable.
+   - I first added a separate "pending" check and then removed it. arith already covers it, and it would have left a surviving mutant.
+2. **opensCase scans every inner segment**, including the scripts of nested shells and here-document scripts. That fails closed: a case inside `$(bash -c '...')` counts as well.
+3. **The other closers in decision 1:**
+   - esac does not take part in the count, because a case after the pipe makes the line undecidable whether it is quoted or not.
+   - `}` and `)` count only as unquoted operators. Controls x1-x4 (`\)`, `")"`, `\}`, `'}'`) are denied at HEAD, on round 4 and on the tree, and bash runs them.
+   - x6 `f\i` and x7 `$'fi'` were round-4 bypasses. They are now pinned as w5c5 and w5c6.
+
+**Tests (permission_test.go:1767-1871, TestHereDocumentPipesAndPatterns).**
+- **Denied under A, D and B via checkHidden (38 rows):**
+  - all 22 reviewer rows: pd1-pd11, pd16, pd17, eg1-eg3, eg5, eg6, cs1, cs3, cs5, cs6;
+  - closers w5c1, w5c2, w5c5, w5c6;
+  - extglob w5e1-w5e8 (`*(`, `?(`, `@\⏎(` included);
+  - case w5s1 `then case`, w5s2 `! case`, w5s3 `echo a; case`, w5s4 nested `$(echo $(case...))`.
+- **Allowed via checkPlain (A and D):**
+  - `git commit -m "$(cat <<'EOF'⏎In this case it fails⏎EOF⏎)"`;
+  - al1 (`msg line⏎⏎body`);
+  - `echo "$(echo 'in case of')"`;
+  - `echo $(git log --grep case)`;
+  - `echo $(echo "case x in x) y")`;
+  - `echo x # it's done`.
+- **Decidable and D ALLOW:**
+  - `echo $((1+2)) # sum`;
+  - `echo $((2*(3+4)))`;
+  - the al3 while-read form, also with `done 2>/dev/null`;
+  - `cat <<'EOF' | while true; do :; done⏎x⏎EOF`.
+- **Pinned undecidable (fail-closed side effects, harmless in bash):**
+  - eg4;
+  - pd20 `[[ x == (done) ]]`;
+  - `until [[ x && done ]]`;
+  - `cat <<'EOF' | [[ -n x ]] && cat⏎a⏎EOF`;
+  - `echo @(x) ; cat <<'EOF'⏎it's⏎EOF`.
+
+**Fail on round 4 (overlay with the round-4 permission.go, step10-r4-fails-final.txt).**
+- 43 of 54 subtests fail: all 38 hidden rows and all 5 undecidable ones.
+- All 11 allowed pins pass there.
+- The rest of the package passes on round 4.
+
+**Mutants (overlay; the tree md5 is unchanged before and after, step11-mutations-final.txt).** All 9 are killed:
+- K1 a quoted closer closes;
+- K2 no `[[`;
+- K3 extglob counts nothing;
+- K4 only `@`;
+- K5 no `*` or `?`;
+- K6 no case check;
+- K7 case only as the first word;
+- K8 case anywhere;
+- K9 "case" anywhere in the raw body (it kills 4 of the allowed pins).
+
+**Matrix (HEAD / r4 / tree under A, D and B; bash file, -c and eval):**
+- **m-r5final, 68 probes** (reviewer rr4 43 + mine 25):
+  - 0 bypasses on the tree, and the 36 round-4 bypasses are closed;
+  - nothing is looser than round 4;
+  - the report is identical to the run before the cleanup.
+  - Stricter, and harmless: eg4, pd20, w5t1, w5t2.
+  - Still D ALLOW, and bash runs nothing hidden: pd18, pd19, sb5.
+- **m-x, 8 closer probes:** 0 bypasses. x6 and x7 are closed.
+- **m-allfinal (342 probes) and m-pwshfinal (16 PowerShell probes):** identical to the earlier runs. The same 7 accepted bypasses remain (envS, envS2, n2fn, x8, pl4, pl5, pl7). The PowerShell decisions are identical to round 4.
+
+**Check (step12-check-final.txt), all exit 0:**
+- `gofmt -l cmd internal skills` is empty;
+- `go vet ./...` and `GOOS=windows go vet ./...`;
+- `go test -count=1 -timeout 600s ./...` and `go test -race -timeout 600s ./internal/config`;
+- `make linux` and `make windows`.
+- Windows: compiled only, unverified. These are Bash-only paths, and the PowerShell split is unchanged.
+
+**README sentences whose claims change (main agent):**
+1. **:759-761.** "So is such a line with any `case` after the pipe." becomes "any `case` or `[[` after the pipe". After "…`grep -w for` is denied too.", add: only an unquoted `fi` / `done` closes; a quoted or escaped one (`"done"`, `\fi`, `$'done'`) leaves the command open, as in bash.
+2. **:801-806, the line-break item.** In "anywhere after an unquoted `((`, `$[`, a compound assignment `=(` or a `[` …", add "an extglob pattern `@(`, `?(`, `*(`, `+(`, `!(` (whether extglob is on or not)".
+3. **:811-820, the arithmetic item.** Add the same extglob patterns to the "anywhere after … for the rest of the command" list. bash reads them raw, with extglob on and always inside `[[ ]]`. Side effect: `echo @(x) # note` is now undecidable, so a D-style deny rule matches it as well (A already denied it at HEAD; probe y1, step13).
+4. **:782-793, the "That covers" list.** Add "a `$(...)` with `case` in command position (`$(case x in x) ...;; esac)`), whose pattern `)` the tokenizer would take for its end".
+
+**Proposed commit:**
+- Subject: "Read comments, here-documents and escapes as bash does (k127, k183)".
+- Changes long form: as in round 3, with two edits:
+  - "a << or a comment that may stand in arithmetic" becomes "a << or a comment that may stand in arithmetic or an extglob pattern";
+  - add "a case pattern inside $(...)" to the denied list.
+- k183 closes with k127.
+
+Fix round 5 done: quoted/escaped closers, [[ after the pipe, extglob patterns and case in $(...) (k183 folded in) fail closed; 22 reviewer rows plus 16 own rows pinned, 43 of 54 new subtests fail on the round-4 code, 9 of 9 mutants killed, full check green, Windows compiled only. Details in the round-5 note. Ready for a narrow re-review.
+
+Main agent 2026-11-21: round 5 is done and the worker's own decisions are accepted (extglob counts for the rest of the command; opensCase looks into nested shell scripts; both fail closed). The session is winding down at the maintainer's request, so k127 is parked in review with its worktree (agent-a0ee04cc2e235186a, base 602304e, applies cleanly on main).
+
+Left for the next session:
+1. The main agent updates the four README sentences named in the worker's round-5 note.
+2. A narrow re-review of round 5: the 22 rows, the 16 new ones, and the side effects pinned as undecidable.
+3. Release-manager, subject 'Read comments, here-documents and escapes as bash does (k127, k183)', with the round-3 Changes long form plus the worker's two edits. k183 closes with this commit.
+
+Research input 2026-11-21: docs/research/2026-11-21-shell-constructs.md (Bash and PowerShell tables) as an independent corpus to run the new splitter against. Unchecked.
+
+From k199 (2026-11-21): a project skill now describes the splitter on main (.claude/skills/unreagent-permissions). When k127 lands, its splitter section, the k127/k183 rows of its gap table and the test list need a skill-author pass; the earlier note 'no skill describes the splitter' no longer holds.
+
+Main agent 2026-11-23: archived on the maintainer's decision — the board keeps cards only for problems actively hit in a real run; these gaps came from adversarial review and stay documented as known gaps in the unreagent-permissions skill. The parked worktree (agent-a0ee04cc2e235186a) no longer exists and none of its changes were committed, stashed or left in the object store; a later fix starts from the notes on this card.
