@@ -1,0 +1,23 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-23T01:03:25Z
+id: 250
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- bug
+- windows
+- toolkit
+title: 'Bridge search: two directory junctions to one plugin count twice on Windows'
+updated: 2026-11-23T02:48:50Z
+---
+
+Bug, found by k226 (Path B step 6, 2026-11-23, Windows 11, unreagent 4c16e2f built with Go 1.27.0). Part of k224.
+
+findBridges (internal/config/defaults.go) promises "a directory reached a second time (a link back up, two links to one plugin) is not read again, so one plugin is one bridge", and the README ("How the toolkit is found") says it "follows links to directories and reads each real directory once". On Windows this does not hold for directory junctions. Two junctions below Plugins/ to the same toolkit checkout (Plugins/ue-llm-toolkit and Plugins/zz-second-link) give, in init -check: "[WARN] several UE LLM Toolkit bridges found below Plugins/, using the first: Plugins/ue-llm-toolkit/Plugin/UELLMToolkit/Resources/mcp-bridge/index.js, Plugins/zz-second-link/Plugin/UELLMToolkit/Resources/mcp-bridge/index.js  write an unreagent.yaml to choose another". One junction alone works (found once, and the editor loads the plugin through it).
+
+Cause, measured with a small Go program on the same machine: filepath.EvalSymlinks returns a junction's path unchanged with no error, and os.Lstat reports it as ModeIrregular ("?rw-rw-rw-"): since Go 1.23 junctions are not symlinks on Windows (GODEBUG winsymlink). The seen-set keyed by the EvalSymlinks result therefore never matches two junctions to one directory, and would not stop a junction that points back up before bridgeSearchDepth. linksToDir still follows the entry, which is why one junction is found.
+
+Done when the de-duplication compares directory identity in a way that holds for junctions on Windows (for example os.SameFile on os.Stat results, which follow the junction), pinned by a test labelled unverified on Windows until a Windows run, and the two-junction case reports one bridge.
