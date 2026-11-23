@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T21:49:49Z
+id: 197
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- skills
+- decision
+title: 'Decide: ship cross-tool workflow skills before an editor can verify them?'
+updated: 2026-11-23T02:48:50Z
+---
+
+Maintainer call. Raised while cutting the Class C round (k193, k194, k195): the shipped set is per-tool reference; the other way to make it less thin is task recipes that span several tools, for example "playable character from a skeletal mesh" or "UI screen wired to input".
+
+What planning could ground without an editor: every single step of those two examples is a documented operation -- asset_import (ue-assets), blueprint_modify create with parent Character and set_component_default (ue-blueprints, section modify), the EnhancedInputAction node (ue-blueprints, section graphs, :51), enhanced_input (ue-enhanced-input), anim_blueprint_modify and blend_space, widget_editor, and, once k193 lands, game_framework set_game_mode_defaults / show_widget / set_input_mode, then gameplay_debug for the PIE check (ue-pie-testing).
+
+What it could not ground: that the chain works. Whether set_component_default reaches the mesh component a Character Blueprint inherits, whether a CallFunction node can add the mapping context at BeginPlay, whether set_game_mode_defaults survives a restart (it writes a CDO in memory, toolkit GameFrameworkEditor.cpp:114-140) -- each is a seam between two tools, and seams are exactly what the per-tool source does not show. The authoring rule (skill unreagent-skill-authoring, "The line you may not cross") allows only what can be verified without a running editor; a workflow's claim is its end result. Spec section 7 has no class for this.
+
+Options:
+1. Wait for an editor, as Class B does. Nothing unverified ships; the set stays per-tool.
+2. One skill, ue-workflows, with one section per workflow, written offline after k193: each step is a pointer to the owning skill and operation, no parameters restated, each seam listed as "not verified against an editor", closing with the PIE check that would prove it. One description line. Revisit with an editor.
+3. One skill per workflow, written offline. Most visible, one description line each on every request, and the most text of unknown correctness.
+
+Recommendation: 2, and only after k193 (both examples run through character / game_framework). It adds the routing an agent lacks today without inventing a tested-looking chain. If the unverified seams are not acceptable in a shipped document, take 1; 3 is not recommended.
+
+When decided: note the choice here. For 2 or 3 the follow-up is one unreagent-skill-author card depending on k193 (and a spec section 7 line, unreagent-doc-writer); for 1 close this card and fold the idea into the Class B round.
