@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T02:27:43Z
+depends_on:
+- 59
+id: 114
+priority: high
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- security
+- windows
+title: Make the permission tokenizer PowerShell-aware
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k104/k59 reviewer (pre-existing): the command tokenizer treats backslash as an escape character, which PowerShell does not (its escape is the backtick, single quotes take no escapes). With PowerShell(echo *) allowed, 'echo x \> C:\Windows\x' and 'echo x \; Remove-Item -Recurse C:\x' are allowed; with PowerShell(*), 'echo `'x > C:\Windows\x' too. The PowerShell tool is the default shell with claudeIntegration on Windows. Fix: tokenize per dialect (Bash vs PowerShell: quoting, backtick escape, ; | && || separators, redirections incl. *> and 2>), or fail closed on constructs the dialect tokenizer cannot follow. Unverified on Windows (no pwsh on the dev box): test the pure tokenizer on Linux, label the runtime unverified. internal/config/permission.go; runs after k59 (same file).
+
+**From the k59 fix round (2026-11-21):** with PowerShell(echo *) three reviewer probes are still allowed because the splitter reads PowerShell with bash rules: 'echo x \> C:\Windows\x', 'echo `'x > …' and 'echo x \; Remove-Item …'. The powershell flag in allowCommand is the plug-in point.
+
+**From the k127 round-3 re-review (2026-11-21).** These are PowerShell bypasses that were already on HEAD; k127 keeps HEAD's PowerShell split on purpose. They are unverified, since there is no pwsh on the review host.
+
+Allowed under allowlist `Bash(echo *)`, allow_all with deny `Bash(touch *)`, and allowlist `Bash(bash *)` plus `Bash(echo *)`, as PowerShell commands:
+- `echo x # it's⏎Remove-Item M` (a comment with a quote, then a newline)
+- `echo "a\" ; Remove-Item M ; echo "b"` (backslash is no escape in PowerShell; backtick is)
+- `echo ${env:-\}; Remove-Item M; echo {}`
+
+Also allowed under deny-only: the backtick-escape forms and `@"…"@` here-strings.
+
+The reviewer's files (the session scratchpad, k127-rr3/ps3-joined.tsv) are not durable. The probe lines above are the record.
+
+Research input 2026-11-21: docs/research/2026-11-21-shell-constructs.md, PowerShell 5.1 and 7 table: a test corpus of constructs that hide a command, marker whoami only, each marked static or refuse. Unchecked; verify entries on a real pwsh before pinning them as tests.
