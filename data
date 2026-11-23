@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T13:15:52Z
+id: 171
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- security
+title: 'Deny rules: a value planted by one Bash segment runs in a later arithmetic
+  context'
+updated: 2026-11-23T02:48:50Z
+---
+
+From the k113 round-3 re-review. Under allow_all with a Bash deny rule such as Bash(touch *), a first segment can store a command substitution as a literal string, for example x='a[$(touch M)]' (single-quoted, so the tokenizer sees no substitution). A later arithmetic context then evaluates it: ${HOME:x}, $((x)), ((x)), let, or [[ x -eq 0 ]]. bash runs the touch, and no segment matches the deny rule. Under an allowlist the assignment segment is not allowed, so this is about deny rules only. Options: treat any arithmetic context that names a variable as undecidable (then every Bash deny rule matches it), or document that Bash deny rules are best-effort and point to the allowlist mode. Decide and pin it with tests. Lane: unreagent-worker; after k113 lands (same file).
+
+Main agent 2026-11-21, from k127: since k127, a '<<' inside arithmetic such as $((1<<2)) reads as a here-document with no body, so the command is undecidable and denied (fail closed, accepted). If this card models arithmetic contexts, it can lift that and allow a shift operator inside $((…)).
+
+Research input 2026-11-21: docs/research/2026-11-21-shell-constructs.md, Bash table (arithmetic contexts that evaluate variables). Unchecked.
