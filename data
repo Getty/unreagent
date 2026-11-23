@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-23T01:03:56Z
+id: 254
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- decision
+- agent
+title: 'Decide: clear CLAUDE_CODE_CHILD_SESSION from the agent unreagent starts'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by k226 (2026-11-23, Windows 11, Claude Code 2.1.330). Part of k224. Needs a decision before code.
+
+When unreagent itself is started from inside a Claude Code session (an agent's shell, which is how agents drive unreagent), the Claude Code agent that unreagent starts as its lead process inherits the parent's environment, including CLAUDE_CODE_CHILD_SESSION=1. That agent then shows "Transcript saving is off  inherited CLAUDE_CODE_CHILD_SESSION marker · restart with CLAUDE_CODE_FORCE_SESSION_PE" and writes no transcript (k226 Path A's agent session left none). Started from Explorer, the marker is absent and the line does not appear.
+
+Question: should unreagent clear CLAUDE_CODE_CHILD_SESSION (and any other Claude Code nesting markers) from the agent's environment when it starts the agent interactively in window mode, since that agent is a top-level session for the user, not a child of whatever started the launcher? Or only document it. If cleared: a test on the agent's environment, and a check of what else the marker changes in Claude Code.
