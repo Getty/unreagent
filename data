@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T23:12:08Z
+id: 209
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- security
+- bug
+title: 'Deny rules: bash -c SCRIPT ARG lets an exact deny rule pass'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found in the k199 review round, probed on main through a test overlay. nestedScripts joins every token after the script flag into the nested script, but bash runs only the first as the script and takes the rest as $0, $1. So with deny Bash(reboot), bash -c reboot is denied and bash -c reboot x is allowed: an exact, no-star deny rule is passed by appending any word. k127 recorded the joining as erring toward more segments, which holds for prefix rules only.
+
+Owner: unreagent-worker, with the failing table row first (skill unreagent-permissions, How to add a case). Same file as k127, so it runs after k127 lands. Done when: only the first token after the flag is split as the script, both senses pinned by rows.
