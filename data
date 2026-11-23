@@ -1,0 +1,51 @@
+---
+block_reason: 'Waits for the maintainer at the Windows machine with the Epic login:
+  code plugin, glTF/FBX and Megascans listings (items 3-5, 8 for those types), Launcher-side
+  Add to project (item 6), com.epicgames.launcher:// links (item 7).'
+blocked: true
+class: standard
+created: 2026-11-22T06:48:48Z
+id: 225
+priority: medium
+started: 2026-11-22T07:12:25Z
+status: backlog
+tags:
+- windows
+- measure
+- onboarding
+title: 'Windows: measure Fab acquisition in an unreagent-started editor'
+updated: 2026-11-23T22:02:49Z
+---
+
+Measurement only, no code. Needs the maintainer at the machine with their Epic login. Part of the first-start epic; blocks the Fab skill and the list/copy-tool decision.
+
+Background (UE 5.8.4 source, read not run): the Fab plugin (Engine/Plugins/Fab, enabled by default) is an embedded web page; its acquisition functions (UFabBrowserApi: AddToProject, InstallToProject, InstallToEngine) are a JavaScript bridge only; console commands Fab.Login, Fab.Logout, Fab.ShowSettings, Fab.ClearCache download nothing. Asset pack -> project Content/, plugin -> project Plugins/ or Engine/Plugins/Marketplace/, glTF/FBX/Megascans -> /Game/Fab/. A Launcher-started editor gets AUTH_TYPE=exchangecode on its command line; an editor started by unreagent does not (FabAuthentication.cpp).
+
+Measure, or mark not measurable with the reason:
+1. Is the Fab tab usable in an editor started by unreagent with the default -unattended? How is it opened?
+2. Login: what happens on first open (persistent auth, browser login)? Does it persist across ue_restart and across a launcher restart?
+3. Exact button labels per listing type (asset pack, plugin, glTF/FBX, Megascans), in English and as shown on this machine.
+4. Where each type lands on disk; does the running editor see it without a restart; for a plugin, is a restart and compile needed?
+5. File and content of UFabLocalAssets (editor per-project user settings) after an import — can an agent read which listings are in the project?
+6. Launcher side: after "Add to project" in the Launcher Fab library, where is the download staged (Vault cache path and layout, manifests)? Can a staged pack be copied into another project by hand and load?
+7. What com.epicgames.launcher:// accepts beyond the home page (open a specific Fab listing?).
+8. LogFab lines in Saved/Logs that mark start, success and failure of an import.
+
+No home-directory paths or account details in the notes; describe locations relative to well-known roots.
+
+Measured (k225), UE 5.8.4 CL 58902052 (Launcher build), Windows 11; editor started by unreagent 1ea8353 -no-agent with the default arguments (-stdout -FullStdOutLogOutput, -unattended appended); German editor UI. First on unreagent-example itself (items 1-2), then, on the maintainer's call, on a disposable copy of unreagent-example reset to the repo state (imports), so the real checkout stays clean (git status there is empty).
+
+1. Fab tab under -unattended: usable. Opened by the maintainer through Window > Fab (German UI: "Fenster" > group header "INHALTE EINFÜGEN" > "Fab"; the header only groups entries, it is no submenu). Other entry points per FabBrowser.cpp: the "Fab" button in the Content Browser toolbar, Content Browser Add menu > Get Content > Fab, the level editor's Add quick menu after "Import Content". The tab is an embedded CEF page ("LogWebBrowser: Loaded CEF3 version 128.4.13.3057", "LogCEFBrowser: CEF GPU acceleration enabled"); the store renders in German; no dialog. It opens as a floating window the first time.
+
+2. Login. First open: "LogFab: Display: Logging in using persist" -> "LogFab: Error: Login failed - error code: EOS_InvalidAuth" (no stored login), then "Logging in using exchange code" / "Reading exchange code from commandline" -> "Login failed - error code: EOS_InvalidParameters" (an unreagent-started editor has no AUTH_TYPE=exchangecode), then "User auth token is invalid - unable to get auth token"; the page shows the store logged out. Sign-in from the page: "LogFab: Display: Logging in using account portal" opens the system DEFAULT browser on the Epic account portal; the maintainer had to copy the URL into the browser where the Epic login lives. A first attempt nobody completed ended after 10 minutes: "Login failed - error code: EOS_Auth_PinGrantExpired". The second took 52 s to "LogFab: Display: User logged in". After ue_restart (unreagent MCP tool): the Fab tab is not restored with the layout; reopening it logs "Logging in using persist" and "User logged in" 0.7 s later, profile shown: survives. After a full unreagent quit ("q") and a new start (on the disposable copy): same persist login, survives. So the login is per Windows user (EOS persistent auth), not per project or editor run.
+
+3-5, 8 for the ASSET PACK ("Unreal Engine" format; listing 7861982c-92d2-43df-a75d-c07a7cee8b24, 538 files, 3.2 GB), disposable copy:
+- Labels as shown (German): status "In Meine Bibliothek gespeichert"; buttons "Zum Projekt hinzufügen" (blue) and "In meiner Bibliothek ansehen"; "Enthaltene Formate" lists the UE icon and "UEFN Source". The click opens an in-page modal whose heading is English, "Select a version", with "Version auswählen" preset to 5.8 and buttons "Abbrechen" / "Zum Projekt hinzufügen"; then a download progress at the bottom right of the editor. English labels as such not measured (the page follows the German UI).
+- Log start: "LogFab: Display: Add listing to project - <listing id>", "Listing type - unreal-engine", "Base Url https://egdownload.fastly-edge.com/Builds/Rocket/Automated/<build>/CloudDir,...", "Fab workflow registered for asset <listing id> (1 in flight)". The editor downloads itself through BuildPatchServices, the Launcher is not involved: "LogBPSInstallerConfig: Build Config: StagingDirectory: %LOCALAPPDATA%\Temp\FabLibrary\<listing id>", "Requiring 538 files", 3116 chunks, ~11 MB/s, "ConstructTime: 4:51 min", then "Staged install complete", "Relocation complete", "Verifying install", "Deleting staging area.". Then "LogFab: Found <absolute path>.uasset" x535, "LogFab: Display: Scanning 535 assets for plugin dependencies...", success: "LogFab: Display: Fab workflow completed for asset <listing id>". No dialog, nothing waited for input.
+- On disk: Content/Environment_Set/ (3.1 GB). The running editor sees it without a restart (toolkit asset_search path /Game/Environment_Set/: 533 assets).
+- UFabLocalAssets: Saved/Config/WindowsEditor/EditorPerProjectUserSettings.ini, section [/Script/Fab.FabLocalAssets]: PathsListingID=(("/Game/Environment_Set", "7861982c-92d2-43df-a75d-c07a7cee8b24")). So the listing id of an imported pack can be read: content path -> listing id. Only PathsListingID is saved (ListingIdPath is rebuilt in memory); entries whose path no longer exists are pruned on the next add (FabLocalAssets.h).
+- SURPRISE: after the install BuildPatchServices deleted EMPTY folders across the whole project directory (its install root): "LogBuildPatchServices: Deleted Empty Folder (1,2) <project>/..." for Content/Collections, Config/Layouts, Saved/Collections, Intermediate/Sandboxes, Content/Developers/<user>/..., the empty scope dirs under Plugins/ue-llm-toolkit/.../mcp-bridge/node_modules/@*, and inside .git (.git/refs/tags, .git/objects/info, .git/modules/<submodule>/refs/tags and objects/info). Only empty folders, nothing tracked changed; anything that relies on an empty directory existing in the project loses it.
+
+PARKED here (2026-11-22, the maintainer moved on to k226): code plugin, glTF/FBX and Megascans listings (items 3-5, 8 for those types), item 6 (Launcher-side "Add to project" and staging; the maintainer named a throwaway project for it) and item 7 (com.epicgames.launcher:// links). The card stays in-progress for these. Raw notes and screenshots are on the Windows machine only.
+
+Main agent 2026-11-23: parked by the maintainer ('not needed right now'); they pick it up at the Windows machine when they have time. Open: code plugin, glTF/FBX and Megascans listings, Launcher-side Add to project, launcher links. Only needed if the Fab skill (k231) should cover more than asset packs.
