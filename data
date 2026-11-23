@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T00:54:20Z
+depends_on:
+- 43
+- 49
+id: 102
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- config
+- cleanup
+title: 'Config follow-ups: unreachable file-root fallbacks, writeConfig path, shared
+  format constants'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found during k43: (1) cmd/launcher/tools.go falls back to agentWorkdir for an empty files.root and filetools.go falls back to "."; both are unreachable from run() after k43 - remove them once k49/k76 have landed. (2) mcp.writeConfig entries with an empty path are not validated. (3) The format values mcp_json/vscode are string literals in both config validate and cmd/launcher/mcpconfig.go; share constants. Also: the config tests that assume no engine is installed fail on a Windows box with UE installed, since engine.go has no hook to fake the registry. Lane: unreagent-worker. Size S.
+
+
+**Note 2026-11-21** (k43 re-review): export the node-extra-server check from internal/config (hasNodeExtraServer) and call it from cmd/launcher/bridge.go so the two cannot drift; also the 132-char comment line at internal/config/config.go:408.
+
+**Found by the doc-writer (k101, 2026-11-21):** the MCPOutput.Path field comment in internal/config/config.go says 'relative to the project or absolute', but run() resolves a relative writeConfig path against agent.workdir (falling back to '.'). README now follows the code; tighten the comment.
