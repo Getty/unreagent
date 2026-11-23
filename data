@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T13:36:48Z
+id: 176
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- windows
+- supervisor
+title: 'Windows: a child can spawn before its Job Object assignment and escape KILL_ON_JOB_CLOSE'
+updated: 2026-11-23T02:48:50Z
+---
+
+Split out of k37 (and seen in k32, k55). internal/supervisor/job_windows.go assigns the process to the job after os/exec's Start returns, so anything the child spawns in that window escapes KILL_ON_JOB_CLOSE, the no-zombie guarantee. The clean fix starts the process suspended (CREATE_SUSPENDED via SysProcAttr.CreationFlags), assigns it to the job, then resumes the main thread (NtResumeProcess or ResumeThread on the primary thread handle), all via syscall.NewLazyDLL with no cgo. Alternatively, PROC_THREAD_ATTRIBUTE_JOB_LIST, which os/exec does not expose. Done when every spawn path (services, runOnce, the bridge smoke test) is assigned before the child runs, and a Windows run confirms it: a child spawning a grandchild at once, then the launcher killed, leaves no survivor. Lane: unreagent-worker; needs a Windows run by the maintainer.
+
+Research input 2026-11-21: docs/research/2026-11-21-windows-processes.md section 1 (CREATE_SUSPENDED versus PROC_THREAD_ATTRIBUTE_JOB_LIST, with Go snippets). Unchecked. Experiment W1 is the Windows run.
