@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-22T08:19:01Z
+id: 240
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- config
+- refactor
+title: Share one UE text decoder between the .uproject, .uplugin and LauncherInstalled.dat
+  readers
+updated: 2026-11-23T02:48:50Z
+---
+
+Follow-up from k203 and k214 (2026-11-22). Two readers now decode UE text files the way FFileHelper::BufferToString does (UTF-16 LE/BE behind a BOM with an even length, otherwise UTF-8 with an optional BOM; UE 5.8.4 Runtime/Core/Private/Misc/FileHelper.cpp 145-185):
+- decodeUEText in internal/config/engine.go (k203, the .uproject's EngineAssociation),
+- the .uplugin/.uproject reader readUEJSON in cmd/launcher/uplugin.go (k214).
+internal/config cannot import cmd/launcher, so the shared helper belongs in internal/config (or a small internal package) and uplugin.go calls it.
+
+Keep the JSON handling apart: the engine reads EngineAssociation with TJsonReader, which refuses trailing commas (DesktopPlatformBase.cpp 1661-1678), while plugin and project descriptors go through RapidJSON with trailing commas allowed. Only the text decoding is shared.
+
+Same card: parseLauncherInstalled (internal/config/engine.go, k211) still reads LauncherInstalled.dat as UTF-8 only, where the engine accepts UTF-16 too; with the shared decoder it is a one-word change. The unreagent-ue skill lists this gap in its Launcher installs row - update it with the fix.
+
+Owner: unreagent-worker; skill-author for the unreagent-ue row. Done when one decoder serves all three readers, with its tests, and behaviour is unchanged otherwise.
