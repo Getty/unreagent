@@ -59,13 +59,13 @@ jobs:
       - name: Package
         run: |
           set -e
-          # NOTICE carries the third-party (MIT) attribution for text embedded in the binary
-          cp unreagent.example.yaml README.md NOTICE dist/
+          # LICENSE is the project's own license; NOTICE carries the third-party (MIT) attribution for text embedded in the binary
+          cp unreagent.example.yaml README.md LICENSE NOTICE dist/
           # demo config as unreagent.yaml -> the exe runs straight out of the archive
           cp example/unreagent.yaml dist/unreagent.yaml
           cd dist
-          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe unreagent.yaml unreagent.example.yaml README.md NOTICE
-          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent unreagent.yaml unreagent.example.yaml README.md NOTICE
+          zip "unreagent-${GITHUB_REF_NAME}-windows-amd64.zip" unreagent.exe unreagent.yaml unreagent.example.yaml README.md LICENSE NOTICE
+          tar czf "unreagent-${GITHUB_REF_NAME}-linux-amd64.tar.gz" unreagent unreagent.yaml unreagent.example.yaml README.md LICENSE NOTICE
 
       - name: Create GitHub Release
         env:

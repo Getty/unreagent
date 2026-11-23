@@ -84,8 +84,10 @@ Revision history for unreagent
     unreagent-files skill, and approve names
     a non-string tool name as such in its deny reason and logs <unknown> for a
     missing one.
-  - The release archives (zip and tar.gz) include NOTICE with the third-party
-    attribution.
+  - The release archives (zip and tar.gz) include LICENSE and NOTICE (the
+    third-party attribution).
+  - unreagent is now licensed under the MIT License; the text is in the new
+    LICENSE file, and the README has a License section.
   - The npm install of a node MCP bridge gives up after 5 minutes instead of
     blocking the launcher forever on a stalled registry; the bridge is left
     out with a warning and the editor starts (when a node_modules was already

@@ -1925,3 +1925,8 @@ unverified on Windows.)
 curl -s -X POST http://127.0.0.1:8765/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
+
+## License
+
+unreagent is released under the MIT License; see [LICENSE](LICENSE). Third-party
+attribution is in [NOTICE](NOTICE).
