@@ -1,0 +1,27 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T19:08:06Z
+id: 192
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- lifecycle
+- console
+title: 'Window mode: startup warnings and the editor''s failed-start/give-up lines
+  stay log-only'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k188 worker (2026-11-21), outside k188's scope.
+
+In window mode these lines still reach unreagent.log only:
+1. The warnIfMissing warnings: k147's 'unreal.editor is a directory / not executable', and 'agent command not in PATH'.
+2. The editor's failed-start line, its retry line, and the give-up lines.
+
+The editor's exited and restart lines already show on the console since k188.
+
+**Done looks like:** each shows one console line in window mode through the k151/k152/k188 console path, without flooding. Each is pinned by a test.
+
+Lane: unreagent-worker. Touches main.go and lifecycle.go, so it runs serially with the other run() cards, after k188 lands.
