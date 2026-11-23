@@ -171,6 +171,8 @@ func loadDefaults(c *Config, path string) (warnings []string, err error) {
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.uproject")) // as resolveProject looks
 	sort.Strings(matches)
 	const fix = "put the launcher next to your .uproject, or write an unreagent.yaml that sets unreal.project"
+	// Several: the launcher already lies next to them (k253).
+	const fixSeveral = "write an unreagent.yaml next to the launcher that sets unreal.project to the one meant (or move the others out of this directory)"
 	switch len(matches) {
 	case 0:
 		return nil, fmt.Errorf("no unreagent.yaml and no .uproject in %s: without a config file the launcher runs on built-in defaults for the project next to it — %s (-config <path> names a config elsewhere)", filepath.ToSlash(dir), fix)
@@ -180,7 +182,7 @@ func loadDefaults(c *Config, path string) (warnings []string, err error) {
 		for i, m := range matches {
 			names[i] = filepath.Base(m)
 		}
-		return nil, fmt.Errorf("no unreagent.yaml in %s and several .uproject files there (%s): without a config file the launcher cannot tell which project is meant — %s", filepath.ToSlash(dir), strings.Join(names, ", "), fix)
+		return nil, fmt.Errorf("no unreagent.yaml in %s and several .uproject files there (%s): without a config file the launcher cannot tell which project is meant — %s", filepath.ToSlash(dir), strings.Join(names, ", "), fixSeveral)
 	}
 	doc, bridges, warnings, err := DefaultYAML(dir)
 	if err != nil {

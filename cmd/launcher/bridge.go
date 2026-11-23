@@ -139,8 +139,40 @@ func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 		return
 	}
 	for _, w := range watches {
-		go waitForEndpoint(ctx, w.name, w.ep, w.url, logger)
+		go waitForEndpoint(ctx, w.name, w.ep, w.url, editorNotRunning(sup), logger)
 	}
+}
+
+// editorNotRunning returns, for waitForEndpoint, what to say when the
+// supervisor's "ue" service is not running at the time of the warning: "" while
+// it runs or when its state is unknown. It makes no claim about a pending
+// restart: the supervisor keeps its desired state on after a give-up and after
+// an exit 0, so that state cannot tell them from a restart waiting out its
+// delay.
+func editorNotRunning(sup *supervisor.Supervisor) func() string {
+	return func() string {
+		for _, st := range sup.Status() {
+			if st.Name == "ue" {
+				return editorNotRunningWhy(st)
+			}
+		}
+		return ""
+	}
+}
+
+// editorNotRunningWhy is the sentence for one status of the editor service.
+func editorNotRunningWhy(st supervisor.ServiceStatus) string {
+	if st.Running || st.Unresponsive {
+		return ""
+	}
+	why := "the launcher's editor is not running"
+	switch {
+	case st.LastError != "":
+		why += " (its last start failed: " + st.LastError + ")"
+	case st.LastExit != "":
+		why += " (its last run ended: " + st.LastExit + ")"
+	}
+	return why + "; the server cannot answer until the editor runs again — if the launcher is not restarting it, start it with ue_start or `start ue` in the console"
 }
 
 // prepareNodeBridge makes sure the script and node_modules of a Node bridge are
@@ -554,7 +586,12 @@ func dialAddr(u *url.URL) string {
 //
 // The lines show scheme, host and path only: user info and query can carry a
 // token, and headers are never read here.
-func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL string, logger func(string)) {
+//
+// notRunning, when not nil, is asked at the warning for what the launcher
+// knows about the editor (k253): a non-empty answer replaces the hint, which
+// only guesses at a firewall or a localhost-only server. It applies to the
+// editor's own server (editorEndpoint) alone.
+func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL string, notRunning func() string, logger func(string)) {
 	window, pause := endpointWaitWindow, endpointPollInterval
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
@@ -577,7 +614,13 @@ func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL strin
 		case <-time.After(pause):
 		case <-wctx.Done():
 			if ctx.Err() == nil { // the window ran out, not the launcher
-				logger(fmt.Sprintf("WARN MCP server '%s': %s not reachable after %s — %s", name, shown, window, ep.hint))
+				hint := ep.hint
+				if notRunning != nil && ep == editorEndpoint {
+					if why := notRunning(); why != "" {
+						hint = why
+					}
+				}
+				logger(fmt.Sprintf("WARN MCP server '%s': %s not reachable after %s — %s", name, shown, window, hint))
 			}
 			return
 		}

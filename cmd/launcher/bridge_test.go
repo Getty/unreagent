@@ -974,7 +974,7 @@ func TestWaitForEndpointEndsWithContext(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		waitForEndpoint(ctx, "unreal-mcp", remoteEndpoint, u, log.log)
+		waitForEndpoint(ctx, "unreal-mcp", remoteEndpoint, u, nil, log.log)
 	}()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -1126,6 +1126,94 @@ func TestDialAddr(t *testing.T) {
 		}
 		if got := dialAddr(u); got != tc.want {
 			t.Errorf("dialAddr(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// k253: the five-minute warning says that the editor is not running when the
+// launcher knows it, in place of guessing at a firewall. One wording for every
+// not-running state, with no claim about a pending restart: the supervisor
+// keeps "desired" on after a give-up and after an exit 0 alike.
+func TestEditorNotRunningWhy(t *testing.T) {
+	const tail = "start it with ue_start or `start ue` in the console"
+	for _, c := range []struct {
+		name string
+		st   supervisor.ServiceStatus
+		want string // "" = no statement, the guess stays
+	}{
+		{"running", supervisor.ServiceStatus{Name: "ue", Running: true, Desired: true}, ""},
+		{"unknown", supervisor.ServiceStatus{Name: "ue", Unresponsive: true}, ""},
+		{"never started", supervisor.ServiceStatus{Name: "ue"}, "the launcher's editor is not running;"},
+		{"stopped", supervisor.ServiceStatus{Name: "ue", LastExit: ""}, tail},
+		{"exit 0, still desired", supervisor.ServiceStatus{Name: "ue", Desired: true, LastExit: "exit 0"}, "last run ended: exit 0)"},
+		{"exit 1, still desired", supervisor.ServiceStatus{Name: "ue", Desired: true, LastExit: "exit 1"}, "last run ended: exit 1)"},
+		{"start failed", supervisor.ServiceStatus{Name: "ue", Desired: true, LastError: "no such file"}, "last start failed: no such file)"},
+	} {
+		got := editorNotRunningWhy(c.st)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: got %q, want it to contain %q", c.name, got, c.want)
+		}
+		if got != "" {
+			for _, must := range []string{"cannot answer until the editor runs again", tail} {
+				if !strings.Contains(got, must) {
+					t.Errorf("%s: %q lacks %q", c.name, got, must)
+				}
+			}
+			if strings.Contains(got, "pending") || strings.Contains(got, "is not restarted") {
+				t.Errorf("%s: %q claims something about a restart", c.name, got)
+			}
+		}
+	}
+}
+
+// The hookup: prepareMCPBridges hands the watcher the supervisor's view, so the warning names the editor. Passing nil for the
+// probe would leave the firewall guess.
+func TestPrepareMCPBridgesWarnsThatTheEditorIsNotRunning(t *testing.T) {
+	shortenEndpointWait(t, 100*time.Millisecond, 20*time.Millisecond)
+	sup := supervisor.New(func(string) {})
+	if err := sup.AddService(supervisor.ServiceSpec{Name: "ue", Command: "sleep", Args: []string{"1"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Never started: not running, not desired.
+	sc := newScripts(t)
+	bridge := filepath.Join(t.TempDir(), "bridge")
+	sc.write(bridge, initAnswer)
+	cfg := &config.Config{}
+	cfg.MCP.ExtraServers = map[string]map[string]interface{}{"ue-llm-toolkit": {
+		"command": bridge,
+		"env":     map[string]interface{}{"UNREAL_MCP_URL": "http://" + freeLoopbackAddr(t)},
+	}}
+	var log syncLog
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	sup.Start(ctx, &wg) // Status needs the control loops
+	defer func() { cancel(); wg.Wait() }()
+	prepareMCPBridges(ctx, sup, cfg, t.TempDir(), log.log)
+	waitForLine(t, &log, "not reachable after", 5*time.Second)
+	if out := log.String(); !strings.Contains(out, "editor is not running") || strings.Contains(out, "Firewall") {
+		t.Fatalf("the warning does not say the editor is not running:\n%s", out)
+	}
+}
+
+func TestWaitForEndpointNamesAnEditorThatIsNotRunning(t *testing.T) {
+	shortenEndpointWait(t, 100*time.Millisecond, 20*time.Millisecond)
+	u := "http://" + freeLoopbackAddr(t)
+	for _, c := range []struct {
+		name       string
+		ep         endpoint
+		notRunning func() string
+		want, not  string
+	}{
+		{"editor down", editorEndpoint, func() string { return "the launcher's editor is not running" }, "the launcher's editor is not running", "Firewall"},
+		{"editor up", editorEndpoint, func() string { return "" }, "Firewall", ""},
+		{"no probe", editorEndpoint, nil, "Firewall", ""},
+		{"remote server", remoteEndpoint, func() string { return "the launcher's editor is not running" }, "does the url match", "editor is not running"},
+	} {
+		var log syncLog
+		waitForEndpoint(context.Background(), "x", c.ep, u, c.notRunning, log.log)
+		out := log.String()
+		if !strings.Contains(out, c.want) || (c.not != "" && strings.Contains(out, c.not)) {
+			t.Errorf("%s: logged %q, want %q and not %q", c.name, out, c.want, c.not)
 		}
 	}
 }

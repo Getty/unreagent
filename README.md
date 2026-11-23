@@ -177,7 +177,7 @@ The release zip ships a ready-to-go demo `unreagent.yaml` that runs **without
 UE and without an agent** (`ping` as a placeholder "editor"). Just unpack the
 zip and start `unreagent.exe` — the MCP server will then run on
 `http://127.0.0.1:8765/mcp`. Details: [`example/`](example/). In the console:
-`status`, `logs`, `c hello`, `r ue`, `q`.
+`status`, `c hello`, `r ue`, `q`.
 
 > The "LLM thing" (Claude Code) is not included — it is a CLI you install
 > separately. The demo therefore leaves the agent off; to arm it, set
@@ -224,9 +224,12 @@ is C++ source and is built once).
    `.gitignore`). No config file is needed.
 3. **Start it** (double-click or from a console in that folder). With no
    `unreagent.yaml` the launcher runs on built-in defaults and says so in its
-   first log lines, `no config file there — running on built-in defaults`.
-4. **Tell the agent to set up the rest.** Claude Code opens in the window. Ask
-   it, for example: *"Look at this project and set up unreagent for it: write
+   first log lines: `no config file (looked for <path>)`, then
+   `no config file there — running on built-in defaults`.
+4. **Tell the agent to set up the rest.** Claude Code opens in the window. On
+   a folder it has not seen before it first asks whether you trust the folder,
+   with "No, exit" preselected, so a reflex Enter ends the agent; it may also
+   ask you to log in to Claude there. Ask it, for example: *"Look at this project and set up unreagent for it: write
    an unreagent.yaml, check that the UE LLM Toolkit is in Plugins/, and tell me
    what is missing."* The agent has unreagent's MCP tools (builds, logs,
    scripts) and Claude Code's own tools in the project folder; it asks you where
@@ -269,7 +272,7 @@ not exist is an error and does not fall back to the defaults). Starting
 
 ```
 no unreagent.yaml and no .uproject in <dir>: without a config file the launcher runs on built-in defaults for the project next to it — put the launcher next to your .uproject, or write an unreagent.yaml that sets unreal.project (-config <path> names a config elsewhere)
-no unreagent.yaml in <dir> and several .uproject files there (A.uproject, B.uproject): without a config file the launcher cannot tell which project is meant — put the launcher next to your .uproject, or write an unreagent.yaml that sets unreal.project
+no unreagent.yaml in <dir> and several .uproject files there (A.uproject, B.uproject): without a config file the launcher cannot tell which project is meant — write an unreagent.yaml next to the launcher that sets unreal.project to the one meant (or move the others out of this directory)
 ```
 
 Both end the start with exit 1 before anything runs.
@@ -625,8 +628,11 @@ then stops serving before anything started the editor again, nothing is left
 to retry with, and the launcher ends with exit 1.
 
 Every editor give-up, with or without an agent, ends its log line with where
-the crash dumps are, for example `The editor failed and is not restarted. Any
-crash dumps are in <project>/Saved/Crashes.` With `unreal.cleanOnRestart` the
+the crash dumps are when `<project>/Saved/Crashes` holds any, for example `The
+editor failed and is not restarted. Crash dumps are in
+<project>/Saved/Crashes.` When nothing was written there (an editor that never
+got going, say because a project module is unbuilt) the line has no dump
+pointer. With `unreal.cleanOnRestart` the
 line adds what empties them: a retry from the launcher keeps them, a new
 launcher run empties them.
 
@@ -982,8 +988,12 @@ only watches HTTP entries for reachability (a TCP connect, not an MCP
 check), `unreagent.log` tells you whether the port answered at all: a
 `... is reachable.` line means the editor's server was up (reconnect with
 `/mcp`), the `not reachable after 5m0s` warning means it never answered
-within 5 minutes, so check the plugins, port and path first. It cannot tell
-you which of the remaining causes applies.
+within 5 minutes, so check the plugins, port and path first. When the launcher
+knows its editor is not running at that point (stopped, given up on, or between
+runs), the warning says so (`the launcher's editor is not running ...`, with
+how the last run ended) instead of suggesting a firewall; then the editor's
+log, not the port, is where to look. It cannot tell you which of the remaining
+causes applies.
 
 ## Configuration (quick reference)
 

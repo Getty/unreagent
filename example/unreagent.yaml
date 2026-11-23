@@ -38,4 +38,6 @@ commands:
   hello:
     description: "Demo command that just prints something"
     command: cmd
-    args: ["/c", "echo", "Hello from unreagent run_command!"]
+    # One word per argument: on Windows an argument with spaces is passed
+    # quoted, and cmd's echo would print the quotes.
+    args: ["/c", "echo", "Hello", "from", "unreagent", "run_command!"]

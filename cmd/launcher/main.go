@@ -90,7 +90,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	logger(fmt.Sprintf("unreagent %s — Config: %s", version, info.ConfigPath))
+	logger(startLine(info))
 	if info.Defaults {
 		for _, line := range defaultsNotice(cfg) {
 			logger("INFO " + line)
@@ -579,8 +579,11 @@ func defaultsNotice(cfg *config.Config) []string {
 		return what + " off (unreagent.local.yaml)"
 	}
 	bridge := "no UE LLM Toolkit bridge (plugin not found below Plugins/)"
-	if _, ok := cfg.MCP.ExtraServers[config.ToolkitServerName]; ok {
+	if def, ok := cfg.MCP.ExtraServers[config.ToolkitServerName]; ok {
 		bridge = "UE LLM Toolkit bridge configured"
+		if script := bridgeScript(def); script != "" {
+			bridge += " (" + script + ")"
+		}
 	}
 	lines := []string{
 		"no config file there — running on built-in defaults: " + onOff("agent", cfg.Agent.Enabled) + ", " + onOff("MCP server", cfg.MCP.Enabled) + ", " + bridge,
@@ -590,6 +593,28 @@ func defaultsNotice(cfg *config.Config) []string {
 		lines = append(lines, "unreagent applies no permission policy on built-in defaults (permissions.enabled is off): "+noPolicyMeaning)
 	}
 	return lines
+}
+
+// startLine is the launcher's first log line. Without a config file it says
+// so (k253): it must not read as a loaded config.
+func startLine(info config.Info) string {
+	if info.Defaults {
+		return fmt.Sprintf("unreagent %s — no config file (looked for %s)", version, info.ConfigPath)
+	}
+	return fmt.Sprintf("unreagent %s — Config: %s", version, info.ConfigPath)
+}
+
+// bridgeScript is the script a node bridge definition runs, "" when its args
+// name none.
+func bridgeScript(def map[string]interface{}) string {
+	raw, _ := def["args"].([]interface{})
+	args := make([]string, 0, len(raw))
+	for _, a := range raw {
+		if s, ok := a.(string); ok {
+			args = append(args, s)
+		}
+	}
+	return nodeScript(args)
 }
 
 // approveTool is the launcher's permission prompt tool, as

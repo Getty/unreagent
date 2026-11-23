@@ -76,7 +76,7 @@ func TestDefaultsNeedExactlyOneProject(t *testing.T) {
 		noEngine(t)
 		dir := t.TempDir()
 		_, _, err := load("", dir)
-		errContains(t, err, "no unreagent.yaml", "no .uproject", dir)
+		errContains(t, err, "no unreagent.yaml", "no .uproject", dir, "next to your .uproject")
 	})
 	t.Run("several", func(t *testing.T) {
 		noEngine(t)
@@ -85,6 +85,10 @@ func TestDefaultsNeedExactlyOneProject(t *testing.T) {
 		writeUProject(t, dir, "A.uproject")
 		_, _, err := load("", dir)
 		errContains(t, err, "no unreagent.yaml", "A.uproject, B.uproject", "unreal.project")
+		// k253: the launcher already lies next to them; that advice does not fit.
+		if strings.Contains(err.Error(), "next to your .uproject") {
+			t.Errorf("error tells the user to put the launcher next to the .uproject it already lies next to: %v", err)
+		}
 	})
 }
 

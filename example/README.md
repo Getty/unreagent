@@ -25,7 +25,7 @@ other program first.
 2. Double-click `unreagent.exe` (or start it in a console).
 3. You'll see the placeholder "editor" being supervised and the MCP server
    running on `http://127.0.0.1:8765/mcp`.
-4. **Test in the console** (stdin commands): `status` · `logs` · `c hello` ·
+4. **Test in the console** (stdin commands): `status` · `c hello` ·
    `r ue` (restart) · `q` (quit).
 5. **Test MCP via curl** (second console):
    ```bat

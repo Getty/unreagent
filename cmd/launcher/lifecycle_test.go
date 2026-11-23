@@ -286,10 +286,10 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 		wantErr    bool
 		wantLog    string
 	}{
-		{supervisor.Exit{}, false, false, ""},
+		{supervisor.Exit{}, false, false, "The editor failed and is not restarted."},
 		{supervisor.Exit{Success: true}, false, false, ""},
 		{supervisor.Exit{StartFailed: true}, false, true, "stopping everything"},
-		{supervisor.Exit{}, true, false, ""},
+		{supervisor.Exit{}, true, false, "The editor failed and is not restarted."},
 		{supervisor.Exit{StartFailed: true}, true, false, "keeps serving MCP"},
 	}
 	for _, c := range cases {
@@ -319,8 +319,13 @@ func TestEditorExitHandlerEndsOnlyOnAFailedStartWithMCPOff(t *testing.T) {
 // the launcher's own agent, where there is no k69 give-up line to carry it,
 // and after a run that failed late — and only the k69 case ends the session.
 func TestEditorGiveUpLineSaysWhereTheDumpsAre(t *testing.T) {
-	dir := filepath.Join("proj", "Demo")
+	dir := t.TempDir()
 	crashes := filepath.Join(dir, "Saved", "Crashes")
+	// k253: the line points there only when a dump is there.
+	if err := os.MkdirAll(filepath.Join(crashes, "UECC-Windows-1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	empty := t.TempDir() // a project whose editor never got going: no Saved/Crashes
 	quick, late := supervisor.Exit{StartFailed: true}, supervisor.Exit{}
 	const failedLine = "The editor failed and is not restarted."
 	for _, c := range []struct {
@@ -332,15 +337,17 @@ func TestEditorGiveUpLineSaysWhereTheDumpsAre(t *testing.T) {
 		ends       bool
 		want       string // the end of the logged line; "" for no dump hint
 	}{
-		{false, quick, true, false, dir, false, "(Ctrl-C stops the launcher). Any crash dumps are in " + crashes + "."},
-		{false, quick, true, true, dir, false, " Any crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
-		{false, quick, false, false, dir, true, "stopping everything. Any crash dumps are in " + crashes + "."},
-		{false, quick, false, true, dir, true, " Any crash dumps are in " + crashes + " — the next launcher run empties them (unreal.cleanOnRestart)."},
-		{false, late, false, true, dir, false, failedLine + " Any crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
-		{true, quick, false, true, dir, false, failedLine + " Any crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
-		{true, quick, true, false, dir, false, failedLine + " Any crash dumps are in " + crashes + "."},
-		{true, late, false, false, dir, false, failedLine + " Any crash dumps are in " + crashes + "."},
+		{false, quick, true, false, dir, false, "(Ctrl-C stops the launcher). Crash dumps are in " + crashes + "."},
+		{false, quick, true, true, dir, false, " Crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
+		{false, quick, false, false, dir, true, "stopping everything. Crash dumps are in " + crashes + "."},
+		{false, quick, false, true, dir, true, " Crash dumps are in " + crashes + " — the next launcher run empties them (unreal.cleanOnRestart)."},
+		{false, late, false, true, dir, false, failedLine + " Crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
+		{true, quick, false, true, dir, false, failedLine + " Crash dumps are in " + crashes + " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)."},
+		{true, quick, true, false, dir, false, failedLine + " Crash dumps are in " + crashes + "."},
+		{true, late, false, false, dir, false, failedLine + " Crash dumps are in " + crashes + "."},
 		{true, supervisor.Exit{Success: true}, false, true, dir, false, ""},
+		{false, quick, true, true, empty, false, ""},
+		{true, late, false, true, empty, false, failedLine},
 		{false, quick, true, true, "", false, ""},
 		{false, quick, false, true, "", true, ""},
 		{true, quick, false, true, "", false, ""},
@@ -357,7 +364,7 @@ func TestEditorGiveUpLineSaysWhereTheDumpsAre(t *testing.T) {
 			t.Errorf("agent %v, %+v, mcp %v: session ended = %v, want %v", c.agent, c.exit, c.mcpServing, ended, c.ends)
 		}
 		if c.want == "" {
-			if strings.Contains(got, "crash dumps") {
+			if strings.Contains(got, "rash dumps") {
 				t.Errorf("agent %v, %+v, project %q: logged %q, want no dump hint", c.agent, c.exit, c.projectDir, got)
 			}
 			continue
@@ -848,7 +855,8 @@ func TestRunEditorGiveUpWithAnAgentSaysWhereTheDumpsAre(t *testing.T) {
 	dir := t.TempDir()
 	for name, content := range map[string]string{
 		"Demo.uproject": "{}",
-		"editor.sh":     "#!/bin/sh\nexit 1\n",
+		// The run leaves a dump behind (k253: the line needs one).
+		"editor.sh": "#!/bin/sh\nmkdir -p '" + filepath.Join(dir, "Saved", "Crashes", "UECC-1") + "'\nexit 1\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
 			t.Fatal(err)
@@ -861,7 +869,7 @@ func TestRunEditorGiveUpWithAnAgentSaysWhereTheDumpsAre(t *testing.T) {
   claudeIntegration: false
 `), "  killCrashReporter: false\n", "  killCrashReporter: false\n  restartDelaySeconds: 1\n", 1)
 	l := startLauncherIn(t, dir, yaml)
-	l.waitLine(t, "Any crash dumps are in "+filepath.Join(dir, "Saved", "Crashes")+".")
+	l.waitLine(t, "Crash dumps are in "+filepath.Join(dir, "Saved", "Crashes")+".")
 
 	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("SIGTERM: %v", err)

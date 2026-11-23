@@ -205,7 +205,7 @@ func (s *session) result() error {
 
 // makeEditorExitHandler builds the editor's OnExit. On every failure the
 // editor is not restarted after, with or without an agent, it says where the
-// crash dumps are in projectDir ("" for none): the next start keeps them
+// crash dumps are in projectDir, when that holds any ("" for none): the next start keeps them
 // (followsCrash). Without an agent it also acts on an editor whose last run
 // never got going (not found, cannot be executed, or failed within the
 // fast-fail window of its start); one that ran and then ended is left to its
@@ -233,8 +233,8 @@ func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpSe
 		// that folder: a retry from this launcher does not (followsCrash), the
 		// first start of a new launcher run does with cleanOnRestart.
 		dumps := ""
-		if projectDir != "" {
-			dumps = " Any crash dumps are in " + filepath.Join(projectDir, "Saved", "Crashes")
+		if crashDumpsExist(projectDir) {
+			dumps = " Crash dumps are in " + filepath.Join(projectDir, "Saved", "Crashes")
 			switch {
 			case u.CleanOnRestart && !ends:
 				dumps += " — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart)"
@@ -244,9 +244,7 @@ func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpSe
 			dumps += "."
 		}
 		if !gaveUp {
-			if dumps != "" {
-				logger("The editor failed and is not restarted." + dumps)
-			}
+			logger("The editor failed and is not restarted." + dumps)
 			return
 		}
 		if serving {
@@ -256,6 +254,18 @@ func makeEditorExitHandler(sess *session, logger func(string), agent bool, mcpSe
 		logger("The editor " + editorFailed + ", and is not restarted; no agent is configured and MCP is not serving — stopping everything." + dumps)
 		sess.fail(errEditorGaveUp)
 	}
+}
+
+// crashDumpsExist reports whether Saved/Crashes under projectDir holds any
+// entry: only then does a give-up line point there (k253). "" or a project
+// without the folder has none, e.g. an editor that never started because a
+// module was unbuilt.
+func crashDumpsExist(projectDir string) bool {
+	if projectDir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(filepath.Join(projectDir, "Saved", "Crashes"))
+	return err == nil && len(entries) > 0
 }
 
 // editorFailed is how the k69 give-up lines say that the editor's last run

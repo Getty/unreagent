@@ -617,10 +617,10 @@ func TestServeMCPClosedIsNotAFailure(t *testing.T) {
 func TestDefaultsNotice(t *testing.T) {
 	var cfg config.Config
 	cfg.Agent.Enabled, cfg.MCP.Enabled = true, true
-	cfg.MCP.ExtraServers = map[string]map[string]interface{}{config.ToolkitServerName: {"command": "node"}}
+	cfg.MCP.ExtraServers = map[string]map[string]interface{}{config.ToolkitServerName: {"command": "node", "args": []interface{}{"/p/Plugins/T/Resources/mcp-bridge/index.js"}}}
 	lines := defaultsNotice(&cfg)
 	all := strings.Join(lines, "\n")
-	for _, want := range []string{"built-in defaults: agent on, MCP server on, UE LLM Toolkit bridge configured", "`unreagent init`", "applies no permission policy", "Claude Code's own permission prompts"} {
+	for _, want := range []string{"built-in defaults: agent on, MCP server on, UE LLM Toolkit bridge configured (/p/Plugins/T/Resources/mcp-bridge/index.js)", "`unreagent init`", "applies no permission policy", "Claude Code's own permission prompts"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("notice does not mention %q:\n%s", want, all)
 		}
@@ -1494,5 +1494,16 @@ agent:
 				t.Errorf("stderr repeats a warning that the log on stdout already shows:\n%s", stderr)
 			}
 		})
+	}
+}
+
+// k253: a start without a config file must not open with a "Config:" line.
+func TestStartLineSaysWhenThereIsNoConfigFile(t *testing.T) {
+	got := startLine(config.Info{ConfigPath: "/p/unreagent.yaml", Defaults: true})
+	if !strings.Contains(got, "no config file") || !strings.Contains(got, "/p/unreagent.yaml") || strings.Contains(got, "Config:") {
+		t.Errorf("defaults start line = %q", got)
+	}
+	if got := startLine(config.Info{ConfigPath: "/p/unreagent.yaml"}); !strings.Contains(got, "Config: /p/unreagent.yaml") {
+		t.Errorf("loaded start line = %q", got)
 	}
 }
