@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-22T08:53:17Z
+id: 244
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- tests
+- windows
+- bridge
+title: Run the k106 bridge marker tests on Windows with the k215 fake npm
+updated: 2026-11-23T02:48:50Z
+---
+
+Follow-up from k215 (2026-11-22). The shell-script fake npm and bridge fixtures in cmd/launcher/bridge_test.go skip on Windows, so the k106 node_modules marker tests never run on the shipping platform. k215 added bridge_npm_test.go with a TestMain that lets the test binary act as a fake npm (env UNREAGENT_TEST_FAKE_NPM), which runs on Windows through RunOnceContext and the Job Object. Port the marker tests to that fake so they run on Windows too, without weakening what they assert on Linux. Owner: unreagent-test-writer.
