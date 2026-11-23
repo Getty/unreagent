@@ -21,7 +21,7 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "status",
-		Description: "Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, \"lastError\": why the last start failed (absent once a start succeeds), and \"lastExit\": how its last run that ended on its own ended, e.g. \"exit 1\" (absent until one ends; ue_start and ue_restart clear it). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0; \"busy\": \"pre-start\" next to it means the loop is still running the editor's pre-start step, not hung. That is not the same as stopped: do not call ue_start on it, re-check status instead.",
+		Description: fmt.Sprintf("Returns the status of all managed processes (Unreal Editor, agent): running/stopped, PID, restart count, \"lastError\": why the last start failed (absent once a start succeeds), and \"lastExit\": how its last run that ended on its own ended, e.g. \"exit 1\" (absent until one ends; ue_start and ue_restart clear it). Also lists the one-off commands available to run_command. Use this to check whether the editor is running before you control it. \"waiting\": \"crash-reporter\" means the editor is not running yet because its next start is held until the crash reporter of its last, failed run has finished its report (at most %s); that start comes on its own, so do not call ue_start for it. A service may also come back with \"unresponsive\": true — its control loop did not answer within the internal timeout, so running/pid are unknown and sent as false/0; \"busy\": \"pre-start\" next to it means the loop is still running the editor's pre-start step, not hung. That is not the same as stopped: do not call ue_start on it, re-check status instead.", crashReporterGrace),
 		InputSchema: noArgs,
 		Handler: func(map[string]interface{}) mcp.ToolResult {
 			payload := map[string]interface{}{
@@ -39,19 +39,19 @@ func registerTools(srv *mcp.Server, sup *supervisor.Supervisor, cfg *config.Conf
 
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_start",
-		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)." + takenNote,
+		Description: "Starts the Unreal Editor if it is not running. No-op if it is already running. Fails, naming the start error, when the editor is not running afterwards — unless the reply says \"waiting\": \"crash-reporter\": then the start is held until the crash reporter of the last, failed run has finished, and comes on its own. Running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)." + takenNote,
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StartService, true),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_stop",
-		Description: "Stops the Unreal Editor and prevents auto-restart until it is explicitly started again. Terminates the whole process tree (no orphan processes)." + takenNote,
+		Description: "Stops the Unreal Editor and prevents auto-restart until it is explicitly started again. Stopping a running editor ends its whole process tree. While the start is held for the last, failed run's crash reporter (status \"waiting\": \"crash-reporter\"), a stop cancels the held start, and that run's leftover processes end within 30 s." + takenNote,
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.StopService, false),
 	})
 	srv.AddTool(mcp.Tool{
 		Name:        "ue_restart",
-		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards; running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)." + takenNote,
+		Description: "Restarts the Unreal Editor (stop + start); starts it if it is stopped. Use it when the editor hangs, or to load C++ modules built while it kept running. To compile, stop it first instead (see run_command). Fails, naming the start error, when the editor is not running afterwards — unless the reply says \"waiting\": \"crash-reporter\": then the start is held until the crash reporter of the last, failed run has finished, and comes on its own. Running only means it was spawned, so check status after a few seconds for one that died at once (lastExit)." + takenNote,
 		InputSchema: noArgs,
 		Handler:     serviceAction(sup, "ue", sup.RestartService, true),
 	})
@@ -235,6 +235,9 @@ func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (sup
 		}
 		b, _ := json.Marshal(st)
 		if starts && !st.Running {
+			if st.Waiting != "" {
+				return mcp.ToolResult{Text: startHeld(name) + "\n" + string(b)}
+			}
 			return mcp.ToolResult{Text: "Error: " + startFailure(name, st) + "\n" + string(b), IsError: true}
 		}
 		return mcp.ToolResult{Text: string(b)}
@@ -245,6 +248,13 @@ func serviceAction(sup *supervisor.Supervisor, name string, fn func(string) (sup
 // ue_start / ue_restart error and the launcher console's answer (commandLoop).
 func startFailure(name string, st supervisor.ServiceStatus) string {
 	return fmt.Sprintf("service %q did not start: %s", name, st.LastError)
+}
+
+// startHeld says that a start is held for the last run's crash reporter
+// (ServiceStatus.Waiting, k154): not a failure, and it comes without another
+// call. Only the editor has a grace, so the bound named is the editor's.
+func startHeld(name string) string {
+	return fmt.Sprintf("service %q is not running yet: its start is held until the last run's crash reporter has finished, at most %s, and then comes without another call; check status for it", name, crashReporterGrace)
 }
 
 func allowWord(b bool) string {

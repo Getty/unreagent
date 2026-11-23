@@ -522,3 +522,29 @@ func TestLogsNoMarkerWhenNothingWasDropped(t *testing.T) {
 		})
 	}
 }
+
+// k154: a ue_start or ue_restart that comes while the last run's job is kept
+// for its crash reporter is held, not failed: the supervisor answers with the
+// service not running and waiting set. The tool says the start is held and
+// comes on its own, as no error; a start that left the service not running
+// with nothing held is still one.
+func TestServiceActionReportsAHeldStartAsNoError(t *testing.T) {
+	sup := supervisor.New(nil)
+	for _, c := range []struct {
+		name    string
+		st      supervisor.ServiceStatus
+		isError bool
+		says    string
+	}{
+		{"held", supervisor.ServiceStatus{Name: "ue", Desired: true, Waiting: "crash-reporter"}, false, "start is held until the last run's crash reporter has finished"},
+		{"failed", supervisor.ServiceStatus{Name: "ue", LastError: "boom"}, true, `did not start: boom`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fn := func(string) (supervisor.ServiceStatus, error) { return c.st, nil }
+			res := serviceAction(sup, "ue", fn, true)(nil)
+			if res.IsError != c.isError || !strings.Contains(res.Text, c.says) {
+				t.Fatalf("serviceAction = %q (IsError %v), want IsError %v and %q", res.Text, res.IsError, c.isError, c.says)
+			}
+		})
+	}
+}

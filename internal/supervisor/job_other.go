@@ -24,3 +24,7 @@ func (j *Job) Assign(pid int) error {
 
 // Close does nothing.
 func (j *Job) Close() error { return nil }
+
+// crashReporterRunning finds no crash reporter: without a job there is
+// nothing to look into, and the grace never applies.
+func (j *Job) crashReporterRunning() (bool, error) { return false, nil }

@@ -236,7 +236,10 @@ func run() error {
 	// The editor's give-up while MCP serves, for a later serve failure to end
 	// the session with (k155); every start of the editor takes it back.
 	var giveUp editorGiveUp
-	preStart := editorPreStart(cfg.Unreal, ueProjectDir, killCrashReporter, logger)
+	if cfg.Unreal.KillCrashReporter != nil {
+		logger("WARN unreal.killCrashReporter has no effect any more and can be removed: the launcher kills no crash reporter before a start, as the kill ended other editors' crash monitors too; this editor's reporter ends with its job")
+	}
+	preStart := editorPreStart(cfg.Unreal, ueProjectDir, logger)
 	if err := sup.AddService(supervisor.ServiceSpec{
 		Name:         "ue",
 		Command:      cfg.Unreal.Editor,
@@ -245,6 +248,9 @@ func run() error {
 		Restart:      cfg.Unreal.Restart,
 		MaxRestarts:  cfg.Unreal.MaxRestarts,
 		RestartDelay: secs(cfg.Unreal.RestartDelaySeconds),
+		// The editor's crash reporter finishes its report after the editor
+		// has exited (k154).
+		ReporterGrace: crashReporterGrace,
 		PreStart: func(st supervisor.Start) {
 			giveUp.started()
 			preStart(st)

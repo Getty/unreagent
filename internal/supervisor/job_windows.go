@@ -21,6 +21,8 @@ var (
 	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 	procOpenProcess              = kernel32.NewProc("OpenProcess")
+	procQueryInformationJob      = kernel32.NewProc("QueryInformationJobObject")
+	procQueryFullProcessImage    = kernel32.NewProc("QueryFullProcessImageNameW")
 )
 
 const (
@@ -28,7 +30,22 @@ const (
 	jobObjectLimitKillOnJobClose      = 0x2000
 	processTerminate                  = 0x0001
 	processSetQuota                   = 0x0100
+	jobObjectBasicProcessIDList       = 3
+	processQueryLimitedInformation    = 0x1000
+	errorMoreData                     = syscall.Errno(234)
+	// maxJobPIDs is how many process ids one look into a job takes in. The
+	// editor's job holds the editor's helpers: a few dozen at most.
+	maxJobPIDs = 1024
 )
+
+// jobProcessIDList is JOBOBJECT_BASIC_PROCESS_ID_LIST with room for
+// maxJobPIDs ids: two DWORDs, then ULONG_PTRs, which Go lays out at the same
+// offsets as C on 386 and amd64.
+type jobProcessIDList struct {
+	NumberOfAssignedProcesses uint32
+	NumberOfProcessIdsInList  uint32
+	ProcessIDList             [maxJobPIDs]uintptr
+}
 
 type ioCounters struct {
 	ReadOperationCount  uint64
@@ -122,4 +139,55 @@ func (j *Job) Close() error {
 	err := syscall.CloseHandle(j.handle)
 	j.handle = 0
 	return err
+}
+
+// crashReporterRunning reports whether a crash reporter
+// (isCrashReporterImage) is among the processes still in the job. The list
+// is the job's, so a reporter of another editor never counts. A process that
+// ends between the list and the look at its image is skipped; it is no
+// longer running.
+func (j *Job) crashReporterRunning() (bool, error) {
+	if j == nil || j.handle == 0 {
+		return false, nil
+	}
+	var list jobProcessIDList
+	r, _, err := procQueryInformationJob.Call(
+		uintptr(j.handle),
+		uintptr(jobObjectBasicProcessIDList),
+		uintptr(unsafe.Pointer(&list)),
+		unsafe.Sizeof(list),
+		0,
+	)
+	// ERROR_MORE_DATA still fills in as many ids as fit.
+	if r == 0 && err != errorMoreData {
+		return false, fmt.Errorf("QueryInformationJobObject: %w", err)
+	}
+	n := int(list.NumberOfProcessIdsInList)
+	if n > maxJobPIDs {
+		n = maxJobPIDs
+	}
+	for _, pid := range list.ProcessIDList[:n] {
+		if path, ok := processImage(pid); ok && isCrashReporterImage(path) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// processImage returns the full image path of process pid, false when the
+// process cannot be opened or asked (it ended meanwhile).
+func processImage(pid uintptr) (string, bool) {
+	r, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, pid)
+	if r == 0 {
+		return "", false
+	}
+	ph := syscall.Handle(r)
+	defer syscall.CloseHandle(ph)
+	var buf [1024]uint16
+	size := uint32(len(buf))
+	r2, _, _ := procQueryFullProcessImage.Call(uintptr(ph), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if r2 == 0 {
+		return "", false
+	}
+	return syscall.UTF16ToString(buf[:size]), true
 }

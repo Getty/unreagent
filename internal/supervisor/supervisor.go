@@ -36,9 +36,8 @@ type ServiceSpec struct {
 	Restart      string // never | on-failure | always
 	MaxRestarts  int    // 0 = unlimited — but one that keeps failing at its start is given up on (giveUp in runService)
 	RestartDelay time.Duration
-	// PreStart is called before every (re)start of the process (e.g. to kill the
-	// crash reporter or to clean up recovery files); Start says which start it
-	// is.
+	// PreStart is called before every (re)start of the process (e.g. to clean
+	// up recovery files); Start says which start it is.
 	PreStart func(Start)
 	// Foreground gives the process the launcher's real console (stdin/stdout/
 	// stderr are inherited) — required for interactive TUIs like Claude Code that
@@ -60,6 +59,25 @@ type ServiceSpec struct {
 	// on the service's loop, before the loop answers anything else: it must
 	// return quickly and must not call the supervisor.
 	OnStartRetry func(Retry)
+	// ReporterGrace, when above 0, keeps the job of a run that ended with a
+	// failure open while a crash reporter (CrashReportClientEditor.exe,
+	// CrashReportClient.exe) is still in it, for at most this long, so it can
+	// finish the crash report: the editor exits as soon as its reporter has
+	// acknowledged the crash, and closing the job then killed the reporter
+	// before it wrote the symbolicated call stack (k154). The service's next
+	// start — the restart policy's, or one StartService or RestartService
+	// asks for — is held until that job is closed, so a new run never shares
+	// the machine with what the last one left in that job; the loop keeps
+	// answering meanwhile, and status says so (ServiceStatus.Waiting). A
+	// launcher shutdown closes the kept job at once. A stop while it is kept
+	// cancels a held start but leaves the job to its reporter, so the
+	// reporter, and whatever else the run left in that job, can outlive a
+	// stop by up to the grace. An exit 0 closes the job at once, and so do a
+	// stop and a restart of a running process. Only a job of this service's
+	// own run is looked into, so no other program's reporter counts. Windows
+	// only; elsewhere there is no job to look into and the grace never
+	// applies.
+	ReporterGrace time.Duration
 }
 
 // Retry tells ServiceSpec.OnStartRetry about a failed start that is retried.
@@ -124,8 +142,8 @@ type ServiceStatus struct {
 	// time. The other fields are then unknown — not "stopped".
 	Unresponsive bool `json:"unresponsive,omitempty"`
 	// Busy says, next to Unresponsive, what kept the loop from answering:
-	// "pre-start" while it runs the service's PreStart (the editor's
-	// crash-reporter kill and crash cleanup). It is empty otherwise.
+	// "pre-start" while it runs the service's PreStart (the editor's crash
+	// cleanup). It is empty otherwise.
 	Busy string `json:"busy,omitempty"`
 	// LastError is why the last start attempt failed (the program is missing,
 	// cannot be executed, …). A successful start clears it.
@@ -135,6 +153,11 @@ type ServiceStatus struct {
 	// a successful start shows here, not in LastError. StartService and
 	// RestartService clear it; the restart policy's restarts keep it.
 	LastExit string `json:"lastExit,omitempty"`
+	// Waiting is "crash-reporter" while a start of the service is held until
+	// the last run's job, kept open for its crash reporter, is closed
+	// (ServiceSpec.ReporterGrace): the service is not running, and that start
+	// comes without another call. It is empty otherwise.
+	Waiting string `json:"waiting,omitempty"`
 }
 
 // CommandResult is the result of a one-off command.
@@ -184,6 +207,15 @@ type Supervisor struct {
 	// first start): called once the loop has taken the timer, right before it
 	// looks for a waiting control message.
 	backoffTaken func()
+	// reporterPoll is how often a job kept for its crash reporter is looked
+	// into, reporterRunning how; fields so tests can shorten the one and
+	// stand in for the other. New sets reporterPoll and Job's own look.
+	reporterPoll    time.Duration
+	reporterRunning func(*Job) (bool, error)
+	// closeJob closes a run's job: every close in runService and
+	// closeAfterReporter goes through it, so tests can count the closes of a
+	// job, which does nothing off Windows. New sets Job's own Close.
+	closeJob func(*Job)
 }
 
 // New creates a supervisor with the given log sink.
@@ -196,8 +228,13 @@ func New(log Logger) *Supervisor {
 		ctrlTimeout:    CtrlTimeout,
 		drainTimeout:   streamDrainTimeout,
 		fastFailWindow: FastFailWindow,
-		services:       map[string]*service{},
-		commands:       map[string]CommandSpec{},
+		reporterPoll:   reporterPoll,
+		reporterRunning: func(j *Job) (bool, error) {
+			return j.crashReporterRunning()
+		},
+		closeJob: func(j *Job) { _ = j.Close() },
+		services: map[string]*service{},
+		commands: map[string]CommandSpec{},
 	}
 }
 
@@ -553,6 +590,14 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		// afterGiveUp is set while the service failed and was not restarted, until
 		// the next start (Start.AfterGiveUp).
 		afterGiveUp bool
+		// lingerDone is closed once the job of the last run, kept open for its
+		// crash reporter (closeAfterReporter), is closed; nil when no job is
+		// kept. No process runs while it is set: start holds every start.
+		lingerDone chan struct{}
+		// held is the start that waits for lingerDone, nil when none does
+		// (ServiceStatus.Waiting). A later start takes its place, a stop
+		// drops it.
+		held *Start
 	)
 
 	// countRun is told whether the run that just ended failed early: a failed
@@ -595,7 +640,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			return
 		}
 		if job != nil {
-			job.Close() // Windows: kills the whole tree
+			s.closeJob(job) // Windows: kills the whole tree
 		}
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill() // fallback (Linux / if the job is a no-op)
@@ -630,6 +675,21 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			return true
 		}
 		if shuttingDown() {
+			return
+		}
+		// The last run's job may still be open for its crash reporter. A new
+		// run does not start next to it: it could take up what that job still
+		// holds (for the editor a running zenserver, by inference, not
+		// measured) and lose it when the job is closed. So the start is held
+		// (held), and the loop runs it once lingerDone is closed, at most the
+		// rest of the grace later; it keeps answering control calls
+		// meanwhile. On a restart the policy's delay has run before, so the
+		// start comes at the later of the two, not after their sum.
+		if lingerDone != nil {
+			if held == nil {
+				s.logf("[%s] start held until the last run's crash reporter has finished", spec.Name)
+			}
+			held = &pre
 			return
 		}
 		pre.AfterGiveUp = afterGiveUp
@@ -725,6 +785,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 
 	snapshot := func() ServiceStatus {
 		st := ServiceStatus{Name: spec.Name, Desired: desired, Restarts: restarts, LastError: lastErr, LastExit: lastExit}
+		if held != nil {
+			st.Waiting = "crash-reporter"
+		}
 		if cmd != nil && cmd.Process != nil {
 			st.Running = true
 			st.PID = cmd.Process.Pid
@@ -743,10 +806,18 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 	}
 
 	// replacesRestart reports whether a start somebody asks for now takes
-	// the place of the restart policy's pending start (Start.ReplacesRestart);
-	// the delayed first start is not one.
+	// the place of the restart policy's pending start (Start.ReplacesRestart):
+	// one whose delay runs, or one held for the last run's crash reporter
+	// (held), or a start held in its place. The delayed first start is not
+	// one.
 	replacesRestart := func() bool {
-		return cmd == nil && backoff != nil && backoffAuto
+		if cmd != nil {
+			return false
+		}
+		if held != nil && (held.Automatic || held.ReplacesRestart) {
+			return true
+		}
+		return backoff != nil && backoffAuto
 	}
 
 	// handle carries out a control message and answers it.
@@ -761,8 +832,10 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				start(pre)
 			}
 		case ctrlStop:
+			// A stop cancels a pending start, a held one too; a job kept for
+			// its crash reporter is left to closeAfterReporter.
 			desired = false
-			backoff = nil
+			backoff, held = nil, nil
 			stop()
 			s.logf("[%s] stopped (manual)", spec.Name)
 		case ctrlRestart:
@@ -788,6 +861,11 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		case <-ctx.Done():
 			s.logf("[%s] stopping …", spec.Name)
 			stop()
+			// A job kept for its crash reporter is closed at the shutdown
+			// too (closeAfterReporter watches ctx); return only once it is.
+			if lingerDone != nil {
+				<-lingerDone
+			}
 			return
 
 		case <-backoff:
@@ -825,7 +903,15 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			failedEarly := err != nil && time.Since(startedAt) < s.fastFailWindow
 			countRun(failedEarly)
 			if job != nil {
-				job.Close()
+				if err != nil && spec.ReporterGrace > 0 && s.reporterIn(spec.Name, job, spec.ReporterGrace) {
+					// A failed run whose crash reporter is still in its job,
+					// maybe still writing the report: the job goes to
+					// closeAfterReporter.
+					lingerDone = make(chan struct{})
+					go s.closeAfterReporter(ctx, spec.Name, job, spec.ReporterGrace, lingerDone)
+				} else {
+					s.closeJob(job)
+				}
 			}
 			// Flush the trailing output first: the lines a crashing process
 			// wrote last are the ones the user needs.
@@ -883,6 +969,17 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			}
 			if pending != nil {
 				handle(*pending)
+			}
+
+		case <-lingerDone:
+			// The last run's job is closed: a start held for it runs now. A
+			// held start is only ever set while the service is desired (a stop
+			// drops it), and no process runs while a job is kept.
+			lingerDone = nil
+			if held != nil {
+				pre := *held
+				held = nil
+				start(pre)
 			}
 
 		case msg := <-svc.ctrl:

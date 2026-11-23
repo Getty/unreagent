@@ -1133,7 +1133,9 @@ func TestDialAddr(t *testing.T) {
 // k253: the five-minute warning says that the editor is not running when the
 // launcher knows it, in place of guessing at a firewall. One wording for every
 // not-running state, with no claim about a pending restart: the supervisor
-// keeps "desired" on after a give-up and after an exit 0 alike.
+// keeps "desired" on after a give-up and after an exit 0 alike. A start held
+// for the last run's crash reporter (status waiting, k154) is named, since
+// the supervisor runs it on its own once the reporter is done.
 func TestEditorNotRunningWhy(t *testing.T) {
 	const tail = "start it with ue_start or `start ue` in the console"
 	for _, c := range []struct {
@@ -1148,6 +1150,7 @@ func TestEditorNotRunningWhy(t *testing.T) {
 		{"exit 0, still desired", supervisor.ServiceStatus{Name: "ue", Desired: true, LastExit: "exit 0"}, "last run ended: exit 0)"},
 		{"exit 1, still desired", supervisor.ServiceStatus{Name: "ue", Desired: true, LastExit: "exit 1"}, "last run ended: exit 1)"},
 		{"start failed", supervisor.ServiceStatus{Name: "ue", Desired: true, LastError: "no such file"}, "last start failed: no such file)"},
+		{"start held for the crash reporter", supervisor.ServiceStatus{Name: "ue", Desired: true, LastExit: "exit 3", Waiting: "crash-reporter"}, "last run ended: exit 3); its start is held until the last run's crash reporter has finished"},
 	} {
 		got := editorNotRunningWhy(c.st)
 		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {

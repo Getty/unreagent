@@ -143,7 +143,6 @@ func TestRunExitsWhenTheMCPAddressCannotBeBound(t *testing.T) {
   editor: ` + editor + `
   args: ["20"]
   unattended: false
-  killCrashReporter: false
 mcp:
   enabled: true
   address: "` + tc.addr + `"
@@ -234,7 +233,6 @@ func TestRunHandsOutALoopbackURLForAWildcardMCPAddress(t *testing.T) {
   editor: sleep
   args: ["20"]
   unattended: false
-  killCrashReporter: false
 mcp:
   enabled: true
   address: ":`+port+`"
@@ -1370,7 +1368,6 @@ func TestRunWarnsWhenAPluginEngineVersionIsRefused(t *testing.T) {
   project: ` + project + `
   args: ["20"]
   unattended: true
-  killCrashReporter: false
 mcp:
   enabled: false
 permissions:
@@ -1449,7 +1446,6 @@ func TestRunWarnsWhenAProjectModuleLooksUnbuilt(t *testing.T) {
   project: ` + project + `
   args: ["20"]
   unattended: false
-  killCrashReporter: false
 mcp:
   enabled: false
 permissions:
@@ -1550,7 +1546,6 @@ func TestRunGiveUpRepeatsTheCompilePointer(t *testing.T) {
   editor: ` + editor + `
   project: ` + project + `
   unattended: false
-  killCrashReporter: false
   restart: never
 mcp:
   enabled: false

@@ -58,8 +58,8 @@ silent memory corruption, not a compile error.
 attaches a PID; closing the handle makes the OS terminate the entire tree.
 Every service and every one-shot command goes through it, and so does the bridge
 smoke test (`smokeTestMCP`, `cmd/launcher/bridge.go`) via `supervisor.NewJob()`,
-closing the job before it kills the child. Only the short-lived `taskkill`
-(`pkill` elsewhere), `reg query` and `git check-ignore` (`unignoredTokenFile`,
+closing the job before it kills the child. Only the short-lived `reg query`
+and `git check-ignore` (`unignoredTokenFile`,
 `cmd/launcher/mcpconfig.go`) helpers run without one. This is the
 mechanism behind the README's "no process zombies" promise and it must survive
 any refactor of the supervisor.
@@ -103,11 +103,22 @@ crash's evidence is launcher logic: `followsCrash` and `editorPreStart` in
 
 Two rules stay here because they are about this code, not about UE:
 
-- Off Windows the reporter kill is a `pkill -f` anchored to the program name
-  (`crashReporterKillers`, whose comment has the reasons). Keep the anchors.
-- `unreal.unattended`, `unreal.killCrashReporter` and `unreal.cleanOnRestart`
-  stay switchable: `unattended: false` is the documented escape hatch for a
-  human working in the editor. Do not make these behaviors unconditional.
+- The launcher kills no crash reporter (k154): no `taskkill`, no `pkill`. The
+  editor's reporter is in its Job Object; after a failed exit the supervisor
+  keeps that job open while the reporter is in it, `ServiceSpec.ReporterGrace`
+  at most (`closeAfterReporter`, `internal/supervisor/reporter.go`;
+  `crashReporterRunning` in `job_windows.go` looks via
+  `QueryInformationJobObject` and `QueryFullProcessImageNameW`, a no-op in
+  `job_other.go`), and every close goes through `Supervisor.closeJob`. The next
+  start waits (`ServiceStatus.Waiting`). `KILL_ON_JOB_CLOSE` and the job
+  assignment are unchanged, and a launcher shutdown closes the kept job at
+  once. Cross-compiled only: unverified on Windows, where the old close was
+  measured (k154 runs 33, 34, 52). Do not add a kill by image name back, and do
+  not leave a job open without a bound.
+- `unreal.unattended` and `unreal.cleanOnRestart` stay switchable:
+  `unattended: false` is the documented escape hatch for a human working in
+  the editor. Do not make these behaviors unconditional. `unreal.killCrashReporter`
+  is accepted for old configs and does nothing.
 
 ## Testing on Linux
 

@@ -64,8 +64,8 @@ placeholder system exists.
    added (`compile`, `package`, each only when the user defined none of that
    name). Note that the zero value is indistinguishable from "not set" for
    plain `bool` and `int`; fields whose default is `true` are therefore `*bool`
-   (`Unattended`, `KillCrashReporter`, `PowershellTool`, `Window`,
-   `skills.enabled`, `skills.mcp`) and read through `boolVal()`. Use `*bool`
+   (`Unattended`, `PowershellTool`, `Window`,
+   `skills.enabled`, `skills.mcp`) and read through `boolVal()`. (`KillCrashReporter` is still a `*bool`, without a default: `run()` warns when it is non-nil, as the key has had no effect since k154.) Use `*bool`
    for any new option that defaults to on. `SkillsConfig` wraps its pair in
    `ViaMCP()` / `ViaFiles()`, which apply `enabled`; callers ask those, not
    the raw fields.

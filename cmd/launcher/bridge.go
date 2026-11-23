@@ -172,6 +172,9 @@ func editorNotRunningWhy(st supervisor.ServiceStatus) string {
 	case st.LastExit != "":
 		why += " (its last run ended: " + st.LastExit + ")"
 	}
+	if st.Waiting == "crash-reporter" {
+		why += "; its start is held until the last run's crash reporter has finished, then comes on its own"
+	}
 	return why + "; the server cannot answer until the editor runs again — if the launcher is not restarting it, start it with ue_start or `start ue` in the console"
 }
 

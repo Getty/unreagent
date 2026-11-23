@@ -1020,6 +1020,24 @@ the **entire process tree** (including ShaderCompileWorker etc.). OS-enforced,
 no external dependency. On Linux (development) only the direct child is
 killed.
 
+One exception to "closed at once": the editor's **crash reporter**
+(`CrashReportClientEditor.exe`) is part of that tree and needs a few seconds
+after the editor has exited to finish its report. When the editor exits with a
+non-zero code and a crash reporter is still in its job, the launcher keeps the
+job open — for up to 30 s, until no crash reporter is left in it — and closes it
+then, so the report is completed and nothing is left behind (`KILL_ON_JOB_CLOSE`
+is unchanged). An exit 0, a `ue_stop` / `ue_restart` / console `stop` / `r` of
+a running editor and a launcher shutdown close the job at once. While the job is
+kept, the editor's next start — the restart policy's or one you ask for — is
+**held** (see `waiting` under `status`) and comes on its own once the job is
+closed; the restart delay and this wait run side by side, so the start comes at
+the later of the two. A `ue_stop` / console `stop` during the wait cancels the
+held start; the last run's leftover processes still end within 30 s. The log
+says `crash reporter still running — the job stays open …`, and, if the
+reporter does not finish in time, `WARN crash reporter still running after 30s
+— ended with the job; the crash report may lack the call stack`. This is
+cross-compiled only and has not been run on Windows yet.
+
 ### Crashes & recovery (unattended)
 
 Two UE dialogs otherwise block agent-driven operation: the **crash reporter**
@@ -1086,7 +1104,7 @@ Windows with 5.7.4 and 5.8.4:
 | Option (`unreal:`) | Default | Effect |
 |---|---|---|
 | `unattended` | `true` | appends `-unattended` — no crash dialog, no package-restore prompt (the restore is skipped, not discarded; see above) |
-| `killCrashReporter` | `true` | kills `CrashReportClientEditor.exe` / `CrashReportClient.exe` before a start (belt and suspenders), except a start that follows a crash — an automatic restart, a `ue_start` / `ue_restart` / console `start` / `r` issued in place of a pending automatic restart (during the restart delay, or the retry delay of a failed start), or the first start after the launcher gave up on the editor — where the reporter may still be writing the dump; a `ue_stop` / console `stop` during the restart delay ends the crash episode, so a later start kills the reporter again; off Windows (`pkill -f`) only a process whose program is `CrashReportClientEditor` or `CrashReportClient` (no `.exe`) matches, not any command line that merely contains the name; a reporter started from a path with a space is not matched |
+| `killCrashReporter` | — | **no effect** (still accepted, so an existing config loads). The launcher no longer kills crash reporters before a start: the kill also ended the crash monitor of every other editor on the machine, and this editor's own reporter ends with its job (see [No process zombies](#no-process-zombies-windows)). Setting it logs a startup `WARN`; remove it |
 | `cleanOnRestart` | `false` | removes `Saved/Autosaves/PackageRestoreData.json` before every start; empties `Saved/Crashes/` before a start that does not follow a crash: the first start of a launcher run and every other manual start (console `start` / `r`, MCP `ue_start` / `ue_restart`). The crash folder is kept on an automatic restart by the restart policy (including a retry of a failed start), on a start issued in place of a pending automatic restart (during the restart delay after a crash, or the retry delay of a failed start; the log reason reads `start in place of the pending automatic restart`) and on the first start after the launcher gave up on the editor, so the dumps stay readable. A `ue_stop` / console `stop` during the restart delay cancels the pending restart and ends the crash episode, so a later start counts as a fresh manual start and empties the folder. When it holds anything the launcher logs `Recovery: Saved/Crashes kept (…)` with the reason |
 
 If a **human** is working interactively in the editor in parallel, set
@@ -1669,8 +1687,8 @@ are materialized the launcher logs
 
 | Tool | Function |
 |---|---|
-| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds); `lastExit` is how the last run that ended on its own ended, e.g. `exit 1` (absent until one ends; `ue_start` / `ue_restart` clear it) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list, with `"busy": "pre-start"` next to it while that loop is still running the editor's pre-start step (crash-reporter kill, crash cleanup) — a slow start, not a hung loop |
-| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle. If the editor is not running after `ue_start` / `ue_restart`, the result is an error, `Error: service "ue" did not start: <lastError>`, followed by the status JSON (e.g. a missing `unreal.editor` program). Running only means the editor was spawned: for one that dies at once, check `status` after a few seconds (`lastExit`) |
+| `status` | process status + available commands; `lastError` is why the last start failed (absent once a start succeeds); `lastExit` is how the last run that ended on its own ended, e.g. `exit 1` (absent until one ends; `ue_start` / `ue_restart` clear it) — a service whose control loop misses the internal 10s timeout is reported as `"unresponsive": true` (`running`/`pid` unknown, sent as `false`/`0`) instead of being dropped from the list, with `"busy": "pre-start"` next to it while that loop is still running the editor's pre-start step (crash cleanup) — a slow start, not a hung loop. `"waiting": "crash-reporter"` means the editor is not running because its next start is held until the crash reporter of its last, failed run has finished (at most 30 s); the loop still answers and the start comes on its own, so do not call `ue_start` for it |
+| `ue_start` / `ue_stop` / `ue_restart` | editor lifecycle. If the editor is not running after `ue_start` / `ue_restart`, the result is an error, `Error: service "ue" did not start: <lastError>`, followed by the status JSON (e.g. a missing `unreal.editor` program), except for a start that is held for the last run's crash reporter: that answer says it is held (not an error) and carries `"waiting": "crash-reporter"` in the status JSON. `ue_stop` during the hold cancels the start. Running only means the editor was spawned: for one that dies at once, check `status` after a few seconds (`lastExit`) |
 | `run_command` | run a preconfigured command (compile, package). The reply is the exit line and the output: on success its last 300 lines within 48 KiB; on failure at most 10 KB: the whole output if it fits, else its first 4 KiB (where the first errors are), a marker counting what is left out, and as much of its end as fits. Claude Code itself cuts an error reply over about 11,000 characters to its first and last 5,000, which would drop a failing build's first errors. What is left out is not kept: re-run narrower, or have the command write to a file and read it with `read_file` |
 | `logs` | last output lines of a service |
 | `run_python` / `run_node` | run code in a prepared environment; the reply is shaped like `run_command`'s |
@@ -1924,7 +1942,9 @@ That covers the command list, the `status` JSON, `c <name>` results,
 `Launcher console active — …`. A `start`, `r <name>`, `r` or `restart` that
 leaves the service not running answers `Error: service "ue" did not start:
 <lastError>`; `start` or `stop` of a name that is not a service answers
-`Error: unknown service "nosuch"`. `status` shows `lastExit` for a run that
+`Error: unknown service "nosuch"`. A start held for the last run's crash
+reporter is not an error: the console prints a line saying the start is held
+and comes on its own. `status` shows `lastExit` for a run that
 ended on its own.
 
 In the launcher console opened with `k` in window mode, `start agent`,

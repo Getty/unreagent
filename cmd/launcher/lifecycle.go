@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -482,7 +480,8 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 	// act runs a lifecycle command and names what went wrong, as serviceAction
 	// does for ue_start / ue_stop / ue_restart: an error, or — for a command
 	// that starts — a service not running afterwards, with the start error.
-	// One that went through says on the console (console.show) what the
+	// A start held for the last run's crash reporter is no error and says
+	// so. One that went through says on the console (console.show) what the
 	// service is now: done ("is running", "restarted", "stopped") and the pid
 	// of a running one.
 	act := func(fn func(string) (supervisor.ServiceStatus, error), name string, starts bool, done string) {
@@ -490,6 +489,8 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 		switch {
 		case err != nil:
 			reply("Error: " + err.Error())
+		case starts && !st.Running && st.Waiting != "":
+			con.show(startHeld(name))
 		case starts && !st.Running:
 			reply("Error: " + startFailure(name, st))
 		case st.Running:
@@ -563,28 +564,35 @@ func commandLoop(ctx context.Context, con console, stop func(), sup *supervisor.
 	}
 }
 
-// editorPreStart is the editor's PreStart: the crash-reporter kill
-// (unreal.killCrashReporter) and the cleanup of unreal.cleanOnRestart in
-// projectDir ("" for none). A start that follows a crash (followsCrash)
-// spares that crash's evidence: Saved/Crashes stays, and so does a crash
-// reporter, which may still be writing the report — the restart policy
-// starts the editor again about one restart delay after it ended, and a
-// start somebody asks for within that delay comes even sooner. Skipping
-// the kill cannot hold the restart up, where waiting for a reporter to finish
-// would need a bound and a way to tell it is done; and every other start
-// still kills it, so a stuck reporter window is gone by the second start
-// somebody asks for after a crash. kill is killCrashReporter; tests pass
-// their own.
-func editorPreStart(u config.UnrealConfig, projectDir string, kill func(), logger func(string)) func(supervisor.Start) {
+// editorPreStart is the editor's PreStart: the cleanup of
+// unreal.cleanOnRestart in projectDir ("" for none). A start that follows a
+// crash (followsCrash) spares that crash's evidence: Saved/Crashes stays.
+//
+// It kills no crash reporter (k154). The editor starts CrashReportClientEditor
+// as its crash monitor for its whole life (-MONITOR=<editor pid>), not after a
+// crash, so the taskkill /IM it used to run ended the monitor of every other
+// editor on the machine (k154, run 52). Every reporter of ours is in our
+// editor's job (the engine starts it without breakaway): it ends when that job
+// is closed, after crashReporterGrace at the latest, and the supervisor has
+// the next start wait for that. What the kill still reached was a reporter of
+// an editor the launcher did not start, which is not ours to end.
+func editorPreStart(u config.UnrealConfig, projectDir string, logger func(string)) func(supervisor.Start) {
 	return func(st supervisor.Start) {
-		if boolVal(u.KillCrashReporter) && !followsCrash(st) {
-			kill()
-		}
 		if u.CleanOnRestart && projectDir != "" {
 			cleanRecovery(projectDir, st, logger)
 		}
 	}
 }
+
+// crashReporterGrace is how long the editor's job stays open after a failed
+// run while its crash reporter is still in it (ServiceSpec.ReporterGrace,
+// k154). The reporter needed about 5 s after the editor's exit to symbolicate
+// the call stack, fill in CrashContext.runtime-xml and send (run 34); 30 s
+// leaves room for a cold symbol load or a slow send. The bound is for a
+// reporter that never ends on its own — one showing its window without
+// -unattended waits for a human — and it delays only the editor's next start,
+// which waits for the job: a launcher shutdown closes the job at once.
+const crashReporterGrace = 30 * time.Second
 
 // followsCrash reports whether st is a start that keeps the last crash's
 // evidence for diagnosis: the restart policy's, a start somebody asks for in
@@ -594,36 +602,6 @@ func editorPreStart(u config.UnrealConfig, projectDir string, kill func(), logge
 // (makeEditorExitHandler). Each comes before anybody has read the dumps.
 func followsCrash(st supervisor.Start) bool {
 	return st.Automatic || st.ReplacesRestart || st.AfterGiveUp
-}
-
-// killCrashReporter terminates a possibly stuck crash reporter window.
-func killCrashReporter() {
-	for _, c := range crashReporterKillers() {
-		_ = exec.Command(c[0], c[1:]...).Run() // ignore errors (the process may not exist)
-	}
-}
-
-// crashReporterKillers returns the commands killCrashReporter runs.
-func crashReporterKillers() [][]string {
-	if runtime.GOOS == "windows" {
-		return [][]string{
-			{"taskkill", "/F", "/IM", "CrashReportClientEditor.exe"},
-			{"taskkill", "/F", "/IM", "CrashReportClient.exe"},
-		}
-	}
-	// pkill -x compares the process name, which Linux cuts to 15 characters
-	// ("CrashReportClie"), so neither full name would ever match. -f matches
-	// the whole command line instead, and a bare -f CrashReportClient hit any
-	// process with the string in an argument — an editor open on
-	// CrashReportClient.cpp. So the pattern pins the name to argv[0]'s last
-	// path component: anchored at the start of the command line, behind an
-	// optional directory part without spaces (with .* it could reach into the
-	// arguments, e.g. a .../Programs/CrashReportClient directory), and ended
-	// by the space before the first argument or by the end of the line (else
-	// a program inside such a directory would match). The price: a crash
-	// reporter started from a path with a space in it is not matched; the
-	// kill is the backup to -unattended, not the guard itself.
-	return [][]string{{"pkill", "-f", "^([^ ]*/)?CrashReportClient(Editor)?( |$)"}}
 }
 
 // editorArgs is the editor's argument list: the project, unreal.args, and

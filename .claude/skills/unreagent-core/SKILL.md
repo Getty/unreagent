@@ -41,7 +41,7 @@ Besides the logger it is built with (`supervisor.New(logger)`), the
 supervisor reaches back into `run()` only through the hooks on `ServiceSpec`.
 `PreStart(Start)` runs before every start (the editor's: `editorGiveUp.started`, then `editorPreStart`). `OnExit(Exit)` runs in its own goroutine when a desired
 service ends or fails its start and is not restarted automatically.
-`OnStartRetry(Retry)` (k152) fires once per failed start that the policy
+`ServiceSpec.ReporterGrace` (k154, `reporter.go`) is a plain duration, not a hook: after a failed exit with a crash reporter still in the job, the job is kept open (`closeAfterReporter`) and the next start held, shown as `ServiceStatus.Waiting`; only the editor gets one (`crashReporterGrace`). `OnStartRetry(Retry)` (k152) fires once per failed start that the policy
 retries — not for a start that is not retried (the one the policy gives up on,
 a program not found: `OnExit` reports those), and not for a restart after an
 exit. The supervisor logs `[name] restart N[/M] in D` on that path, as after
@@ -60,7 +60,7 @@ never calls the supervisor.
 | `scripts.go` | `scriptAction`, `runtimeDir`, the stale-script sweep, `prepareRuntimes` |
 | `bridge.go` | `prepareMCPBridges`, `smokeTestMCP`, `waitForEndpoint` |
 | `mcpconfig.go` | `buildMCPServers`, `writeMCPConfigs` (each target through `writeFileAtomic(..., true)`: replaced by rename, created 0600, an existing one open to group or others tightened to 0600 and logged, Unix only; `unignoredTokenFile` warns when git does not ignore one holding the token), `writeAgentMCPConfig` / `removeAgentMCPConfig` (the embedded agent's `--mcp-config` file, k181: `mcp-config.json` in an `os.MkdirTemp` directory, written by `writeFileAtomic`, 0600 in 0700 on Unix, the per-user `%TEMP%` on Windows; never inline JSON on its command line, which every local user can read), `redactAgentArgs` for the logged agent command (it shows the launcher's own config path, and replaces every other `--mcp-config` value, a hand-wired path too) |
-| `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt; `agentRetryLine`, the line for a retried failed start), the stdin console loop (`commandLoop`; `console.reply` answers on the console and in the log, `console.show` on the console only and only when the log is elsewhere, for an outcome the supervisor has logged already), the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`killCrashReporter` / `crashReporterKillers`, `cleanRecovery`) |
+| `lifecycle.go` | agent exit handling (`agentEnded`, the exit prompt; `agentRetryLine`, the line for a retried failed start), the stdin console loop (`commandLoop`; `console.reply` answers on the console and in the log, `console.show` on the console only and only when the log is elsewhere, for an outcome the supervisor has logged already), the session's one console line reader (`console`, `lineReader`), the window-mode launcher log (`openLauncherLog`), the editor's `editorPreStart` (`cleanRecovery`; it kills no crash reporter, k154) and `crashReporterGrace`, the `ReporterGrace` the editor's service gets |
 | `uplugin.go` | the startup check of the project plugins' `EngineVersion` (k214): `checkPluginEngineVersions`, called once in `run()` before the editor starts, with the editor's final arguments from `editorArgs` (they decide `-unattended`; `-NoEnginePlugins` or any `DisablePlugins=` switches the check off), warns about each plugin under `<Project>/Plugins` the editor will refuse for its `EngineVersion`, which `-unattended` turns into a silent skip; it never stops the start. The engine's compatible version comes from `<Engine>/Build/Build.version` (`engineDirOf`, `compatibleEngineVersion`); the engine facts it mirrors, and what it does not cover: skill `unreagent-ue` |
 | `init.go` | the `init` sub-command (k228): `initCommand` / `initRun` write the default `unreagent.yaml` when none exists, and `preflight` prints what a start needs without starting anything, in order: project, engine (and editor binary), the engine/project mismatch warnings, whether `mcp.address` can be bound (k252, blocking), the agent command, the toolkit (`toolkitFindings`: bridge, `extraServers` entry, node, npm, `node_modules`), the plugins' `EngineVersion` (`checkPluginEngineVersions`), the modules (`moduleFinding`), the permissions line; only project and engine, and the bind, block; skill `unreagent-config` |
 | `modules.go` | the unbuilt-module check (k229, k247): `unbuiltModules`, `checkProjectModules` (startup WARN), `moduleFix` / `editorRoutes` (the fix text, naming only the routes the configuration has), `giveUpModulesPointer` (repeated at the editor's give-up); `init`'s `moduleFinding` uses it too; the heuristic and the engine facts: skill `unreagent-ue` |
@@ -97,10 +97,10 @@ was split by concern.
 3. **Job Objects are load-bearing.** On Windows every service, every one-shot
    command and the bridge smoke test is attached to a Job Object with
    `KILL_ON_JOB_CLOSE` (`internal/supervisor/job_windows.go`); only the
-   short-lived `taskkill`, `reg query` and `git check-ignore`
+   short-lived `reg query` and `git check-ignore`
    (`unignoredTokenFile`) helpers run without one. Off Windows
    the job is a no-op (`job_other.go`), the supervisor kills only the direct
-   child, and the crash-reporter kill runs `pkill` instead of `taskkill`. This is
+   child, and the crash-reporter wait (`ServiceSpec.ReporterGrace`) never applies. This is
    what makes "no zombie ShaderCompileWorker" an OS guarantee rather than a hope.
    Removing or bypassing it silently breaks the product's core promise.
 4. **No machine-specific paths in shipped config.** `unreagent.example.yaml` uses

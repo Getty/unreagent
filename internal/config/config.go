@@ -97,16 +97,11 @@ type UnrealConfig struct {
 	// Unattended appends -unattended (default true): it suppresses the crash
 	// reporter dialog AND both recovery prompts on restart.
 	Unattended *bool `yaml:"unattended"`
-	// KillCrashReporter (default true) kills CrashReportClientEditor.exe and
-	// CrashReportClient.exe before a start — a safeguard in case a reporter
-	// window is stuck after all. A start that follows a crash spares it, as
-	// the reporter may still be writing the dump: an automatic restart (a
-	// retry of a failed start too), a start issued in place of a pending
-	// automatic restart (ue_start, ue_restart, console start or r during the
-	// restart delay, or the retry delay of a failed start), and the first
-	// start after the editor failed and was not restarted. A ue_stop or
-	// console stop during that delay cancels the pending restart and ends the
-	// crash episode, so a later start kills the reporter.
+	// KillCrashReporter has no effect (k154): the launcher no longer kills
+	// crash reporters before a start, as the kill by image name ended the
+	// crash monitor of every other editor on the machine, and the editor's own
+	// reporter ends with its job. The key is still accepted, so a config
+	// that sets it keeps loading; run() warns when it is set.
 	KillCrashReporter *bool `yaml:"killCrashReporter"`
 	// CleanOnRestart (default false) removes
 	// Saved/Autosaves/PackageRestoreData.json before every start, and empties
@@ -476,10 +471,6 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 	if c.Unreal.Unattended == nil {
 		t := true
 		c.Unreal.Unattended = &t
-	}
-	if c.Unreal.KillCrashReporter == nil {
-		t := true
-		c.Unreal.KillCrashReporter = &t
 	}
 
 	if c.Agent.Command == "" {

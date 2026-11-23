@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -224,7 +223,6 @@ func launcherYAML(editor, agent string) string {
   editor: ` + editor + `
   args: ["20"]
   unattended: false
-  killCrashReporter: false
 mcp:
   enabled: false
 permissions:
@@ -510,7 +508,7 @@ func breakMCP(t *testing.T, l *launcherRun, addr, trigger string) {
 // at editor, no restart for it, and MCP on at addr.
 func noAgentMCPYAML(editor, addr string) string {
 	return withMCP(strings.Replace(launcherYAML(editor, "  enabled: false\n"),
-		"  killCrashReporter: false\n", "  killCrashReporter: false\n  restart: never\n", 1), addr)
+		"  unattended: false\n", "  unattended: false\n  restart: never\n", 1), addr)
 }
 
 // The k69 give-up line with MCP not serving, and the k155 line for MCP
@@ -670,8 +668,8 @@ func TestRunCleanOnRestartKeepsCrashesOnAnAutomaticRestart(t *testing.T) {
 		}
 	}
 	yaml := strings.Replace(launcherYAML(filepath.Join(dir, "editor.sh"), "  enabled: false\n"),
-		"  killCrashReporter: false\n",
-		"  killCrashReporter: false\n  cleanOnRestart: true\n  restart: on-failure\n  restartDelaySeconds: 1\n", 1)
+		"  unattended: false\n",
+		"  unattended: false\n  cleanOnRestart: true\n  restart: on-failure\n  restartDelaySeconds: 1\n", 1)
 	l := startLauncherIn(t, dir, yaml)
 
 	var run2 []byte
@@ -732,8 +730,8 @@ func TestRunCleanOnRestartKeepsCrashesOnAStartDuringTheRestartDelay(t *testing.T
 	}
 	// The restart delay outlasts the test: only ue_start can start run 2.
 	yaml := strings.Replace(launcherYAML(filepath.Join(dir, "editor.sh"), "  enabled: false\n"),
-		"  killCrashReporter: false\n",
-		"  killCrashReporter: false\n  cleanOnRestart: true\n  restart: on-failure\n  restartDelaySeconds: 600\n", 1)
+		"  unattended: false\n",
+		"  unattended: false\n  cleanOnRestart: true\n  restart: on-failure\n  restartDelaySeconds: 600\n", 1)
 	yaml = strings.Replace(yaml, "mcp:\n  enabled: false\n", "mcp:\n  enabled: true\n  address: "+addr+"\n", 1)
 	l := startLauncherIn(t, dir, yaml)
 	l.waitLine(t, "[ue] restart 1 in ")
@@ -810,8 +808,8 @@ func TestRunCleanOnRestartKeepsCrashesOnTheFirstStartAfterAGiveUp(t *testing.T) 
 		}
 	}
 	yaml := strings.Replace(launcherYAML(filepath.Join(dir, "editor.sh"), "  enabled: false\n"),
-		"  killCrashReporter: false\n",
-		"  killCrashReporter: false\n  cleanOnRestart: true\n  restartDelaySeconds: 1\n", 1)
+		"  unattended: false\n",
+		"  unattended: false\n  cleanOnRestart: true\n  restartDelaySeconds: 1\n", 1)
 	yaml = strings.Replace(yaml, "mcp:\n  enabled: false\n", "mcp:\n  enabled: true\n  address: "+addr+"\n", 1)
 	l := startLauncherIn(t, dir, yaml)
 	l.waitLine(t, "keeps serving MCP")
@@ -867,7 +865,7 @@ func TestRunEditorGiveUpWithAnAgentSaysWhereTheDumpsAre(t *testing.T) {
   args: ["20"]
   window: false
   claudeIntegration: false
-`), "  killCrashReporter: false\n", "  killCrashReporter: false\n  restartDelaySeconds: 1\n", 1)
+`), "  unattended: false\n", "  unattended: false\n  restartDelaySeconds: 1\n", 1)
 	l := startLauncherIn(t, dir, yaml)
 	l.waitLine(t, "Crash dumps are in "+filepath.Join(dir, "Saved", "Crashes")+".")
 
@@ -892,113 +890,74 @@ func TestSleepProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-// k80: off Windows the crash-reporter kill ran pkill -f CrashReportClient
-// before every editor start, and -f matches every command line that contains
-// the string — an editor open on CrashReportClient.cpp, a tool run on the
-// engine's Programs/CrashReportClient directory. It must hit the two crash
-// reporter programs and nothing else. The test runs the real commands, limited
-// to its own children (pkill -P), so it never touches a process of the user.
-func TestCrashReporterKillMatchesOnlyTheProgram(t *testing.T) {
+// k154: the pre-start ran taskkill /F /IM CrashReportClientEditor.exe (pkill
+// off Windows), and the crash reporter is no leftover but each editor's
+// monitor for its whole life: the kill ended the monitor of every other
+// editor on the machine (run 52). Every reporter of ours is in our editor's
+// job and ends with it, so no pre-start kills one, whatever the start and
+// whatever unreal.killCrashReporter says. The reporters are the test binary
+// under their names, children of this test; on Windows the test cannot
+// stand in for an image name, so it runs off Windows only.
+func TestEditorPreStartKillsNoCrashReporter(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("taskkill /IM matches image names; this tests the pkill pattern")
-	}
-	if _, err := exec.LookPath("pkill"); err != nil {
-		t.Skip("pkill not on PATH")
+		t.Skip("the stand-in reporters are symlinks to the test binary")
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
 	dir := t.TempDir()
-	src := "/src/UE/Engine/Source/Programs/CrashReportClient"
 	type proc struct {
 		name string
 		cmd  *exec.Cmd
 		done chan struct{}
 	}
-	start := func(name, program string, args ...string) *proc {
+	var reporters []*proc
+	for _, name := range []string{"CrashReportClient", "CrashReportClientEditor"} {
+		link := filepath.Join(dir, name)
+		if err := os.Symlink(exe, link); err != nil {
+			t.Skipf("symlink: %v", err)
+		}
 		p := &proc{name: name, done: make(chan struct{})}
-		p.cmd = exec.Command(program, append([]string{"-test.run=^TestSleepProcess$"}, args...)...)
+		p.cmd = exec.Command(link, "-test.run=^TestSleepProcess$", "--", "-MONITOR=4711")
 		p.cmd.Env = append(os.Environ(), sleepProcessEnv+"=1")
 		if err := p.cmd.Start(); err != nil {
 			t.Fatalf("start %s: %v", name, err)
 		}
 		go func() { _ = p.cmd.Wait(); close(p.done) }()
 		t.Cleanup(func() { _ = p.cmd.Process.Kill(); <-p.done })
-		return p
+		reporters = append(reporters, p)
 	}
-	// The crash reporters are the test binary under their names: argv[0] is
-	// the path a symlink is started by.
-	var targets []*proc
-	for _, name := range []string{"CrashReportClient", "CrashReportClientEditor"} {
-		link := filepath.Join(dir, name)
-		if err := os.Symlink(exe, link); err != nil {
-			t.Skipf("symlink: %v", err)
-		}
-		targets = append(targets, start(name, link))
-	}
-	inside := filepath.Join(dir, "Programs", "CrashReportClient")
-	if err := os.MkdirAll(inside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(exe, filepath.Join(inside, "build")); err != nil {
-		t.Skipf("symlink: %v", err)
-	}
-	decoys := []*proc{
-		start("an editor open on CrashReportClient.cpp", exe, src+"/Private/CrashReportClient.cpp"),
-		start("a tool run on the CrashReportClient directory", exe, src),
-		start("a program inside a CrashReportClient directory", filepath.Join(inside, "build")),
-	}
-	time.Sleep(200 * time.Millisecond) // let them all reach their sleep
+	time.Sleep(200 * time.Millisecond) // let them reach their sleep
 
-	for _, c := range crashReporterKillers() {
-		args := append([]string{c[0], "-P", strconv.Itoa(os.Getpid())}, c[1:]...)
-		_ = exec.Command(args[0], args[1:]...).Run() // exit 1 = nothing matched
+	on := true
+	pre := editorPreStart(config.UnrealConfig{KillCrashReporter: &on}, "", func(string) {})
+	for _, st := range []supervisor.Start{{}, {Automatic: true}, {AfterGiveUp: true}, {ReplacesRestart: true}} {
+		pre(st)
 	}
-	for _, p := range targets {
+	time.Sleep(200 * time.Millisecond)
+	for _, p := range reporters {
 		select {
 		case <-p.done:
-			if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() {
-				t.Errorf("%s ended without being killed: %v", p.name, p.cmd.ProcessState)
-			}
-		case <-time.After(5 * time.Second):
-			t.Errorf("%s was not killed", p.name)
-		}
-	}
-	time.Sleep(100 * time.Millisecond)
-	for _, p := range decoys {
-		select {
-		case <-p.done:
-			t.Errorf("killed %s (%v): the pattern matches more than the crash reporter", p.name, p.cmd.ProcessState)
+			t.Errorf("the editor pre-start ended %s (%v)", p.name, p.cmd.ProcessState)
 		default:
 		}
 	}
 }
 
-// k128: the crash-reporter kill ran before every start, also before the
-// restart policy's restart about one restart delay after a crash, and could
-// cut off a reporter still writing the report of that crash. A start that
-// keeps Saved/Crashes for diagnosis leaves the reporter alone too; every
-// other start kills it, and killCrashReporter: false never does. k153: so
-// does a start somebody asks for in place of the pending automatic restart.
-func TestEditorPreStartSparesTheCrashReporterAfterACrash(t *testing.T) {
-	on, off := true, false
-	for _, c := range []struct {
-		kill  *bool
-		start supervisor.Start
-		want  int
-	}{
-		{&on, supervisor.Start{}, 1},
-		{&on, supervisor.Start{Automatic: true}, 0},
-		{&on, supervisor.Start{AfterGiveUp: true}, 0},
-		{&on, supervisor.Start{ReplacesRestart: true}, 0},
-		{&off, supervisor.Start{}, 0},
-	} {
-		kills := 0
-		editorPreStart(config.UnrealConfig{KillCrashReporter: c.kill}, "", func() { kills++ }, func(string) {})(c.start)
-		if kills != c.want {
-			t.Errorf("killCrashReporter %v, %+v: %d kills, want %d", *c.kill, c.start, kills, c.want)
-		}
+// k154: unreal.killCrashReporter lost its effect with the kill. A config that
+// sets it still loads, and the launcher says the key does nothing; one
+// without it hears nothing about it.
+func TestRunWarnsThatKillCrashReporterHasNoEffect(t *testing.T) {
+	const warn = "unreal.killCrashReporter has no effect"
+	with := strings.Replace(launcherYAML("sleep", "  enabled: false\n"), "  unattended: false\n", "  unattended: false\n  killCrashReporter: false\n", 1)
+	l := startLauncher(t, with)
+	l.waitLine(t, "WARN "+warn)
+
+	l = startLauncher(t, launcherYAML("sleep", "  enabled: false\n"))
+	l.waitLine(t, "[ue] started")
+	if strings.Contains(l.stdout.String(), warn) {
+		t.Fatalf("warned about unreal.killCrashReporter though the config does not set it:\n%s", l.stdout)
 	}
 }
 

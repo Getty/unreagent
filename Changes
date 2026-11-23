@@ -589,6 +589,17 @@ Revision history for unreagent
   - The unbuilt-modules fix text names only the routes your setup has: the
     launcher console and the agent tools. With the agent in the launcher's
     window it tells you to have the agent run the tools.
+  - After a failed editor exit, its Job Object stays open for up to 30 s while
+    its crash reporter is still in it, so the crash report keeps its
+    symbolicated call stack and module list. During that time the editor's
+    next start is held: status shows "waiting": "crash-reporter",
+    ue_start/ue_restart report the start as held rather than failed, and a
+    stop cancels it. A launcher shutdown closes the job at once;
+    KILL_ON_JOB_CLOSE is unchanged. Unverified on Windows.
+  - The launcher no longer runs taskkill /IM CrashReportClientEditor.exe (or
+    pkill) before a start, which ended the crash monitor of every other editor
+    on the machine. unreal.killCrashReporter is still accepted but has no
+    effect; setting it logs a startup WARN.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:
