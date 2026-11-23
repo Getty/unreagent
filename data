@@ -1,0 +1,40 @@
+---
+claimed_at: 2026-11-23T22:14:45Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-23T22:14:45Z
+created: 2026-11-22T08:53:03Z
+id: 242
+priority: medium
+started: 2026-11-23T22:01:48Z
+status: done
+tags:
+- toolkit
+- bridge
+- decision
+title: 'Decide: should bridge installs leave a plugin''s package-lock.json alone (--no-save)?'
+updated: 2026-11-23T22:14:45Z
+---
+
+Decision for Getty, from k215 (2026-11-22, measured on Windows 11, Node 22.17.1, npm 10.9.2, on a scratch copy of the UE LLM Toolkit bridge at 9f6a0f7).
+
+The Toolkit bridge's package-lock.json (name unrealclaude-mcp-bridge 1.1.0, with zod) does not match its package.json (ue5-mcp-server 1.3.0, vitest dev deps). Every successful bridge install the launcher runs (plain, and the k215 --legacy-peer-deps retry) rewrites that tracked lock file (about +1570/-65 lines), so a plugin submodule checkout is left dirty after the first start.
+
+Options measured:
+- --no-save on both install calls: the lock stays byte-identical, npm still installs the lock's pinned versions (SDK 1.25.1, 152 packages), and still adds peers on its own. For a bridge without a lock it writes none (a plain install would add an untracked file). For a bridge whose lock is correct, a plain re-install leaves it byte-identical anyway, so --no-save costs nothing there.
+- --no-package-lock: also leaves the lock alone but ignores it: SDK moves to 1.32.2, 158 packages. A real cost.
+- Leave it (today): the README's Toolkit section says the lock gets rewritten.
+
+Worker's recommendation: --no-save, if the launcher should never write a plugin's tracked files. Owner after the decision: unreagent-worker (cmd/launcher/bridge.go), README via unreagent-doc-writer.
+
+Main agent 2026-11-23: absorbs k243 (same npm install policy for runtimes.node: share the bridge's retry or stay plain). Decide both here.
+
+Maintainer 2026-11-23: decided, use --no-save for the bridge installs, so the launcher leaves a plugin's tracked package-lock.json alone. Handed to unreagent-worker.
+
+runtimes.node (k243): left alone. prepareRuntimes (cmd/launcher/scripts.go) runs a bare 'npm install' in runtimes.node.project, the user's own project that the user chose to have prepared, not a plugin's tracked checkout; there a lock sync is what the user's npm install would do and --no-save would stop the lock and package.json from tracking what gets installed. No --legacy-peer-deps retry there either: that part of k243 stays undecided. Docs stating the lock is rewritten or quoting the install command (not edited): README.md:78-79, 385-386, 897-921 (919-921 says the lock gets rewritten and to git checkout it: now wrong), 972-995 (980-983 quote 'npm install --legacy-peer-deps'); unreagent.example.yaml:253; .claude/skills/unreagent-ue/SKILL.md:152-154 (lock mismatch row, maybe quotes the install). skills/unreagent-runtimes/SKILL.md:286-290 is runtimes.node, unchanged. Measured: Linux tests with a fake npm only; --no-save effect on the lock is the card's own Windows npm 10.9.2 measurement, not re-run by me. Windows: cross-compiled and go vet only.
+
+bridge.go: both installs get --no-save (const noSave); logs/WARN quote the real command; tests updated first (7 red, then green). Full check green on Linux, make windows ok, unverified on Windows.
+
+Reviewer 2026-11-23: PASS for the Go change (cmd/launcher/bridge.go, bridge_npm_test.go, bridge_test.go). Check run by the reviewer: gofmt -l cmd internal skills empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -count=1 -race ./cmd/launcher ok; make windows built dist/unreagent.exe. Checked: bridge.go:233 and :253 both carry --no-save, argv otherwise unchanged (install / install --legacy-peer-deps plus the flag); the retry notice (:250), the success line, exit/timeout WARN and the by-hand hint all quote the command really run via install/command; the start line (:230) prints noSave separately but matches the first call. retried (:234/:252) is right on every path: a plain timeout cannot retry (retry needs err == nil) so it reads 'timed out after', a retry timeout reads 'together', a plain failure then retry success hits the default case and never reads it; the old len(install) > 1 test would now be wrong because the plain argv has two items. Tests: bridge_npm_test.go:185 and :207 assert the exact argv lines, so dropping --no-save from either call fails them; :267 and :273 pin both timeout wordings exactly, so a wrong retried fails. Marker/skip-install logic (bridgeInstallMarker, settleModules, the marked early return) untouched. runtimes.node (scripts.go:164) left plain: right reading, the card scopes the decision to bridge installs and the user's own project should track its lock. No German added. Not verified: no real npm ran here (fake npm only); the --no-save effect on the lock is k215's Windows measurement, not re-run on this code; Windows cross-compiled and vetted only, unverified on Windows. Outside this review: .claude/skills/unreagent-ue/SKILL.md, README.md and unreagent.example.yaml are also modified in the tree and were not reviewed here; they need their own review before they go into the commit.
+
+Committed as e47205b. runtimes.node left on a plain npm install (the user's own project). The --legacy-peer-deps retry for runtimes.node (from k243) stays undecided and untracked unless it is hit.
