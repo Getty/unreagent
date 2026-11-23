@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,6 +44,11 @@ func newInitTree(t *testing.T, buildVersion string, onPath ...string) initTree {
 		tr.executable(filepath.Join(bin, name))
 	}
 	t.Setenv("PATH", bin)
+	// Keep the tests off the real mcp.address: another program may hold it.
+	// TestInitPreflightChecksMCPAddress puts net.Listen back.
+	oldListen := listen
+	listen = func(network, _ string) (net.Listener, error) { return net.Listen(network, "127.0.0.1:0") }
+	t.Cleanup(func() { listen = oldListen })
 	return tr
 }
 
@@ -484,5 +490,55 @@ func TestInitUsageErrors(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("init ran, output:\n%s", out.String())
+	}
+}
+
+// k252: the preflight binds mcp.address the way a start does. A taken port is
+// a blocking finding that names the fix; a free one is ok; with the MCP server
+// off there is no finding.
+func TestInitPreflightChecksMCPAddress(t *testing.T) {
+	tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
+	cfg, info, err := config.LoadForPreflight("", tr.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := func(fs []finding) (finding, bool) {
+		for _, f := range fs {
+			if strings.HasPrefix(f.text, "mcp: ") || strings.HasPrefix(f.text, "MCP server cannot listen") {
+				return f, true
+			}
+		}
+		return finding{}, false
+	}
+
+	listen = net.Listen // this test binds for real
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := held.Addr().String()
+	cfg.MCP.Enabled = true
+	cfg.MCP.Address = addr
+	f, ok := find(preflight(cfg, info))
+	if !ok || f.level != levelBlocking || !strings.Contains(f.text, "cannot listen on "+addr) || !strings.Contains(f.text, "mcp.address") || !strings.Contains(f.text, "unreagent.local.yaml") {
+		t.Errorf("taken port: finding = %+v, found %v", f, ok)
+	}
+
+	// Free again: the preflight must have closed what it bound, too.
+	held.Close()
+	f, ok = find(preflight(cfg, info))
+	if !ok || f.level != levelOK || !strings.Contains(f.text, addr+" can be bound") {
+		t.Errorf("free port: finding = %+v, found %v", f, ok)
+	}
+	again, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Errorf("the preflight left %s bound: %v", addr, err)
+	} else {
+		again.Close()
+	}
+
+	cfg.MCP.Enabled = false
+	if f, ok := find(preflight(cfg, info)); ok {
+		t.Errorf("mcp disabled: unexpected finding %+v", f)
 	}
 }

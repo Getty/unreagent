@@ -195,6 +195,19 @@ func preflight(cfg *config.Config, info config.Info) []finding {
 		add(levelWarn, w, "")
 	}
 
+	// A start binds mcp.address before anything else and ends if it cannot
+	// (k252); with the MCP server off there is nothing to bind. The error is
+	// listenMCP's and names its fix. Whether a running unreagent holds the port
+	// is not told apart: nothing in the tree identifies one for this project.
+	if cfg.MCP.Enabled {
+		if ln, err := listenMCP(cfg.MCP.Address); err != nil {
+			add(levelBlocking, err.Error(), "")
+		} else {
+			_ = ln.Close()
+			add(levelOK, "mcp: "+cfg.MCP.Address+" can be bound", "")
+		}
+	}
+
 	if !cfg.Agent.Enabled {
 		add(levelInfo, "agent: off (agent.enabled is false) — the launcher starts no agent; an external one can connect to the MCP server", "")
 	} else if withoutEngine(info, cfg.Agent.Command) {
