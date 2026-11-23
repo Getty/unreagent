@@ -1,0 +1,24 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T17:38:32Z
+id: 190
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- release
+- docs
+title: Changes names the ue-* skills but not the shipped unreagent-* skills
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k189 review (2026-11-21).
+
+**Gap:** under {{$NEXT}}, Changes has 'New shipped skills ...' entries for the ue-* skills (around :166-195), plus the delivery entries for the skills MCP tool and materialization. The launcher's own shipped skills under skills/unreagent-* are not named anywhere: unreagent-iterate, unreagent-build, unreagent-runtimes, unreagent-files and any others. They are new since v0.0.9.
+
+**Done looks like:** one user-facing entry names them and what each covers, matching the ue-* entries. This is for the pre-release audit.
+
+Lane: unreagent-release-manager.
+
+**Also for the pre-release audit (main agent, 2026-11-21):** in the `Changes` entry at ~80-84 (the ue_restart description), k100 folded in "as does the unreagent-files skill", and the wrap is now uneven. The sentence also carries the unrelated approve fix. Reword it and rewrap; splitting approve into its own bullet is probably cleaner.
