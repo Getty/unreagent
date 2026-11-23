@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T10:44:15Z
+id: 161
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- tests
+- flaky
+title: A cmd/launcher test failed once under -race, near the console run-mode tests
+updated: 2026-11-23T02:48:50Z
+---
+
+Seen once while committing k156 (main b6159c3): `go test -race -count=1 ./cmd/launcher` failed in a test whose output was cut off; the tail showed run-mode console output ("[cmd:hello]", "Unknown command: nonsense"), so most likely one of the console / commandLoop tests from the lifecycle bundle (b8e300c). It did not reproduce: 5 more race runs by the release-manager and 6 by the main agent (each ~34 s) were green. The host was loaded at the time (several agents running test suites in parallel), so a timing assumption that breaks under load is the likely cause.
+
+Done when: the failing test is found (e.g. `go test -race -count=20 -run "Console|CommandLoop|Prompt" ./cmd/launcher` under CPU load, `-cpu 1`, or with `stress`-style parallel runs) and its timing dependency fixed, or the card is closed with the evidence that it cannot be reproduced. Lane: unreagent-test-writer.
+
+Main agent 2026-11-21: seen again. The k175 worker's first 'go test -race ./cmd/launcher' run in its worktree failed, and the next six passed. The name of the failing test was lost, because the output had been cut to three lines. Whoever takes this card: run a stress loop with the full output kept, e.g. go test -race -count=50 ./cmd/launcher 2>&1 | tee file.
