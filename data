@@ -1,0 +1,31 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T15:17:49Z
+id: 183
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- security
+- bug
+title: 'Permission splitter: a case pattern''s ) inside $(…) closes the substitution
+  early'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k127 worker (drift 2). It is pre-existing on HEAD and still present after k127.
+
+**The bug:** in `internal/config/permission.go`, `readDelimited` ends a `$(…)` at the first unquoted `)`. Inside a `case`, the `)` after a pattern is not a closing parenthesis. So `echo "$(case x in x) touch M;; esac)"` passes a `Bash(touch *)` deny rule under allow_all, and bash runs the touch. Allowlist mode denies it, because the leftover is not covered.
+
+**Done means:**
+- A `case … esac` inside `$(…)` is either read correctly (a pattern `)` does not close the substitution; `(x)` patterns count too) or makes the command undecidable, which fails closed.
+- Pinned by a table test and an overlay mutation.
+- Probed in real bash with a harmless stand-in.
+
+**Lane:** unreagent-worker, after k127 lands (same file).
+
+Main agent 2026-11-21: folded into k127 round 5 (same file, same fix: a $(…) with case in command position fails closed). Closes with the k127 commit.
+
+Research input 2026-11-21: docs/research/2026-11-21-shell-constructs.md, Bash table (case patterns, command substitution). Unchecked.
