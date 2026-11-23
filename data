@@ -1,0 +1,39 @@
+---
+claimed_at: 2026-11-23T02:48:31Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-23T02:48:31Z
+created: 2026-11-21T23:06:24Z
+id: 204
+priority: medium
+started: 2026-11-23T02:48:31Z
+status: done
+tags:
+- ue
+- windows-check
+title: 'Source-build registry key: Epic documents two spellings of the Builds key'
+updated: 2026-11-23T02:48:31Z
+---
+
+Found in k198. buildsRegKey in internal/config/engine.go reads HKCU Software\Epic Games\Unreal Engine\Builds (with a space), which matches Epic's Managing Game Code page. The installed-build guide spells it Software\Epic Games\UnrealEngine\Builds (no space).
+
+Needs a Windows machine with a registered source build: experiment U6 in docs/research/2026-11-21-unreal-editor.md (export the key). Then keep the one that exists, or read both. Owner after the run: unreagent-worker.
+
+From the k198 review (2026-11-21): a third location exists. Epic's tk-unreal (EngineLauncher._find_software_from_registry) also reads a Builds subkey under HKLM SOFTWARE\EpicGames\Unreal Engine, taking every value's data as an engine root. Add it to the U6 export: three candidates, not two.
+
+Windows run 2026-11-22 (U6, partial). Windows 11 Pro 26H2 build 26300.9711, Go 1.27.0, unreagent d4edd23 (go build, CGO_ENABLED=0). Engines: Launcher UE 5.7.4 (CL 51494982) at C:\EpicGames\UE_5.7 and UE 5.8.4 (CL 58902052) at C:\EpicGames\UE_5.8. NO source build on this machine, so the export of a registered source build could not be run as U6 asks.
+
+Registry export (reg/Get-ItemProperty, both views):
+- HKCU\SOFTWARE\Epic Games\Unreal Engine\Builds: absent. HKCU\SOFTWARE\Epic Games\UnrealEngine\Builds: absent. HKCU\SOFTWARE\Epic Games\Unreal Engine (with space) exists, subkeys Hardware Survey and Identifiers (written by the engine).
+- HKLM\SOFTWARE\EpicGames\Unreal Engine: one subkey 5.7, InstalledDirectory=C:\EpicGames\UE_5.7. No 5.8 subkey although 5.8 is installed, and no Builds subkey.
+- HKLM\SOFTWARE\WOW6432Node\EpicGames\Unreal Engine: INSTALLDIR=C:\Program Files (x86)\Epic Games\, subkey 4.0 (Launcher leftover). HKLM ...\Epic Games\Unreal Engine\Builds and ...\UnrealEngine\Builds: absent.
+
+Binary evidence instead of a source build: scanned the shipped binaries for every registry/manifest string (UTF-16LE and ASCII, case-insensitive): UnrealEditor-DesktopPlatform.dll of 5.7.4 and 5.8.4 (and the six other *-DesktopPlatform.dll of 5.7.4), and the Launcher's Engine\Binaries\Win64\UnrealVersionSelector.exe. Each holds exactly these three: "SOFTWARE\Epic Games\Unreal Engine\Builds", "SOFTWARE\EpicGames\Unreal Engine", "UnrealEngineLauncher/LauncherInstalled.dat". The spelling without the space ("UnrealEngine\Builds") occurs in none of them. The hive is not part of the string; both Epic pages say HKCU.
+
+Result: CONFIRMS buildsRegKey (with the space). The installed-build guide's spelling is a documentation slip, not a second key the engine reads; this settles the "Documentation conflict" row of docs/research/2026-11-21-unreal-editor.md section 4 for the spelling. The third candidate from the review (a Builds subkey under HKLM SOFTWARE\EpicGames\Unreal Engine, per tk-unreal): the engine binaries name that key only as the Launcher key (what launcherRegKey already reads, subkeys with InstalledDirectory); no Builds path under it appears in them, and none exists here. Not settled: whether a real source build registration lands anywhere else; needs a machine with one. Recommendation: no code change for the spelling.
+
+Found on the way: k211. The engine itself also reads LauncherInstalled.dat; unreagent does not, and on this machine it picks UE 5.7 for a project associated with 5.8.
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). Settled without a source-build run: the engine reads only HKCU\SOFTWARE\Epic Games\Unreal Engine\Builds, with spaces (Engine/Source/Developer/DesktopPlatform/Private/Windows/DesktopPlatformWindows.cpp 28, 335-390); value name = identifier, data = root directory; invalid values are deleted while enumerating. The no-space spelling and an HKLM Builds key are not read. buildsRegKey is correct as is — this card can close once the unreagent-ue row is updated.
+
+Main agent 2026-11-23: closed without a change — the source read and the Windows binary scan confirm buildsRegKey as the code has it.
