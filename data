@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T02:05:46Z
+depends_on:
+- 104
+id: 109
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- security
+- windows
+title: 'Permission deny rules: path forms that still bypass them'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found while working k104/k59 (pre-existing, not fixed there):
+- Windows path aliases defeat deny rules by string matching: \\?\C:\..., \\.\C:\..., \??\C:\..., 8.3 short names (CONFIG~1), trailing dots or spaces (Config.\x), ::$DATA streams. String matching cannot close these in general; at least strip the \\?\ and \\.\ prefixes, and document the rest.
+- A relative value slips past an absolute deny rule: ../../etc/passwd never matches Write(/etc/*). Matters only if Claude Code passes relative file_path values — check what it sends.
+The README already calls the policy a guard rail, not a security boundary (k59 item 4); keep that framing. internal/config/permission.go.
+
+**From the k104/k59 review:** (1) on Windows \\\\\\server\\share\\x (three leading separators) — how Windows resolves it is unverified; (2) Write(\\\\?\\C:\\*) and Write(\\\\.\\C:\\*) load while Write(C:\\*) is rejected (k104): they only match that literal spelling but cover a whole drive; (3) Go ToUpper folds ſ into S and ı into I, so Write(C:\\Proj\\Source\\*) grants C:\\Proj\\ſource\\x — only a sibling folder if NTFS $UpCase does not fold them; low.
+
+**From the k59 fix round (2026-11-21):** \\?\ and \\.\ prefixes are still unhandled; an allow pattern with three or more leading separators loads but never grants on Windows (fail-closed) — consider a load error for it.
+
+Research input 2026-11-21: docs/research/2026-11-21-windows-processes.md section 7 (extra leading separators, the \\?\ and \\.\ prefixes). Unchecked. Experiment W8.
