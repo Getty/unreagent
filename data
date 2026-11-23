@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T18:28:44Z
+id: 191
+priority: low
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- config
+- linux
+title: Editor path warning says 'not found' for a path under a directory the launcher
+  cannot search
+updated: 2026-11-23T02:48:50Z
+---
+
+From the k147 review (2026-11-21). In cmd/launcher/helpers.go pathProblem, every os.Stat error becomes 'path not found'. For a path under a directory the launcher has no search (x) permission for, os.Stat fails with permission denied, and exec then fails with 'permission denied', but the warning says 'path not found'. v0.0.9 behaved the same, and so did k147.
+
+Done when: off Windows, a stat error that is not ErrNotExist is reported with its own cause (e.g. 'cannot be read: permission denied'), pinned by a test. The test needs a non-root run, so skip it for euid 0. Windows stays byte-for-byte unchanged (k130). Lane: unreagent-worker. Touches helpers.go, after k147 and k178.
