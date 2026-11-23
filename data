@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-11-23T02:48:50Z
+created: 2026-11-21T12:53:54Z
+id: 168
+priority: medium
+started: 2026-11-23T02:48:50Z
+status: archived
+tags:
+- permissions
+- agent
+- docs
+title: 'agent.window: false without -p: does Claude Code accept --permission-prompt-tool,
+  or abort?'
+updated: 2026-11-23T02:48:50Z
+---
+
+Found by the k38/k46 worker. With agent.window: false and no -p/--print in agent.args, the launcher passes --permission-prompt-tool. Its own code comment (cmd/launcher/main.go, the agent-start block) says Claude Code aborts on that outside -p, but the README's Permission layer section calls window: false alone headless. One of them is wrong. The flag is hidden in claude --help (2.1.330 lists only --permission-prompts, which applies with --print). Done when a real run of Claude Code settles it (interactive, without -p, with --permission-prompt-tool and an MCP config naming the tool) and the code comment, the README and the k38 warning's advice agree with the result. If Claude Code does abort, the launcher must not pass the flag in that case, and the k38 warning must cover it. Lane: unreagent-scout to settle it, then unreagent-worker and unreagent-doc-writer.
