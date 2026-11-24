@@ -212,7 +212,7 @@ func hermesEnableHint(info config.Info) []string {
 		"Set it in unreagent.local.yaml, which is overlaid on the defaults, and re-run this command to integrate Hermes:",
 		"  " + localOverridePath(info.ConfigPath),
 		"Do not create an unreagent.yaml for this setting alone: a config file replaces the built-in defaults, and one without agent.enabled and mcp.enabled starts neither the agent nor the MCP server.",
-		"To get a config file, run `unreagent init`: it writes the built-in defaults out as unreagent.yaml, and the setting can go in there.",
+		"To get a config file, run `unreagent init`: it writes the built-in defaults out as unreagent.yaml, with skills.materialize turned on, and the setting can go in there.",
 	}
 }
 

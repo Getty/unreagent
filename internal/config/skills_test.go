@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +122,34 @@ func TestSkillsAgents(t *testing.T) {
 		if got := c.Skills.AgentFiles(); got != tc.files {
 			t.Errorf("%q + %q: AgentFiles = %v; want %v", tc.base, tc.local, got, tc.files)
 		}
+	}
+}
+
+// MaterializeSetting tells a file that sets skills.materialize, to either
+// value, from one that does not set it: the value an overlay file wins with.
+func TestMaterializeSetting(t *testing.T) {
+	dir := t.TempDir()
+	for name, c := range map[string]struct {
+		doc     string
+		on, set bool
+	}{
+		"on":              {"skills: {materialize: true}\n", true, true},
+		"off":             {"skills:\n  materialize: false\n", false, true},
+		"null":            {"skills: {materialize: null}\n", false, false},
+		"other key":       {"skills: {agents: false}\n", false, false},
+		"no skills":       {"agent: {enabled: true}\n", false, false},
+		"empty":           {"", false, false},
+		"not YAML at all": {"skills: [\n", false, false},
+	} {
+		p := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".yaml")
+		if err := os.WriteFile(p, []byte(c.doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if on, set := MaterializeSetting(p); on != c.on || set != c.set {
+			t.Errorf("%s: MaterializeSetting = %v, %v; want %v, %v", name, on, set, c.on, c.set)
+		}
+	}
+	if on, set := MaterializeSetting(filepath.Join(dir, "missing.yaml")); on || set {
+		t.Errorf("missing file: MaterializeSetting = %v, %v; want false, false", on, set)
 	}
 }

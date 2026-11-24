@@ -83,7 +83,7 @@ func (tr initTree) built() {
 func (tr initTree) run(check bool) (string, error) {
 	tr.t.Helper()
 	var out bytes.Buffer
-	err := initRun(func() (*config.Config, config.Info, error) { return config.LoadForPreflight("", tr.dir) }, check, &out)
+	err := initRun(func() (*config.Config, config.Info, error) { return config.LoadForInit("", tr.dir) }, check, &out)
 	return out.String(), err
 }
 
@@ -108,7 +108,7 @@ func wantNone(t *testing.T, out string, nots ...string) {
 }
 
 // k228: next to a .uproject with no config, init writes the built-in defaults
-// with placeholders and no machine path, the toolkit entry as found, and a
+// (plus skills.materialize, k256) with placeholders and no machine path, the toolkit entry as found, and a
 // preflight with nothing to fix when everything is there.
 func TestInitWritesTheDefaultsAndACleanPreflight(t *testing.T) {
 	tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
@@ -120,12 +120,12 @@ func TestInitWritesTheDefaultsAndACleanPreflight(t *testing.T) {
 		t.Fatalf("init failed: %v\n%s", err, out)
 	}
 	written := mustReadFile(t, tr.config())
-	doc, _, _, err := config.DefaultYAML(tr.dir)
+	doc, _, _, err := config.InitYAML(tr.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if written != initHeader+string(doc) {
-		t.Errorf("written config is not the header and config.DefaultYAML:\n%s", written)
+		t.Errorf("written config is not the header and config.InitYAML:\n%s", written)
 	}
 	wantAll(t, written, "${PROJECT_DIR}/"+toolkitPlugin+"/Resources/mcp-bridge/index.js", "enabled: true")
 	if strings.Contains(written, tr.dir) || strings.Contains(written, filepath.ToSlash(tr.dir)) || strings.Contains(written, tr.engine) {
@@ -173,12 +173,12 @@ func TestInitNeverOverwritesAConfig(t *testing.T) {
 					t.Errorf("init created %s next to %s", e.Name(), name)
 				}
 			}
-			wantAll(t, out, path+" exists and is left as it is. Preflight only.",
+			wantAll(t, out, path+" exists and is left as it is.",
 				"agent: off (agent.enabled is false)",
 				// The plugin is there, this config does not name it: the entry is shown.
 				"[WARN]     UE LLM Toolkit: the plugin is there ("+toolkitPlugin+"/Resources/mcp-bridge/index.js) but the config has no mcp.extraServers.ue-llm-toolkit entry",
 				"Fix: add the entry to "+name, "${PROJECT_DIR}/"+toolkitPlugin+"/Resources/mcp-bridge/index.js")
-			wantNone(t, out, "Wrote ")
+			wantNone(t, out, "Wrote "+path)
 		})
 	}
 
@@ -203,7 +203,7 @@ func TestInitCheckWritesNothing(t *testing.T) {
 	if fileExists(tr.config()) {
 		t.Error("init -check wrote unreagent.yaml")
 	}
-	wantAll(t, out, "-check, so none is written", "Preflight:")
+	wantAll(t, out, "-check, so nothing is written", "Preflight:")
 }
 
 // No .uproject, or several: nothing to write a config for. The load error
@@ -245,10 +245,10 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 	if strings.Contains(out, "[ok]       engine: ") {
 		t.Skip("this host has an engine config.Load detects without UE_ROOT")
 	}
-	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s), see [BLOCKING] above (unreagent init wrote "+tr.config()+")") {
+	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s), see [BLOCKING] above (unreagent init wrote "+tr.config()+", ") {
 		t.Errorf("err = %v, want one blocking finding and the file init wrote\n%s", err, out)
 	}
-	doc, _, _, derr := config.DefaultYAML(tr.dir)
+	doc, _, _, derr := config.InitYAML(tr.dir)
 	if derr != nil {
 		t.Fatal(derr)
 	}
@@ -256,7 +256,7 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 		t.Fatalf("init wrote no unreagent.yaml:\n%s", out)
 	}
 	if written := mustReadFile(t, tr.config()); written != initHeader+string(doc) {
-		t.Errorf("written config is not the header and config.DefaultYAML:\n%s", written)
+		t.Errorf("written config is not the header and config.InitYAML:\n%s", written)
 	}
 	wantAll(t, out, "Wrote "+tr.config(),
 		"[ok]       project: ",
@@ -272,12 +272,13 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 	// Nothing is said about an editor binary or a plugin that needs the engine to judge.
 	wantNone(t, out, "unreal.editor not found", "does not match the engine", "or run what the launcher's compile command runs")
 
-	// Again, now with the file there: the same finding, nothing rewritten.
+	// Again, now with the file there: the same finding, the config not
+	// rewritten (TestInitClosingLineNamesWhatItWrote pins what is).
 	out, err = tr.run(false)
-	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s), see [BLOCKING] above (unreagent init wrote nothing)") {
+	if err == nil || !strings.Contains(err.Error(), "1 blocking finding(s), see [BLOCKING] above (unreagent init wrote ") || strings.Contains(err.Error(), tr.config()) {
 		t.Errorf("second run: err = %v, want one blocking finding\n%s", err, out)
 	}
-	wantAll(t, out, "exists and is left as it is. Preflight only.", "[BLOCKING] engine: not found")
+	wantAll(t, out, "exists and is left as it is.", "[BLOCKING] engine: not found")
 
 	t.Run("check writes nothing", func(t *testing.T) {
 		tr := newInitTree(t, "")
@@ -296,8 +297,9 @@ func TestInitWithoutEnginePrintsTheFullPreflight(t *testing.T) {
 			t.Errorf("err = %v, want one blocking finding\n%s", err, out)
 		}
 		wantAll(t, out, "[BLOCKING] engine: not found\n", "1 blocking, ")
-		if err != nil && !strings.Contains(err.Error(), "(unreagent init wrote nothing)") {
-			t.Errorf("err = %v; want it to end on what init wrote: nothing", err)
+		// No config written, but the starter CLAUDE.md (k256).
+		if err != nil && !strings.Contains(err.Error(), "(unreagent init wrote "+filepath.Join(tr.dir, "CLAUDE.md")+")") {
+			t.Errorf("err = %v; want it to end on what init wrote: CLAUDE.md", err)
 		}
 	})
 	// What holds ${ENGINE} cannot be looked up without an engine: it is
@@ -331,19 +333,21 @@ commands:
 }
 
 // k246: init never writes to a -config path — not to a config that is there,
-// and not where the path names no file, which is a load error.
+// and not where the path names no file, which is a load error. k256: nor
+// anything else in the project, though the config materializes and the
+// project has no CLAUDE.md.
 func TestInitConfigFlagNeverWrites(t *testing.T) {
-	const existing = "# mine\nunreal: {editor: claude}\n"
+	const existing = "# mine\nunreal: {editor: claude}\nskills: {materialize: true}\n"
 	tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
 	path := filepath.Join(tr.dir, "custom.yaml")
 	mustWriteFile(t, path, existing)
-	before := dirNames(t, tr.dir)
+	before := snapshot(t, tr.dir, true)
 
 	var out bytes.Buffer
 	if err := initCommand([]string{"-config", path}, &out); err != nil {
 		t.Fatalf("init -config failed: %v\n%s", err, out.String())
 	}
-	wantAll(t, out.String(), path+" exists and is left as it is. Preflight only.", "Preflight:")
+	wantAll(t, out.String(), path+" exists and is left as it is. Nothing is written: preflight only.", "Preflight:")
 	wantNone(t, out.String(), "Wrote ")
 	if got := mustReadFile(t, path); got != existing {
 		t.Errorf("the -config file was changed:\n%s", got)
@@ -355,23 +359,7 @@ func TestInitConfigFlagNeverWrites(t *testing.T) {
 		t.Errorf("init -config on a missing file: err = %v\n%s", err, out.String())
 	}
 	wantNone(t, out.String(), "Wrote ", "Preflight:")
-	if after := dirNames(t, tr.dir); after != before {
-		t.Errorf("init -config changed the directory: %s, was %s", after, before)
-	}
-}
-
-// dirNames lists the entries of dir, sorted.
-func dirNames(t *testing.T, dir string) string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	return strings.Join(names, ",")
+	sameSnapshot(t, "init -config", before, snapshot(t, tr.dir, true))
 }
 
 // k246: a symlink at the target is left untouched. One that leads to a config
@@ -403,8 +391,8 @@ func TestInitLeavesASymlinkAtTheTargetAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("init failed: %v\n%s", err, out)
 		}
-		wantAll(t, out, "exists and is left as it is. Preflight only.", "agent: off (agent.enabled is false)")
-		wantNone(t, out, "Wrote ")
+		wantAll(t, out, "exists and is left as it is.", "agent: off (agent.enabled is false)")
+		wantNone(t, out, "Wrote "+tr.config())
 		isLinkTo(t, tr.config(), target)
 		if got := mustReadFile(t, target); got != existing {
 			t.Errorf("the linked config was changed:\n%s", got)

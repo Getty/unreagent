@@ -202,11 +202,15 @@ git clone --recursive https://github.com/Getty/unreagent-example
 ## New project (quick start)
 
 From nothing to a first agent session with the editor supervised, without
-leaving this section. **Nothing here has been run on Windows yet.** The launcher
-is cross-compiled from Linux; the config load, the defaults and `unreagent init`
-are tested on Linux only. Windows-specific behaviour below (the PATH lookup for
-`claude`, `node` and `npm`, Visual Studio, the editor itself) is unverified,
-except where a line says it was measured.
+leaving this section. **Both first-start paths were walked through on Windows
+11 with UE 5.8.4**: a clone of the template project, and a C++ project made in
+Unreal Editor with no config (a start without a config, `unreagent init`,
+`init -check` and a second `init`, the toolkit built into the project, and the
+agent's first `unreal_status` answer in both). **What is newer than that walk-through has not
+been run on Windows:** what `init` now writes into the project (the starter
+`CLAUDE.md`, the skills, the topic agents and the rules file), and how Claude
+Code reads them. The launcher is cross-compiled from Linux, so everything else
+below is tested on Linux only, except where a line says it was measured.
 
 **What you need first** (details in [What the machine must have](#what-the-machine-must-have)):
 Unreal Engine 5.7 or newer (5.8 for the reference project), Claude Code with
@@ -234,14 +238,35 @@ is C++ source and is built once).
    what is missing."* The agent has unreagent's MCP tools (builds, logs,
    scripts) and Claude Code's own tools in the project folder; it asks you where
    it cannot tell. Nothing ships yet that scripts this for it.
-5. **Write the defaults out and check the setup:** `unreagent init` (see
+5. **Set the project up and check it:** `unreagent init` (see
    [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup)).
-   `init` looks next to the `unreagent.exe` it runs from, not in the console's
-   folder, so the .exe must sit next to the `.uproject` (step 2). It never
-   changes an existing config. Without an engine (no `UE_ROOT`, no
-   `engineRoot`), it still writes the defaults and prints the full preflight
+   On a project with no config it writes:
+   - `unreagent.yaml`: the built-in defaults plus `skills.materialize: true`;
+   - a starter `CLAUDE.md`, when the project has neither `CLAUDE.md` nor
+     `.claude/CLAUDE.md`. Its kickstart block, between two marker comments,
+     tells the agent's main session to ask you about the project (genre and
+     scope, target platforms, C++ versus Blueprint, source control), write the
+     answers into the file and remove the block. The file is yours from then
+     on; `init` never overwrites a `CLAUDE.md`;
+   - the shipped skills, the topic agents and the rules file into `.claude/`
+     right away, so the project is complete before its first start.
+
+   A start without a config still writes nothing into the project: only `init`
+   turns this on. `init` looks next to the `unreagent.exe` it runs from, not in
+   the console's folder, so the .exe must sit next to the `.uproject` (step 2).
+   It never edits an existing config. Without an engine (no `UE_ROOT`, no
+   `engineRoot`), it still writes all of this and prints the full preflight
    with `[BLOCKING] engine: not found`, then exits 1; set `UE_ROOT` and run it
    again.
+
+**Converting a project that already has skills or a config.** Run
+`unreagent init -check` first: it writes nothing and prints what `init` would
+do. Read the `WARN` lines. If one lists `unreagent-*` directories in
+`.claude/skills` that are your own, move them out or rename them without the
+`unreagent-` prefix: the launcher owns every `unreagent-*` directory there and
+replaces or deletes them (see [Skills](#skills)). Then run `unreagent init`. An
+existing `unreagent.yaml` is never edited: where it has `skills.materialize`
+off, `init` says so and prints the lines to add.
 
 ### What a start without a config does
 
@@ -303,17 +328,59 @@ unreagent init [-check] [-config <path>]
 ```
 
 Run the `unreagent.exe` that sits next to the `.uproject`; the console's working
-directory does not matter. It writes the built-in defaults as
-`unreagent.yaml` (no machine paths: the toolkit's bridge, if found, is written
-as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
+directory does not matter. It writes the built-in defaults plus
+`skills.materialize: true` as `unreagent.yaml` (no machine paths: the toolkit's
+bridge, if found, is written as `${PROJECT_DIR}/Plugins/...`), sets the project
+up (below) and then prints a **preflight**.
 
-- **It never overwrites.** With an `unreagent.yaml` or `unreagent.yml` already
-  there, it writes nothing and prints the preflight for that config. The file
-  is created exclusively, so a config that appears meanwhile is not replaced
-  either, and a link at the target is never written through.
-- `-check` writes nothing even where there is no config; the preflight is for
-  the defaults then.
-- `-config <path>` preflights the config at that path and never writes to it.
+- **It never overwrites a config.** With an `unreagent.yaml` or `unreagent.yml`
+  already there, `init` does not edit it and prints the preflight for that
+  config. The file is created exclusively, so a config that appears meanwhile
+  is not replaced either, and a link at the target is never written through.
+- **It sets the project up** (unless `-check` or `-config`):
+  - a starter `CLAUDE.md` in the project directory, when the project has
+    neither `CLAUDE.md` nor `.claude/CLAUDE.md`. Its kickstart block (between
+    two marker comments) has the agent's main session ask you about the
+    project, write the answers into the file and remove the block; a subagent
+    is told to leave it alone. `init` says `Wrote <path>: the starter
+    CLAUDE.md. ...` and never writes to the file again, and an existing
+    `CLAUDE.md` is never touched;
+  - with `skills.materialize` on in the config (the one `init` writes has it),
+    the shipped skills, the topic agents and the rules file into `.claude/`, as
+    every start does from then on (`skills.agents: false` keeps the agents and
+    the rules file out; see [Skills](#skills)).
+  A start without a config writes none of this.
+- **`skills.materialize` off in an existing config.** `init` writes no skills,
+  agents or rules file and says so (`skills: not written into the project ...`),
+  with the lines to add under `skills:` and the file that decides: the
+  `unreagent.yaml` for the project-wide choice, or `unreagent.local.yaml` when
+  it turns materialization off over an `unreagent.yaml` that has it on (remove
+  the setting there). Add the lines, then run `init` again.
+- **Your own `unreagent-*` skill directories.** Materialization owns every
+  `unreagent-*` directory in `skills.dir`. Where the launcher cannot tell it has
+  materialized in this project before (no agent file or rules file of its own,
+  recognised by its marker, next to `skills.dir`), `init` lists every such
+  directory in a `WARN` (`(replaced)` for one named like a shipped skill,
+  `(deleted)` for another), writes no skills, agents or rules file, and warns
+  that the next start replaces or deletes them unless you move them first. Move
+  your own out, or rename them without the `unreagent-` prefix, then run `init`
+  again; if they are only copies an earlier unreagent wrote, start the launcher
+  once and its sweep clears them. Where it has materialized before,
+  directories named like a shipped skill are refreshed as on every start,
+  silently, and only the other `unreagent-*` directories are listed, as
+  `(deleted)`: `init -check` lists them without changing anything, and `init`
+  prints `Deleting from <dir> the unreagent-* directories not named like a
+  shipped skill: ...` before it deletes them, then a `WARN` that says so. Keep
+  your own skills under a name without the `unreagent-` prefix.
+- **A known limit.** With `skills.agents: false`, a `skills.dir` outside
+  `.claude`, or a Git checkout that converts the skill files to CRLF line
+  endings, `init` cannot recognise an earlier materialization, and holds as
+  above after each unreagent update until the launcher has been started once.
+- `-check` writes nothing at all (no config, no `CLAUDE.md`, no skills, agents
+  or rules file) even where there is no config; the preflight is for the
+  `unreagent.yaml` `init` would write then.
+- `-config <path>` preflights the config at that path and writes nothing, not
+  to the config and not into the project.
 - The preflight lists the project, engine (with its version), the agent command
   on PATH, the toolkit (bridge path, `node`, `npm`, the bridge's dependencies),
   whether a project plugin's `EngineVersion` would make the editor refuse it,
@@ -321,7 +388,16 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
   plugins look built (`plugin modules: built` / `WARN plugin modules: <names>
   look unbuilt ...` with the compile fix; `info` `not checked` when the editor
   arguments carry `-NoEnginePlugins` or `-DisablePlugins=`; no line when no
-  plugin has a module to check), and what permissions off means. Each
+  plugin has a module to check), what permissions off means, and the project
+  setup: `CLAUDE.md` (present, written, or the kickstart block still in it),
+  `skills`, and `agents` (how many topic agent files and the rules file are
+  new, refreshed or unchanged; one in the way that the launcher did not write or
+  that was edited since is left alone and named). When the configured agent is
+  not Claude Code (`agent.claudeIntegration: false`, or Hermes), an `info` line
+  says that `CLAUDE.md`, the topic agents and the rules file are read by Claude
+  Code only. When `agent.workdir` is not the project directory, the `CLAUDE.md`
+  finding carries a note: Claude Code reads `CLAUDE.md` from its working
+  directory upward, and `init` looked in the project directory. Each
   finding is `ok`, `info`, `WARN` or `BLOCKING`, and names its fix. **Without an
   engine**, what holds `${ENGINE}` (the agent command, the toolkit's bridge
   script, the `node` / `npm` commands, the compile command line) is reported as
@@ -329,16 +405,16 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
 - **No or several `.uproject`, or a config that does not load, end `init` with
   the load error** (`Error: ... (unreagent init wrote nothing)`) and **no
   preflight**. (A blocking finding ends `init` with a closing error too, see
-  below; its suffix says whether the defaults were written.) A missing engine is not one of them: `init` reports it as a
+  below; its suffix names what this run wrote.) A missing engine is not one of them: `init` reports it as a
   **BLOCKING** finding inside the full preflight (next bullet). **BLOCKING**
   lines keep the editor from starting; everything else is a `WARN`: the
   launcher starts without it and the finding says what is missing then.
 - **Exit codes:** `0` when nothing is blocking (and for `-h`), `1` for a
   blocking finding (a missing engine included) or a config that does not load, `2` for a usage error (an
   unknown flag, or a word after the flags).
-- **With no engine found, `init` still writes the defaults and prints the whole
+- **With no engine found, `init` still writes its files and prints the whole
   preflight**, with the engine as its `BLOCKING` finding, and exits 1. The
-  defaults file does not depend on the engine, and the fix never goes into it:
+  files do not depend on the engine, and the fix never goes into it:
   set `UE_ROOT`, or `engineRoot` in a git-ignored `unreagent.local.yaml` next to
   `unreagent.yaml`, then run `init` again. The output then contains:
 
@@ -348,12 +424,20 @@ as `${PROJECT_DIR}/Plugins/...`) and then prints a **preflight**.
   ...
   [info]     plugin EngineVersion: not checked — without an engine there is no version to hold the project plugins' EngineVersion against
   1 blocking, 1 warning(s). BLOCKING keeps the editor from starting; ...
-  Error: preflight: 1 blocking finding(s), see [BLOCKING] above (unreagent init wrote <path>)
+  Error: preflight: 1 blocking finding(s), see [BLOCKING] above (unreagent init wrote <what>)
   ```
 
-  The closing line ends `(unreagent init wrote <path>)` when this run created
-  `unreagent.yaml`, and `(unreagent init wrote nothing)` when it did not (a
-  config was already there, or `-check` / `-config`).
+  The closing error names everything this run wrote, joined as "a, b and c":
+  the config (its path), the starter `CLAUDE.md` (its path), `the N shipped
+  skills into <dir>` (`part of the shipped skills into <dir>` when some could
+  not be written) and `N files of the topic agents and the rules file into
+  <.claude>` (only files actually written). It ends `(unreagent init wrote
+  nothing)` when the run wrote none of them: `-check`, `-config`, a load error,
+  or a project that has its config and `CLAUDE.md` and has `skills.materialize`
+  off. Materialization rewrites every skill directory on every run, as a start
+  does, so a second `init` on a set-up project names the skills again. A run
+  with no blocking finding ends without a closing line; what it wrote is in the
+  lines above the preflight.
 
   Only `init` is lenient here: a normal start and `hermes-setup` still stop at
   load without an engine, and `-check` still writes nothing.
@@ -404,7 +488,9 @@ the launcher is dropped into the UE project, the config is committed. Start with
 1. Put `unreagent.exe` next to the `.uproject` — gitignored.
 2. Run `unreagent init` (or rename `unreagent.example.yaml` -> **`unreagent.yaml`**),
    place the file next to the `.uproject` and **commit it to the repo**. This
-   file is portable.
+   file is portable. Renaming the example does not turn `skills.materialize`
+   on, and so writes no skills, agents or rules file; only the document `init`
+   writes has it on (see [Skills](#skills)).
 3. Start `unreagent.exe`. It reads the config as described under
    [New project](#new-project-quick-start); the .exe opens no file passed to
    it: dropping a file onto it ends with a usage error (exit 2) instead of
@@ -646,9 +732,9 @@ shutdown lines. Windows console behaviour is unverified (cross-compiled only).
 
 | Exit | When |
 |---|---|
-| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup` or `init`, which print the usage and start nothing; also `unreagent init` when its preflight has no blocking finding |
+| `0` | a signal (Ctrl-C, SIGTERM), or the agent's last run exited 0; also `-h` (`-help`, `--help`) for the launcher or for `hermes-setup` or `init`, which print the usage and start nothing; also `unreagent init` when its preflight has no blocking finding (`init -check` and `init -config` write nothing) |
 | `1` | the agent failed and is not restarted: a non-zero exit with `restart: never`, after an explicit `maxRestarts` is used up, or after the fast-fail give-up; also a failed agent start. Interactively, after a crash, leaving the exit prompt with Enter, any other input, EOF or the 30 s timeout |
-| `1` | `unreagent init` when the config does not load (no or several `.uproject`, ...) or the preflight has a `BLOCKING` finding (a missing engine is one, and `init` still writes the defaults and prints the preflight then); a start without a config file that finds no or several `.uproject` next to the executable |
+| `1` | `unreagent init` when the config does not load (no or several `.uproject`, ...) or the preflight has a `BLOCKING` finding (a missing engine is one, and `init` still writes its files and prints the preflight then; its closing error names what it wrote); a start without a config file that finds no or several `.uproject` next to the executable |
 | `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 and a host that is empty, an IP address or a plain name (see `mcp` in the configuration quick reference; checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up. The 5-minute give-up (see Restart policy) is not one: its last run outlasted 10 s, so the launcher keeps running. The order does not matter: MCP that stops serving after such a give-up ends the launcher too, unless the editor was started again in between |
 | `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments; `init` likewise for any flag but `-config`, `-check` and `-h`, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
@@ -1714,6 +1800,15 @@ On every start the launcher:
 
 Do not put your own skills under an `unreagent-` name in that directory.
 
+**Only `unreagent init` turns materialization on.** `skills.materialize`
+defaults to `false`, and a start without a config file writes nothing into the
+project. The `unreagent.yaml` that `init` writes sets it to `true`, and from
+then on every start refreshes the files. Renaming `unreagent.example.yaml`
+does not: add `skills: { materialize: true }` to your config, or let `init`
+print the lines when the config has it off. `init` also holds back, with a
+`WARN`, while `unreagent-*` directories it cannot show to be the launcher's own
+are in `skills.dir`; see [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup).
+
 **Failure modes.** A skill set that does not load, or two skills that would land
 in the same directory (names that differ only in case count as the same), stops
 the start with an error, and so does a section file named like a Windows device
@@ -1942,7 +2037,7 @@ gone once the list is set), or a different extension id. Uppercase is fine.
 
 | Sub-command | Purpose |
 |---|---|
-| `unreagent init` | Writes the built-in defaults as `unreagent.yaml` next to the `.uproject` (never over an existing config) and prints a preflight; flags `-check`, `-config <path>`. See [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup). |
+| `unreagent init` | Writes the built-in defaults plus `skills.materialize: true` as `unreagent.yaml` next to the `.uproject` (an existing config is never edited), a starter `CLAUDE.md` where the project has none, and the shipped skills, topic agents and rules file into `.claude/`, then prints a preflight; flags `-check` (writes nothing), `-config <path>` (writes nothing). See [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup). |
 | `unreagent hermes-setup` | One-shot merge of the unreagent MCP server into Hermes Agent's `config.yaml` (idempotent; auto-generates `mcp.token` if missing; needs a resolvable engine, like a normal start). See "Hermes Agent" above. |
 
 The sub-command is the first argument that is neither a flag nor a flag's

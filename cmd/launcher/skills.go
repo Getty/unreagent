@@ -82,31 +82,60 @@ func setupSkills(cfg *config.Config, agentWorkdir string, logger func(string)) (
 	case s.ViaMCP() && !s.ViaFiles():
 		logger("WARN no skills reach the agent: the skills MCP tool needs mcp.enabled — enable it, set skills.materialize: true, or skills.enabled: false")
 	}
-	if !s.ViaFiles() {
-		return all, nil
+	writeSkillFiles(s, all, agentWorkdir, logger)
+	return all, nil
+}
+
+// skillsDirFor is skills.dir as the files are written to it: a relative one
+// taken relative to agentWorkdir; "" when there is none.
+func skillsDirFor(s config.SkillsConfig, agentWorkdir string) string {
+	if s.Dir == "" || filepath.IsAbs(s.Dir) {
+		return s.Dir
 	}
-	dir := s.Dir
+	return filepath.Join(agentWorkdir, s.Dir)
+}
+
+// skillFiles is what writeSkillFiles wrote: the skills into skillsDir (""
+// when it wrote none; skillsPartly when materializeSkills failed for some),
+// and agents agent and rules files into claude.
+type skillFiles struct {
+	skillsDir    string
+	skillsPartly bool
+	agents       int
+	claude       string
+}
+
+// writeSkillFiles is the part of setupSkills that writes into the project,
+// while the skills are materialized: all into skills.dir, then the topic
+// agents and the rules file next to it (setupAgents). `unreagent init` runs it
+// too, so that a project it sets up is complete before the first start, and
+// names what it wrote from the result.
+func writeSkillFiles(s config.SkillsConfig, all []skills.Skill, agentWorkdir string, logger func(string)) skillFiles {
+	var w skillFiles
+	if !s.ViaFiles() {
+		return w
+	}
+	dir := skillsDirFor(s, agentWorkdir)
 	if dir == "" {
 		// Only -no-skills-mcp gets here: config.Load clears an unused dir
 		// whose placeholder is unresolved, and rejects a used one.
 		logger("WARN skills not written: skills.dir names a placeholder that is unresolved — set unreal.project or skills.dir")
-		return all, nil
+		return w
 	}
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(agentWorkdir, dir)
-	}
+	w.skillsDir = dir
 	if err := materializeSkills(dir, all); err != nil {
 		// One error per skill that failed, joined by newlines; the log line stays one.
 		cause := strings.ReplaceAll(err.Error(), "\n", "; ")
 		logger("WARN skills not fully written to " + dir + ": " + cause + " — its unreagent-* directories may be missing, incomplete or left from an earlier start")
+		w.skillsPartly = true
 	} else {
 		logger(fmt.Sprintf("Skills: %d materialized into %s", len(all), dir))
 	}
 	// The agents are written even when a skill failed: an agent whose skill
 	// is missing loses only that pre-load (Claude Code documents that it skips
 	// a skill it cannot find).
-	setupAgents(s, dir, logger)
-	return all, nil
+	w.claude, w.agents = setupAgents(s, dir, logger)
+	return w
 }
 
 // checkSkillDirs rejects a set materialization could not write one to one:
@@ -372,6 +401,76 @@ func sweepSkillDirs(dir string, keep map[string]bool) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// unprovenSkillDirs lists the directories in dir that the materialization of
+// all would replace (named like a skill of the set) or remove (any other
+// unreagent-* name), except those it can show to be its own copy: a
+// directory that holds exactly the files materializeSkills writes for that
+// skill now, byte for byte, and the work directories it names
+// skillWorkPattern. It mirrors sweepSkillDirs' rule — real directories whose
+// name starts with skillDirPrefix; a symlink or a file is never touched there
+// — and changes nothing. `unreagent init` uses it to see, before it
+// materializes, what a project's own unreagent-* skills would lose (k256).
+// A dir that does not exist holds none.
+func unprovenSkillDirs(dir string, all []skills.Skill) (replaced, removed []string, err error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	byDir := make(map[string]skills.Skill, len(all))
+	for _, s := range all {
+		byDir[skillDirName(s.Name)] = s
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() || !strings.HasPrefix(n, skillDirPrefix) {
+			continue
+		}
+		if ok, _ := filepath.Match(skillWorkPattern, n); ok {
+			continue
+		}
+		s, shipped := byDir[n]
+		if !shipped {
+			removed = append(removed, n)
+			continue
+		}
+		if !holdsCopyOf(filepath.Join(dir, n), s, n) {
+			replaced = append(replaced, n)
+		}
+	}
+	return replaced, removed, nil
+}
+
+// holdsCopyOf reports whether path, the directory name, holds exactly what
+// materializeSkills writes for s there: SKILL.md and the section files, each
+// a regular file with that content, and nothing else.
+func holdsCopyOf(path string, s skills.Skill, name string) bool {
+	src, err := materializedSource(s, name)
+	if err != nil {
+		return false
+	}
+	want := map[string]string{skillFile: src}
+	for section, doc := range s.Files {
+		want[section+".md"] = doc
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil || len(entries) != len(want) {
+		return false
+	}
+	for _, e := range entries {
+		doc, ok := want[e.Name()]
+		if !ok || !e.Type().IsRegular() {
+			return false
+		}
+		if data, err := os.ReadFile(filepath.Join(path, e.Name())); err != nil || string(data) != doc {
+			return false
+		}
+	}
+	return true
 }
 
 // materializeHook is called between the steps of materializeSkills; tests

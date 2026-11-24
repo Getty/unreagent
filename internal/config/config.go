@@ -317,8 +317,9 @@ type Info struct {
 	// could not read (loadDefaults).
 	Warnings []string
 	// Defaults is true when there was no config file and the configuration is
-	// the built-in one (DefaultYAML). ConfigPath then names the file that was
-	// looked for and is not there.
+	// the built-in one (DefaultYAML; for LoadForInit the document init writes,
+	// InitYAML). ConfigPath then names the file that was looked for and is not
+	// there.
 	Defaults bool
 }
 
@@ -353,16 +354,29 @@ func LoadForPreflight(explicitPath, dir string) (*Config, Info, error) {
 	if dir == "" {
 		dir = exeDir()
 	}
-	return loadMode(explicitPath, dir, true)
+	return loadMode(explicitPath, dir, true, false)
+}
+
+// LoadForInit is LoadForPreflight as `unreagent init` sees the project: with
+// no config file it loads InitYAML, the document init writes, in place of the
+// built-in defaults — the configuration a start runs on once init has written
+// it (Info.Defaults still says that no file is there). With a config file it
+// is LoadForPreflight.
+func LoadForInit(explicitPath, dir string) (*Config, Info, error) {
+	if dir == "" {
+		dir = exeDir()
+	}
+	return loadMode(explicitPath, dir, true, true)
 }
 
 // load is Load with the executable's directory as a parameter.
 func load(explicitPath, dir string) (*Config, Info, error) {
-	return loadMode(explicitPath, dir, false)
+	return loadMode(explicitPath, dir, false, false)
 }
 
-// loadMode is load; engineOptional makes it LoadForPreflight.
-func loadMode(explicitPath, dir string, engineOptional bool) (*Config, Info, error) {
+// loadMode is load; engineOptional makes it LoadForPreflight, forInit with it
+// LoadForInit.
+func loadMode(explicitPath, dir string, engineOptional, forInit bool) (*Config, Info, error) {
 	var info Info
 
 	path := explicitPath
@@ -390,7 +404,7 @@ func loadMode(explicitPath, dir string, engineOptional bool) (*Config, Info, err
 
 	var c Config
 	if info.Defaults {
-		warnings, err := loadDefaults(&c, path)
+		warnings, err := loadDefaults(&c, path, forInit)
 		if err != nil {
 			return nil, info, err
 		}
@@ -1199,6 +1213,27 @@ func resolveProject(c *Config, baseDir string) (project, dir, name string, err e
 }
 
 // --- file helpers ---
+
+// MaterializeSetting reports whether the config file at path sets
+// skills.materialize, and to what. A file that is not there, does not read or
+// does not parse sets nothing. `unreagent init` uses it to name the file whose
+// value decides — unreagent.local.yaml is decoded over unreagent.yaml, so a
+// value it sets wins.
+func MaterializeSetting(path string) (on, set bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, false
+	}
+	var doc struct {
+		Skills struct {
+			Materialize *bool `yaml:"materialize"`
+		} `yaml:"skills"`
+	}
+	if yaml.Unmarshal(b, &doc) != nil || doc.Skills.Materialize == nil {
+		return false, false
+	}
+	return *doc.Skills.Materialize, true
+}
 
 // decodeYAML decodes the config file at path into c. An empty file is fine; a
 // second YAML document that holds anything, even just a comment, is an error,

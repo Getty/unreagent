@@ -12,10 +12,11 @@ import (
 )
 
 // The built-in defaults: what the launcher runs on when it is started next to
-// a .uproject with no config file (see load), and the document `unreagent
-// init` writes out. Both come from DefaultYAML, and load decodes that document
-// like a file, so a start without a config and a start with the written one
-// cannot drift apart.
+// a .uproject with no config file (see load). `unreagent init` writes InitYAML,
+// which is DefaultYAML plus skills.materialize: true and nothing else (k256:
+// only init turns on writing into the project). Both come from one encoder,
+// and load decodes them like a file, so a start without a config, a start with
+// the written one and init's own view of it (LoadForInit) cannot drift apart.
 
 // ToolkitServerName is the mcp.extraServers key of the UE LLM Toolkit bridge
 // in the built-in defaults.
@@ -40,6 +41,10 @@ type defaultDoc struct {
 		Enabled      bool                     `yaml:"enabled"`
 		ExtraServers map[string]defaultServer `yaml:"extraServers,omitempty"`
 	} `yaml:"mcp"`
+	// Skills is set by InitYAML only.
+	Skills *struct {
+		Materialize bool `yaml:"materialize"`
+	} `yaml:"skills,omitempty"`
 }
 
 type defaultServer struct {
@@ -60,11 +65,31 @@ type defaultServer struct {
 // to report, as are warnings: what kept the search from looking everywhere,
 // each a complete message.
 func DefaultYAML(projectDir string) (doc []byte, bridges, warnings []string, err error) {
+	return encodeDefaults(projectDir, false)
+}
+
+// InitYAML is the document `unreagent init` writes for a new unreagent.yaml:
+// DefaultYAML with skills.materialize: true added, so that every start writes
+// the shipped skills into skills.dir and, with them, the topic agents and the
+// rules file (skills.agents defaults to true). skills.dir is not written: its
+// default, ${PROJECT_DIR}/.claude/skills, is the place the agents need. The
+// results are as for DefaultYAML.
+func InitYAML(projectDir string) (doc []byte, bridges, warnings []string, err error) {
+	return encodeDefaults(projectDir, true)
+}
+
+// encodeDefaults is DefaultYAML, with skills.materialize: true when forInit.
+func encodeDefaults(projectDir string, forInit bool) (doc []byte, bridges, warnings []string, err error) {
 	bridges, warnings = findBridges(projectDir)
 	var d defaultDoc
 	d.Agent.Enabled = true
 	d.Agent.ClaudeIntegration = true
 	d.MCP.Enabled = true
+	if forInit {
+		d.Skills = &struct {
+			Materialize bool `yaml:"materialize"`
+		}{Materialize: true}
+	}
 	if len(bridges) > 0 {
 		d.MCP.ExtraServers = map[string]defaultServer{ToolkitServerName: {
 			Command: "node",
@@ -165,8 +190,9 @@ func linksToDir(e os.DirEntry, path string) bool {
 // config file: path is where findConfig looked for it. The project is the one
 // .uproject in that directory; none or several is an error naming them, as
 // there is no unreal.project to choose with. warnings report a bridge chosen
-// among several and what the bridge search could not read.
-func loadDefaults(c *Config, path string) (warnings []string, err error) {
+// among several and what the bridge search could not read. forInit decodes
+// InitYAML instead (LoadForInit).
+func loadDefaults(c *Config, path string, forInit bool) (warnings []string, err error) {
 	dir := filepath.Dir(path)
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.uproject")) // as resolveProject looks
 	sort.Strings(matches)
@@ -184,12 +210,16 @@ func loadDefaults(c *Config, path string) (warnings []string, err error) {
 		}
 		return nil, fmt.Errorf("no unreagent.yaml in %s and several .uproject files there (%s): without a config file the launcher cannot tell which project is meant — %s", filepath.ToSlash(dir), strings.Join(names, ", "), fixSeveral)
 	}
-	doc, bridges, warnings, err := DefaultYAML(dir)
+	doc, bridges, warnings, err := encodeDefaults(dir, forInit)
 	if err != nil {
 		return nil, err
 	}
 	if len(bridges) > 1 {
 		warnings = append(warnings, fmt.Sprintf("several UE LLM Toolkit bridges found below Plugins/, using the first: %s — write an unreagent.yaml to choose another", strings.Join(bridges, ", ")))
 	}
-	return warnings, decodeDoc("built-in defaults", doc, c)
+	name := "built-in defaults"
+	if forInit {
+		name = "the document unreagent init writes"
+	}
+	return warnings, decodeDoc(name, doc, c)
 }

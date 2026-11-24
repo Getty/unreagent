@@ -607,8 +607,9 @@ const noPolicyMeaning = "it neither allows nor denies a tool call, and Claude Co
 // without the INFO prefix: what the loaded configuration switches on — the
 // built-in defaults with an unreagent.local.yaml over them, which is the only
 // thing that can have switched agent or MCP server off —, that `unreagent
-// init` writes the defaults out, and, unless the overlay enabled permissions,
-// that unreagent applies no permission policy on this path.
+// init` writes the defaults out (with skills.materialize on), and, unless the
+// overlay enabled permissions, that unreagent applies no permission policy on
+// this path.
 func defaultsNotice(cfg *config.Config) []string {
 	onOff := func(what string, on bool) string {
 		if on {
@@ -625,7 +626,7 @@ func defaultsNotice(cfg *config.Config) []string {
 	}
 	lines := []string{
 		"no config file there — running on built-in defaults: " + onOff("agent", cfg.Agent.Enabled) + ", " + onOff("MCP server", cfg.MCP.Enabled) + ", " + bridge,
-		"`unreagent init` writes these defaults out as an unreagent.yaml to edit, and checks the setup (engine, node, the agent command, the toolkit plugin)",
+		"`unreagent init` writes these defaults out as an unreagent.yaml to edit, with skills.materialize on (the shipped skills, topic agents and a starter CLAUDE.md go into the project), and checks the setup (engine, node, the agent command, the toolkit plugin)",
 	}
 	if !cfg.Permissions.Enabled {
 		lines = append(lines, "unreagent applies no permission policy on built-in defaults (permissions.enabled is off): "+noPolicyMeaning)

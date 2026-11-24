@@ -346,9 +346,9 @@ func TestDefaultsUnsearchablePluginsWarns(t *testing.T) {
 	})
 }
 
-// The document DefaultYAML returns is what `unreagent init` writes: portable
-// (placeholders, no machine path), and loading it as a file gives the config
-// a start without a file runs on.
+// The document DefaultYAML returns is portable (placeholders, no machine path),
+// and loading it as a file gives the config a start without a file runs on.
+// What `unreagent init` writes is InitYAML (TestInitYAMLIsTheDefaultsPlusMaterialize).
 func TestDefaultYAMLRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
@@ -400,6 +400,63 @@ mcp:
 	}
 	if strings.Contains(string(plain), "extraServers") || len(bridges) != 0 {
 		t.Errorf("without a plugin: bridges = %v, document =\n%s", bridges, plain)
+	}
+}
+
+// k256: InitYAML, the document `unreagent init` writes, is DefaultYAML plus
+// skills.materialize: true and nothing else (decision M1: only init turns the
+// writing into the project on; a start without a file stays on DefaultYAML).
+// Loading it as a file is the config LoadForInit gives without one, and that
+// differs from the built-in defaults in Skills.Materialize alone. skills.dir
+// is not written: its default is the project's .claude/skills already.
+func TestInitYAMLIsTheDefaultsPlusMaterialize(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
+	writeUProject(t, dir, "Game.uproject")
+	writeBridge(t, dir, "ue-llm-toolkit/Plugin/UELLMToolkit")
+
+	defaults, _, _, err := DefaultYAML(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, bridges, warnings, err := InitYAML(dir)
+	if err != nil || len(warnings) != 0 || len(bridges) != 1 {
+		t.Fatalf("err = %v, warnings = %v, bridges = %v", err, warnings, bridges)
+	}
+	if want := string(defaults) + "skills:\n  materialize: true\n"; string(doc) != want {
+		t.Errorf("InitYAML =\n%s\nwant\n%s", doc, want)
+	}
+
+	fromDefaults, _, err := load("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromDefaults.Skills.Materialize {
+		t.Error("a start without a config file materializes the skills")
+	}
+	preview, previewInfo, err := LoadForInit("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !previewInfo.Defaults {
+		t.Error("LoadForInit without a file: Info.Defaults is false")
+	}
+	if want := dir + "/.claude/skills"; filepath.ToSlash(preview.Skills.Dir) != filepath.ToSlash(want) || !preview.Skills.ViaFiles() || !preview.Skills.AgentFiles() {
+		t.Errorf("LoadForInit: skills = %+v; want materialized into %s, with agents", preview.Skills, want)
+	}
+	fromFile, info, err := LoadForInit("", filepath.Dir(writeConfigFiles(t, dir, string(doc), "")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Defaults {
+		t.Error("Info.Defaults is true with the written file in place")
+	}
+	if !reflect.DeepEqual(preview, fromFile) {
+		t.Errorf("LoadForInit without a file differs from the written document loaded:\n%+v\n%+v", preview, fromFile)
+	}
+	fromFile.Skills.Materialize = false
+	if !reflect.DeepEqual(fromDefaults, fromFile) {
+		t.Errorf("the written document differs from the defaults in more than skills.materialize:\n%+v\n%+v", fromDefaults, fromFile)
 	}
 }
 

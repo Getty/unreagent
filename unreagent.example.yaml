@@ -20,10 +20,13 @@
 #  unreal.project without an unreagent.yaml.
 #
 #  `unreagent init` writes those defaults out as an unreagent.yaml (it never
-#  overwrites one) and prints a preflight. Or rename THIS file to
-#  unreagent.yaml and place it next to the .uproject (and next to
-#  unreagent.exe). It is portable and belongs in the project repo. The
-#  README's "New project" section walks through both.
+#  edits an existing one), with skills.materialize: true added, and prints a
+#  preflight. It also writes a starter CLAUDE.md where the project has none,
+#  and the shipped skills, topic agents and rules file into .claude/. Or rename
+#  THIS file to unreagent.yaml and place it next to the .uproject (and next to
+#  unreagent.exe): that leaves skills.materialize at its default, false. The
+#  file is portable and belongs in the project repo. The README's "New
+#  project" section walks through both.
 #
 #  NO machine-specific paths here! They are resolved automatically and
 #  substituted via placeholders:
@@ -192,7 +195,8 @@ files:
 # skills:
 #   enabled: true            # default true; false turns both paths off
 #   mcp: true                # default true
-#   materialize: false       # default false
+#   materialize: false       # default false; the unreagent.yaml that
+#                            # `unreagent init` writes sets it to true
 #   # Where the files go. Takes placeholders; a relative path is taken relative
 #   # to the agent working directory. UE 5.8 reads <Project>/Skills/:
 #   # "${PROJECT_DIR}/Skills" targets it.

@@ -126,21 +126,22 @@ func claudeDirOf(skillsDir string) (string, bool) {
 // materialized skills in skillsDir (absolute), when skills.agents is on and
 // skillsDir is <x>/.claude/skills; otherwise it writes none and logs why. A
 // failure only warns, like a failed materialization. Turned off, it removes
-// nothing — as materialization turned off leaves the skill directories.
-func setupAgents(s config.SkillsConfig, skillsDir string, logger func(string)) {
+// nothing — as materialization turned off leaves the skill directories. It
+// returns the .claude directory and how many files it wrote there.
+func setupAgents(s config.SkillsConfig, skillsDir string, logger func(string)) (string, int) {
 	if !s.AgentFiles() {
 		logger("Agents: not written, skills.agents is false; agent and rules files of an earlier start are left as they are")
-		return
+		return "", 0
 	}
 	claude, ok := claudeDirOf(skillsDir)
 	if !ok {
 		logger("Agents: not written, skills.dir " + skillsDir + " is not <project>/.claude/skills, the only place the agents and the rules file are written next to")
-		return
+		return "", 0
 	}
 	set, err := loadEmbeddedAgents()
 	if err != nil {
 		logger("WARN agents not written: " + err.Error())
-		return
+		return claude, 0
 	}
 	r := writeAgentFiles(claude, set)
 	logger(fmt.Sprintf("Agents: %d agents and the rules file in %s: %d written, %d unchanged, %d removed", len(set.Agents), claude, r.written, r.unchanged, r.removed))
@@ -153,6 +154,7 @@ func setupAgents(s config.SkillsConfig, skillsDir string, logger func(string)) {
 	if r.sweepErr != nil {
 		logger("WARN files of dropped agents not removed from " + filepath.Join(claude, "agents") + ": " + strings.ReplaceAll(r.sweepErr.Error(), "\n", "; "))
 	}
+	return claude, r.written
 }
 
 type agentWriteResult struct {
@@ -182,6 +184,114 @@ func agentFileName(data string) string {
 	return fm.Name
 }
 
+// agentFile is one file writeAgentFiles puts in place: where, what, and the
+// form of its ownership marker.
+type agentFile struct {
+	path, data string
+	m          markerKind
+}
+
+// agentFiles are the files writeAgentFiles puts into claude for set — each
+// agent at <claude>/agents/unreagent-<name>.md, the rules file at
+// <claude>/rules/unreagent.md — and the agent file names the sweep keeps.
+func agentFiles(claude string, set skills.AgentSet) (files []agentFile, keep map[string]bool) {
+	agentsDir := filepath.Join(claude, "agents")
+	keep = map[string]bool{}
+	for _, a := range set.Agents {
+		name := skillDirName(a.Name) + ".md"
+		files = append(files, agentFile{filepath.Join(agentsDir, name), renderAgent(a), agentMarker})
+		keep[name] = true
+	}
+	files = append(files, agentFile{filepath.Join(claude, "rules", rulesFileName), renderRules(set), rulesMarker})
+	return files, keep
+}
+
+// agentFileState is what is at the place of one agent or rules file.
+type agentFileState int
+
+const (
+	fileAbsent  agentFileState = iota // nothing there: written
+	fileStale                         // ours and unedited, content differs: replaced
+	fileSame                          // ours and the same content: left
+	fileForeign                       // not ours or edited, or a symlink: never written
+)
+
+// stateOf reads the place of f. A symlink is never ours, whatever its target
+// holds; a file is ours when ownedFile says so.
+func stateOf(f agentFile) (agentFileState, error) {
+	if fi, err := os.Lstat(f.path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		return fileForeign, nil
+	}
+	old, err := os.ReadFile(f.path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fileAbsent, nil
+	case err != nil:
+		return 0, err
+	case !ownedFile(string(old), f.m):
+		return fileForeign, nil
+	case strings.ReplaceAll(string(old), "\r\n", "\n") == f.data:
+		return fileSame, nil
+	}
+	return fileStale, nil
+}
+
+// agentPlan is what writeAgentFiles would do in claude for set, without
+// doing it: the files it would write (absent), replace (stale), leave as they
+// are (same), and those in its way (foreign, by path). err joins what could
+// not be read. The sweep of dropped agents is not predicted.
+type agentPlan struct {
+	absent, stale, same int
+	foreign             []string
+	err                 error
+}
+
+func planAgentFiles(claude string, set skills.AgentSet) agentPlan {
+	var p agentPlan
+	var errs []error
+	files, _ := agentFiles(claude, set)
+	for _, f := range files {
+		st, err := stateOf(f)
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		case st == fileAbsent:
+			p.absent++
+		case st == fileStale:
+			p.stale++
+		case st == fileSame:
+			p.same++
+		default:
+			p.foreign = append(p.foreign, f.path)
+		}
+	}
+	p.err = errors.Join(errs...)
+	return p
+}
+
+// launcherWroteAgentsIn reports whether claude holds an agent or rules file
+// the launcher wrote and nobody edited since (the ownership marker; for an
+// agent file also its name, as the sweep checks it). Such a file is left only
+// by a start or an init that materialized next to it, so the sweep of
+// unreagent-* skill directories has run in skills.dir before.
+func launcherWroteAgentsIn(claude string) bool {
+	if data, err := os.ReadFile(filepath.Join(claude, "rules", rulesFileName)); err == nil && ownedFile(string(data), rulesMarker) {
+		return true
+	}
+	dir := filepath.Join(claude, "agents")
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		n := e.Name()
+		if !e.Type().IsRegular() || !strings.HasPrefix(n, skillDirPrefix) || !strings.HasSuffix(n, ".md") {
+			continue
+		}
+		if data, err := os.ReadFile(filepath.Join(dir, n)); err == nil && ownedFile(string(data), agentMarker) && agentFileName(string(data))+".md" == n {
+			return true
+		}
+	}
+	return false
+}
+
 // writeAgentFiles puts each agent at <claude>/agents/unreagent-<name>.md and
 // the rules file at <claude>/rules/unreagent.md, then sweeps the agents
 // directory. For each file: absent, it is written; ours and unedited
@@ -197,39 +307,23 @@ func writeAgentFiles(claude string, set skills.AgentSet) agentWriteResult {
 	var r agentWriteResult
 	var errs []error
 	agentsDir := filepath.Join(claude, "agents")
-	type file struct {
-		path, data string
-		m          markerKind
-	}
-	var files []file
-	keep := map[string]bool{}
-	for _, a := range set.Agents {
-		name := skillDirName(a.Name) + ".md"
-		files = append(files, file{filepath.Join(agentsDir, name), renderAgent(a), agentMarker})
-		keep[name] = true
-	}
-	files = append(files, file{filepath.Join(claude, "rules", rulesFileName), renderRules(set), rulesMarker})
+	files, keep := agentFiles(claude, set)
 
 	for _, f := range files {
 		p := f.path
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-			r.foreign = append(r.foreign, p)
-			continue
-		}
-		old, err := os.ReadFile(p)
-		isNew := errors.Is(err, fs.ErrNotExist)
+		st, err := stateOf(f)
 		switch {
-		case isNew:
 		case err != nil:
 			errs = append(errs, err)
 			continue
-		case !ownedFile(string(old), f.m):
+		case st == fileForeign:
 			r.foreign = append(r.foreign, p)
 			continue
-		case strings.ReplaceAll(string(old), "\r\n", "\n") == f.data:
+		case st == fileSame:
 			r.unchanged++
 			continue
 		}
+		isNew := st == fileAbsent
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			errs = append(errs, err)
 			continue
