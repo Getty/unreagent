@@ -17,6 +17,15 @@ as its working directory. You never create a venv, install anything, or inspect
 the environment first — you pass source code and get back output and an exit
 code.
 
+This skill has four sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `enabling` | the `runtimes:` config block with its keys, where `uv`, `node` and `npm` are looked up, the placeholders `project` accepts | before you tell the user how to enable a runtime or set its executable or directory |
+| `script-file` | the two side effects of the script being a real file in the project (briefly visible there, left behind by a hard kill), the startup sweep with its log lines, the `.gitignore` entries | when an `unreagent-<digits>.py` or `.mjs` file shows up in the project or in the launcher log, or before you offer the project `.gitignore` entries for them |
+| `prepare` | what `prepareOnStart` runs at launcher start (`uv sync`, `npm install`), its log lines, the warning a failure leaves | when the launcher log or the user's console has a `Runtime: preparing …` line, or a first call takes long |
+| `failures` | the failure table (what you see, what it means, what to do), and `createRequire` for a package that ships CommonJS only | when a call returns an error or a non-zero exit, an `import` that fails included, or does not come back |
+
 ## These are not Unreal Python
 
 This is the mistake worth preventing before anything else. `run_python` starts a
@@ -45,28 +54,13 @@ absent from `tools/list`, and calling it returns `-32602 unknown tool:
 run_python`. There is no command-line flag for these — enabling them is a config
 edit by the user.
 
-```yaml
-runtimes:
-  python:
-    enabled: true
-    prepareOnStart: true   # uv sync at launcher start, if a pyproject.toml is there
-    # uv: "uv"             # executable, resolved on PATH
-    # project: ""          # working directory AND script location; empty = agent workdir
-  node:
-    enabled: true
-    # node: "node"
-    # npm: "npm"           # used only by prepareOnStart
-    # project: ""
-```
-
 The shipped `unreagent.example.yaml` enables both, so a project set up from it
 has them; a project with a hand-written config may not.
 
-`uv`, `node` and `npm` are looked up on the launcher's `PATH` unless the config
-gives an absolute path. A machine-specific absolute path belongs in the
-git-ignored `unreagent.local.yaml`, not in the committed config. `project`
-accepts the usual placeholders, so `${PROJECT_DIR}` is the portable way to pin a
-runtime to the UE project directory.
+Load section `enabling` before you tell the user how to enable a runtime or
+set its executable or directory: it has the `runtimes:` config block with its
+keys, where `uv`, `node` and `npm` are looked up, and the placeholders
+`project` accepts.
 
 ## Execution model
 
@@ -152,7 +146,7 @@ lookup in both languages resolve against that one directory, which is normally
 the project.
 
 The directory is chosen once, identically for both tools and for the startup
-sweep below:
+sweep (section `script-file`):
 
 1. `runtimes.<lang>.project`, when set;
 2. otherwise the agent workdir (`agent.workdir`, which itself defaults to the
@@ -161,41 +155,27 @@ sweep below:
 
 It has to exist and be writable. If it does not, the call fails at script
 creation — **before** the interpreter is started — with the message in the
-failure table below. There is deliberately no fallback to the system temp
-directory. A script running outside the project resolves neither its
+failure table (section `failures`). There is deliberately no fallback to the
+system temp directory. A script running outside the project resolves neither its
 `node_modules` nor its sibling Python modules, so a fallback would quietly hand
 you a subtly different environment; a loud failure the user can fix in the
 config is the intended outcome.
 
-Two side effects follow from the script being a real file in the project:
+The script being a real file in the project has two side effects:
 
-- **It is briefly visible there.** Anything watching that directory — UE's
-  directory watcher, a source-control client, a bundler in watch mode — can
-  observe an `unreagent-<digits>.py` / `.mjs` appear and vanish within one run.
-- **A hard kill leaves it behind.** The deletion is a deferred call in the
-  launcher; killing the launcher skips it. At the next start the launcher sweeps
-  the runtime directories and logs one line per file it finds:
+- **It is briefly visible there.** Anything watching that directory can
+  observe an `unreagent-<digits>.py` / `.mjs` appear and vanish within one
+  run.
+- **A hard kill leaves it behind.** Killing the launcher skips the deletion.
+  At the next start the launcher sweeps the runtime directories.
 
-  ```
-  Stale script file removed: <path>
-  WARN could not remove stale script file <path>: <error>
-  ```
+The project's own `.gitignore` should ignore these script files; the entries
+are in section `script-file`.
 
-  The sweep matches only the generated shape — the prefix, then decimal digits,
-  then `.py` or `.mjs`. A hand-written `unreagent-helper.py` is deliberately
-  safe from it.
-
-Because a leftover script sits in the user's repository, the UE project's own
-`.gitignore` should carry:
-
-```gitignore
-unreagent-[0-9]*.py
-unreagent-[0-9]*.mjs
-```
-
-The launcher's own repository has these entries, which does nothing for the
-project the launcher is running in. If you are set up in a project that lacks
-them, adding them is a reasonable thing to offer.
+Load section `script-file` when an `unreagent-<digits>.py` or `.mjs` file
+shows up in the project or in the launcher log, or before you offer the
+project `.gitignore` entries for them: it has the sweep's log lines, the file
+names the sweep matches, and the `.gitignore` entries.
 
 ### No timeout
 
@@ -234,24 +214,12 @@ there is nothing for you to install.
   alone. Most projects already ignore it in git; a UE project that does not may
   want to.
 
-With `prepareOnStart: true` the launcher runs `uv sync` once at startup when the
-working directory has a `pyproject.toml`, and logs `Runtime: preparing Python
-(uv sync) …`. It runs in the background, so an early `run_python` can overlap
-it; that is harmless, because `uv run` resolves the environment anyway. A first
-call may simply take longer while dependencies are fetched. A sync that fails,
-or a `uv` that cannot be started, leaves a warning in the launcher log, with
-the last 20 lines of uv's output below it when there was any:
-
-```
-WARN Runtime: preparing Python failed — uv sync in <dir>: <cause>
-```
-
-`uv` is the command as `runtimes.python.uv` names it; `<cause>` is `exit N`,
-or `start failed: …` when the command is not found. When that log is a file,
-the warning's first line also appears on the user's console, pointing at the
-log when there is output below it. A successful sync ends
-with `[prepare:python] done (exit 0)` and no warning. Where the launcher log is
-and how to read it: `unreagent-iterate`.
+With `prepareOnStart: true` the launcher runs `uv sync` once at startup when
+the working directory has a `pyproject.toml`. It runs in the background, so
+an early `run_python` can overlap it; that is harmless. A sync that fails, or
+a `uv` that cannot be started, leaves a warning in the launcher log. Load
+section `prepare` when the launcher log or the user's console has a
+`Runtime: preparing …` line, or a first call takes long.
 
 ## run_node specifics
 
@@ -267,46 +235,25 @@ and how to read it: `unreagent-iterate`.
   there. `ERR_MODULE_NOT_FOUND` therefore means what it says: the dependency is
   missing, not merely out of reach. Node built-ins (`node:fs`, `node:path`,
   `node:process`, …) are always available.
-- **`createRequire` is an option, not a necessity.** It has one genuine use:
-  a package that ships CommonJS only and offers no ESM entry point, where the
-  ESM loader cannot give you named exports (`SyntaxError: The requested module
-  … does not provide an export named …`) or where the package's `exports` map
-  offers only a `require` condition.
+- **`createRequire` is an option, not a necessity.** Its one genuine use is a
+  package that ships CommonJS only and offers no ESM entry point. Load section
+  `failures` when an `import` of such a package fails: it has the two cases
+  and the snippet.
 
-  ```js
-  import { createRequire } from 'node:module';
-  const require = createRequire(import.meta.url);
-  const dep = require('some-cjs-only-package');
-  ```
-
-  `import.meta.url` is the correct anchor: the script lives in the project, so
-  no absolute path has to be hard-coded. A dynamic `import()` of a CommonJS
-  module works too and hands you its `default`.
-
-With `prepareOnStart: true` the launcher runs `npm install` once at startup when
-the working directory has a `package.json`, logging `Runtime: preparing Node
-(npm install) …`. It runs in the background, at the same time as the Python
-step. A failure is the same warning, with the last 20 lines of npm's output:
-`WARN Runtime: preparing Node failed — npm install in <dir>: <cause>`.
+With `prepareOnStart: true` the launcher runs `npm install` once at startup
+when the working directory has a `package.json`, in the background, at the
+same time as the Python step. A failure is the same warning (section
+`prepare`).
 `runtimes.node.npm` is used for that step only — there is no
 tool that runs npm on demand. A package script belongs in the launcher's
 `commands:` section and is then reachable through `run_command`.
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `-32602 unknown tool: run_python` | the runtime is disabled in this project | the user enables `runtimes.python.enabled` |
-| `Error: 'code' missing` | `code` missing or empty | pass the source as `code` |
-| `Error: could not create the script file in the working directory of the python runtime (<dir>): <error>`, second line `The directory must exist and be writable — check runtimes.python.project or agent.workdir.` | the runtime's directory is missing or not writable, so no script could be written and nothing was started (`node runtime` / `runtimes.node.project` in the `run_node` wording) | fix `runtimes.<lang>.project` or `agent.workdir`; there is no fallback location, so retrying unchanged fails identically |
-| `Error: start failed: exec: "uv": executable file not found in %PATH%` | `uv` / `node` not installed or not on the launcher's PATH (a Linux dev build of the launcher says `$PATH` instead) | install it, or set an absolute path in `unreagent.local.yaml` |
-| `ModuleNotFoundError: No module named 'unreal'` | you tried to reach the editor from the host | use the plugin's `execute_script` instead |
-| `ModuleNotFoundError` for a project dependency | not declared in `pyproject.toml` | the dependency has to be added there; the script cannot install it |
-| `ERR_MODULE_NOT_FOUND` for a bare specifier | the package is not installed in the project | `npm install` it in the project (or via `prepareOnStart`) |
-| `SyntaxError: … does not provide an export named …` | a CommonJS package with no usable named ESM exports | `createRequire(import.meta.url)`, or import its `default` |
-| `ReferenceError: require is not defined` | the script is ESM | use `import`, or `createRequire` |
-| exit non-zero with a traceback | the script itself failed | the traceback is in the output; fix and rerun |
-| the call never returns | no timeout exists | the script is blocking; it has to be killed on the host |
+When a call returns an error or a non-zero exit, an `import` that fails
+included, or does not come back, load section `failures`: a table from what
+you see to what it means and what to do, and `createRequire` for a package
+that ships CommonJS only.
 
 ## See also
 

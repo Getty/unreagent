@@ -128,7 +128,7 @@ Reading the result:
 - **`total_issues: 0` does not mean the animation looks right.** Nothing here
   compares the result with the source animation, checks contact with the
   ground, or looks at the mesh. Look at frames with `capture_viewport` (skill
-  `ue-viewport`).
+  `ue-viewport`, section `asset-preview`).
 
 Errors: `Animation has no data model`, `Animation has no bone tracks`.
 

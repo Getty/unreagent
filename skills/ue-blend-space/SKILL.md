@@ -24,6 +24,14 @@ The tool takes an `operation` string and lowercases it before dispatch. `get`,
 returns `Unknown operation: '<op>'. Valid: <list>`, plus ` Did you mean '<x>'?`
 when a valid name is close.
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `inspect-result` | the fields inside `inspect`'s `axes`, `samples`, `settings` and `geometry` | when you need the name or meaning of a field inside one of these four, or a value there is not what you expect |
+| `batch` | `batch` in full: the shape of `operations`, an example, the per-op errors, the result | before you call `batch` |
+| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or the asset is not in the state you expect |
+
 ## Before the first call
 
 - **Result shape.** Success is the tool's message, a blank line, then JSON. By
@@ -114,21 +122,10 @@ read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
   `loop`.
 - `type` is `BlendSpace1D` or `BlendSpace`; it never says that the asset is an
   aim offset.
-- `axes`, one entry per dimension: `index`, `name`, `min`, `max`,
-  `grid_divisions`, `snap_to_grid`, `wrap_input`, and `interpolation` with
-  `time`, `damping_ratio`, `max_speed` and `type` (`Average`, `Linear`,
-  `Cubic`, `EaseInOut`, `ExponentialDecay`, `SpringDamper`, or `Unknown`).
-- `samples`: `index`, `animation` (object path) and `animation_name` (both
-  `None` for a sample without an animation), `position` with `x` (plus `y` on a
-  2D blend space), `rate_scale`. On UE 5.6 and later each sample also has
-  `single_frame` (always `false` on 5.6); from 5.7, `frame_index` is added when
-  `single_frame` is true and the sample has an animation. `sample_count` counts them.
-- `settings`: `notify_trigger_mode`, `interpolate_using_grid`,
-  `preferred_triangulation`, `target_weight_interpolation_speed`,
-  `allow_mesh_space_blending`, `allow_marker_based_sync`. The tool reads these
-  but cannot set them.
-- `geometry`: the number of `triangles` and `segments` the engine built from
-  the samples.
+- `axes`, `samples` (`sample_count` counts them), `settings` and `geometry`.
+  The tool reads the `settings` but cannot set them. Load section
+  `inspect-result` when you need the name or meaning of a field inside one of
+  these four, or a value there is not what you expect.
 
 **`list`** searches the asset registry for blend spaces of every kind in
 `folder_path`, such as `/Game/Anims`. **It searches only that folder** unless
@@ -229,35 +226,19 @@ Changes only the fields you pass, on axis `axis_index`: 0 on a 1D blend space,
 
 ## batch
 
-`operations` is an array of objects, each with `op` and the parameters of one
-of `add_sample`, `remove_sample`, `move_sample`, `set_sample_animation` or
-`set_axis`. `asset_path` is given once, outside the array.
+Runs several of `add_sample`, `remove_sample`, `move_sample`,
+`set_sample_animation` and `set_axis` on one asset in one call. Load section
+`batch` before you call `batch`: it has the shape of `operations`, an
+example, the per-op errors and the result. What goes wrong without a word:
 
-```json
-{"operation": "batch", "asset_path": "/Game/Anims/BS_Walk.BS_Walk",
- "operations": [
-   {"op": "set_axis", "axis_index": 0, "axis_name": "Speed", "min": 0, "max": 600},
-   {"op": "add_sample", "animation_path": "/Game/Anims/Idle.Idle", "x": 0},
-   {"op": "add_sample", "animation_path": "/Game/Anims/Walk.Walk", "x": 300}
- ]}
-```
-
-- The ops run in order on the same asset, and the geometry is rebuilt once at
-  the end. A `remove_sample` moves the last sample into the freed index for
-  every op after it.
+- A `remove_sample` moves the last sample into the freed index for every op
+  after it.
 - A failed op does not stop the ones after it, and nothing is rolled back.
-- Per-op errors: `[<i>] not a JSON object`, `[<i>] missing 'op' field`,
-  `<op>: missing animation_path`, `<op>: missing sample_index`,
-  `set_axis: missing axis_index`, `Unknown batch op: '<op>'. Valid: add_sample, remove_sample, move_sample, set_sample_animation, set_axis`,
-  and the single operations' errors.
-- `batch` does not save. A missing array:
-  `Missing required parameter: operations (JSON array)`.
-- The message is `Batch: <n> OK, <m> errors, <t> total`. With every op
-  successful, the data has `results` (one result per op), `ok_count`,
-  `error_count` and `total`. **With one failed op, the call is an error, and
-  the bridge passes only that message**: which op failed, and why, does not
-  reach you. Run `inspect`, then repeat the missing change as a single
-  operation to get its error.
+- **With one failed op, the call is an error, and the bridge passes only the
+  message** `Batch: <n> OK, <m> errors, <t> total`: which op failed, and why,
+  does not reach you. Run `inspect`, then repeat the missing change as a
+  single operation to get its error.
+- `batch` does not save.
 
 ## save
 
@@ -272,35 +253,16 @@ is a blend space.
 2. **Read.** `inspect`: axes, sample indices, positions.
 3. **Set the axes first**, then add samples. Several changes go in one
    `batch`.
+   Load section `batch` before you call `batch`.
 4. **Read back.** `inspect` after `remove_sample`, after a range change, and
    after any `batch` that failed.
 5. **Save.** `save`.
 
-## Errors
+## When a call fails
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or empty; for an index, also a negative one |
-| `Failed to load blend space: <path>` / `Asset is not a BlendSpace: …` | nothing loads at that path as a blend space |
-| `Failed to load animation: <path>` / `Asset is not an AnimSequence: …` | `animation_path` is not an animation sequence |
-| `Animation <path> is not compatible with this blend space's skeleton` | `set_sample_animation` with an animation for another skeleton |
-| `Sample index <n> out of range (0-<last>)` | stale or wrong index; read it with `inspect` |
-| `Axis index <n> out of range …` | axis 1 on a 1D blend space, or above 1 |
-| `AddSample failed for <path> at (<x>, <y>)` | the engine refused the sample |
-| `Error: Batch: <n> OK, <m> errors, <t> total` | at least one batch op failed |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a change is gone after an editor restart | it was never saved | `save` after each finished change |
-| a later call changed the wrong sample | `remove_sample` moved the last sample into the freed index | `inspect`, then use the new indices |
-| a 2D sample dropped to `y = 0` | `move_sample` without `y` | pass both `x` and `y` |
-| `rate_scale` is not what you sent | you sent 0 or less, which leaves it unchanged, or more than 64 | send a value from 0.01 to 64 |
-| the interpolation type did not change | the `interp_type` string was not one of the six names | use one of the six |
-| `create` made a 2D blend space | `type` contained neither `1D` nor `AimOffset` as you meant | check the result's `type` |
-| `list` returns nothing for a folder with blend spaces | they sit in subfolders | `recursive: true` |
+Load section `failures` when a call returns an error, or the asset is not in
+the state you expect: it has the error table (error, cause) and the failure
+table (what you see, what it means, what to do).
 
 ## Background in the plugin
 

@@ -631,6 +631,9 @@ Revision history for unreagent
   - The shipped skills ue-lighting, unreagent-files, ue-control-rig,
     ue-sequencer, ue-metasounds and unreagent-build are split the same way,
     into a shorter SKILL.md and section files loaded on demand.
+  - The shipped skills ue-blend-space, unreagent-runtimes, ue-materials,
+    ue-tasks, ue-niagara and ue-viewport are split the same way, into a
+    shorter SKILL.md and section files loaded on demand.
   - With `skills.materialize` on and `skills.dir` at `<project>/.claude/skills`,
     every start writes the shipped topic agents as
     `.claude/agents/unreagent-<name>.md` and the launcher's rules file as

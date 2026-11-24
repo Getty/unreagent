@@ -19,6 +19,13 @@ wait for the plugin.
 This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor.
 
+This skill has two sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `slots` | `set_skeletal_mesh_material` and `set_actor_material` in full: where to read a mesh's slots, which actor and which component are taken, the slot and load errors, the results | before you call `set_skeletal_mesh_material` or `set_actor_material` |
+| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or a material or a slot is not in the state you expect |
+
 The tool takes an `operation` string, lowercases it and accepts these aliases:
 
 | Operation | Aliases | Required | Optional |
@@ -210,47 +217,25 @@ parent are not listed. A base material (`is_instance: false`) returns no
 parameters at all, so this operation cannot tell you which parameters a
 material exposes.
 
-## set_skeletal_mesh_material
+## set_skeletal_mesh_material and set_actor_material
 
-Puts `material_path` into slot `material_slot` (default 0) of the skeletal
-mesh asset. This changes the asset, and so every use of that mesh.
+Both put `material_path` into slot `material_slot` (default 0). Load section
+`slots` before you call `set_skeletal_mesh_material` or `set_actor_material`:
+it has where to read a mesh's slots, the errors and the results. What you
+must know before that:
 
-- `asset get_asset_info` on the skeletal mesh lists its slots with `slot`,
-  `slot_name` and `material` (skill `ue-assets`).
-- A negative slot fails with `material_slot must be >= 0`; one past the end
-  with
-  `Material slot <n> out of range. Skeletal mesh has <m> material slots.`
-- Load errors: `Failed to load skeletal mesh: <path>`,
-  `Failed to load material: <path>`.
-
-The result has `skeletal_mesh` (your path), `slot`, `old_material` and
-`new_material` (object names; `None` for an empty slot). The message is
-`Set material slot <n> on <mesh> to <material>`. Save the mesh afterwards.
-
-## set_actor_material
-
-Puts `material_path` into slot `material_slot` (default 0) of an actor in the
-level open in the editor. Only that actor's component changes, not the mesh
-asset.
-
+- **`set_skeletal_mesh_material` changes the asset, and so every use of that
+  mesh.** With `set_actor_material`, only that actor's component changes, not
+  the mesh asset.
+- **`set_actor_material` uses the first mesh component of the actor.** There
+  is no parameter to pick another one. The result's `component` and
+  `component_type` tell you which one it was.
 - **`actor_name`** is the actor's object name or its label; the first actor
   with either one is taken. The name passes the toolkit's actor-name check,
   which rejects a label such as `Crate (2)` (skill `ue-level-actors` covers
-  addressing actors). An actor that is not found gives
-  `Actor not found: <name>. Use level_query find to search for actors in the current level`.
-- **The first mesh component of the actor is used.** There is no parameter to
-  pick another one. The result's `component` and `component_type` tell you
-  which one it was. An actor without one fails with
-  `Actor '<name>' has no mesh component`.
-- Slot errors: `material_slot must be >= 0`,
-  `Material slot <n> out of range. Mesh component has <m> material slots.`
-- Other errors: `Failed to load material: <path>`, and
-  `No active world. Open a level in the editor first`.
-
-The result has `actor` (the object name), `component`, `component_type`,
-`slot`, `old_material` and `new_material`. The message is
-`Set material slot <n> on actor '<name>' (<component class>) to <material>`.
-The actor and the level are marked dirty: save with `asset save_all`.
+  addressing actors).
+- Neither saves. Save the mesh afterwards; after `set_actor_material`, the
+  actor and the level are marked dirty: save with `asset save_all`.
 
 ## A typical sequence
 
@@ -263,31 +248,14 @@ The actor and the level are marked dirty: save with `asset save_all`.
    that every value you sent is there.
 4. `set_actor_material` or `set_skeletal_mesh_material` with the new
    `asset_path`.
+   Load section `slots` before you call either.
 5. Save: `asset save_all`.
 
-## Errors
+## When a call fails
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or an empty string |
-| `Cannot access engine or script Blueprints` | a path under `/Engine/` or `/Script/` |
-| `Failed to load parent material: <path>` / `Failed to load material: <path>` | no material at that path |
-| `Failed to load material instance: <path>` | not a Material Instance Constant, or nothing at that path |
-| `Failed to load texture: <path>` | a texture in `parameters` did not load |
-| `Material instance created but failed to save: <path>` | the instance exists in memory but is not on disk |
-| `Material slot <n> out of range. …` | the slot index is past the mesh's or component's last slot |
-| `Actor '<name>' has no mesh component` | the actor has no mesh to take a material |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a parameter you set is not in `get_material_info` | the tool could not read its value as the listed type and skipped it, or a texture failed during `create_material_instance` | send it again with the type from "The parameters object" |
-| a parameter shows in `get_material_info` but the material looks unchanged | probably no parameter of that name in the parent | check the name in the parent material |
-| a slot change is gone after an editor restart | the mesh or level was never saved | `asset save_asset` or `save_all` after each change |
-| `set_actor_material` changed the wrong component | the actor has several mesh components and the first was taken | not selectable with this tool; tell the user |
-| `Cannot access engine or script Blueprints` for a material | engine materials are refused by the path check | use or create a material under `/Game/` |
+Load section `failures` when a call returns an error, or a material or a slot
+is not in the state you expect: it has the error table (error, cause) and the
+failure table (what you see, what it means, what to do).
 
 ## Background in the plugin
 

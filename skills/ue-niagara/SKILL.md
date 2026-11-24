@@ -18,6 +18,13 @@ works only while the editor is running and the plugin is reachable;
 This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor.
 
+This skill has two sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `spawn` | `spawn_system` in full: its parameters and defaults, the result, why it is a preview and not a placed actor, its errors | before you call `spawn_system` |
+| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or a parameter or a spawned effect is not in the state you expect |
+
 The tool takes an `operation` string, lowercases it and accepts these aliases:
 
 | Operation | Aliases | Required | Optional |
@@ -234,46 +241,20 @@ skill. Read it back with `get_parameters`, which reads the same store.
 
 ## spawn_system
 
-Spawns the system in the level open in the editor, through UE's
-`UNiagaraFunctionLibrary::SpawnSystemAtLocation`, and activates it.
+Spawns the system in the level open in the editor and activates it. Load
+section `spawn` before you call `spawn_system`: it has the parameters and
+their defaults, the result and the errors. What you must know before that:
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `location` | `{"x": 0, "y": 0, "z": 0}` | world position |
-| `rotation` | `{"pitch": 0, "yaw": 0, "roll": 0}` | rotation in degrees |
-| `scale` | `{"x": 1, "y": 1, "z": 1}` | scale |
-| `auto_destroy` | `true` | handed to the engine's spawn call as its auto-destroy flag. By the tool's description the spawned system then auto-destroys; the engine's auto-destroy removes it once it has finished (not verified) |
-| `label` | — | label for the owning actor, see below |
-
-A missing component of `location`, `rotation` or `scale` takes its default.
-
-The result has `actor_name` and `actor_label` (the actor that owns the new
-Niagara component), `asset_path`, `location`, `rotation` and `scale`. The
-message is `Spawned Niagara system '<system>' as '<label>'`.
-
-**Treat this operation as a preview, not as placing an actor.** UE's function
-is made for effects at run time. It creates a Niagara component, not an actor
-of its own. Which actor the component belongs to has not been verified for
-this skill; it is probably one the level already has, such as World Settings.
-Two consequences follow:
-
+- **Treat this operation as a preview, not as placing an actor.** It creates
+  a Niagara component, not an actor of its own. Which actor the component
+  belongs to has not been verified for this skill; it is probably one the
+  level already has, such as World Settings.
 - **`label` renames that actor**, whichever it is. Spawn once without `label`
   and look at `actor_name` before you pass one.
 - **The effect is probably not saved with the level.** The level is marked
   dirty, but whether the component survives a save and reload has not been
   verified. With `auto_destroy` left at `true`, an effect that does not loop
   probably removes itself once it has played.
-
-For an effect that must stay in the level, check after a save and reload
-whether it is still there. If it is not, tell the user: this tool has no
-other way to place one.
-
-Errors, after the system has loaded:
-
-- `Editor not available. Is the Unreal Editor running with UELLMToolkit plugin loaded?`
-- `No active world. Open a level in the editor first`
-- `Failed to spawn Niagara system '<path>' in the level`
-- `Niagara component spawned but has no owning actor`
 
 ## A typical sequence
 
@@ -285,30 +266,11 @@ Errors, after the system has loaded:
 4. `get_parameters` again to check the new default.
 5. Save: `asset save_asset` `{"asset_path": "/Game/FX/NS_Fire"}`.
 
-## Errors
+## When a call fails
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | `operation`, `asset_path` or `parameter_name` is absent or an empty string |
-| `Failed to load Niagara system: <path>` | nothing at that path, or not a Niagara system |
-| `Must specify either emitter_name or emitter_index` | `get_emitter_info` without either |
-| `Emitter '<name>' not found. Available: …` | no emitter of that name |
-| `Emitter index <n> out of range (0-<last>)` | the index is past the last emitter |
-| `Parameter '<name>' not found on system '<path>'. Available: …` | no user parameter of that name |
-| `Parameter '<name>' is <type> -- 'value' must be …` | `value` has the wrong JSON type |
-| `Unsupported parameter type '<type>' for parameter '<name>'` | the parameter's type cannot be set by this tool |
-| `No active world. Open a level in the editor first` | `spawn_system` with no level open |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a vector parameter has a wrong component after `set_parameter` | a component was left out of `value` | send every component |
-| `set_parameter` succeeded but the effect in the level looks the same | not verified whether placed effects pick up a new default at once | save the system; check again after a reload |
-| a new default is gone after an editor restart | the system was never saved | `asset save_asset` after `set_parameter` |
-| `spawn_system` renamed an actor you did not expect | `label` went to the actor that owns the component, probably World Settings | tell the user, with the old and new label; how to rename that actor back has not been verified. Spawn without `label` from then on |
-| the spawned effect is gone | `auto_destroy` removed it, or it was never saved with the level | see `spawn_system`; tell the user if it must stay |
+Load section `failures` when a call returns an error, or a parameter or a
+spawned effect is not in the state you expect: it has the error table (error,
+cause) and the failure table (what you see, what it means, what to do).
 
 ## Background in the plugin
 

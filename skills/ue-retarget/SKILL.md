@@ -67,7 +67,7 @@ Each step is one call; `operation` is the name in front.
     did not load is left out silently.
 11. `diagnose_anim` `{"asset_path": "<new anim>"}` for each entry of
     `new_assets`. Then look at it: `capture_viewport` with `asset_path` and
-    `frame` (skill `ue-viewport`).
+    `frame` (skill `ue-viewport`, section `asset-preview`).
 12. `save` each new animation.
 
 ### A chain is not mapped, or mapped to the wrong chain
