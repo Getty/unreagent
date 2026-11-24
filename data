@@ -1,0 +1,65 @@
+---
+class: standard
+completed: 2026-11-24T02:05:55Z
+created: 2026-11-23T18:37:18Z
+id: 255
+priority: medium
+started: 2026-11-24T02:05:55Z
+status: archived
+tags:
+- toolkit
+- bug
+title: 'Toolkit lighting spawn_light: DirectionalLight comes out with a different
+  rotation than requested'
+updated: 2026-11-24T02:05:55Z
+---
+
+## What happened
+
+Seen while building a level for the ECK project (UE 5.8.4, UE LLM Toolkit submodule at
+commit 9fc7d4f, branch ue-5.8), calling the plugin's `lighting` tool directly over its HTTP
+endpoint (same request the bridge sends):
+
+    POST /mcp/tool/lighting
+    {"operation":"spawn_light","light_type":"DirectionalLight",
+     "location":{"x":0,"y":0,"z":1000},
+     "rotation":{"pitch":-45,"yaw":-60,"roll":0},"label":"Sun"}
+
+In: pitch -45, yaw -60, roll 0.
+Out (the result's `rotation`, read back from the actor): pitch -89.0, yaw 120.0, roll 180.0.
+That is the same orientation as pitch -91, yaw -60, roll 0: the yaw arrived, the pitch is
+off by -46 degrees. The actor's scale read back as 2.5.
+
+Corrected afterwards with
+`move_actor {"actor_name":"DirectionalLight_0","rotation":{"pitch":-45,"yaw":-60,"roll":0}}`,
+which read back pitch -45, yaw -60, roll 0.
+
+## Cause (read in the UE 5.8.4 source, not run in a debugger)
+
+- `ADirectionalLight`'s constructor gives its root component a relative rotation of
+  pitch -46 and a relative scale of 2.5
+  (`Engine/Source/Runtime/Engine/Private/Light.cpp`, around line 245/248).
+- `FActorSpawnParameters::TransformScaleMethod` defaults to
+  `ESpawnActorScaleMethod::MultiplyWithRoot` (`Engine/Classes/Engine/World.h`), and
+  `AActor::PostSpawnInitialize` then sets the root to `RootTransform * UserSpawnTransform`
+  (`Engine/Private/Actor.cpp`, around line 4310-4321). The -46 degrees are composed with the
+  requested rotation.
+- `FLightingEditor::SpawnLight` (`Plugin/UELLMToolkit/Source/UELLMToolkit/Private/LightingEditor.cpp`)
+  calls `World->SpawnActor<ADirectionalLight>(Location, Rotation, SpawnParams)` and leaves
+  `TransformScaleMethod` at its default.
+
+Other light classes may carry default root rotations too; not checked.
+
+## Suggested fix
+
+After the spawn, `SpawnedActor->SetActorRotation(Rotation)` (keeps the class's default scale),
+or `SpawnParams.TransformScaleMethod = ESpawnActorScaleMethod::OverrideRootScale` (also drops
+the 2.5 scale). Then read the rotation back in the result as today. The `ue-lighting` skill
+says the light is spawned "at the requested point"; it could also say the rotation is now
+exact, or warn until the fix lands.
+
+## Done when
+
+`spawn_light` with pitch -45 / yaw -60 for a DirectionalLight reads back pitch -45 / yaw -60 / roll 0.
+
+Main agent 2026-11-24: moved at the maintainer's word to the board of the toolkit fork (Getty/ue-llm-toolkit), card k1 there; the fix belongs in that fork, branch ue-5.8. Archived here.
