@@ -89,3 +89,36 @@ func TestSkillsDirUnresolvedWhenUnused(t *testing.T) {
 		}
 	}
 }
+
+// k259: skills.agents defaults to true but takes effect only while the skills
+// are materialized; false turns the agent files off, and the local overlay can
+// turn them off over a base that leaves them on.
+func TestSkillsAgents(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	for _, tc := range []struct {
+		base, local string
+		agents      bool // the field, default applied
+		files       bool // AgentFiles
+	}{
+		{"", "", true, false},
+		{"skills: {materialize: true}\n", "", true, true},
+		{"skills: {materialize: true, agents: false}\n", "", false, false},
+		{"skills: {materialize: true}\n", "skills: {agents: false}\n", false, false},
+		{"skills: {agents: true}\n", "", true, false},
+		{"skills: {enabled: false, materialize: true, agents: true}\n", "", true, false},
+	} {
+		dir := t.TempDir()
+		writeUProject(t, dir, "Game.uproject")
+		c, _, err := Load(writeConfigFiles(t, dir, tc.base, tc.local))
+		if err != nil {
+			t.Errorf("%q + %q: %v", tc.base, tc.local, err)
+			continue
+		}
+		if got := boolVal(c.Skills.Agents); got != tc.agents {
+			t.Errorf("%q + %q: skills.agents = %v; want %v", tc.base, tc.local, got, tc.agents)
+		}
+		if got := c.Skills.AgentFiles(); got != tc.files {
+			t.Errorf("%q + %q: AgentFiles = %v; want %v", tc.base, tc.local, got, tc.files)
+		}
+	}
+}

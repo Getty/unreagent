@@ -197,6 +197,16 @@ files:
 #   # to the agent working directory. UE 5.8 reads <Project>/Skills/:
 #   # "${PROJECT_DIR}/Skills" targets it.
 #   dir: "${PROJECT_DIR}/.claude/skills"   # default
+#   # Claude Code only, and only with materialize: true. When dir is
+#   # <project>/.claude/skills, every start also writes the shipped topic
+#   # agents (.claude/agents/unreagent-<name>.md, subagents that pre-load a few
+#   # skills) and the rules file (.claude/rules/unreagent.md), and refreshes
+#   # them while unedited. A file you edited, or one of that name the launcher
+#   # did not write, is never overwritten or deleted: one WARN names it, and
+#   # deleting it gets the shipped version back. Setting this to false (or
+#   # materialize off) removes nothing already written. With dir elsewhere,
+#   # none are written and the log says why.
+#   agents: true             # default true
 
 mcp:
   enabled: true

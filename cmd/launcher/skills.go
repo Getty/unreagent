@@ -99,9 +99,13 @@ func setupSkills(cfg *config.Config, agentWorkdir string, logger func(string)) (
 		// One error per skill that failed, joined by newlines; the log line stays one.
 		cause := strings.ReplaceAll(err.Error(), "\n", "; ")
 		logger("WARN skills not fully written to " + dir + ": " + cause + " — its unreagent-* directories may be missing, incomplete or left from an earlier start")
-		return all, nil
+	} else {
+		logger(fmt.Sprintf("Skills: %d materialized into %s", len(all), dir))
 	}
-	logger(fmt.Sprintf("Skills: %d materialized into %s", len(all), dir))
+	// The agents are written even when a skill failed: an agent whose skill
+	// is missing loses only that pre-load (Claude Code documents that it skips
+	// a skill it cannot find).
+	setupAgents(s, dir, logger)
 	return all, nil
 }
 

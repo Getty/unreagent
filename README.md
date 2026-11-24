@@ -1053,7 +1053,7 @@ causes applies.
 | `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded, but the 10 s fast-fail give-up and, for the editor, the 5-minute give-up apply, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
 | `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
-| `skills` | *optional* — how the shipped UE skill documents reach the agent, see [Skills](#skills). `enabled` (default `true`; `false` turns both paths off), `mcp` (default `true`: the `skills` MCP tool), `materialize` (default `false`: write the skills as files into `dir`), `dir` (default `${PROJECT_DIR}/.claude/skills`; takes the path placeholders; a relative path is taken relative to the agent working directory). `enabled: true` with `mcp: false` and `materialize: false` is a load error |
+| `skills` | *optional* — how the shipped UE skill documents reach the agent, see [Skills](#skills). `enabled` (default `true`; `false` turns both paths off), `mcp` (default `true`: the `skills` MCP tool), `materialize` (default `false`: write the skills as files into `dir`), `dir` (default `${PROJECT_DIR}/.claude/skills`; takes the path placeholders; a relative path is taken relative to the agent working directory)), `agents` (default `true`; only with `materialize`: also write the shipped topic agents and the rules file to `.claude/agents/` and `.claude/rules/`, only when `dir` is `<project>/.claude/skills`; Claude Code only). `enabled: true` with `mcp: false` and `materialize: false` is a load error |
 | `engineRoot` | *usually only in local.yaml* — engine path override; relative is resolved against the working directory |
 
 ### No process zombies (Windows)
@@ -1741,6 +1741,44 @@ inside `skills.dir`; a later start removes it (a second launcher starting at
 the same moment can remove it sooner). Two launchers of different versions on
 one project can still remove each other's extra skills.
 The `skills` MCP tool, when on, is unaffected, since it serves from the binary.
+
+**Agents and the rules file (Claude Code).** With `skills.materialize: true`
+and `skills.dir` at a directory named `skills` under one named `.claude` (the
+usual `<project>/.claude/skills`), every start also writes the shipped topic
+agents as `<project>/.claude/agents/unreagent-<name>.md` and the launcher's
+rules file as `<project>/.claude/rules/unreagent.md`, and refreshes them. An
+agent is a Claude Code subagent definition whose `skills` list pre-loads a few
+of the shipped skills, so the main session can hand a task to an agent that
+starts with the matching skills already loaded (for example a rigging task to
+`unreagent-rigging`, a lighting task to `unreagent-lighting`); the rules file
+carries a short task-to-agent table. The files in `.claude/agents/` are the
+full list. They are for Claude Code only: Hermes and other agents are
+unaffected and keep using the `skills` MCP tool.
+
+`skills.agents` (default `true`) switches this off with `false`; it has an
+effect only while `skills.materialize` is on, and a start with it off logs one
+line. With `skills.dir` anywhere else, no agent or rules file is written and the
+log says why (`Agents: not written, skills.dir ... is not <project>/.claude/skills`).
+
+Ownership works by a content hash in each written file (`unreagent-hash`, a
+frontmatter key in an agent file, a trailing HTML comment in the rules file):
+
+- an unedited file is replaced when a new launcher ships a different text, and
+  an unedited agent file that is no longer shipped is removed;
+- a file you edited, or a file of that name the launcher did not write, is
+  never overwritten or deleted. One warning per start names it:
+  `WARN agent files left alone, not written by unreagent or edited since: <paths> — delete one to have it written again`.
+  Edits stop the refresh, so project rules belong in `CLAUDE.md`, not in the
+  rules file; to get the shipped version back, delete the file;
+- a symlink is never treated as the launcher's.
+
+Turning it off (`skills.agents: false`, or `skills.materialize` off) removes
+nothing already written, as with materialized skills. A write that fails logs
+`WARN agent files not fully written in <dir>: <cause>` and the start goes on.
+
+Unverified: how Claude Code reads these files (the `skills` field resolving the
+`unreagent-*` names, rules files reaching subagents) has not been run yet, and
+the Windows paths are cross-compiled only.
 
 With `mcp.enabled: false` the `skills` tool cannot be served; unless the skills
 are materialized the launcher logs

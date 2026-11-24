@@ -66,6 +66,7 @@ type SkillsConfig struct {
 	MCP         *bool  `yaml:"mcp"`         // default true: serve them through the skills MCP tool
 	Materialize bool   `yaml:"materialize"` // write them into Dir on every start
 	Dir         string `yaml:"dir"`         // default: ${PROJECT_DIR}/.claude/skills
+	Agents      *bool  `yaml:"agents"`      // default true: with Materialize, also write the topic agents and the rules file next to Dir
 }
 
 // ViaMCP reports whether the skills MCP tool is to be served.
@@ -73,6 +74,11 @@ func (s SkillsConfig) ViaMCP() bool { return boolVal(s.Enabled) && boolVal(s.MCP
 
 // ViaFiles reports whether the skills are to be written into Dir.
 func (s SkillsConfig) ViaFiles() bool { return boolVal(s.Enabled) && s.Materialize }
+
+// AgentFiles reports whether the shipped topic agents and the rules file are
+// to be written next to Dir: only while the skills are written there, since
+// an agent file names its skills by their materialized directories.
+func (s SkillsConfig) AgentFiles() bool { return s.ViaFiles() && boolVal(s.Agents) }
 
 func boolVal(p *bool) bool { return p != nil && *p }
 
@@ -520,6 +526,10 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 	}
 	if c.Skills.Dir == "" {
 		c.Skills.Dir = "${PROJECT_DIR}/.claude/skills"
+	}
+	if c.Skills.Agents == nil {
+		t := true
+		c.Skills.Agents = &t
 	}
 
 	// Built-in default commands (only if not defined by the user).

@@ -22,7 +22,7 @@ jobs:
       - name: gofmt
         run: |
           # vendor/ is third-party code and is not checked.
-          unformatted="$(gofmt -l cmd internal skills)"
+          unformatted="$(gofmt -l cmd internal skills agents)"
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-clean:"
             echo "$unformatted"
