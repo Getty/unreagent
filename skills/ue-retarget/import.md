@@ -43,9 +43,9 @@ and no way to switch any of that off here.
 Returns `imported_assets[]` (`name`, `path`, `class`) and the message
 `Imported <n> asset(s) from <file name without extension>`.
 
-Errors: `FBX file not found: <path>`, the skeleton load errors (skill body),
-and `Import failed for: <path>` when the import produced no asset. The result
-gives no reason for a failed import.
+Errors: `FBX file not found: <path>`, the skeleton load errors (section
+`failures`), and `Import failed for: <path>` when the import produced no
+asset. The result gives no reason for a failed import.
 
 What the code cannot tell you:
 

@@ -126,8 +126,8 @@ Errors: `No FK Chains op found in retargeter stack` (run `setup_ops`),
 ## batch_retarget
 
 Runs the engine's duplicate-and-retarget batch over AnimSequences. Which
-engine call that is depends on the engine version (skill body, "Engine
-versions").
+engine call that is depends on the engine version (section
+`engine-versions`).
 
 | Parameter | Default | Meaning |
 |---|---|---|

@@ -28,6 +28,14 @@ This skill was written from the toolkit's C++ and bridge source. It has not
 been exercised against a running editor. It covers how a script gets run and
 how to read what comes back, not the editor's Python API.
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `script-types` | the `script_type` values other than `python` (`console`, `cpp`, `editor_utility`): what each does, its results and its errors | before you send a script of one of these types |
+| `files-history` | where the script files and the history are kept and how the files are named; the parameter and the result fields of `get_script_history`; what `cleanup_scripts` deletes and answers | when you look for a script's file or the history on disk, want more history entries than `get_script_history` returns by default, or a field of its result needs explaining |
+| `failures` | the failure table (what you see, what it means, what to do) | when a call or a `task_result` returns an error, no answer comes for 10 minutes, or a result is not what you expect |
+
 ## Before the first call
 
 - **A person approves every script.** Before anything runs, the plugin has
@@ -57,7 +65,7 @@ how to read what comes back, not the editor's Python API.
 
 | Parameter | Required | Meaning |
 |---|---|---|
-| `script_type` | yes | `python` here. The others are under "Other script types". Case does not matter |
+| `script_type` | yes | `python` here. The others are in section `script-types`. Case does not matter |
 | `script_content` | yes | the script |
 | `description` | no | one line for the approval window, the history and the file name. Without it the script must carry its own |
 
@@ -151,43 +159,32 @@ assumes but has not verified.
 
 ## Files and history
 
-Each Python script is written to a file before it runs, and that file stays:
+Each Python script is written to a file under
+`Content/UnrealClaude/Scripts/` in the project before it runs, and that file
+stays. `get_script_history` lists what ran; `cleanup_scripts` removes the
+files and the history. Load section `files-history` when you look for a
+script's file or the history on disk, want more history entries than
+`get_script_history` returns by default, or a field of its result needs
+explaining. What you must know without it:
 
-| What | Where |
-|---|---|
-| Python scripts | `Content/UnrealClaude/Scripts/` in the project, named after the first 30 characters of the description plus a counter, such as `List_the_static_meshes_under___003.py` |
-| C++ scripts | `Source/<ProjectName>/Generated/UnrealClaude/` |
-| history | `Saved/UnrealClaude/script_history.json`, the last 100 scripts |
-
-The counter starts again with each editor session, so a new session can
-overwrite an older session's file of the same name.
-
-**get_script_history** (`count`, default 10, clamped to 1–50) returns
-`scripts[]`, newest first. Each entry has `type`, `filename`, `description`,
-`success`, `result` (the message, cut to 200 characters. A failed C++ script
-gets `Compilation failed: ` plus up to 200 characters of errors) and `timestamp`
-(UTC). It also returns `count` and `formatted_context`, the same list as text.
-It never returns the script itself. The history is kept on disk, so it
-includes earlier editor sessions, although the tool description says "in this
-session". A denied script, or one that failed an argument check, is not
-recorded.
-
-**cleanup_scripts** takes no parameters. It deletes every file under both
-script directories, removes the directories, and empties the history. It
-answers `Cleanup complete: Deleted <n> files, cleared <m> history entries`.
-Its description names `Source/UnrealClaude/Generated/` and leaves out the
-Python directory. The code deletes the two directories in the table above. It
-cannot be undone, and the project's version control may already track those
-files.
+- **A new editor session can overwrite an older session's file of the same
+  name**: the counter in the file name starts again with each session.
+- **`cleanup_scripts` cannot be undone.** It deletes every file under both
+  script directories, the Python one and the C++ one, removes the
+  directories and empties the history, and the project's version control may
+  already track those files.
+- **The history is kept on disk, so it includes earlier editor sessions.** A
+  denied script, or one that failed an argument check, is not recorded.
 
 ## Other script types
 
-| `script_type` | What happens |
-|---|---|
-| `console` | one console command per line. Blank lines, `#` and `//` lines, and the `@Description:` line are skipped. Each line passes the same check as `run_console_command`. A blocked line becomes `Skipped blocked command: …` in the output, and the result is still `Executed <n> console commands` |
-| `cpp` | written to the C++ directory above. The plugin then starts a Live Coding compile and waits up to 60 s. Whether that compile builds a newly added `.cpp` file is up to the engine and unverified. The plugin never calls the compiled code: success means only `C++ script compiled successfully via Live Coding`. A failure in the compile step starts with `Compilation failed. Fix these errors and call execute_script again:`, followed by the reason: up to five compile errors, `Live Coding is not enabled. Press Ctrl+Alt+F11 to enable.`, `Live Coding module not loaded`, or `Live Coding compilation timed out (60s)`. Two failures come without that prefix: `Failed to write C++ script file`, and `Live Coding not available - C++ scripts cannot be compiled` in an editor built without Live Coding. The tool description promises automatic retries. The code has none |
-| `editor_utility` | not implemented. It still asks for approval, then fails with `Editor Utility script execution not yet implemented.` |
-| anything else | runs as `console`, without a warning. Check the spelling |
+`script_type` also takes `console` (one console command per line), `cpp`
+(written to a file and compiled through Live Coding; the plugin never calls
+the compiled code) and `editor_utility` (not implemented: it still asks for
+approval, then fails). Load section `script-types` before you send a script
+of one of these types: it has what each does, its results and its errors.
+
+**Any other value runs as `console`, without a warning.** Check the spelling.
 
 ## Typical sequences
 
@@ -214,20 +211,15 @@ files.
 files should not stay in the project. That is your decision to make with the
 person, because the history goes with them.
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `Script execution queued. Task ID: …` | normal. The script has not run yet | poll that id (skill `ue-tasks`) |
-| `Error: Script execution denied by user` | someone clicked Deny or closed the window. In an editor started with `-unattended`, unreagent's default, whether the engine can also end the window this way is unverified | ask before you try again |
-| `Error: Task execution timed out after 600 seconds`, or no answer for 10 minutes | nobody approved the script, or it ran too long | ask whether anyone is at the editor. The timeout does not withdraw the call, so an approval given later may still run the script |
-| `Error: Script MUST include @Description …` | no description in either place | add `# @Description: …` or pass `description` |
-| `Error: Python script execution failed` | the output matched one of the scanned words | read the editor log, then the "Failure" section above |
-| `Python script executed (actors created: 0)` plus the warning line | success. The plugin warns about every script that spawns nothing | judge by your own output |
-| `Executed <n> console commands` for a Python script | `script_type` was misspelt and the script ran as console commands | use `python` |
-| `Error: Editor not available` or `Error: No active world` | no editor world to run against | skill `ue-levels`, or wait for the editor (skill `unreagent-iterate`) |
-| `Error: Task not found: <id>` | the result is more than 5 minutes old, or the editor restarted | `get_script_history` shows whether the script ran |
-| `ModuleNotFoundError: No module named 'unreal'` from `run_python` | you ran editor code on the host | use `execute_script` |
+Load section `failures` when a call or a `task_result` returns an error, no
+answer comes for 10 minutes, or a result is not what you expect: a table from
+what you see to what it means and what to do.
+
+**A timeout does not withdraw the call.** After `Error: Task execution timed
+out after 600 seconds`, or no answer for 10 minutes, an approval given later
+may still run the script.
 
 ## See also
 

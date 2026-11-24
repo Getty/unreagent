@@ -22,6 +22,13 @@ Placing and changing single actors is the subject of `ue-level-actors`.
 This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor.
 
+This skill has two sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `filtered-classes` | the class-name prefixes and the exact class names that `level_query` `list` and `find` leave out as engine infrastructure, and the light classes that `list` leaves out | before you conclude from `list` or `find` that the level holds no actor of a class, or when an actor you expect is missing from either |
+| `failures` | the checks a level path goes through, each with its error; the errors of `open`, `new` and `save_as` with their meaning; the failure table (what you see, what it means, what to do) | when a call returns an error or does not return, or a result is not what you expect |
+
 ## Before the first call
 
 - **Tool names.** The bridge lists them as `unreal_open_level` and
@@ -50,16 +57,10 @@ object path: `/Game/Maps/Arena`, without `.umap`. `asset_search` (skill
 object path `/Game/Maps/Arena.Arena`. The part before the dot is the package
 path.
 
-Each path goes through these checks, in order:
-
-| Check | Error |
-|---|---|
-| not empty | `Level path cannot be empty` |
-| at most 512 characters | `Level path exceeds maximum length of 512 characters` |
-| not under `/Engine/` or `/Script/` | `Cannot open engine or script levels` |
-| no `..` | `Level path cannot contain path traversal sequences` |
-| none of `` < > \| & ; ` $ ( ) { } [ ] ! * ? ~ `` | `Level path contains invalid character: '<c>'` |
-| starts with `/Game/` | `Level path must start with '/Game/' to reference project content` |
+A path is refused when it is empty, longer than 512 characters, under
+`/Engine/` or `/Script/`, holds `..` or one of
+`` < > | & ; ` $ ( ) { } [ ] ! * ? ~ ``, or does not start with `/Game/`. Each
+check has an error of its own (section `failures`).
 
 A level inside a plugin's content folder therefore cannot be opened or saved
 through `open_level`.
@@ -90,6 +91,8 @@ have to be undone by hand, or dropped with an editor restart
 unknown action gives `Unknown action: '<action>'. Use 'open', 'new',
 'save_as', or 'list_templates'.`
 
+The errors of each action, with their meaning, are in section `failures`.
+
 ### open
 
 Opens a level and replaces the current one.
@@ -100,12 +103,6 @@ Opens a level and replaces the current one.
 
 The result holds `action`, `levelPath`, `mapName` and `worldName`, and the
 message is `Opened level: Arena`.
-
-| Error | Meaning |
-|---|---|
-| `Level not found: '<path>'. Use asset_search to find available maps.` | no package exists at that path |
-| `Could not resolve level path: '<path>'` | the path does not map to a file on disk |
-| `Failed to load level: '<path>'` | the engine returned no world |
 
 ### new
 
@@ -133,14 +130,6 @@ template.
 - `save_current` is not used on this branch. Any prompt is the engine's own,
   as for `open`.
 
-| Error | Meaning |
-|---|---|
-| `Template '<name>' not found. Use action 'list_templates' to see available templates.` | no template matched |
-| `Could not resolve template path: '<path>'` | the template's map path did not map to a file |
-| `Failed to create map from template: '<name>'` | the engine returned no world. Fall back to a blank level |
-| `Failed to create new blank map.` | the engine returned no world for a blank level |
-| `Editor engine not available.` | the editor's engine object is missing |
-
 ### save_as
 
 Saves the level that is open in the editor under a package path.
@@ -155,12 +144,6 @@ and the message is `Saved level to: /Game/Maps/Arena`. Whether the editor then
 goes on editing the level under the new path is not verified: compare
 `mapName` with the name you saved under, and if they differ, `open` the saved
 path before you go on editing, so that later saves land in the file you meant.
-
-| Error | Meaning |
-|---|---|
-| `Editor not available` | no editor |
-| `No world currently loaded` | no level is open |
-| `Failed to save level to: '<path>'` | the engine's save failed |
 
 ### list_templates
 
@@ -188,13 +171,14 @@ Outliner shows, and leaves engine infrastructure out of `list` and `find`.
 
 ### What counts as infrastructure
 
-The filter goes by the actor's class name:
-
-| Rule | Classes |
-|---|---|
-| class name starts with | `Landscape`, `Foliage`, `InstancedFoliage`, `WorldPartition`, `WorldDataLayers`, `NavMesh`, `RecastNavMesh`, `AbstractNavData`, `NavigationData`, `HLOD`, `DataLayer`, `LevelInstance`, `PackedLevelActor` |
-| class name is exactly | `WorldSettings`, `GameModeBase`, `GameMode`, `GameStateBase`, `GameState`, `PlayerState`, `GameSession`, `HUD`, `GameNetworkManager`, `AtmosphericFog`, `SkyAtmosphere`, `SkyLight`, `VolumetricCloud`, `ExponentialHeightFog`, `Note`, `GroupActor`, `LevelBounds`, `LevelScriptActor`, `DefaultPhysicsVolume`, `Brush`, `WorldPartitionReplay` |
-| lights, filtered by `list` only | `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight` |
+The filter goes by the actor's class name: by prefix, such as `Landscape`,
+`Foliage`, `NavMesh`, `WorldPartition` and `LevelInstance`, and by exact
+name, such as `WorldSettings`, `GameMode`, `HUD`, `SkyLight`,
+`ExponentialHeightFog` and `Brush`. `list` also leaves out the four light
+classes `DirectionalLight`, `PointLight`, `SpotLight` and `RectLight`; `find`
+includes them. Load section `filtered-classes` before you conclude from
+`list` or `find` that the level holds no actor of a class, or when an actor
+you expect is missing from either: it has every prefix and every class name.
 
 A level-instance actor or a landscape never shows up here. Use
 `get_level_actors` (skill `ue-level-actors`) for those.
@@ -283,17 +267,12 @@ and leaves them out. Run `find` with part of the label instead.
 2. `level_query` `{"operation": "info", "actor_label": "<label from step 1>"}`.
 3. Use the `name` from step 2 with `move_actor` or `set_property`.
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `Level path must start with '/Game/' …` | a file path, an engine path or plugin content | pass the `/Game/` package path |
-| `Level not found: '…'` | no package at that path | `asset_search` with `class_filter: "World"`. Use the part of `path` before the dot |
-| an `open` or `new` call that never returns | probably a save prompt with nobody to answer it | save first. Pass `save_current: false` to `new` |
-| `Error: Task timed out after …ms (task_id: …)` | the bridge stopped waiting, but the level may still be loading | `task_status` with the `task_id`, then `level_query list` |
-| your edits to a level from `new` are not saved by `save_all` | the level still lives under `/Temp/`, or is an engine template | `save_as` to a `/Game/` path |
-| `Actor '…' not found` from `info` | no actor with exactly that label | `find` with part of the label |
-| an actor you expect is missing from `list` | it is a light or infrastructure | `find` includes lights. `get_level_actors` includes everything |
+Load section `failures` when a call returns an error or does not return, or a
+result is not what you expect: it has the checks a level path goes through,
+each with its error, the errors of `open`, `new` and `save_as` with their
+meaning, and the failure table (what you see, what it means, what to do).
 
 ## See also
 

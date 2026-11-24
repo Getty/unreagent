@@ -17,6 +17,14 @@ Through the plugin's MCP bridge it is listed as `unreal_enhanced_input`. It
 works only while the editor is running and the plugin is reachable;
 `unreagent-iterate` covers the wait for the plugin.
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `key-aliases` | the short names `add_mapping` takes for mouse buttons and gamepad keys (`LMB`, `Cross`, `L2`, `DPadUp`, `Start` and the like), each with the engine key it stands for | before you pass `key` as a short name instead of the engine key name, or when a call returns `Invalid key name` |
+| `triggers-modifiers` | the `trigger_type` and `modifier_type` values, each one's settings with defaults and accepted ranges, and their errors | before you call `add_trigger` or `add_modifier` |
+| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or a mapping, trigger or modifier is not what you expect: in a query, in play, or after an editor restart |
+
 The tool takes an `operation` string. An unknown operation returns
 `Unknown operation: <op>. Valid operations: create_input_action, create_mapping_context, add_mapping, remove_mapping, add_trigger, add_modifier, query_context, query_action`.
 
@@ -114,25 +122,10 @@ position in the context. The tool does not check for an existing mapping of
 the same key and action.
 
 `key` is an engine key name, such as `SpaceBar`, `W`, `LeftShift`,
-`Gamepad_FaceButton_Bottom` or `Gamepad_Left2D`, or one of these aliases:
-
-| Alias | Key |
-|---|---|
-| `LMB`, `RMB`, `MMB` | `LeftMouseButton`, `RightMouseButton`, `MiddleMouseButton` |
-| `Cross`, `FaceA` | `Gamepad_FaceButton_Bottom` |
-| `Circle`, `FaceB` | `Gamepad_FaceButton_Right` |
-| `Square`, `FaceX` | `Gamepad_FaceButton_Left` |
-| `Triangle`, `FaceY` | `Gamepad_FaceButton_Top` |
-| `L1`, `LB` / `R1`, `RB` | `Gamepad_LeftShoulder` / `Gamepad_RightShoulder` |
-| `L2`, `LT` / `R2`, `RT` | `Gamepad_LeftTrigger` / `Gamepad_RightTrigger` |
-| `L2Axis`, `LTAxis` / `R2Axis`, `RTAxis` | `Gamepad_LeftTriggerAxis` / `Gamepad_RightTriggerAxis` |
-| `L3` / `R3` | `Gamepad_LeftThumbstick` / `Gamepad_RightThumbstick` (stick click) |
-| `LeftStickX`, `LeftStickY` | `Gamepad_LeftX`, `Gamepad_LeftY` |
-| `RightStickX`, `RightStickY` | `Gamepad_RightX`, `Gamepad_RightY` |
-| `LeftStick2D` / `RightStick2D` | `Gamepad_Left2D` / `Gamepad_Right2D` |
-| `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight` | `Gamepad_DPad_Up`, `Gamepad_DPad_Down`, `Gamepad_DPad_Left`, `Gamepad_DPad_Right` |
-| `Start`, `Options`, `Menu` | `Gamepad_Special_Right` |
-| `Select`, `Share`, `View` | `Gamepad_Special_Left` |
+`Gamepad_FaceButton_Bottom` or `Gamepad_Left2D`, or a short alias such as
+`LMB` or `Cross`. Load section `key-aliases` before you pass `key` as a short
+name instead of the engine key name, or when a call returns
+`Invalid key name`: it has every alias and the key it stands for.
 
 A name the engine does not know returns `Invalid key name: <k>. Use standard UE key names …`.
 The result's `key` echoes what you passed; `query_context` shows the engine
@@ -161,36 +154,14 @@ Each call adds one more trigger or modifier to the mapping. The results have
 `trigger_count` or `modifier_count`. Calling twice adds the same one twice, and
 neither can be removed with this tool.
 
-**`trigger_type`:**
+Load section `triggers-modifiers` before you call `add_trigger` or
+`add_modifier`: it has the `trigger_type` and `modifier_type` values, each
+one's settings with defaults and accepted ranges, and their errors. What goes
+wrong without an error:
 
-| Type | Settings | Accepted range |
-|---|---|---|
-| `Pressed`, `Released`, `Down` | — | — |
-| `Hold`, `HoldAndRelease` | `hold_time` (default 0.5 s) | more than 0, at most 60 |
-| `Tap` | `tap_release_time` (default 0.2 s) | more than 0, at most 5 |
-| `Pulse` | `pulse_interval` (default 0.1 s) | more than 0.01, at most 10 |
-| `ChordAction` | `chord_action_path` (required): the Input Action that must be active as well | — |
-
-Out of range returns `hold_time must be between 0 and 60 seconds` and so on.
-For `Pulse`, the message says "between 0.01 and 10", but 0.01 itself is
-rejected. Other errors:
-`ChordAction trigger requires 'chord_action_path' parameter`, the load errors
-for the chord action, and
-`Invalid trigger_type: <t>. Valid types: Pressed, Released, Down, Hold, HoldAndRelease, Tap, Pulse, ChordAction`.
-
-**`modifier_type`:**
-
-| Type | Settings |
-|---|---|
-| `Negate` | — |
-| `Swizzle` | `swizzle_order`: `YXZ` (default), `ZYX`, `XZY`, `YZX`, `ZXY` |
-| `Scalar` | `scalar`: `{x, y, z}`; an axis left out is 1 |
-| `DeadZone` | `dead_zone_lower` (default 0.2), `dead_zone_upper` (default 1.0), each from 0 to 1 with lower below upper; `dead_zone_type`: `Radial`, any other value is axial |
-
-Errors: `Invalid swizzle_order: <o>. Valid orders: YXZ, ZYX, XZY, YZX, ZXY`,
-`dead_zone_lower must be between 0.0 and 1.0`, the same for `dead_zone_upper`,
-`dead_zone_lower must be less than dead_zone_upper`,
-`Invalid modifier_type: <m>. Valid types: Negate, Swizzle, Scalar, DeadZone`.
+- **`dead_zone_type`** of a `DeadZone` modifier: `Radial`, any other value is
+  axial.
+- **`scalar`** of a `Scalar` modifier is `{x, y, z}`; an axis left out is 1.
 
 **Check that they persist.** The tool creates trigger and modifier objects
 that do not belong to the context asset, and then saves the context. Whether
@@ -235,27 +206,12 @@ value, not a key press, so it does not test the key mapping. Whether the
 mapping's context, triggers and modifiers still take part is not verified
 (see there).
 
-## Errors
+## When a call fails
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or empty |
-| `Failed to load InputAction: <path>` / `Failed to load InputMappingContext: <path>` | no asset of that type at the path |
-| `Invalid key name: <k>. …` | not an engine key name or an alias |
-| `No mapping found for action '<a>' in context '<c>'. …` | `add_mapping` first |
-| `Mapping at index <i> is for action '<x>', not '<a>'` | the index belongs to another action; check `query_context` |
-| `Failed to save asset: <package>` | the change was made but not saved |
-| `Cannot access engine or script Blueprints` | an `/Engine/` or `/Script/` path |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| the action never fires in play | the mapping context is not added at runtime, or there is no mapping for the key | `query_context`, then check the game code that adds the context |
-| a trigger or modifier is gone after a restart | it did not survive the save (see "Check that they persist") | set it in the editor by hand, and tell the user |
-| `remove_mapping` removed a different mapping than expected | the indices changed, or the same key and action are mapped twice | `query_context` before every index-based call |
-| a mapping or trigger exists twice | the call was repeated | `remove_mapping` for a duplicate mapping; a duplicate trigger stays |
+Load section `failures` when a call returns an error, or a mapping, trigger
+or modifier is not what you expect, in a query, in play, or after an editor
+restart: an error table (error, cause) and a failure table (what you see,
+what it means, what to do).
 
 ## Background in the plugin
 

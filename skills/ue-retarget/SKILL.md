@@ -22,8 +22,9 @@ This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor. Whether a retargeted animation looks right cannot be
 read off any result of this tool: see "What a success does not prove".
 
-This skill has four sections. Load the one for the operation you are about to
-call; the recipes below need no section for their happy path.
+This skill has six sections. Load one of the first four for the operation
+you are about to call; the recipes below need no section for their happy
+path.
 
 | Section | Covers | Load it when |
 |---|---|---|
@@ -31,6 +32,8 @@ call; the recipes below need no section for their happy path.
 | `retargeter` | `inspect_retargeter`, `create_retargeter`, `setup_ops`, `configure_fk`, `batch_retarget`, `set_root_motion`, `find_anims`, `save` | you build a retargeter, run a retarget, or a chain is not mapped |
 | `import` | `import_fbx`, `batch_import_fbx` | you import FBX animations, or choose between this tool and `asset_import` |
 | `anim-checks` | `inspect_anim`, `compare_bones`, `sample_bones`, `diagnose_anim`, `copy_bone_tracks` | you check an animation or copy bone tracks between two |
+| `engine-versions` | what differs between UE 5.6, UE 5.7 or later and the UE 5.8 port, per operation, and the plugin commits it was read from | the editor is not UE 5.7 and you need to know which branch a call takes, or you need the commits these statements were read from |
+| `failures` | the load errors by what was asked for, and the failure table (what you see, what it means, what to do) | a call returns an error, or a result or a retargeted animation is not what you expect |
 
 ## Recipes
 
@@ -169,15 +172,7 @@ empty required string returns `Missing required parameter: <name>`.
 - **File paths** (`fbx_path`, `fbx_directory`) are paths on the machine that
   runs the editor.
 
-Load errors, by what was asked for:
-
-| Error | Asked for |
-|---|---|
-| `Failed to load: <path>`, `Skeletal mesh has no skeleton: <path>`, `Asset is not a Skeleton or SkeletalMesh: <path> (is <class>)` | a skeleton or mesh |
-| `Failed to load skeletal mesh: <path>`, `Asset is not a SkeletalMesh: <path>` | a skeletal mesh |
-| `Failed to load IK Rig: <path>`, `Asset is not an IKRigDefinition: <path>` | an IK Rig |
-| `Failed to load IK Retargeter: <path>`, `Asset is not an IKRetargeter: <path>` | a retargeter |
-| `Failed to load anim sequence: <path>`, `Asset is not an AnimSequence: <path>` | an animation |
+The load errors, by what was asked for, are in section `failures`.
 
 A load failure does not prove the asset is missing. Check with `asset_search`
 (skill `ue-assets`).
@@ -248,26 +243,24 @@ of `diagnose_anim` catch broken output; a human or a `capture_viewport` image
 
 ## Engine versions
 
-The plugin's code at upstream commit 9f6a0f7 (43 tools, plugin version
-1.1.0) has branches for UE 5.6 and for UE 5.7 or later, and none for older
-engines:
+The plugin's code has branches for UE 5.6 and for UE 5.7 or later, and none
+for older engines. UE 5.8 takes the "5.7 or later" branch, except in
+`batch_retarget`, which has a branch of its own in the UE 5.8 port. Load
+section `engine-versions` when the editor is not UE 5.7 and you need to know
+which branch a call takes, or you need the commits these statements were read
+from: it has the per-version table. What differs without an error:
 
-| Where | UE 5.7 or later | UE 5.6 |
-|---|---|---|
-| `create_retargeter`, `setup_ops` | add default ops, remove duplicates, assign the source and target IK Rig to every op, auto-map | the same without assigning the rigs to the ops |
-| `inspect_retargeter` `chain_mapping` | read from the FK Chains op's settings | read from the retargeter asset |
-| `configure_fk` `rotation_mode` | also `CopyLocal` | `CopyLocal` is not recognized and is ignored without an error |
-| `batch_retarget` | asks the engine to overwrite existing output assets | passes no overwrite flag; the engine's default applies |
-
-**UE 5.8.** Upstream 9f6a0f7 declares engine version 5.6.0 in its `.uplugin`
-and has no branch of its own for UE 5.8. The UE 5.8 port (fork `Getty/ue-llm-toolkit`, branch
-`ue-5.8`, commit 9fc7d4f) gives `batch_retarget` a third branch: on UE 5.8 it
-calls the engine's newer batch entry point, `RunBatchRetarget`, with the
-animations, both meshes, the retargeter, the prefix, referenced assets left
-out, and overwrite on. UE 5.7 and 5.6 keep the calls of the table. It sets no
-target folder, so on UE 5.8 the output lands in `/Game` (UE 5.8.4 source, not
-run; section `retargeter`, `batch_retarget`). The other rows of the table
-are unchanged in that port: UE 5.8 takes the "5.7 or later" column.
+- **UE 5.6: `create_retargeter` and `setup_ops`** do not assign the source
+  and target IK Rig to the ops, without an error; what that changes in a
+  retarget is not known (C++ source, not run).
+- **UE 5.6: `configure_fk` `rotation_mode` `CopyLocal`** is not recognized
+  and is ignored without an error.
+- **`batch_retarget` and existing output assets.** On UE 5.7 or later the
+  tool asks the engine to overwrite them; on UE 5.6 it passes no overwrite
+  flag, and the engine's default applies.
+- **UE 5.8, in the port: `batch_retarget`** sets no target folder, so the
+  output lands in `/Game` (UE 5.8.4 source, not run; section `retargeter`,
+  `batch_retarget`).
 
 ## Results through the bridge
 
@@ -288,20 +281,12 @@ are unchanged in that port: UE 5.8 takes the "5.7 or later" column.
 - **Misspelt parameters.** Calls the bridge queues do not warn about a
   parameter the tool does not declare (skill `ue-tasks`).
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| `Missing required parameter: rig_path` although you passed a path | `add_chain` and `remove_chain` take `rig_path`, not `asset_path` | use the name in the operations table |
-| `create_ik_rig` reports fewer chains than you sent | a chain entry lacked `name`, `start_bone` or `end_bone`, or the engine refused the bones | `inspect_ik_rig`, then `add_chain`, which reports a failure |
-| `inspect_ik_rig` returns `warnings` about goals or solvers | the plugin expects batch retarget to fail with them | this tool cannot remove goals or solvers; build a rig with `create_ik_rig`, which adds none |
-| a target chain has no source in `chain_mapping` | the auto-map found no chain of a similar name | recipe "A chain is not mapped" |
-| the retargeted character stays at bind height or slides | pelvis translation or root motion | `configure_fk` the pelvis chain to `GloballyScaled`; `set_root_motion` (section `retargeter`) |
-| `batch_retarget` succeeds with `retargeted_count: 0` or fewer than sent | paths did not load as AnimSequences, or the engine produced nothing | `inspect_anim` on a path; `inspect_ik_rig` warnings |
-| `batch_import_fbx` fails with `Unknown error` | at least one file failed; the per-file results are dropped | `find_anims` on `dest_path`, then `import_fbx` for the missing files |
-| `configure_fk` succeeded, nothing changed | chain name or mode string did not match | names from `inspect_retargeter` `fk_chains[].chain`; modes from section `retargeter` |
-| a change is gone after an editor restart | it was never saved | `save` after each finished change |
+Load section `failures` when a call returns an error, or a result or a
+retargeted animation is not what you expect: it has the load errors by what
+was asked for, and the failure table (what you see, what it means, what to
+do).
 
 ## Background in the plugin
 
