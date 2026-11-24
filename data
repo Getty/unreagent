@@ -1,0 +1,42 @@
+---
+class: standard
+created: 2026-11-21T23:07:35Z
+id: 208
+priority: medium
+started: 2026-11-22T06:35:55Z
+status: backlog
+tags:
+- ue
+- windows-check
+title: Unverified UE assumptions behind restart policy and timing windows
+updated: 2026-11-24T03:57:08Z
+---
+
+Found in k198; nothing to change until measured. (1) restart: on-failure (shouldRestart) and the fast-fail count assume the editor exits 0 on a clean quit and non-zero on a crash; no source establishes either (experiment U5). (2) FastFailWindow is 10 s: a start failure that takes longer never reaches the give-up. (3) endpointWaitWindow is 5 minutes: a cold shader cache can outlast it and draw a false warning (experiment U8). Experiments are in docs/research/2026-11-21-unreal-editor.md. Needs a Windows machine with an editor; record the measured exit codes and times here, then decide per item.
+
+Windows run 2026-11-22 (U5, U8 warm; cold U8 still to come). Windows 11 Pro 26H2 build 26300.9711, i9-11900KF, RTX 4060 Ti; UE 5.7.4 (CL 51494982) and 5.8.4 (CL 58902052), Launcher builds; disposable Blueprint projects; unreagent d4edd23 built on the machine with Go 1.27.0. Editor started directly unless marked "via unreagent". Raw timelines/stdout/logs: C:\Temp\unreagent-probe\runs\ on that machine.
+
+(1) Exit DWORDs, measured (same on 5.7.4 and 5.8.4 where both are listed):
+- quit_editor() (the File > Exit path): 0 (5.7 x4, 5.8 x3; with and without -unattended)
+- WM_CLOSE to the main window, nothing dirty: 0 (5.7 with/without -unattended, 5.8 without)
+- console "debug crash" (fatal error): 3 (5.7 -unattended and interactive, 5.8 -unattended); a full Saved/Crashes/UECC-* folder each time
+- console "debug gpf" (access violation): 3, not 0xC0000005 (5.7 and 5.8, -unattended)
+- TerminateProcess / taskkill /F: 1
+- job closed via unreagent (console "stop ue", and unreagent itself TerminateProcess-ed): 0 (0x00000000) for the editor, within 0.44 s; zenserver, crashpad_handler, EpicWebHelper and the crash reporter all gone too
+- .uproject naming a missing C++ module: 1 (both versions)
+- .uproject path that does not exist (-unattended): 1 after 0.48 s
+- console "debug assert" (5.7.4): no exit at all; the editor kept ticking (frame counter rose, game thread answered); no crash folder. Treat as "command has no effect here", not as an assert sample.
+Not measured: failed compilation, a module built for another engine version, cancelled startup dialogs, cancelled window close with dirty packages.
+Verdict for (1): CONFIRMS the on-failure assumption: clean quit 0, crash non-zero (3), startup failures 1. Caveat: a job-closed editor also exits 0, indistinguishable from a clean quit by the code alone; harmless today because unreagent closes the job only on a stop it asked for.
+
+(2) FastFailWindow 10 s: CONTRADICTED in practice. With -unattended (the default) a missing module does not exit at once: the editor loads on, auto-answers the message box 'Das Spielemodul "ProbeMissing" wurde nicht gefunden' with Ok (log: "Message dialog closed, result: Ok") and exits 1 after 15.7 s (5.7) / 17.1 s (5.8), direct start. Without -unattended the same project exits 1 after 1.3-1.5 s ("Incompatible or missing module: ProbeMissing", no dialog). Via unreagent (default restart: on-failure, maxRestarts 0): 8 starts in 95 s, every run exit 1 after 9-11 s, "restart N in 3s" each time, NO give-up line; stopped by hand. Run times sit right on the 10 s edge on a warm, fast machine, so the fast-fail rule fires only by luck; on a slower machine or a cold cache it never does. Owner decision needed (unreagent-worker): e.g. count a failure that happens before the editor was ever ready (first 200 from the toolkit, see k205) instead of a wall-clock window, or widen the window well past the measured 15-17 s.
+
+(3) endpointWaitWindow 5 min, warm numbers so far (5.7.4 + toolkit 1.1.0): port 3000 accepts TCP 10.0-12.4 s after start on warm starts, 48.5 s on the very first start of a fresh project (DDC warm from other projects, 8 ShaderCompileWorkers ran). Details on k205. A genuinely cold DDC run is next; it needs the machine to itself.
+
+More for (2), from the reference project (2026-11-22, unreagent-example rebuilt on UE 5.8.4 as a C++ project, fresh recursive clone, no binaries yet, unreagent d4edd23 -no-agent, default restart policy): the editor cannot build its own module under -unattended. It logs 'Message dialog closed, result: Ok, title: Meldung, text: Das Spielemodul "UnreagentExample" wurde nicht gefunden ...' and exits 1 about 12 s after start; unreagent answers "restart N in 3s" with no give-up, the same loop as the missing-module repro. Typing "c compile" ends it: the built-in compile (Build.bat UnreagentExampleEditor) took 216 s on the fresh clone, one editor start overlapping the build ran 3.5 min and still exited 1, the first restart after the build came up and the Toolkit answered with 43 tools at 250 s. So a fresh clone of the reference project hits the FastFailWindow gap on its very first start. Raw: C:\Temp\unreagent-probe\runs\44-clone58-firststart, 45-clone58-compile on that machine.
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). Exit codes (Windows implementation read): clean quit 0; crash/fatal error 3 (WindowsPlatformMisc.cpp 1455-1470); startup failure 1 (LaunchEngineLoop.cpp ~2779), command-line failure -1; crash in static init 777006, crash handler failures 777003/777004 (GenericPlatformCrashContext.h 36-60); console control events 0xC000013A. Exception: EditorInit returns 0 even when EngineLoop.Init() fails (Editor/UnrealEd/Private/UnrealEdGlobals.cpp 244-249), so exit 0 does not prove a clean run. New: with -unattended or -stdout (our default args carry -stdout) missing or incompatible project/plugin modules make the editor log 'Incompatible or missing module' and exit 1, no dialog (LaunchEngineLoop.cpp ~6705). A plugin whose .uplugin EngineVersion differs in major.minor is silently skipped under -unattended with 'Skipping load of' (Runtime/Projects/Private/PluginManager.cpp 1860, 2688-2715) — upstream UE LLM Toolkit declares 5.6.0, so on another engine the bridge port never opens. Timing windows (10 s, 5 min): nothing in source, still need a measurement.
+
+2026-11-23 02:40 Item 2 measured by k226 (Path B step 4, UE 5.8.4, unreagent 4c16e2f): an editor that fails the same way on every run (plugin module not built) runs about 82 s each time (plugin load error dialog under -unattended, LogExit 22 s after the start, then a 60 s hang, exit 3221225477 = 0xC0000005). That is longer than FastFailWindow, so the fast-fail give-up is never reached and the launcher restarts without end; filed as k251. Item 3: k226 Path A saw the 5-minute toolkit WARN fire 2.5 min after the give-up (wording: k253.4); k221 measured 44.1 s to the first answer on the first start with new plugins and 16 s warm. A cold-DDC start is still not measured; that run is what remains on this card.
+
+Main agent 2026-11-24: nobody is on this card; back to backlog. Open: the cold-DDC run on the Windows machine.
