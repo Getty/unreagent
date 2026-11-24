@@ -1,0 +1,45 @@
+---
+claimed_at: 2026-11-24T16:00:13Z
+claimed_by: unreagent
+class: standard
+completed: 2026-11-24T16:00:13Z
+created: 2026-11-21T23:06:42Z
+id: 205
+priority: medium
+started: 2026-11-24T15:27:51Z
+status: done
+tags:
+- ue
+- bridge
+title: 'Editor readiness: a TCP connect on port 3000 does not prove the toolkit is
+  up'
+updated: 2026-11-24T16:00:13Z
+---
+
+Found in k198. waitForEndpoint in cmd/launcher/bridge.go logs "is reachable" on a bare TCP connect. The toolkit serves GET /mcp/status with toolCount, projectName and engineVersion (UnrealClaudeMCPServer.cpp at 9f6a0f7); that is the only thing that tells the toolkit from another listener on 3000, and it shows whether tools are registered. If the toolkit cannot start its server the editor only logs an error and runs on. The launcher never passes -MCPPort=, so a changed port must be mirrored by hand in UNREAL_MCP_URL.
+
+Decision inside the card: use a status GET for the editor endpoint only and keep the bare connect for http/sse extra servers. Owner: unreagent-worker. Done when: the editor endpoint check reads /mcp/status and reports the tool count, with a test against a local HTTP stub; the bare connect remains the fallback when the status route answers 404.
+
+Measured on Windows 2026-11-22 while running k202/k208 (Windows 11 26H2 build 26300.9711, UE 5.7.4 CL 51494982 Launcher, UE LLM Toolkit 1.1.0 binary, BuildId 47537391, in a disposable Blueprint project; editor started directly). Probe: TCP connect to 127.0.0.1:3000 every 0.25 s; after the first accept, GET /mcp/tools with a 2 s timeout until 200. Raw timelines: C:\Temp\unreagent-probe\runs\ on that machine.
+- First start of a fresh project: TCP accepted at 48.5 s; GET timed out five times (50.8-59.9 s); 200 with 43 tools at 60.2 s, the same moment as the first game-thread tick (60.1 s).
+- Warm starts (8 runs): TCP accepted at 10.0-12.4 s, 200 at 13.4-19.1 s, i.e. 2-7 s after the connect, always within ~0.3 s of the first game-thread tick. When it answers, all 43 tools are listed.
+- Start without -unattended after a crash (modal "Restore Packages" dialog, see k202): TCP accepted at 10.4 s, every GET timed out for 150 s, the game thread was blocked. A bare connect reports "is reachable" here although no tool can run.
+For the card: the status GET needs a read timeout and retries. During startup the route neither answers nor returns 404, so a timeout must not count as "not the toolkit" and must not end the watch. The listener is up seconds before HTTP is served (requests are handled on the game thread), so only a 200 says the editor can work.
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). Candidate readiness signal: PostEngineInit modules (the toolkit among them) load inside FEngineLoop::Init; the log line '(Engine Initialization) Total time' is printed after that (Launch.cpp ~175). It is an upper bound for 'module loaded', not proof the port is bound. Epic's Unreal MCP (port 8000) has no health route; a POST {jsonrpc ping} works without a session.
+
+Worker: editor endpoint now GETs <UNREAL_MCP_URL>/mcp/status (path as the bridge's lib.js builds it; route read on toolkit origin/ue-5.8 HandleStatus) after each successful TCP connect, 3 s read timeout (endpointStatusTimeout), retried every poll inside the existing 5 min window. 200 = ready, logs tool count + project/engine (unparsable body = ready, count unknown); 404 = bare-connect fallback line saying the status route is missing; timeout/other code = not ready yet; deadline with the port open = WARN 'port open, but the toolkit did not answer /mcp/status within …' with a blocked-game-thread hint (notRunning still overrides). http/sse extras keep the bare connect. Tests: cmd/launcher/bridge_status_test.go (httptest stubs + a held raw listener). Windows behaviour unverified (cross-compiled only). Out of scope, not done: -MCPPort= handling; README.md 88/900-902/1139-1141 and unreagent.example.yaml 296-297 still describe the bare connect (doc-writer); .claude/skills/unreagent-ue/SKILL.md 148 and 150 name waitForEndpoint as a bare connect (skill-author).
+
+Ready for review: status-route readiness for the editor endpoint (bridge.go waitForEndpoint + statusProbe), tests in bridge_status_test.go, one expectation in bridge_test.go updated to the 404 fallback. gofmt/vet (linux+windows)/go test ./.../-race cmd/launcher/make windows green on Linux; Windows unverified.
+
+Docs: README.md (startup-checks paragraph ~l.88, HTTP-entry watch ~l.900, startup list ~l.1070, -32000 chain item 4 ~l.1134, Unreal MCP note ~l.1160) and unreagent.example.yaml (~l.274) now describe the /mcp/status poll for UNREAL_MCP_URL; extra http/sse servers still described as bare connect. Not verified on Windows; no commit.
+
+skill-author: .claude/skills/unreagent-ue/SKILL.md rows at 148, 149, 150 rewritten to the status-route readiness (source: bridge.go waitForEndpoint/statusProbe/describeStatus, uncommitted; Windows behaviour of the new path labelled unverified; timings stay the k205 measurements, UE 5.7.4, toolkit 1.1.0). No stale 'bare connect' claim in the other unreagent-* skills. Open for the owner: row 175 (What ready is, U8) still says no signal is documented; left as is, still true of UE itself.
+
+Review (unreagent-reviewer): verdict COMMIT (Go files only: cmd/launcher/bridge.go, bridge_test.go, bridge_status_test.go; README/example/skill not reviewed). Check run by reviewer: gofmt -l cmd internal skills agents empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -count=1 -race ./cmd/launcher ok; make windows ok. Windows behaviour unverified (cross-compiled only). Toolkit origin/ue-5.8 UnrealClaudeMCPServer.cpp: SetupRoutes binds /mcp/status before StartAllListeners and FMCPToolRegistry registers tools in its constructor, so a booting toolkit never answers 404 on the route and a 200 carries the full tool count; 404 fallback is sound. Original claim of TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall kept (line 1093 negative check still matches the 404 line). Tests fail on the asked mutations (timeout-as-failure, 404-as-ready). Non-blocking findings: (1) low, bridge.go:746 + tool-count-unknown path: any 200 (HTML page, non-toolkit server) logs 'is ready - the toolkit answers /mcp/status' - attributes a foreign 200 to the toolkit; wording could say 'answers 200, not the toolkit status shape'. (2) low, bridge.go:706: a 3xx is kept as 'not ready yet' for the full window and then warns with the blocked-game-thread hint, though the comment says a redirect is not the toolkit - either fall back like 404 or fix the comment. (3) low, bridge.go:644: open reflects only the last dial; if the window ends during the final DialContext the warning says 'not reachable' for a port that was open - also a rare flake source in bridge_status_test.go:175 (300ms window). Tracking 'ever connected' would avoid both. (4) nit, bridge.go:764 logSafe passes Unicode format chars (Cf, e.g. U+202E) since unicode.IsControl covers Cc only. None blocks the commit.
+
+Review follow-up (unreagent-worker), bridge.go + bridge_status_test.go only: (1) a 200 whose body is not a JSON object ends the watch: 'is reachable and answers /mcp/status with 200, but not with the toolkit's JSON — probably another server on that port; tool count unknown.'; a JSON object without a usable toolCount stays 'ready, tool count unknown' (a toolCount of the wrong type now also counts as unknown — Unmarshal sets the pointer to 0 before failing; caught by a new case). (2) a 3xx ends the watch like a 404: 'is reachable, but /mcp/status redirects (HTTP 302) — not the toolkit's answer; tool count unknown.'; comments fixed. (3) waitForEndpoint remembers whether any try connected (opened), so the warning still says 'port open' when the last dial failed or was cut off by the window. (4) logSafe rejects any rune that is not unicode.IsPrint (U+202E, U+200B). New tests: TestWaitForEndpointStatusNotTheToolkit, TestWaitForEndpointPortOpenOnceThenClosed (deterministic: the listener accepts the connect and the GET, then closes, so every later dial is refused; no timing race), 2 new cases in TestWaitForEndpointReadsToolkitStatus. Each fails with its fix reverted. Check: gofmt -l empty; go vet ./... and GOOS=windows go vet ./... clean; go test -count=1 ./... ok; go test -count=1 -race ./cmd/launcher ok; make windows ok. Windows behaviour unverified (cross-compiled only). No commit.
+
+unreagent-ue SKILL.md: toolkit status-probe rows corrected to the reviewed code (200 needs a JSON object, non-JSON 200 and 3xx end the watch as another server, no toolCount = ready count unknown, timeout WARN says port open when any try connected; remaining limit narrowed to 200 with a JSON object). Labels unchanged.
+
+Final tree checked by the dispatcher after the reviewer's four low findings were fixed (no second reviewer pass): gofmt -l empty, go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -count=1 -race ./cmd/launcher, make windows all green. Windows behaviour unverified (cross-compiled only). Committed as 444664e.
