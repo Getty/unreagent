@@ -12,6 +12,10 @@ the user about the project. At least:
 - C++ and Blueprint: what is written in C++, what in Blueprint
 - source control: which system, and how large binary assets are handled
 
+Skill `unreagent-setup` is the long form of this, with what to read in the
+project before asking: load it first if you have it, through the `skills` tool
+or from `.claude/skills/unreagent-setup/`.
+
 Write the answers into the sections below, replacing each "Not described yet."
 Then delete this block: everything from the `unreagent:kickstart:begin` comment
 line to the `unreagent:kickstart:end` comment line, both lines included.

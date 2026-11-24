@@ -660,6 +660,11 @@ Revision history for unreagent
     materialized there before: keep your own skills under a name without that
     prefix. `init -check` and `init -config` write nothing. Not yet run on
     Windows or in a Claude Code session.
+  - New shipped skill `unreagent-setup`: say "set up the rest" in a session and
+    the agent reads the project, runs `unreagent init`, adds and builds the UE
+    LLM Toolkit and asks you about the project to fill in CLAUDE.md; it also
+    guides converting an existing project, and asks before it changes anything
+    you made. Main session only. Not yet run in a Claude Code session.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

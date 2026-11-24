@@ -36,10 +36,12 @@ var onDemandSkills = map[string]string{
 }
 
 // mainSessionOnlySkills are shipped skills that belong to no topic agent
-// because only the main session uses them, each with the reason. Empty today:
-// every shipped skill has an agent. A skill goes here only with its reason;
-// "no agent fits yet" is not one.
-var mainSessionOnlySkills = map[string]string{}
+// because only the main session uses them, each with the reason. A skill goes
+// here only with its reason; "no agent fits yet" is not one.
+var mainSessionOnlySkills = map[string]string{
+	// Setting a project up means asking the user, which a subagent must not do.
+	"unreagent-setup": "it interviews the user and hands them the launcher restart, which only the main session can do",
+}
 
 // agentMD builds a well-formed agent definition; extra is spliced into the
 // frontmatter as-is.

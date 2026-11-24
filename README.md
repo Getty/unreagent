@@ -233,20 +233,35 @@ is C++ source and is built once).
 4. **Tell the agent to set up the rest.** Claude Code opens in the window. On
    a folder it has not seen before it first asks whether you trust the folder,
    with "No, exit" preselected, so a reflex Enter ends the agent; it may also
-   ask you to log in to Claude there. Ask it, for example: *"Look at this project and set up unreagent for it: write
-   an unreagent.yaml, check that the UE LLM Toolkit is in Plugins/, and tell me
-   what is missing."* The agent has unreagent's MCP tools (builds, logs,
-   scripts) and Claude Code's own tools in the project folder; it asks you where
-   it cannot tell. Nothing ships yet that scripts this for it.
-5. **Set the project up and check it:** `unreagent init` (see
+   ask you to log in to Claude there. Then say *"set up the rest"* (or *"set up
+   unreagent for this project"*). The agent has unreagent's MCP tools (builds,
+   logs, scripts) and Claude Code's own tools in the project folder, and finds
+   the shipped skill `unreagent-setup` through the `skills` tool. The skill is
+   for the agent's main session only: it reads the project, runs
+   `unreagent init -check`, adds the UE LLM Toolkit, runs `unreagent init`,
+   builds the project, asks you about it to fill in `CLAUDE.md`, and then asks
+   you to restart the launcher, because the config and the toolkit search are
+   read at start only. It asks you before it changes or deletes anything you
+   made, and before it adds the toolkit or stops the editor. C++ projects only.
+   It has not been run in a Claude Code session yet, and its path for an
+   existing project has not been run on a project.
+5. **Or do it by hand** (this is what the agent does when asked): add the
+   toolkit, **then** run `unreagent init` (see
    [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup)).
-   On a project with no config it writes:
+   The order matters: `init` writes the toolkit's `mcp.extraServers` entry
+   only for a plugin it finds in `Plugins/` at that moment, and a start with a
+   config does not search `Plugins/`. With the toolkit added after `init`, add
+   the entry `init -check` prints to `unreagent.yaml` yourself. `init -check`
+   prints the command to add the toolkit (`git submodule add ...` or
+   `git clone ...`; see [`unreagent init`](#unreagent-init-write-the-defaults-and-check-the-setup)).
+   On a project with no config `init` writes:
    - `unreagent.yaml`: the built-in defaults plus `skills.materialize: true`;
    - a starter `CLAUDE.md`, when the project has neither `CLAUDE.md` nor
      `.claude/CLAUDE.md`. Its kickstart block, between two marker comments,
      tells the agent's main session to ask you about the project (genre and
      scope, target platforms, C++ versus Blueprint, source control), write the
-     answers into the file and remove the block. The file is yours from then
+     answers into the file and remove the block; it names skill
+     `unreagent-setup` as the long form. The file is yours from then
      on; `init` never overwrites a `CLAUDE.md`;
    - the shipped skills, the topic agents and the rules file into `.claude/`
      right away, so the project is complete before its first start.
@@ -266,7 +281,10 @@ do. Read the `WARN` lines. If one lists `unreagent-*` directories in
 `unreagent-` prefix: the launcher owns every `unreagent-*` directory there and
 replaces or deletes them (see [Skills](#skills)). Then run `unreagent init`. An
 existing `unreagent.yaml` is never edited: where it has `skills.materialize`
-off, `init` says so and prints the lines to add.
+off, `init` says so and prints the lines to add. The agent can do this for you:
+the `convert` section of skill `unreagent-setup` covers what `init` leaves
+alone, what a start deletes, what the agent proposes to you first (it moves or
+renames nothing of yours without your word) and what to check afterwards.
 
 ### What a start without a config does
 
@@ -342,7 +360,8 @@ up (below) and then prints a **preflight**.
     neither `CLAUDE.md` nor `.claude/CLAUDE.md`. Its kickstart block (between
     two marker comments) has the agent's main session ask you about the
     project, write the answers into the file and remove the block; a subagent
-    is told to leave it alone. `init` says `Wrote <path>: the starter
+    is told to leave it alone. The block names skill `unreagent-setup` as its long
+    form. `init` says `Wrote <path>: the starter
     CLAUDE.md. ...` and never writes to the file again, and an existing
     `CLAUDE.md` is never touched;
   - with `skills.materialize` on in the config (the one `init` writes has it),
@@ -1799,6 +1818,12 @@ On every start the launcher:
   file or directory stay as they are.
 
 Do not put your own skills under an `unreagent-` name in that directory.
+
+**The shipped set is 31 skills.** `unreagent-setup` guides the agent's main
+session through setting a project up (config, UE LLM Toolkit, first build,
+`CLAUDE.md`) and through converting an existing one; it is the one skill that
+no topic agent pre-loads, because it talks to you and hands you the launcher
+restart, which only the main session can do. Say "set up the rest" to start it.
 
 **Only `unreagent init` turns materialization on.** `skills.materialize`
 defaults to `false`, and a start without a config file writes nothing into the
