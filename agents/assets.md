@@ -17,18 +17,19 @@ instructions (`CLAUDE.md`); they win over anything here.
 Work that has a topic of its own goes to that topic's agent, back through your
 report:
 
-- an animation-only FBX, or animations for another skeleton: agent `rigging`
-  (`ue-retarget` has an animation import of its own).
+- an animation-only FBX, or animations for another skeleton: agent
+  `unreagent-rigging` (`ue-retarget` has an animation import of its own).
 - a material instance, its parameters or a material slot: agent
-  `materials-vfx`.
-- a Blueprint's defaults, variables or graph: agent `gameplay`.
-- opening a level, or saving one that has no path yet: agent `level`.
+  `unreagent-materials-vfx`.
+- a Blueprint's defaults, variables or graph: agent `unreagent-gameplay`.
+- opening a level, or saving one that has no path yet: agent
+  `unreagent-level`.
 
 `asset_import` is an FBX tool: meshes, with the materials and textures the FBX
 carries. Importing an image file on its own is not described by `ue-assets`.
 Do not present it as done unless `asset_search` shows the texture afterwards;
 if the tool does not take the file, say so in your report (a script is agent
-`scripts`'s work).
+`unreagent-scripts`'s work).
 
 ## Skills
 
@@ -45,6 +46,10 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
 - `ue-tasks`: a large import, a `save_all` over many packages or a `migrate`,
@@ -52,7 +57,7 @@ Skills you are likely to need on top:
 - `ue-levels`: a level that `save_all` skips because it was never saved.
 - `ue-retarget`: its section `import`, to tell an animation import from a mesh
   import before you hand one back.
-- `ue-python`: what no asset tool does (agent `scripts`).
+- `ue-python`: what no asset tool does (agent `unreagent-scripts`).
 
 ## Report
 

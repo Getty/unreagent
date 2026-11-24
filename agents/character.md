@@ -16,9 +16,9 @@ assets, and player input (Input Actions, Input Mapping Contexts, key mappings,
 triggers and modifiers).
 
 The input binding of a feature is yours, a pause key for one; the widget it
-opens is agent `ui`'s and the logic behind it agent `gameplay`'s. A walk that
-slides is agent `animation`'s first, and yours when the fix is a movement
-value.
+opens is agent `unreagent-ui`'s and the logic behind it agent
+`unreagent-gameplay`'s. A walk that slides is agent `unreagent-animation`'s
+first, and yours when the fix is a movement value.
 
 What this project is and how it wants things done is in the project's own
 instructions (`CLAUDE.md`); they win over anything here.
@@ -39,12 +39,16 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
 - `ue-blueprints`: the character Blueprint's components, defaults and graphs
-  (agent `gameplay`).
+  (agent `unreagent-gameplay`).
 - `ue-anim-blueprint`: the character's Animation Blueprint (agent
-  `animation`).
+  `unreagent-animation`).
 - `ue-game-framework`: the level's default pawn class, and any DataTable that
   is not a character stats table.
 - `ue-pie-testing`: trying movement and input in Play In Editor.

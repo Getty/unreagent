@@ -1,7 +1,9 @@
 # unreagent
 
 This project runs under the unreagent launcher. The launcher writes this file
-and replaces it on every start: project rules belong in `CLAUDE.md`, not here.
+and refreshes it at its start for as long as nobody has edited it. An edit is
+not overwritten, but it stops the refresh: project rules belong in
+`CLAUDE.md`, not here.
 
 - The launcher runs the Unreal Editor as a supervised process. Start, stop and
   restart it only with the launcher's tools (`ue_start`, `ue_stop`,

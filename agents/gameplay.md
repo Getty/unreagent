@@ -16,8 +16,9 @@ of a running Play In Editor session, DataTable rows, and the toolkit's task
 queue for calls that run long.
 
 Logic that plays a sound, opens a menu or pauses the game is yours. The sound
-assets and audio components are agent `audio`'s, the widget is agent `ui`'s,
-and the Input Action and its key mapping are agent `character`'s.
+assets and audio components are agent `unreagent-audio`'s, the widget is agent
+`unreagent-ui`'s, and the Input Action and its key mapping are agent
+`unreagent-character`'s.
 
 What this project is and how it wants things done is in the project's own
 instructions (`CLAUDE.md`); they win over anything here.
@@ -38,11 +39,15 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
 - `ue-pie-testing`: testing a gameplay change in Play In Editor (agent
-  `build-test`).
-- `ue-widgets`: the widget tree of a Widget Blueprint (agent `ui`).
+  `unreagent-build-test`).
+- `ue-widgets`: the widget tree of a Widget Blueprint (agent `unreagent-ui`).
 - `ue-enhanced-input`: the Input Action assets a Blueprint's input nodes refer
   to.
 - `ue-character`: movement values of a placed character.

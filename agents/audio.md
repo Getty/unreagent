@@ -15,7 +15,7 @@ defaults, graph inputs and outputs, editor preview).
 
 The sound assets and the components that play them are yours. The gameplay
 logic that decides when a sound plays, a door's Blueprint graph for one, is
-agent `gameplay`'s.
+agent `unreagent-gameplay`'s.
 
 What this project is and how it wants things done is in the project's own
 instructions (`CLAUDE.md`); they win over anything here.
@@ -35,6 +35,10 @@ whichever you have:
 - the files under `.claude/skills/`: `<section>.md` lies next to the skill's
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
+
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
 
 Skills you are likely to need on top:
 

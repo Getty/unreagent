@@ -190,6 +190,14 @@ names it is given. Writing any of it into a project is `cmd/launcher`
   for, the two routes to a section (the `skills` tool, the file next to the
   materialized `SKILL.md`), the neighbouring skills to load on demand, what to
   report back.
+- **A body names another agent by its written name**: agent
+  `unreagent-rigging`, never agent `rigging`. The launcher writes the body
+  verbatim and the agent as `unreagent-<name>`, so the plain name points at
+  nothing in a project. Skills stay under their shipped names there, the ones
+  the `skills` tool takes; each body says in one sentence that
+  `unreagent-ue-context` in the written skill list is `ue-context`.
+  `TestAgentReferencesUseTheWrittenNames` holds the agent names, in the two
+  project texts as well.
 - **`TestShippedAgentsFitTheShippedSkills`** (`agents_test.go`) holds the
   agents against the skill set: every named skill ships (Claude Code skips an
   unknown one silently), every agent has `ue-context`, no pre-load (the sum of

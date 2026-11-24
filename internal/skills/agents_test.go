@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -330,6 +331,92 @@ func TestNoAgentIsWrittenUnderASkillsName(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("nameClashes = %q, want %q", got, want)
+	}
+}
+
+// agentRef is how a shipped text refers to an agent: the word agent, then the
+// name in backticks. The two may be a line break apart.
+var agentRef = regexp.MustCompile("(?i)\\bagents?\\s+`([^`\n]*)`")
+
+// codeSpan is any text in backticks on one line.
+var codeSpan = regexp.MustCompile("`([^`\n]+)`")
+
+// agentRefProblems returns one line per reference in text that the reader of
+// the written file cannot follow. The launcher writes a body verbatim
+// (renderAgent in cmd/launcher/agents.go) and every agent as
+// agentPrefix + name, so a reference has to carry the written name already:
+// agent `unreagent-rigging`, not agent `rigging`. A shipped agent's plain name
+// in backticks is a problem wherever it stands, also without the word agent
+// before it. where names the text in each line.
+func agentRefProblems(where, text string, agents []Agent) []string {
+	plain := map[string]bool{}
+	for _, a := range agents {
+		plain[a.Name] = true
+	}
+	var problems []string
+	referred := map[int]bool{} // offset of a name that agentRef matched
+	for _, m := range agentRef.FindAllStringSubmatchIndex(text, -1) {
+		referred[m[2]] = true
+		name := text[m[2]:m[3]]
+		switch short, ok := strings.CutPrefix(name, agentPrefix); {
+		case ok && plain[short]:
+		case plain[name]:
+			problems = append(problems, fmt.Sprintf("%s: agent `%s` is written into a project as `%s`: name it so", where, name, agentPrefix+name))
+		default:
+			problems = append(problems, fmt.Sprintf("%s: agent `%s` is no shipped agent under its written name (%s<name>)", where, name, agentPrefix))
+		}
+	}
+	for _, m := range codeSpan.FindAllStringSubmatchIndex(text, -1) {
+		if name := text[m[2]:m[3]]; plain[name] && !referred[m[2]] {
+			problems = append(problems, fmt.Sprintf("%s: `%s` is an agent's plain name; a project knows that agent as `%s`", where, name, agentPrefix+name))
+		}
+	}
+	return problems
+}
+
+// A body names its neighbours so the agent can say in its report whose a task
+// is, and the main session routes on the rules file's table, which lists the
+// written names. A reference in any other form points at an agent the project
+// does not have. The two project texts are held to the same.
+func TestAgentReferencesUseTheWrittenNames(t *testing.T) {
+	set, err := LoadAgents()
+	if err != nil {
+		t.Fatalf("LoadAgents: %v", err)
+	}
+	refs := 0
+	for _, a := range set.Agents {
+		refs += len(agentRef.FindAllString(a.Body, -1))
+		for _, p := range agentRefProblems(a.Name+".md", a.Body, set.Agents) {
+			t.Error(p)
+		}
+	}
+	// With no reference found at all the pattern has stopped matching the
+	// bodies' wording, and the loop above proves nothing.
+	if refs == 0 {
+		t.Error("no agent reference found in any body: agentRef no longer matches how the bodies refer to an agent")
+	}
+	for _, p := range agentRefProblems(projectDir+"/"+rulesFile, set.Rules(nil), set.Agents) {
+		t.Error(p)
+	}
+	for _, p := range agentRefProblems(projectDir+"/"+starterFile, set.Starter, set.Agents) {
+		t.Error(p)
+	}
+	t.Logf("%d agent references in %d bodies", refs, len(set.Agents))
+
+	// The check must be able to fail, once per kind of problem, and must let
+	// the written form through, across a line break too.
+	agents := []Agent{{Name: "rigging"}, {Name: "ui"}}
+	text := "Hand it to agent `unreagent-rigging`, or to agent\n`unreagent-ui`. Not to agent `rigging`,\n" +
+		"agent `unreagent-riging` or agent `unreagent-unreagent-ui`. The `ui` one is next. Skill `ue-widgets` is none.\n"
+	got := agentRefProblems("x.md", text, agents)
+	want := []string{
+		"x.md: agent `rigging` is written into a project as `unreagent-rigging`: name it so",
+		"x.md: agent `unreagent-riging` is no shipped agent under its written name (unreagent-<name>)",
+		"x.md: agent `unreagent-unreagent-ui` is no shipped agent under its written name (unreagent-<name>)",
+		"x.md: `ui` is an agent's plain name; a project knows that agent as `unreagent-ui`",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("agentRefProblems =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

@@ -11,8 +11,8 @@ tools: Widget Blueprints (UMG), their widget tree, widget properties, layout
 slots, brushes, bound events, property bindings and widget animations.
 
 Of a menu, the widget is yours. The input binding that opens it is agent
-`character`'s, and the game logic behind it, pausing the game for one, is
-agent `gameplay`'s.
+`unreagent-character`'s, and the game logic behind it, pausing the game for
+one, is agent `unreagent-gameplay`'s.
 
 What this project is and how it wants things done is in the project's own
 instructions (`CLAUDE.md`); they win over anything here.
@@ -31,6 +31,10 @@ whichever you have:
 - the files under `.claude/skills/`: `<section>.md` lies next to the skill's
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
+
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
 
 Skills you are likely to need on top:
 

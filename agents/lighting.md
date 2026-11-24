@@ -31,6 +31,10 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
 - `ue-viewport`: a screenshot, to see what a lighting change did. Load it
@@ -38,7 +42,7 @@ Skills you are likely to need on top:
 - `ue-levels`: saving the level.
 - `ue-assets`: finding a cubemap, a LUT or a Level Sequence, and `save_all`.
 - `ue-level-actors`: any actor that is not a light, sky, fog or post-process
-  volume (agent `level`).
+  volume (agent `unreagent-level`).
 
 ## Report
 

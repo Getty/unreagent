@@ -33,12 +33,16 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
 - `ue-anim-sequence`: editing the keys of a retargeted sequence, or repairing
   a skeletal mesh's bones or bind pose.
 - `ue-anim-blueprint`: the Animation Blueprint that plays the result (agent
-  `animation`).
+  `unreagent-animation`).
 - `ue-viewport`: a screenshot of a pose in the asset preview.
 - `ue-tasks`: a call that returned a task id or may run longer than the bridge
   waits.

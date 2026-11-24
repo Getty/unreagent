@@ -16,7 +16,8 @@ notifies, curves).
 
 An animation that looks wrong in motion, a walk that slides for one, starts
 with you. When the animation is right and the character's movement value is
-not, say so in your report: the movement value is agent `character`'s.
+not, say so in your report: the movement value is agent
+`unreagent-character`'s.
 
 What this project is and how it wants things done is in the project's own
 instructions (`CLAUDE.md`); they win over anything here.
@@ -37,12 +38,17 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
 - `ue-anim-sequence`: load it before you change an animation sequence's keys,
   frame range, additive settings or skeleton, or repair a skeletal mesh's
   bones or bind pose. It is yours, just not pre-loaded.
-- `ue-retarget`: moving animations to another skeleton (agent `rigging`).
+- `ue-retarget`: moving animations to another skeleton (agent
+  `unreagent-rigging`).
 - `ue-blueprints`: the event graph and variables of an Animation Blueprint.
 - `ue-viewport`: a screenshot of an animation frame in the asset preview.
 - `ue-pie-testing`: playing a montage in Play In Editor.

@@ -32,9 +32,14 @@ whichever you have:
   `SKILL.md`. The directory is the skill's name with `unreagent-` in front,
   unless the name already starts with it.
 
+Skills are named here as the `skills` tool takes them: a skill you see as
+`unreagent-ue-context`, in your own skill list or as the name of a loaded
+skill, is `ue-context` here.
+
 Skills you are likely to need on top:
 
-- `ue-lighting`: lights, sky, fog and post-process volumes (agent `lighting`).
+- `ue-lighting`: lights, sky, fog and post-process volumes (agent
+  `unreagent-lighting`).
 - `ue-materials`: assigning a material to an actor.
 - `ue-niagara`: placing an effect in the level.
 - `ue-audio`: placing an ambient sound.
