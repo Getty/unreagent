@@ -73,7 +73,8 @@ Rebuilds every bone track of each sequence with a new key count.
   so expect a resample to a rate other than the current one to change the play
   length. This has not been checked against a running editor. For a real
   frame-rate change, reimport the source with `asset_import` and
-  `custom_sample_rate` (skill `ue-assets`), as the plugin's notes recommend.
+  `custom_sample_rate` (skill `ue-assets`, section `import`), as the plugin's
+  notes recommend.
 - A sequence already at exactly `target_fps` (a whole-number rate) is skipped
   and counted as a success: `Skipped <animation> — already at <fps> FPS`.
 - Only bone tracks are rewritten. The tool does nothing to curves or notifies.

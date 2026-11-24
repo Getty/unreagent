@@ -23,6 +23,14 @@ reference. This skill does not repeat them.
 This skill was written from the plugin's bridge source and its documents. It
 has not been exercised against a running editor.
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `status-result` | every field of an `unreal_status` result, reachable and not, and the `Currently: …` text in the tool's description | before you rely on anything in that result beyond `connected` |
+| `injection` | the bridge's automatic context injection (`INJECT_CONTEXT`) and where unreagent sets it | when a tool result ends in a `## Relevant UE 5.7 API Context` block, or before you switch injection on |
+| `failures` | the failure table: what you see, what it means, what to do | when a call from this skill returns an error or something you did not expect |
+
 ## Before the first call
 
 - **The bridge answers, not the editor.** `get_ue_context` reads files next to
@@ -58,6 +66,13 @@ as `actor` and `parallel_workflows`, because slate's keyword `ui` is inside
 "build". The result is about 27,000 characters, most of them unrelated. Call
 without arguments once, then ask for the one category you need.
 
+A tool result that ends in a `## Relevant UE 5.7 API Context` block carries
+the bridge's automatic injection, off by default: load section `injection`.
+Every context file but `parallel_workflows` opens with "This context is
+automatically loaded when …". That is true only with the injection switched
+on (`INJECT_CONTEXT=true` in the bridge's environment): without it, nothing
+is loaded until you ask for the category.
+
 ## status
 
 The bridge's second tool of its own, listed as `unreal_status`. It takes no
@@ -70,29 +85,13 @@ and how the last one ended; it is the `status` that skills
 plugin's bridge and says only whether the plugin answers. Tell the two apart
 by the server prefix your MCP client shows.
 
-- **Plugin reachable.** The result is JSON text with `connected: true`,
-  `project`, `engine`, `context_system`, `tool_summary`, `total_tools` and
-  `message`.
-  - `project` and `engine` are what the plugin reports about itself.
-  - `context_system` is `OK (<n> categories: …)` when the bridge could load
-    its `animation` context, else `FAILED - context files not loading`.
-  - `tool_summary` counts the plugin's tools in six buckets by name pattern
-    (`blueprint`, `animation`, `asset`, `task_queue`, `actor`, `utility`). It
-    is a rough count, not a tool list.
-  - `message` is `Unreal Editor connected. All tools operational.` That means
-    only that every tool has a description; no tool was called. Otherwise
-    `broken_tools` lists each tool without one (`name`, `issue`), and the
-    message becomes `Unreal Editor connected. <n> tool(s) have issues.`
-- **Plugin not reachable.** The result is an error whose text is JSON:
-  `connected: false`, `reason` and a `message` asking to start the editor
-  with the plugin. `reason` is `timeout`, `HTTP <code>` or the network
-  error's own text. The bridge waits up to 30 s for the plugin
-  (`MCP_REQUEST_TIMEOUT_MS`) before it says `timeout`.
-- **The tool list tells the same story.** While the plugin is unreachable,
-  `unreal_status` is the only tool the bridge lists, and its description ends
-  in `Currently: NOT CONNECTED. …`. Once reachable, the description reads
-  `Currently: CONNECTED to <project> (<engine>)`. Both are from the moment
-  the list was fetched; call the tool for the current state.
+The result is JSON text with `connected: true` while the plugin is
+reachable, and an error whose text is JSON with `connected: false` and a
+`reason` while it is not. Before you rely on any other field, or on the
+`Currently: …` text in the tool's description, load section `status-result`.
+Know one now: the `message`
+`Unreal Editor connected. All tools operational.` means only that every tool
+has a description; no tool was called.
 
 To get the editor up, or to find out why it is down, use unreagent's tools
 (skill `unreagent-iterate`), not this one.
@@ -169,30 +168,12 @@ Read them with your own file access, or with unreagent's `read_file` when the
 project has file access switched on (skill `unreagent-files`). Its paths start
 at the configured files root, which is normally the project directory.
 
-## Automatic injection
+## When a call fails
 
-The bridge can append the context for a tool's area to each successful tool
-result, under a `## Relevant UE 5.7 API Context` heading. That is off unless
-the bridge's environment sets `INJECT_CONTEXT=true`. Every context file but
-`parallel_workflows` opens with "This context is automatically loaded when
-…", which is true only with that setting. In unreagent, the bridge's
-environment is the `env` of its entry under `mcp.extraServers`. That option
-is a map keyed by server name: an entry of the same name in
-`unreagent.local.yaml` replaces the whole server definition, `env` included.
-Injection adds several thousand characters to every matching result, so
-asking for one category when you need it costs less.
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| `Unknown category: <name>. Available categories: …` | not an exact name | copy one from the list. Names are lower case |
-| `No context found for query: "<query>"` | no keyword matched | call with no arguments and pick a category |
-| a result far larger than expected | the query matched several categories | ask for one `category` |
-| `get_ue_context` missing from the tool list | the bridge could not reach the editor when the list was fetched | read the files. See skill `unreagent-iterate` for getting the editor up |
-| `unreal_status` returns `connected: false` | the plugin's HTTP server did not answer the bridge; `reason` says how | check the editor with unreagent's own `status` (skill `unreagent-iterate`) |
-| a `status` result with `services` and `commands` instead of `connected` | you called unreagent's `status`, not the bridge's | read it with skill `unreagent-iterate` |
-| a document asks you to run `ue-tool.sh` or `help` | the toolkit's shell wrapper | call `unreal_<tool>` and read its schema |
+If `get_ue_context` or `unreal_status` returns an error, a result far larger
+than expected or a result of another shape than this skill describes, or if
+`get_ue_context` is missing from the tool list, load section `failures`: it
+maps what you see to what it means and what to do.
 
 ## See also
 

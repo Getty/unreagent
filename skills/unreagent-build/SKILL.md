@@ -208,7 +208,7 @@ in which stage.
 - **The launcher log is the only trace of a lost run.** It records
   `[cmd:<name>] done (exit N)` when the run ends. That log is `unreagent.log`
   next to the `.uproject` when the launcher runs its own agent in the
-  foreground; `unreagent-iterate` covers how to read it.
+  foreground; `unreagent-iterate`, section `logs`, covers how to read it.
 - **The call returns when the command itself exits.** On Windows, the command's
   job is closed at that moment, which kills anything the build left running
   inside it, such as a build-server node or a worker. The launcher then

@@ -211,13 +211,13 @@ The errors of each operation are in its section.
   `anim_edit resample` changes key data and not the frame rate, and recommends
   a reimport with a custom sample rate for a real rate change. The code agrees
   (section `sequences`). `asset_import` has that `custom_sample_rate`
-  parameter (skill `ue-assets`).
+  parameter (skill `ue-assets`, section `import`).
 - `Resources/domains/tooling.md` lists `anim_edit` as
   "Inspect + adjust/resample/replace_skeleton".
 - `unreal_get_ue_context` with `category: "animation"` serves notes on
   Animation Blueprints, not on `anim_edit`. With `INJECT_CONTEXT=true` in the
   bridge's environment, that context is appended to every successful
-  `anim_edit` result (skill `ue-context`).
+  `anim_edit` result (skill `ue-context`, section `injection`).
 
 ## See also
 

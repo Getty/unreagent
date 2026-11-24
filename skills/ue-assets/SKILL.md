@@ -26,6 +26,15 @@ Actors placed in a level are the subject of `ue-level-actors`, and levels of
 This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor.
 
+This skill has four sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `operations` | the ten `asset` operations not described here: `list_assets`, `rename`, `duplicate`, `migrate`, `create_folder`, `rename_folder`, `delete_folder`, `open_editor`, `set_preview_mesh`, `get_hashes` | before you call one of them |
+| `import` | `asset_import` in full: `import`, `batch_import`, `export`, `reimport`, `get_source`, their errors, and the sequence for importing a character | before you call `asset_import` |
+| `json-types` | how the `asset` tool reads a boolean parameter, and a `set_asset_property` value, of the wrong JSON type | when a call behaved as if you had sent another value, or a write went through with a value you did not send |
+| `failures` | the failure table (what you see, what it means, what to do), the path checks of `asset`, the remaining errors of `set_asset_property` | when a call returns an error or a result you did not expect |
+
 ## Before the first call
 
 - **Tool names.** The bridge lists each tool as `unreal_<name>`, for example
@@ -69,22 +78,11 @@ Which form each tool takes:
   `asset_path`.
 
 `asset` checks `asset_path`, `directory`, `folder_path` and `new_folder_path`
-before it uses them:
-
-- it rejects an empty path, one longer than 512 characters, and one containing `..`;
-- it rejects any of `` < > | & ; ` $ ( ) { } [ ] ! * ? ~ ``;
-- it rejects anything under `/Engine/` or `/Script/`.
-
-The errors begin with "Blueprint path" even for assets that are not Blueprints,
-for example `Cannot access engine or script Blueprints`. Engine content can
-still be found with `asset_search`.
-
-Some paths are not checked at all:
-
-- `asset_paths` in `delete`, `migrate` and `get_hashes`;
-- `new_path` in `rename`;
-- `dest_path` and `new_name` in `duplicate`;
-- both paths in `set_preview_mesh`.
+before it uses them, and rejects anything under `/Engine/` or `/Script/`.
+Engine content can still be found with `asset_search`. Section `failures`
+lists every check, the errors (which begin with "Blueprint path" even for
+assets that are not Blueprints) and the path parameters that are not checked
+at all.
 
 `asset` also accepts `blueprint_path` and `path` as aliases for `asset_path`,
 and `asset_class` for `class_filter`.
@@ -139,6 +137,18 @@ folder**, such as `/Game/Meshes`, not a package path. The package path is
 An unknown operation gives `Unknown operation: '<op>'. Valid: …`, with a "Did
 you mean" suggestion when one is close.
 
+Five of the 15 operations are described below: `get_asset_info`,
+`set_asset_property`, `save_asset`, `save_all` and `delete`. **Load section
+`operations` before you call any of the other ten**: `list_assets`, `rename`,
+`duplicate`, `migrate`, `create_folder`, `rename_folder`, `delete_folder`,
+`open_editor`, `set_preview_mesh` or `get_hashes`. Three of its warnings, so
+that they are not missed:
+
+- **Treat `delete_folder` as a recursive delete.**
+- **`migrate`'s result always says success.** Check the target folder on disk.
+- `duplicate` needs `new_name`: it is **required by the code**, although the
+  tool's description calls it optional.
+
 ### get_asset_info
 
 | Parameter | Default | Meaning |
@@ -155,58 +165,10 @@ With `include_properties`, `properties[]` lists each editable property with
 A Blueprint asset reports the properties of the Blueprint object, not the
 defaults of the class it generates.
 
-**A wrong JSON type for `include_properties` is never an error.** The tool
-reads it, like `recursive` in `list_assets` and `save` and `mark_dirty` in
-`save_asset`, with the engine's `FJsonObject::GetBoolField`, which cannot
-report a failure. The default applies only when the key is absent:
-
-- a number is `true` unless it is 0;
-- a string is `true` for `true`, `yes` and `on` and `false` for `false`, `no`
-  and `off`, in any case; every other string is `false` unless it starts with
-  a non-zero integer.
-  The editor language's words for True, Yes, False and No count as well
-  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`);
-- `null`, an array or an object is `false`, whatever the default is. The
-  engine writes a line to the editor log and the call goes on.
-
-(`FJsonValue::AsBool` and `FJsonValueNumber::TryGetBool` in
-`Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
-`TJsonValueString::TryGetBool` in `Public/Dom/JsonValue.h`; read in the UE
-5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7.)
-
-### list_assets
-
-Lists one folder. It is the quick alternative to `asset_search` when you know
-the folder.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `directory` | `/Game/` | the folder |
-| `class_filter` | — | case-insensitive substring of the class name, such as `AnimMontage` |
-| `recursive` | `false` | include subfolders |
-| `limit` | `25` | 1 to 1000, counted after the class filter. There is no `offset` |
-
-The result holds `directory`, `count`, `total_found` and `assets[]` (`name`,
-`path` as an object path, `class`, and `package` as a package path).
-`total_found` counts the whole folder **before**
-the class filter, so it does not tell you how many matches remain. Use
-`asset_search` when you need to page.
-
-**A `limit` the tool cannot read as a number lists one asset, not 25.** The
-read is the engine's `FJsonObject::GetIntegerField`, which cannot report a
-failure: `null`, an array, an object, an empty string or a string that is not
-numeric reads as 0, and the tool then raises it to 1. `false` reads as 0 and
-`true` as 1, so both list one asset too. A string made of an optional sign,
-digits and at most one dot is read as that number, and a fraction is cut off
-towards zero.
-A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-(`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-The default 25 applies only when the key is absent
-(`FJsonObject::GetIntegerField`
-in `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
-`FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
-source, not run). A wrong type for `recursive` is not an error either: see
-`include_properties` under "get_asset_info".
+**A wrong JSON type for `include_properties` is never an error.** Send a
+JSON boolean. Section `json-types` says how every other type is read (read
+in the UE 5.8.4 source, not run); the same holds for `recursive` in
+`list_assets` and for `save` and `mark_dirty` in `save_asset`.
 
 ### set_asset_property
 
@@ -254,7 +216,7 @@ Values:
 | object reference | an object path string. `"None"` or `""` clears it. The loaded object must be of the property's class: `Object type mismatch. Expected <class>, got <class>` |
 | class reference | a class path. For a Blueprint, that is `/Game/BP/BP_Door.BP_Door_C`: the asset path loads the Blueprint, not its class, and fails the type check. `"None"` or `""` clears it |
 | number | a JSON number |
-| `TEnumAsByte` enum | its numeric value, as a JSON number. A name string fails |
+| `TEnumAsByte` enum | its numeric value, as a JSON number. A name string is not refused: it is stored as 0, with no error (read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7; section `json-types`) |
 | `bool` | a JSON boolean |
 | `FString`, `FName` | a string |
 | `FVector`, `FRotator`, `FLinearColor` | an object: `{x, y, z}`, `{pitch, yaw, roll}`, `{r, g, b, a}`. Pass every key, because nothing is defaulted, not even `a` |
@@ -268,28 +230,11 @@ Some types cannot be set here at all:
 - `enum class` properties.
 
 All of these fail with `Unsupported property type for: <path>`. So does a
-value the tool cannot read as the property's type. It reads `value` with the
-engine's `FJsonValue::TryGetNumber`, `TryGetBool` and `TryGetString`, and
-those accept more than the matching JSON type
-(`Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`, and
-`TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4 source,
-not run, while the toolkit targets UE 5.6 and 5.7):
-
-- **An integer or byte property, a `TEnumAsByte` included, accepts any
-  string.** The read is into an `int64`: a string counts by its leading
-  digits, and one without any is stored as 0, with no error. An enum value's
-  name therefore writes 0. Send the number.
-- **A `bool` property accepts any string and any number.** `true`, `yes`,
-  `on` and `false`, `no`, `off` count in any case; every other string is
-  `false` unless it starts with a non-zero integer. A typo writes `false`.
-  The editor language's words for True, Yes, False and No count as well
-  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
-- A `float` or `double` property also takes `true` and `false` as 1 and 0,
-  and a string made of an optional sign, digits and at most one dot, such as
-  `"0.5"`. Any other string fails with the error above.
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-- An `FString` or `FName` property stores a number or a boolean as its text.
+value the tool cannot read as the property's type. The tool's reads accept
+more than the matching JSON type, though (read in the UE 5.8.4 source, not
+run, while the toolkit targets UE 5.6 and 5.7): section `json-types` lists
+what each property type accepts. Load it when a write went through with a
+value you did not send.
 
 So send the JSON type the property has: a wrong string in an integer or
 `bool` property is a wrong write, not an error. Read the value back with
@@ -297,11 +242,7 @@ So send the JSON type the property has: a wrong string in an integer or
 `set_property` (skill `ue-level-actors`) accepts more value forms, but for
 placed actors only.
 
-Other errors: `Failed to load asset: <path>`, `Property not found: <part> on
-<class>`, `Cannot index without preceding array property`, `Property is not an
-array, cannot use index`, `Array index 3 out of bounds (size: 2)`, `Nested object
-is null: <part>`, `Object property value must be a string path`, `Failed to load
-object: <path>`.
+The other errors of `set_asset_property` are listed in section `failures`.
 
 ### save_asset and save_all
 
@@ -320,7 +261,7 @@ Neither shows a dialog.
 asset: <path>`.
 
 **A wrong JSON type for `save` can skip the save without an error.** Both
-parameters are read as `include_properties` is, under "get_asset_info":
+parameters are read as `include_properties` is (section `json-types`):
 `null`, an array, an object or a string such as `"maybe"` for `save` reads as
 `false`: the package is not written, and it is marked dirty unless
 `mark_dirty` reads as `false`. `saved` in the result says which happened;
@@ -342,32 +283,6 @@ The plugin's `domains/tooling.md` recommends `save_all` after every write
 operation, and warns against the console command `SaveAll`, which opens the
 engine's confirmation dialog.
 
-### rename
-
-| Parameter | Meaning |
-|---|---|
-| `asset_path` | required |
-| `new_name` | the new asset name |
-| `new_path` | the new folder, such as `/Game/Props`. At least one of `new_name` and `new_path` is required |
-
-The rename goes through the editor's asset tools. The header says it leaves a
-redirector at the old path. The result holds `old_path`, `new_path` (folder
-plus name) and `success`. Errors: `At least one of new_name or new_path is
-required`, and `Failed to rename asset <path> to <folder>/<name>`.
-
-### duplicate
-
-| Parameter | Meaning |
-|---|---|
-| `asset_path` | required |
-| `dest_path` | required. The folder of the copy |
-| `new_name` | **required by the code**, although the tool's description calls it optional |
-
-The result holds `success`, `source_path` and `new_asset_path`. A failure gives
-`Failed to duplicate asset <path> to <folder>/<name>`. The plugin's
-`domains/assets.md` notes that duplicating an Animation Blueprint leaves stale
-class references.
-
 ### delete
 
 | Parameter | Default | Meaning |
@@ -388,65 +303,6 @@ referencers with broken references.
 
 Errors: `Missing required parameter: asset_paths (non-empty array)`, and `No
 valid assets found to delete` when none of the paths loaded.
-
-### migrate
-
-Copies packages into another project's `Content` folder, without a prompt.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `asset_paths` | required | package paths |
-| `target_content_dir` | required | absolute path on disk to the other project's `Content` folder. It must exist |
-| `include_dependencies` | `true` | copy what the packages depend on as well |
-| `overwrite` | `true` | overwrite existing assets at the target. `false` skips them |
-
-**The result always says success.** The engine call returns nothing to check, so
-`migrated_packages` is the list you asked for, not a confirmation. Check the
-target folder on disk. Errors: `Target directory does not exist: <dir>`,
-`Missing required parameter: asset_paths (non-empty array of package paths)`,
-`No valid package paths found in asset_paths array`.
-
-### create_folder, rename_folder, delete_folder
-
-| Operation | Parameters | Notes |
-|---|---|---|
-| `create_folder` | `folder_path` | a folder that already exists is a success, with `already_existed: true`. Error: `Failed to create folder: <path>` |
-| `rename_folder` | `folder_path`, `new_folder_path` | moves the folder with its assets. Errors: `Source folder does not exist: <path>`, `Failed to rename folder <a> to <b>` |
-| `delete_folder` | `folder_path` | errors: `Folder does not exist: <path>`, `Failed to delete folder: <path> (must be empty — delete contained assets first)` |
-
-**Treat `delete_folder` as a recursive delete.** The toolkit's text says the
-folder has to be empty. Epic's documentation describes the engine function it
-calls, `UEditorAssetLibrary::DeleteDirectory`, as deleting the assets inside
-as well; this skill has run neither case. List the folder with `list_assets`
-and `recursive: true` before you call it.
-
-### open_editor and set_preview_mesh
-
-`open_editor` takes `asset_path` and opens the asset's editor. The result holds
-`asset_path`, `asset_class` and `opened`. Errors: `AssetEditorSubsystem not
-available.`, `Failed to open editor for: <path>`.
-
-`set_preview_mesh` takes `asset_path`, an animation asset, and `mesh_path`, a
-skeletal mesh. It sets the preview mesh, marks the animation dirty, and reopens
-the animation's editor if it was open. The result holds `asset_path`,
-`mesh_path`, `mesh_name` and `editor_reopened`. Errors: `Asset is not an
-animation: <path> (<class>)`, `Failed to load skeletal mesh: <path>`.
-
-### get_hashes
-
-Detects changes cheaply, without loading the assets.
-
-| Parameter | Meaning |
-|---|---|
-| `asset_paths` | required. An array of **package paths** |
-
-Each entry in `assets[]` holds `path`, `hash`, `file_size`, `mtime` (ISO 8601)
-and `is_dirty`, or `error: "file_not_found"`. The hash is built from the file
-size, the modification time and the dirty flag. It is not a content hash,
-although the tool's description calls it one. Compare the hashes of one asset
-over time: an unchanged hash means the file's size and modification time and
-the package's dirty flag are as they were. Two different assets with equal
-hashes say nothing about their content.
 
 ## Dependencies and referencers
 
@@ -476,119 +332,22 @@ this asset appears unused`.
 
 ## asset_import
 
-`operation` is required and is lowercased: `import`, `batch_import`, `export`,
-`reimport` or `get_source`. An unknown one gives `Unknown operation: '<op>'.
-Valid: import, batch_import, export, reimport, get_source`.
+`asset_import` has five operations: `import`, `batch_import`, `export`,
+`reimport` and `get_source`. **Load section `import` before you call it**: it
+has every parameter with its default, the errors, and the sequence for
+importing a character. What you must know even before that:
 
-File paths in this tool are paths on the machine that runs the editor.
-
-The parameter names are `fbx_path` and `dest_path`. The plugin's
-`domains/assets.md` shows an example with `file_path` and `destination`, but the
-code does not read those names.
-
-### import
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `fbx_path` | required | the FBX file on disk |
-| `dest_path` | required | content folder for the result, such as `/Game/Meshes` |
-| `mesh_type` | `auto` | `auto`, `static`, `skeletal` or `animation` |
-| `skeleton_path` | — | a Skeleton or a SkeletalMesh. Required for `skeletal` and `animation`, and ignored for `auto` |
-| `import_materials` | `true` | import the FBX's materials |
-| `import_textures` | `true` | import the FBX's textures |
-| `import_animations` | `false` | import animations alongside a mesh. `static` forces `false`, and `animation` forces `true` |
-| `generate_collision` | `true` | static mesh option |
-| `combine_meshes` | `false` | static mesh option |
-| `normal_import` | `import` | static mesh option: `compute`, `mikk` (normals and tangents), or anything else for imported normals |
-| `replace_existing` | `true` | overwrite an asset of the same name in `dest_path` |
-| `save` | `true` | save the imported assets |
-| `custom_sample_rate` | `0` | animation sample rate. At 0 or below the tool sets none |
-| `snap_to_frame_boundary` | `false` | animation option |
-
-`auto` starts from the static-mesh options and leaves it to the engine's FBX
-factory to switch to a skeletal mesh when the file holds one. For a skeletal
-mesh that must share an existing skeleton, use `mesh_type: "skeletal"` with
-`skeleton_path`.
-
-The options above belong to the legacy FBX factory. The plugin's
-`domains/assets.md` says UE 5.7 imports through Interchange. Whether every
-option still applies there cannot be seen in this code: check the result.
-
-The result holds `imported_assets[]` (`name`, `path`, `class`), and the message
-is `Imported 2 asset(s) from SM_Rock`.
-
-| Error | Meaning |
-|---|---|
-| `FBX file not found: <path>` | no file at `fbx_path` |
-| `Invalid mesh_type: '<type>'. Valid: auto, static, skeletal, animation` | the type is misspelt |
-| `skeleton_path is required for mesh_type '<type>'` | skeletal or animation without a skeleton |
-| `Asset not found: <path>` | `skeleton_path` did not load |
-| `Could not get skeleton from: <path>` | `skeleton_path` is neither a Skeleton nor a SkeletalMesh with one |
-| `Import failed for: <path>` | the import produced no assets |
-
-### batch_import
-
-Imports every file with one extension from one folder. It takes the import
-parameters above, except that the folder is given in `fbx_directory`, and it
-adds `file_pattern`, default `*.fbx`.
-
-- Only the extension after the last dot of `file_pattern` counts. `Hero_*.fbx`
-  imports every `.fbx` file, not only those starting with `Hero_`.
-- Subfolders are not searched.
-- **No matching file gives a bare `Error: ` with an empty message.** The
-  importer puts its `No .<ext> files found in: <dir>` text in a field this
-  operation does not read. The toolkit does not check that `fbx_directory`
-  exists, so a missing folder probably looks the same. Check `fbx_directory`
-  and `file_pattern`.
-- **Any failed file turns the whole call into an error**, `Error: Batch import:
-  5 succeeded, 1 failed, 6 total`. The per-file `results[]` is dropped with it.
-  To see what did land, run `asset_search` with `path_filter` set to
-  `dest_path`. When every file succeeds, `results[]` is in the data, alongside
-  `success_count`, `fail_count` and `total`.
-
-### export
-
-| Parameter | Meaning |
-|---|---|
-| `asset_path` | required |
-| `output_path` | required. A file path on disk. The tool asks for its folder to be created, without checking the result, and looks the exporter up by its extension |
-
-`.fbx` exports a mesh or an animation. The plugin's `domains/tooling.md`
-describes `.t3d` as a text dump, for reading properties no tool exposes. The
-result holds `asset_path`, `output_path` and `asset_class`. Errors: `Asset not
-found: <path>`, `Export failed for <path>. Check that the asset type supports
-FBX export.`
-
-### reimport and get_source
-
-`get_source` takes `asset_path` and reports where the asset was imported from:
-`asset_path`, `asset_class`, `has_import_data`, `source_files[]` (`path` and
-`exists`) and `can_reimport`. Import data is read for static meshes, skeletal
-meshes and animation sequences only. The tool's description promises
-timestamps, but none are returned.
-
-`reimport` reimports an asset from its source file:
-
-| Parameter | Meaning |
-|---|---|
-| `asset_path` | required |
-| `new_source_path` | a different source file, which must exist |
-| `import_rotation` | `{pitch, yaw, roll}` in degrees. Pass all three |
-| `import_translation` | `{x, y, z}`. Pass all three |
-| `import_uniform_scale` | a scale override. A value of 0 or below is ignored |
-
-The overrides are applied to the asset's FBX import data, or to its Interchange
-generic-assets pipeline. The result holds `asset_path`, `asset_class` and
-`new_source_path`.
-
-| Error | Meaning |
-|---|---|
-| `New source file not found: <path>` | `new_source_path` does not exist |
-| `Cannot update source path — asset <path> has no AssetImportData` | the asset was not imported, or its type is not one of the three above |
-| `Cannot apply transform overrides — asset <path> has no GenericAssetsPipeline in its Interchange data` | the overrides have nowhere to go |
-| `Cannot apply transform overrides — asset <path> import data type <class> is not supported` | as above, for other import data |
-| `Asset cannot be reimported: <path>. No source file found.` | the engine finds no source to reimport from |
-| `Reimport failed for: <path>` | the engine's reimport failed |
+- File paths in this tool are paths on the machine that runs the editor.
+- The parameter names are `fbx_path` and `dest_path`. The plugin's
+  `domains/assets.md` shows an example with `file_path` and `destination`,
+  but the code does not read those names.
+- `replace_existing` defaults to `true`: an import overwrites an asset of the
+  same name in `dest_path`, and that is final ("No undo" above).
+- A large import or `batch_import` can hold the editor for more than 30 s
+  ("Timeouts" above).
+- In `batch_import`, **no matching file gives a bare `Error: ` with an empty
+  message**, and **any failed file turns the whole call into an error**, with
+  the per-file `results[]` dropped.
 
 ## Typical sequences
 
@@ -606,27 +365,13 @@ generic-assets pipeline. The result holds `asset_path`, `asset_class` and
 2. `asset` `{"operation": "delete", "asset_paths": ["<path>"]}`.
 3. Compare `deleted_count` with `requested_count`.
 
-**Import a character**
+Importing a character: section `import`.
 
-1. `asset` `{"operation": "create_folder", "folder_path": "/Game/Characters/Hero"}`.
-2. `asset_import` `{"operation": "import", "fbx_path": "D:/Art/Hero.fbx", "dest_path": "/Game/Characters/Hero", "mesh_type": "skeletal", "skeleton_path": "/Game/Characters/Shared/SK_Base"}`.
-3. Note the skeletal mesh in `imported_assets`. Import the animations with
-   `mesh_type: "animation"` and the same skeleton.
+## When a call fails
 
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| `Cannot access engine or script Blueprints` | an `/Engine/` or `/Script/` path passed to `asset` | engine content is read-only through this tool |
-| `asset_search` returns nothing for a class you know exists | none of the four lookups resolved the short class name | pass `/Script/<Module>.<Class>` |
-| `Property not found: MaterialInterface on SkeletalMesh` | the path tried to enter an array of structs | not reachable through `set_asset_property` |
-| the editor crashes after `set_asset_property` | the path probably ended in an array index | never end the path with an index |
-| `Unsupported property type for: …` | an array, an `enum class`, an unlisted struct, or a value the tool could not read as the property's type | check the JSON type. Arrays and `enum class` properties cannot be set here |
-| `Deleted 0 of 1 assets` | the engine deleted nothing. The toolkit does not say why, and a reference to the asset is a likely cause (unverified) | `asset_referencers`, then decide on `force` |
-| `save_all` success with `failed_count` above 0 | some packages did not save | retry them with `save_asset` and read its error |
-| `Error: Batch import: … failed …` | at least one file failed, and the per-file list is gone | `asset_search` on `dest_path` shows what landed |
-| a bare `Error: ` from `batch_import` | no file matched, or probably a folder that does not exist | check `fbx_directory` and `file_pattern` |
-| `Missing required parameter: new_name` from `duplicate` | the code requires it | pass `new_name` |
+When a call returns an error or a result you did not expect, load section
+`failures`: a table from what you see to what it means and what to do, the
+path checks of `asset`, and the remaining errors of `set_asset_property`.
 
 ## See also
 

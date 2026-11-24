@@ -19,6 +19,15 @@ the plugin. MetaSound graphs are a separate tool (skill `ue-metasounds`).
 This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor.
 
+This skill has four sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `reading` | `inspect`, `list_sounds` and `get_audio_components` in full: the result fields per sound type, how a Blueprint or an actor is looked up, the errors | before you rely on a field of their results, or when `get_audio_components` does not find what you named |
+| `creating` | `add_audio_component`, `create_sound_cue`, `create_attenuation` and `spawn_ambient_sound` in full: parameters with defaults, the attenuation settings, results, errors | before you call one of the four |
+| `set-properties` | how `set_audio_properties` finds the component, and how it reads a key of the wrong JSON type | when it does not find the component or the actor, or when `properties_set` lacks a key or holds a value you did not send |
+| `failures` | the error table and the failure table (what you see, what it means, what to do) | when a call returns an error or a result you did not expect |
+
 | Operation | Required | Optional |
 |---|---|---|
 | `inspect` | `asset_path` | — |
@@ -27,7 +36,7 @@ against a running editor.
 | `add_audio_component` | `blueprint_path` | `component_name`, `sound_asset_path` |
 | `set_audio_properties` | **`target_path`** | `component_name`, `properties`, and the shortcuts below |
 | `create_sound_cue` | `package_path`, `name`, `sound_wave_path` | — |
-| `create_attenuation` | `package_path`, `name` | `settings`, and the settings below |
+| `create_attenuation` | `package_path`, `name` | `settings`, and the settings in section `creating` |
 | `spawn_ambient_sound` | `sound_asset_path` | `location`, `label` |
 
 `operation` is lowercased; there are no aliases, and no parameter aliases
@@ -111,110 +120,44 @@ or use `list_sounds`. `asset_search` matches subclasses too, so a `SoundWave`
 search probably includes MetaSound Sources, which most likely derive from
 SoundWave; `list_sounds` matches each class exactly.
 
-## inspect
+## inspect, list_sounds, get_audio_components
 
-Takes `asset_path`, any sound asset. Every result has `asset_path` (the object
-path), `asset_name` and `type`. The rest depends on the type:
+The table at the top has their parameters. Load section `reading` before you
+rely on a field of their results, or when `get_audio_components` does not
+find what you named. What you must know without it:
 
-| `type` | Fields |
-|---|---|
-| `SoundWave` | `duration`, `sample_rate`, `num_channels`, `is_looping`; `sound_class` and `attenuation_settings` when set |
-| `SoundCue` | `duration`, `volume_multiplier`, `pitch_multiplier`, `nodes[]` (`class`, and `sound_wave` for a wave player), `node_count`; `sound_class`, `attenuation_settings` and `first_node` when set |
-| `SoundAttenuation` | `shape`, `inner_radius`, `outer_radius`, `falloff_distance`, `distance_algorithm`, `db_attenuation_at_max`, `is_spatialized`, `spatialization_algorithm` |
-| `SoundClass` | `volume`, `pitch`, `properties` (`volume`, `pitch`, `low_pass_filter_frequency`, `attenuation_distance_scale`) |
-| `MetaSoundSource` | `duration`, `hint` (use the `metasound` tool) |
+- **`list_sounds` loads every SoundWave it lists**, to read its `duration`. A
+  large folder, with `recursive: true` above all, can hold the editor for a
+  while. Narrow the folder or set `class_filter`: `SoundWave`, `SoundCue`,
+  `SoundAttenuation`, `SoundClass` or `MetaSoundSource`.
+- **A MetaSound probably comes back as `SoundWave`** from `inspect`. Use skill
+  `ue-metasounds` for MetaSounds.
+- In `get_audio_components`, **a path starting with `/Game/`** is loaded as a
+  Blueprint first, and the result lists the audio components the Blueprint
+  adds itself, not those it inherits. **Anything else is an actor's label or
+  object name.**
 
-- The message sums it up, such as `SoundWave: SW_Rain (12.40s, 2ch, 48000Hz)`.
-- Asset paths in the fields are object paths.
-- **A SoundWave has no subtitle field**, though the tool's description
-  promises one.
-- **A MetaSound probably comes back as `SoundWave`.** The tool tests for a
-  SoundWave before it tests for a MetaSound Source, and in UE 5 a MetaSound
-  Source is most likely a kind of SoundWave. Use skill `ue-metasounds` for
-  MetaSounds.
-- **Attenuation radii.** `inner_radius` is the shape's first extent and
-  `outer_radius` is that plus `falloff_distance`. For a sphere that is the
-  radius; for a capsule, box or cone, the other extents are not reported.
-  `distance_algorithm` is `Linear`, `Logarithmic`, `Inverse`, `LogReverse`,
-  `NaturalSound` or `Custom`; `spatialization_algorithm` is `Default` or
-  `HRTF`. Anything else shows as `Unknown`.
-- Errors: `Failed to load asset: <path>`, and for any other kind of asset
-  `Asset is not a recognized sound type: <path> (is <class>)`.
+## add_audio_component, create_sound_cue, create_attenuation, spawn_ambient_sound
 
-## list_sounds
+**Load section `creating` before you call one of these four.** It has their
+parameters with defaults, the settings of `create_attenuation`, the results
+and the errors. Its warnings, so that they are not missed:
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `folder_path` | required | content folder, such as `/Game/Audio` |
-| `recursive` | `false` | include subfolders |
-| `class_filter` | all five | `SoundWave`, `SoundCue`, `SoundAttenuation`, `SoundClass` or `MetaSoundSource`, case-insensitive |
+- `add_audio_component`: **the name is not checked.** Read the Blueprint with
+  `get_audio_components` first and pick a new name. **The compile result is
+  not checked.** A Blueprint that fails to compile still reports success.
+- `create_sound_cue` and `create_attenuation`: **the tool does not check
+  whether an asset already exists** at that path, and what the engine does
+  then has not been verified. Check with `asset_search` first.
+- `create_sound_cue`: **the wave player is not added to the editor graph.**
+  Whether the cue plays correctly and how its editor shows it have not been
+  verified; test it before you build on it.
+- `create_attenuation`: **unknown shape, algorithm or spatialization names are
+  skipped without an error.** Read the asset back with `inspect`.
+- `spawn_ambient_sound`: labels can repeat. Use a distinct one and keep the
+  returned `actor_name`.
 
-Lists from the asset registry. Only these five classes match exactly:
-subclasses, such as other kinds of sound wave, are not listed. There is no
-paging and no name filter. Any other `class_filter` fails with
-`Unknown class filter: '<filter>'. Valid: SoundWave, SoundCue, SoundAttenuation, SoundClass, MetaSoundSource`.
-
-The result has `assets[]` (`name`, `path` as the object path, `class`, and
-`duration` for a SoundWave) and `count`. The message is
-`Found <n> sound assets in <folder>`.
-
-**It loads every SoundWave it lists**, to read its `duration`. A large folder,
-with `recursive: true` above all, can hold the editor for a while. Narrow the
-folder or set `class_filter`.
-
-## get_audio_components
-
-Takes `asset_path`: a Blueprint or an actor in the level open in the editor.
-
-- **A path starting with `/Game/`** is loaded as a Blueprint first. The
-  result lists the audio components the Blueprint adds itself, with
-  `source: "blueprint"` and `component_name` set to the component's variable
-  name. Components the Blueprint inherits from its parent class are not in
-  that list.
-- **Anything else is an actor's label or object name**, compared without
-  regard to case; the first match is taken. The result lists every audio
-  component of the actor, with `source: "world_actor"` and `component_name`
-  set to the component's object name. Labels with characters such as `(` work
-  here.
-- A Blueprint outside `/Game/`, such as plugin content, is looked up as an
-  actor name and not found. A `/Game/` path that does not load as a Blueprint
-  falls through to the actor lookup as well.
-
-Each component has `component_name`, `volume`, `pitch`, `is_auto_activate`
-and `is_spatialized`, plus `sound_asset` and `attenuation_settings_path` when
-set. The result has `components[]`, `count` and `source`. The message is
-`Found <n> audio components in Blueprint <path>` or
-`Found <n> audio components on actor <name>`.
-
-Errors: `Could not find Blueprint or actor: <path>`, `Editor not available`,
-`No editor world available`.
-
-## add_audio_component
-
-Adds an audio component to a Blueprint's component tree, compiles the
-Blueprint and marks it dirty.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `blueprint_path` | required | the Blueprint |
-| `component_name` | `AudioComponent` | variable name of the new component |
-| `sound_asset_path` | — | a sound to assign; any sound asset, MetaSounds included |
-
-- **The component is added at the top of the tree**, with no parent. There is
-  no parameter to attach it under another component.
-- **The name is not checked.** The tool does not look for a component of the
-  same name, and what the engine does with a duplicate has not been verified.
-  Read the Blueprint with `get_audio_components` first and pick a new name.
-- **The compile result is not checked.** A Blueprint that fails to compile
-  still reports success. Skill `ue-blueprints` covers compiling and reading
-  errors.
-- Errors: `Failed to load Blueprint: <path>`,
-  `Blueprint has no SimpleConstructionScript: <path>` (such as a Blueprint
-  that is not an actor), `Failed to load sound asset: <path>`,
-  `Failed to create SCS node for AudioComponent`.
-
-The result has `component_name`, `blueprint_path`, and `sound_asset` when one
-was set. The message is `Added audio component '<name>' to <path>`.
+None of them saves ("Saving").
 
 ## set_audio_properties
 
@@ -245,31 +188,18 @@ same key there. `attenuation_overrides` works only inside `properties`.
   `get_audio_components` reports the component's spatialization flag. The two
   will disagree. To switch spatialization, set `bAllowSpatialization` on a
   placed actor with `set_property` (skill `ue-level-actors`), or put the
-  setting in an attenuation asset and assign that (see the end of
-  `create_attenuation`).
+  setting in an attenuation asset and assign that (section `creating`, the end
+  of `create_attenuation`).
 - **Keys the engine's JSON classes cannot read as the listed type, unknown
   keys and unknown `distance_algorithm` names are skipped without an
-  error.** The tool reads the keys with the engine's
-  `FJsonObject::TryGetNumberField` (into a `double`), `TryGetBoolField` and
-  `TryGetStringField`. A number key also reads `true` and `false` as 1 and 0,
-  and a string made of an optional sign, digits and at most one dot, such as
-  `"0.5"`; any other string is skipped.
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  **A boolean key reads any string and
-  any number, and never skips one**: `true`, `yes`, `on` and `false`, `no`,
-  `off` count in any case, and every other string is `false` unless it starts
-  with a non-zero integer, so a typo sets `false` and still shows up in
-  `properties_set`.
-  The editor language's words for True, Yes, False and No count as well
-  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
-  A string key reads a number or a boolean as its text.
-  (`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, and
-  `TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7.) Send JSON
-  numbers and booleans. Check `properties_set` in the
-  result: it lists what was applied, such as `"volume=0.50"`.
-  `Set 0 properties …` means nothing changed.
+  error.** **A boolean key reads any string and any number, and never skips
+  one**, so a typo sets `false` and still shows up in `properties_set`. Send
+  JSON numbers and booleans. Check `properties_set` in the result: it lists
+  what was applied, such as `"volume=0.50"`. `Set 0 properties …` means
+  nothing changed. Section `set-properties` has how each JSON type is read
+  (read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
+  5.7): load it when `properties_set` lacks a key or holds a value you did
+  not send.
 - **Any `attenuation_overrides` object switches the component's own
   attenuation on**, even `{}` or one that holds only unknown keys, and it
   adds `attenuation_overrides` to `properties_set` either way. That entry
@@ -285,20 +215,11 @@ same key there. `attenuation_overrides` works only inside `properties`.
   also leaves `sound` applied. A Blueprint is then neither compiled nor marked
   dirty.
 
-**Finding the component.**
-
-- **A Blueprint** (`target_path` starts with `/Game/`): the first audio
-  component in its own tree whose variable name is `component_name`, or the
-  first audio component at all. The Blueprint is compiled and marked dirty.
-  Errors: `Failed to load Blueprint or no SCS: <path>`,
-  `No audio component '<name>' found in Blueprint: <path>` (with an empty name
-  when you gave none).
-- **A placed actor**: the first actor whose label or object name equals
-  `target_path`, then the audio component whose object name is
-  `component_name`, or its first audio component. Errors:
-  `Could not find actor: <name>`,
-  `No audio component '<name>' found on actor: <name>`, `Editor not available`,
-  `No editor world available`.
+**Finding the component.** A `target_path` that starts with `/Game/` is a
+Blueprint, anything else a placed actor; `component_name` is the variable
+name on a Blueprint and the object name on an actor. Section `set-properties`
+has the lookup in full and its errors: load it when the call does not find
+the component or the actor.
 
 **The tool marks neither a placed actor nor its level dirty.** The change is
 in memory; whether the engine flags the level on its own is not verified, so
@@ -310,89 +231,6 @@ to a sound already playing in the editor has not been verified.
 
 The result has `properties_set[]` and `target_path`. The message is
 `Set <n> properties on audio component in <target>`.
-
-## create_sound_cue
-
-Creates a Sound Cue at `<package_path>/<name>` that plays `sound_wave_path`:
-one wave player, set as the cue's first node.
-
-- **The wave player is not added to the editor graph.** The tool sets it as
-  the cue's first node and adds it to the cue's node list, but not to the
-  graph the Sound Cue editor shows. Whether the cue plays correctly and how
-  its editor shows it have not been verified; test it before you build on it.
-- **The tool does not check whether an asset already exists** at that path,
-  and what the engine does then has not been verified. A `Failed to load …`
-  from another tool does not mean the name is free. Check with
-  `asset_search` first: `path_filter` set to the folder, `name_pattern` to the
-  name. The name is taken only if an entry has exactly that `name` and that
-  `package_path`, which `asset_search` writes without a trailing slash.
-- Errors: `Failed to load SoundWave: <path>`,
-  `Failed to create package: <path>`, `Failed to create USoundCue object`.
-
-The result has `asset_path` (the object path) and `sound_wave`. The message is
-`Created SoundCue: <path> from SoundWave: <wave>`. Save it.
-
-## create_attenuation
-
-Creates a Sound Attenuation asset at `<package_path>/<name>`. The settings
-come from a `settings` object, from top-level parameters of the same names,
-or both; a top-level value wins. `shape` is read only inside `settings`; at the
-top level, use `attenuation_shape`.
-
-| Setting | Values |
-|---|---|
-| `shape` or `attenuation_shape` | `Sphere`, `Capsule`, `Box` or `Cone`, case-insensitive. `shape` in `settings` wins over `attenuation_shape` anywhere |
-| `inner_radius` | number: the shape's first extent, the radius of a sphere |
-| `falloff_distance` | number: the distance over which the sound fades out |
-| `outer_radius` | number: used only without `falloff_distance`. The falloff becomes `outer_radius − inner_radius`, at least 0 |
-| `distance_algorithm` | `Linear`, `Logarithmic`, `NaturalSound`, `Custom`, `LogReverse` or `Inverse`, case-insensitive |
-| `db_attenuation_at_max` | number |
-| `is_spatialized` | boolean: the asset's spatialization switch |
-| `spatialization_algorithm` | `Default` (or `Panning`), `HRTF` (or `Binaural`) |
-
-- **Unknown shape, algorithm or spatialization names are skipped without an
-  error.** The tool sets nothing for a setting you leave out. Read the asset
-  back with `inspect`.
-- Only the first extent can be set. The tool leaves a capsule's, box's or
-  cone's other dimensions as the new asset has them.
-- The existence caveat of `create_sound_cue` applies here too.
-- Errors: `Failed to create package: <path>`,
-  `Failed to create USoundAttenuation object`.
-
-The result has `asset_path` (the object path). The message is
-`Created SoundAttenuation: <path>`. Save it, then assign it:
-
-- **on a placed actor**, with `set_property` on the audio component's
-  `AttenuationSettings` (skill `ue-level-actors`), which marks the level
-  dirty; `set_audio_properties` would not (see there);
-- **on a Blueprint**, with `set_audio_properties` and `attenuation_path`.
-
-## spawn_ambient_sound
-
-Places an Ambient Sound actor in the level open in the editor and gives its
-audio component the sound.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `sound_asset_path` | required | any sound asset |
-| `location` | `{"x": 0, "y": 0, "z": 0}` | world position; a missing component is 0 |
-| `label` | `AmbientSound` | the actor's label |
-
-The actor gets no rotation. Labels can repeat: the tool does not check
-whether another actor already has the label, so use a distinct one and keep
-the returned `actor_name`.
-
-The result has `actor_name` (the object name), `actor_label`, `location` and
-`sound_asset`. The message is
-`Spawned AmbientSound '<label>' at (<x>, <y>, <z>)`. The level is marked
-dirty: save with `asset save_all`.
-
-Errors:
-
-- `Editor not available. Is the Unreal Editor running with UELLMToolkit plugin loaded?`
-- `No active world. Open a level in the editor first`
-- `Failed to load sound asset: <path>`
-- `Failed to spawn AAmbientSound actor`
 
 ## A typical sequence
 
@@ -406,33 +244,11 @@ Errors:
    attenuation: `{"actor_name": "<actor_name>", "property": "AudioComponent.AttenuationSettings", "value": "/Game/Audio/ATT_Rain"}`.
 5. Save: `asset save_all`.
 
-## Errors
+## When a call fails
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: target_path` | `set_audio_properties` with `asset_path` instead of `target_path` |
-| `Missing required parameter: <name>` | another required parameter is absent or an empty string |
-| `Failed to load asset: <path>` | `inspect`: nothing at that path |
-| `Asset is not a recognized sound type: <path> (is <class>)` | `inspect` on an asset that is not one of the five sound types |
-| `Unknown class filter: '<filter>'. Valid: …` | `list_sounds` with another class |
-| `Could not find Blueprint or actor: <path>` | `get_audio_components`: neither a loadable `/Game/` Blueprint nor an actor's label or name |
-| `Could not find actor: <name>` | `set_audio_properties`: no actor with that label or name |
-| `No audio component '<name>' found …` | no audio component of that name, or none at all |
-| `Failed to load sound asset: <path>` / `Failed to load SoundWave: <path>` / `Failed to load attenuation asset: <path>` | the asset did not load |
-| `Failed to create package: <path>` | the engine could not create the package, probably an invalid path |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| `set_audio_properties` fails with `Missing required parameter: target_path` | the description names `asset_path`, the code reads `target_path` | pass `target_path` |
-| `properties_set` is missing a key you sent | a value the tool could not read as the listed type, a wrong key name, or an unknown enum name | fix the key and send it again, numbers and booleans as JSON numbers and booleans |
-| `is_spatialized` shows the old value after `set_audio_properties` | the key sets a different flag | see `set_audio_properties` |
-| a change to a placed actor's audio is gone after a save and reload | the tool did not mark the level dirty | use `set_property` for placed actors |
-| `inspect` on a MetaSound says `SoundWave` | the SoundWave test runs first | use the `metasound` tool (`ue-metasounds`) |
-| `list_sounds` takes long | it loads every SoundWave in the folder | narrow `folder_path`, drop `recursive` |
-| a new Sound Cue plays wrong or looks empty in its editor (neither is verified) | the tool adds the wave player to no editor graph | test the cue before you build on it; this tool cannot add the graph node |
+When a call returns an error or a result you did not expect, load section
+`failures`: the errors with their causes, and a table from what you see to
+what it means and what to do.
 
 ## Background in the plugin
 
