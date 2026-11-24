@@ -24,6 +24,10 @@ go.sum	unreagent-worker
 skills/	unreagent-skill-author
 internal/skills/	unreagent-skill-author
 
+# Shipped topic agents for a UE project (k256): prompt text that pre-loads the shipped
+# skills; writing them into a project is launcher wiring in cmd/launcher, unreagent-worker
+agents/	unreagent-skill-author
+
 # Project skills the agent team is briefed with
 .claude/skills/unreagent-core/	unreagent-skill-author
 .claude/skills/unreagent-config/	unreagent-skill-author

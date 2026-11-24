@@ -141,20 +141,8 @@ func parse(dir, src string) (Skill, error) {
 		return Skill{}, err
 	}
 	var fm frontmatter
-	dec := yaml.NewDecoder(strings.NewReader(front))
-	dec.KnownFields(true)
-	if err := dec.Decode(&fm); err != nil && !errors.Is(err, io.EOF) { // EOF: empty frontmatter
-		return Skill{}, fmt.Errorf("frontmatter: %w", err)
-	}
-	// A "..." line, or a "--- " line with content, ends the YAML document;
-	// whatever follows is never checked against the closed key set.
-	var more yaml.Node
-	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
-		const msg = `frontmatter: content after the end of the YAML document (a "..." line, or "---" followed by content, ends it)`
-		if err != nil {
-			return Skill{}, fmt.Errorf("%s: %w", msg, err)
-		}
-		return Skill{}, errors.New(msg)
+	if err := decodeFrontmatter(front, &fm); err != nil {
+		return Skill{}, err
 	}
 	if fm.Name == "" {
 		return Skill{}, errors.New("frontmatter: name is missing")
@@ -178,6 +166,28 @@ func parse(dir, src string) (Skill, error) {
 		UnrealClasses: fm.UnrealClasses,
 		Body:          body,
 	}, nil
+}
+
+// decodeFrontmatter reads front, the YAML between the two --- lines, into the
+// struct into points at. Its fields are the closed key set: an unknown key is
+// an error, and so is anything after the end of the one YAML document.
+func decodeFrontmatter(front string, into any) error {
+	dec := yaml.NewDecoder(strings.NewReader(front))
+	dec.KnownFields(true)
+	if err := dec.Decode(into); err != nil && !errors.Is(err, io.EOF) { // EOF: empty frontmatter
+		return fmt.Errorf("frontmatter: %w", err)
+	}
+	// A "..." line, or a "--- " line with content, ends the YAML document;
+	// whatever follows is never checked against the closed key set.
+	var more yaml.Node
+	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
+		const msg = `frontmatter: content after the end of the YAML document (a "..." line, or "---" followed by content, ends it)`
+		if err != nil {
+			return fmt.Errorf("%s: %w", msg, err)
+		}
+		return errors.New(msg)
+	}
+	return nil
 }
 
 // splitFrontmatter splits "---\n<yaml>---\n<body>". Both delimiters are lines

@@ -157,6 +157,47 @@ naming the skill and the problem. Nothing is skipped — one broken file takes
 the whole set down, by design, and at startup it stops the launcher (the error
 names `skills.enabled: false` as the way out).
 
+## Topic agents — `agents/`
+
+The third thing that ships (k256, k258): `agents/<name>.md`, twelve topic
+agents in Claude Code subagent format, each pre-loading a few shipped skills
+through its `skills` list, so a project's main session delegates instead of
+loading skills itself. `agents/embed.go` embeds them with
+`agents/project/rules.md` (the launcher-owned rules file; the line
+`{{agents}}` becomes the task-to-agent table) and `agents/project/starter.md`
+(the CLAUDE.md `init` gives a project without one; the kickstart block lies
+between `KickstartBegin` and `KickstartEnd`). `LoadAgents`
+(`internal/skills/agents.go`) parses all of it as strictly as `Load` and
+returns an `AgentSet`; `AgentSet.Rules(agents)` renders the rules with the
+names it is given. Writing any of it into a project is `cmd/launcher`
+(`unreagent-worker`).
+
+- **Frontmatter is `name`, `description`, `skills`, nothing else.** `name`
+  equals the file name: lowercase letters, digits, single hyphens. No `tools`
+  and no `model`, so the agent inherits both. Skills go by their shipped names
+  (`ue-materials`); the launcher maps them when it writes the file.
+- **No agent name may give a skill's name.** The launcher writes an agent as
+  `unreagent-<name>`, and a skill into `unreagent-<name>` as well (kept as it
+  is when it already starts with `unreagent-`). An agent `build` would be
+  `unreagent-build`, a shipped skill: hence `build-test`.
+  `TestNoAgentIsWrittenUnderASkillsName` holds it.
+- **The description is the routing text and the table's task column.** One
+  short sentence on one line, different from every other agent's, no `|`.
+  Where two topics meet in one request (a sound played from gameplay logic, a
+  pause menu), each description says which part is its own; the rules text
+  tells the main session to split such a request, one part per agent.
+- **The body is standing instructions, not project facts**: what the agent is
+  for, the two routes to a section (the `skills` tool, the file next to the
+  materialized `SKILL.md`), the neighbouring skills to load on demand, what to
+  report back.
+- **`TestShippedAgentsFitTheShippedSkills`** (`agents_test.go`) holds the
+  agents against the skill set: every named skill ships (Claude Code skips an
+  unknown one silently), every agent has `ue-context`, no pre-load (the sum of
+  its skills' `SKILL.md` bytes) exceeds `preloadBudget`, and every shipped
+  skill is in an agent or on `onDemandSkills` / `mainSessionOnlySkills` with
+  its reason. A new skill therefore fails `go test ./internal/skills` until it
+  has an agent; `go test -v` logs each agent's pre-load.
+
 ## Authoritative sources, in order
 
 1. **The toolkit's C++ headers** — `../ue-llm-toolkit/Plugin/UELLMToolkit/Source/

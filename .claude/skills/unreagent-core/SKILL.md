@@ -22,7 +22,7 @@ Python/Node.
 | Config | `internal/config/` | YAML load, `unreagent.local.yaml` overlay, `${…}` substitution, defaults, validation |
 | MCP | `internal/mcp/` | minimal JSON-RPC-over-HTTP server, tool registry, bearer auth |
 | Processes | `internal/supervisor/` | services + one-shot commands, restart policy, ring-buffer logs, Windows Job Objects |
-| Skills | `internal/skills/` | `Load` parses the shipped skill documents, `DescribeAll` renders their selection list |
+| Skills | `internal/skills/` | `Load` parses the shipped skill documents, `DescribeAll` renders their selection list; `LoadAgents` parses the shipped topic agents and the two project texts |
 
 The skill documents live in `skills/<name>/` at the repository root, and
 `skills/embed.go` holds only the `go:embed` directive — a pattern cannot reach
@@ -32,6 +32,12 @@ outside its own package directory. Import `internal/skills`, never `skills`.
 starts, loads the set and, as the `skills:` config says, hands it to the
 `skills` MCP tool, writes it into `skills.dir`, or both — skill
 `unreagent-skill-authoring` holds the rules.
+
+`agents/` follows the same pattern (k258): `agents/<name>.md` are topic agents
+that pre-load shipped skills, `agents/project/` holds the launcher-owned rules
+text and the starter CLAUDE.md, `agents/embed.go` embeds them and
+`skills.LoadAgents` parses them. Nothing writes them into a project yet (k259,
+k256).
 
 Dependency direction is strictly downward: `main` knows the packages below it,
 and they know nothing of each other and nothing of `main`. A supervisor that
@@ -219,8 +225,9 @@ A Linux-only build proves nothing about the actual shipping target.
 ## Testing reality
 
 Every package has tests next to the code it covers
-(`git ls-files '*_test.go'` lists them) — except `skills/`, which holds only the
-embed directive; its guards live in `internal/skills/skills_test.go`. There is
+(`git ls-files '*_test.go'` lists them) — except `skills/` and `agents/`, which hold only
+an embed directive; their guards live in `internal/skills/skills_test.go` and
+`agents_test.go`. There is
 no mock harness and no fixture system — tests use the stdlib `testing` package,
 real temp dirs, real short-lived processes, and `testing/fstest` for in-memory
 file trees (`internal/skills`). New tests follow that style rather than
