@@ -21,11 +21,25 @@ This skill was written from the toolkit's C++ source (`MCPTool_Lighting.cpp`,
 `LightingEditor.cpp`, at toolkit commit 9f6a0f7). It has not been exercised
 against a running editor.
 
+This skill has four sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `properties` | every key of the `properties` and `settings` objects, per operation, with its JSON type, colour scale and source line | before you write a `properties` or `settings` object |
+| `inspect-light` | the fields `inspect_light` returns, per actor type | when you need a field's name from its result, or a value you set is missing from it |
+| `post-process` | `inspect_post_process`, `set_post_process` and `spawn_post_process_volume` in full: parameters, result fields, errors | before you call one of the three in any way the recipe "Grade the whole level" does not show |
+| `failures` | the failure table (what you see, what it means, what to do), and which kind of actor each set operation accepts, with the error for any other | when a call returns an error, or succeeded and the level looks the same |
+
 Section `properties` lists every key the `properties` and `settings` objects
 accept, per operation, with its JSON type and the source line that reads it.
 Load it before you write a `properties` or `settings` object: the tool's own
 description names no keys, and **a key it does not know is ignored without an
 error**.
+
+**Colour keys do not share one scale, and the wrong one is not an error.**
+`ground_albedo` and `volumetric_fog_albedo` take bytes, 0–255, and come out
+black or nearly black when given 0–1; a 0–1 colour key given 0–255 comes out
+far too bright. Section `properties` says which scale each colour key takes.
 
 ## Recipes
 
@@ -180,19 +194,9 @@ does not mean an empty level.
 ### inspect_light
 
 Returns `actor_name`, `actor_label`, `class`, `type`, `location`, `rotation`
-and the fields of that type:
-
-| `type` | Fields |
-|---|---|
-| all four standard lights | `intensity`, `light_color`, `temperature`, `use_temperature`, `cast_shadows`, `affects_world` |
-| `PointLight` | also `attenuation_radius`, `source_radius`, `soft_source_radius` |
-| `SpotLight` | also `attenuation_radius`, `inner_cone_angle`, `outer_cone_angle`, `source_radius` |
-| `DirectionalLight` | also `light_shaft_occlusion`, `light_shaft_bloom` |
-| `RectLight` | also `source_width`, `source_height`, `barn_door_angle`, `barn_door_length` |
-| `SkyLight` | `intensity`, `light_color`, `cast_shadows`, `cubemap` (a path, or `None`), `sky_distance_threshold`, `lower_hemisphere_is_solid_color`, `source_type` (`CapturedScene`, `SpecifiedCubemap` or `Unknown`), `captures_scene` |
-| `SkyAtmosphere` | `bottom_radius`, `atmosphere_height`, `ground_albedo`, `rayleigh_scattering_scale`, `mie_scattering_scale` |
-| `ExponentialHeightFog` | `fog_density`, `fog_height_falloff`, `start_distance`, `fog_cutoff_distance`, `fog_max_opacity` |
-| `PostProcessVolume` | `enabled`, `infinite_extent`, `blend_radius`, `blend_weight`, `priority`, `settings_sample` |
+and the fields of that type. Section `inspect-light` lists the fields per
+`type`; load it when you need a field's name, or a value you set is missing
+from the result.
 
 - **The read names are not the write names.** `light_color` is read back with
   byte channels (0–255), and it is written as `color`. `source_type` reads
@@ -241,14 +245,9 @@ only, `actor_label`. The messages are `Set <n> properties on '<name>'`,
 `Set <n> properties on SkyLight '<name>'`, `… on SkyAtmosphere '<name>'` and
 `… on ExponentialHeightFog '<name>'`.
 
-Each operation accepts only its own kind of actor:
-
-| Operation | Accepts | Otherwise |
-|---|---|---|
-| `set_light_properties` | point, spot, directional, rect light | `Actor '<name>' (class: <class>) is not a standard light type (point/spot/directional/rect)` |
-| `set_sky_light` | a sky light actor | `Actor '<name>' is not a SkyLight (class: <class>)` |
-| `set_sky_atmosphere` | any actor with a sky atmosphere component | `Actor '<name>' has no SkyAtmosphereComponent (class: <class>)` |
-| `set_fog` | an exponential height fog actor | `Actor '<name>' is not an ExponentialHeightFog (class: <class>)` |
+Each operation accepts only its own kind of actor (`set_sky_atmosphere`: any
+actor with a sky atmosphere component). Any other actor is an error that
+names its class; section `failures` lists the four messages.
 
 - A missing `properties`, or one that is not a JSON object, fails with
   `Properties object is required`. An empty object succeeds with 0 properties
@@ -261,76 +260,33 @@ Each operation accepts only its own kind of actor:
 - A `source_type` other than `captured_scene` or `specified_cubemap` is
   skipped without an error, like an unknown key.
 
-### inspect_post_process
+### inspect_post_process, set_post_process, spawn_post_process_volume
 
-Returns `actor_name`, `actor_label`, `class`, `location`, `rotation`,
-`is_infinite`, `blend_radius`, `blend_weight`, `priority`, `is_enabled`, and
-one object per group, **each present only when at least one of its settings
-has its override on**:
+**Load section `post-process` before you call one of the three** in any way
+the recipe "Grade the whole level" does not show: it has their parameters,
+results and errors. Its warnings, so that they are not missed:
 
-| Object | Fields, each only when overridden |
-|---|---|
-| `bloom` | `enabled` (always `true`, with `intensity`), `intensity`, `threshold`, `method` (`convolution` or `standard`) |
-| `depth_of_field` | `focal_distance`, `fstop`, `sensor_width`, `min_fstop`, `blade_count` |
-| `motion_blur` | `amount`, `max` |
-| `exposure` | `compensation`, `min_brightness`, `max_brightness`, `speed_up`, `speed_down` |
-| `color_grading` | `white_balance_temp`, `white_balance_tint`, `saturation`, `contrast`, `gamma`, `gain` (each `{r, g, b, a}`), `color_grading_lut` (a path, or `None`) |
-| `vignette` | `intensity` |
-| `ambient_occlusion` | `intensity`, `radius` |
-
-A setting that is absent is not overridden by this volume; its stored value is
-not shown. `ao_quality` can be set but is never reported. These read names
-differ from the write keys (`bloom.intensity` here, `bloom_intensity` in
-`settings`).
-
-Another kind of actor fails with `Actor '<name>' is not a PostProcessVolume
-(class: <class>)`. The message on success is `Post-process volume inspected`.
-
-### set_post_process
-
-Takes `actor_name` and a `settings` object (section `properties`). Every key
-applied **turns that setting's override on** and writes the value. The result
-holds `actor_name`, `actor_label` and `settings_applied`; the message is
-`Set <n> post-process settings on '<name>'`.
-
-- A missing or non-object `settings` fails with `Settings object is required`.
-- **No override can be switched off** with this tool, and it cannot change the
-  volume's own fields: enabled, infinite extent, blend radius, blend weight,
-  priority. Those are properties of the actor (`bEnabled`, `bUnbound`,
-  `BlendRadius`, `BlendWeight`, `Priority` in the code this tool reads them
-  from); `set_property` of skill `ue-level-actors` is the tool for actor
-  properties. That path has not been verified for a post-process volume.
+- **`extent` has no effect**, and the code gives the volume no size.
+  **`infinite: true` is the only setting known to make the volume apply**, so
+  pass it unless you can check the result.
+- `spawn_post_process_volume` returns **no `settings_applied`**. Confirm with
+  `inspect_post_process`.
+- Every key `set_post_process` applies **turns that setting's override on**,
+  and **no override can be switched off** with this tool. It cannot change
+  the volume's own fields either (enabled, infinite extent, blend radius,
+  blend weight, priority): those are properties of the actor, for
+  `set_property` of skill `ue-level-actors`, a path not verified for a
+  post-process volume. Sent in `settings` they are ignored without an error,
+  like any key the tool does not know.
+- `inspect_post_process` shows a setting only while its override is on: an
+  absent setting is not overridden by this volume, and its stored value is
+  not shown. Its read names differ from the write keys (`bloom.intensity`
+  there, `bloom_intensity` in `settings`). `bloom.enabled`, where present,
+  is always `true`: it is not a switch. `ao_quality` can be set but is never
+  reported.
 - A `color_grading_lut` path that does not load as a texture is skipped
-  without an error.
-- A `bloom_method` other than `convolution` or `fft` selects the standard
-  method and is still listed as applied.
-
-### spawn_post_process_volume
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `location` | `{x:0, y:0, z:0}` | world location |
-| `extent` | `{x:200, y:200, z:200}` | **read and then ignored**, see below |
-| `infinite` | `false` | the volume affects the whole level |
-| `label` | engine-chosen | the Outliner label |
-| `settings` | — | the post-process keys of section `properties` |
-
-The result holds `actor_name`, `actor_label`, `location`, `rotation` and
-`is_infinite`. The message is `Spawned PostProcessVolume`. There is no
-`rotation` parameter; the volume is spawned unrotated.
-
-- **`extent` has no effect.** The tool's description documents it and the
-  dispatch reads it, but the code that spawns the volume never uses the value.
-  The code spawns the volume actor and gives it no size at all: it sets no
-  brush and no bounds. What bounds such a volume has in the engine has not
-  been verified; it may have none, in which case a volume that is not
-  infinite affects nothing. **`infinite: true` is the only setting known to
-  make the volume apply**, so pass it unless you can check the result. For a
-  bounded volume, the size must be set by other means; `move_actor` with
-  `scale` (skill `ue-level-actors`) is the only handle the actor tools offer,
-  and whether scaling gives the bounds you want has not been verified.
-- `settings` is applied, but the result carries **no `settings_applied`**.
-  Confirm with `inspect_post_process`.
+  without an error. A `bloom_method` other than `convolution` or `fft`
+  selects the standard method and is still listed as applied.
 
 ## lighting or the actor tools
 
@@ -346,22 +302,11 @@ nothing.
 | move, rotate, scale or delete a lighting actor | `move_actor`, `delete_actors` (`ue-level-actors`) |
 | list lighting actors by kind | `lighting` `list_lights` |
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| success, and the level looks the same | the key was not applied, or the value changes little | compare `properties_set` or `settings_applied` with what you sent; check the key in section `properties` |
-| `Set 0 properties on '<name>'` | no key matched | the same |
-| a colour came out black or nearly black | a byte colour (`ground_albedo`, `volumetric_fog_albedo`) was given as 0–1 | pass 0–255 for those two keys |
-| a colour came out far too bright | a 0–1 colour key was given 0–255 | section `properties` says which scale each colour key takes |
-| a volume spawned with `extent` and without `infinite` shows no effect, or not where expected | `extent` is ignored, and the code gives the volume no size; its bounds are unverified | `infinite: true`; check `is_infinite` in the result |
-| `"name": "Sun"` on a spawn named nothing | `name` is an alias of `actor_name`, which the spawns do not read | pass `label` |
-| `Actor not found: <name>` | no actor with that label or object name | `list_lights` |
-| `Properties object is required` / `Settings object is required` | the object is missing or not a JSON object; note `settings` for post-process, `properties` for the rest | fix the parameter name |
-| `Failed to load cubemap: <path>` | not a loadable cube texture; earlier keys of the call were applied | find the path with `asset_search` (skill `ue-assets`), inspect, send again |
-| `Internal error: null result from LightingEditor` | the helper returned nothing | not expected from the code as read; report it |
-| the change is gone after an editor restart | nothing was saved | save the level (skill `ue-levels`) |
-| `Error: Task timed out after …ms (task_id: …)` | the bridge stopped waiting | skill `ue-tasks`; read the state back before you retry |
+When a call returns an error, or succeeded and the level looks the same, load
+section `failures`: a table from what you see to what it means and what to
+do, and which kind of actor each set operation accepts.
 
 ## Background in the plugin
 

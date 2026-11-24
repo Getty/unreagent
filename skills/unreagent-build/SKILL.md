@@ -15,6 +15,15 @@ end, or, when the command failed, to its start and its end. This is how you
 compile and package. There is no other build tool here, and you cannot pass a
 command line of your own.
 
+This skill has four sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `custom-commands` | what the user writes under `commands:`: an example entry, how it replaces a built-in command, how `unreagent.local.yaml` merges the map, how the launcher starts a command | before you tell the user how to add or change a command |
+| `reply-cuts` | the exact cut rules of a reply: the 48 KiB cut of a success, head and tail of a failing reply, a line longer than its share, the dropped middle past 2 MiB, and what N and B count in each case | when a reply carries an omitted marker and you need to know exactly what was cut, or what N or B counts |
+| `job-objects` | how a run's processes are killed on Windows, the two launcher-log warnings that mean they are not, what a launcher exit does to a run, the non-Windows build | when processes are left over after a run, or before the launcher is stopped while a run is going |
+| `failures` | the failure table (what you see, what it means, what to do) | when a call returns an error or a non-zero exit, or does not come back |
+
 ## The command list
 
 `status` returns the available names under `commands`. The `run_command` tool
@@ -49,24 +58,14 @@ and the launcher log says
 The user sets `UE_ROOT` or `engineRoot`, or `unreal.project`, and restarts the
 launcher.
 
-The list is fixed when the launcher starts. You cannot add a command, change
-one, or pass it arguments through MCP. New or changed commands are a config
-edit by the user, followed by a launcher restart. A command defined under
-`commands:` in the config replaces the built-in one of the same name:
-
-```yaml
-commands:
-  cook:
-    description: "Cook content only"   # not shown to the agent
-    command: "${ENGINE}/Engine/Build/BatchFiles/RunUAT.bat"
-    args: ["BuildCookRun", "-project=${PROJECT}", "-noP4", "-cook", "-skipstage"]
-    # dir: ""                           # working directory; empty = the launcher's own
-```
-
-`commands:` is a map. In `unreagent.local.yaml` it merges by name: an entry
-there replaces that whole command, and every other command stays. The launcher
-starts `command` directly with `args`, without a shell of its own, so pipes and
-redirection do not exist. The environment is inherited from the launcher.
+**The list is fixed when the launcher starts.** You cannot add a command,
+change one, or pass it arguments through MCP. New or changed commands are a
+config edit by the user, followed by a launcher restart. Load section
+`custom-commands` before you tell the user how to add or change a command:
+it has an example
+entry, how a command of the same name replaces a built-in one, how
+`unreagent.local.yaml` merges the map, and that a command is started
+without a shell.
 
 ## Calling it
 
@@ -121,42 +120,14 @@ These errors come back before anything runs:
 - **A successful reply holds only the last 300 lines.** When the command
   printed more, they are led by `[... N lines omitted]` (`[... 1 line
   omitted]` for one). The N lines are gone.
-- **A successful reply holds at most 48 KiB**, the `exit` line and the
-  markers included. When the last 300 lines are longer (about 160 bytes a
-  line on average), their oldest bytes go as well, and
-  `[... B bytes omitted; a reply holds at most 48 KiB]` follows the `exit`
-  line and any lines marker. Whole lines go first, then the start of the
-  oldest line kept: you see at most 300 lines, and the first one can start
-  mid-line. A single line longer than 48 KiB comes back as its end only. The
-  cut never splits a UTF-8 character. The B bytes are gone.
-- **A failing reply holds the start and the end.** When the `exit` line and
-  the output are more than 10,000 bytes, the head is the output's first whole
-  lines within 4 KiB, then comes `[... N lines omitted]`, then the tail: as
-  many of the last whole lines as fit in the rest, about 5.8 KB when the head
-  is full. N counts every line between head and tail. They are gone. No
-  300-line limit applies to a failing reply.
-- **A failing reply cuts a line only when it is longer than its share.** A
-  first line over 4 KiB leaves the head as its start; a last line that does
-  not fit leaves the tail as its end. The marker then counts bytes instead:
-  `[... B bytes omitted; a failing call's reply holds at most 10 KB]`. The
-  cut never splits a UTF-8 character.
-- **Past 2 MiB the middle is dropped as well.** While the command runs, the
-  launcher keeps only the first and the last MiB of its output, and the
-  markers count the dropped middle too. In a failing reply, the head comes
-  from the first MiB and the tail from the last, so the marker between them
-  stands where the middle was dropped, and N (or B) includes it. In a
-  successful reply, N whole lines, then B bytes, are everything above what
-  you see. When the last MiB holds more than 300 lines
-  (its first line, which can begin in the dropped part, counts as one), the
-  300 lines all come from it: N includes the dropped lines, and B counts bytes
-  of the 300 only. When it holds 300 or fewer, the lines reach back into the
-  first MiB, at least to its last line: N counts only the first MiB's lines
-  above them, and B includes the dropped bytes. In the rare reply that still
-  shows the launcher's own `[... D bytes omitted]` line, that line names the
-  middle, B leaves it out, and the reply can hold up to 302 lines, that line
-  included. A failing reply shows that line only when the output ends in
-  nearly a MiB of line breaks, with no text after them; the marker above it
-  then leaves the middle out.
+- **Either reply can also be cut by bytes, and past 2 MiB of output the
+  middle is dropped as well.** A successful reply then carries
+  `[... B bytes omitted; a reply holds at most 48 KiB]`, and its first line
+  can start mid-line. A failing reply holds the output's first whole lines
+  within 4 KiB and as many of the last as fit, and counts bytes instead of
+  lines when a single line is longer than its share. Whatever a marker
+  counts is gone. Load section `reply-cuts` when a reply carries an omitted
+  marker and you need to know exactly what was cut, or what N or B counts.
 - **Nothing else is retained.** The launcher discards the output once the call
   returns. `logs` holds no command output. The launcher log records only two
   lines per run:
@@ -217,22 +188,14 @@ in which stage.
 
 ## Build processes and Job Objects
 
-On Windows, each run is placed in its own Job Object with `KILL_ON_JOB_CLOSE`.
-When the command exits, the job is closed before the call returns, and every
-process still inside it is killed, so a build leaves no stray processes
-behind. That holds only when the job exists. If the launcher could not create
-it, or could not assign the command to it, the launcher log shows
-`[cmd:<name>] WARN job object could not be created: …` or
-`[cmd:<name>] WARN job assign failed: … — the process runs unsupervised`. In
-that case, leftover processes survive the run.
-
-When the launcher exits, an unfinished run is killed the same way, together with
-everything it started. Stopping the launcher in the middle of `package` aborts
-the package. `ue_stop` and `ue_restart` do not touch a run, because the editor
-lives in a job of its own.
-
-A non-Windows launcher build, used only for development, has no Job Objects.
-There, a run's children are not killed with it.
+On Windows, each run is placed in its own Job Object. When the command
+exits, every process still inside the job is killed, so a build leaves no
+stray processes behind. **When the launcher exits, an unfinished run is
+killed the same way**: stopping the launcher in the middle of `package`
+aborts the package. `ue_stop` and `ue_restart` do not touch a run. Load
+section `job-objects` when processes are left over after a run, or before
+the launcher is stopped while a run is going: it has the two launcher-log
+warnings that mean the job did not exist, and the non-Windows build.
 
 ## The editor and the build
 
@@ -257,24 +220,11 @@ There, a run's children are not killed with it.
 - **`package` does its own build of the game target and its own cook.** If it
   fails because of the open editor, stop the editor and run it again.
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `Error: unknown command "build"` | the name is not configured | use a name from `status`. Only the user can add commands |
-| `Error: unknown command "compile"`, and `status` lists neither `compile` nor `package` | the launcher found no engine root or no `.uproject` at start and left the built-in commands out | the user sets `UE_ROOT` or `engineRoot`, or `unreal.project`, then restarts the launcher |
-| `Error: start failed: fork/exec …/Engine/…: …` | the program is not at that path | the user checks the engine root (`UE_ROOT` or `engineRoot`) |
-| `exit 6` while the editor is running, and the output has `Unable to build while Live Coding is active` | a Live Coding session is active in the open editor (UE 5.8.4 source) | `ue_stop`, then compile again |
-| `exit` non-zero while the editor is running, and the output names the running editor or a module binary it cannot write, not your code (this case was not run; the wording is not confirmed) | the open editor is in the build's way | `ue_stop`, then compile again |
-| `exit 10` at once, and the output says a conflicting instance is already running | another UnrealBuildTool of the same engine is running, and this command line has no `-waitmutex` (UE 5.8.4 source). The built-in `compile` has the flag and waits instead | wait for the other build, then run it again |
-| `exit` non-zero, an omitted marker, and the errors look like follow-ons | their cause is among the omitted lines or bytes | fix what is visible, then compile again |
-| `exit` non-zero right away, and the project has no `Source/` | there is no `<ProjectName>Editor` target | if `Plugins/` holds C++ plugins, they need an `UnrealEditor` build, a command the user adds. Otherwise there is nothing to compile |
-| `exit` non-zero, `[... N lines omitted]` between the first lines and the last | the output was more than a failing reply's 10,000 bytes; the N lines between its first 4 KiB and its end were cut (past 2 MiB, N includes the dropped middle) | they are gone, and a rerun of the same state cuts the same way. Fix what is visible and compile again; for the whole output, the user adds a command that writes it to a file, read with `read_file` |
-| `[... B bytes omitted; a failing call's reply holds at most 10 KB]` | a single line was longer than its share of a failing reply: a first line over 4 KiB is cut to its start, a last line that does not fit to its end | as for the lines marker above |
-| `exit 0`, then `[... N lines omitted]` | the first N lines of a successful run's output were cut | they are gone. Rerun only if you must |
-| `exit 0`, then `[... B bytes omitted; a reply holds at most 48 KiB]`, alone or below the lines marker | the last 300 lines were more than a reply holds, so their oldest B bytes were cut (past 2 MiB, B can include the dropped middle); the first line can start mid-line | they are gone, and a rerun cuts the same way. For the whole output, the user adds a command that writes it to a file |
-| the call never returns, or the client times out | no timeout exists, and the run continues on the host. A `compile` also waits, without a time limit, behind any other build, clean or project file generation on the same engine | do not retry. Watch the launcher log for `[cmd:<name>] done` |
-| a run of more than 4 hours ends in a dropped connection, with no result | the reply missed the server's 4-hour write deadline | the run did finish. Read `[cmd:<name>] done (exit N)` in the launcher log |
+When a call returns an error or a non-zero exit, or does not come back, load
+section `failures`: a table from what you see to what it means and what to
+do.
 
 ## See also
 

@@ -27,6 +27,14 @@ editor, evaluating a sequence and recording a take are the engine's work. The
 skill says what the plugin asks the engine to do, and marks what follows from
 that as unverified.
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `open-values` | how `open` reads the six camera keys and `frame` from each JSON type, with the engine source it was read in | when `open` succeeded and the camera or the playhead is not where you sent it, or `frame` in its result is not the number you expect |
+| `take-start` | `take_start` in full: the steps the code takes before recording, the result, what its success does not prove | before you call `take_start` |
+| `failures` | `open`'s error table, and the failure table (what you see, what it means, what to do) | when a call returns an error, or a capture or a take is not what you expected |
+
 ## Recipes
 
 Argument names are exact, and **`operation` is case sensitive**.
@@ -148,37 +156,22 @@ What the success does not prove:
 - **`camera_set: true` means the call was made**, not that a camera moved. The
   code sets the camera of the level editor's first active viewport and ignores
   whether there was one.
-- **A key left out of a camera object is not the current value.** The code
-  reads all six keys with the engine's `FJsonObject::GetNumberField`, without
-  a default of its own. That call cannot report a failure: a missing key
-  reads as 0, and so does `null`, an array, an object or a string that is not
-  numeric. `true` and `false` read as 1 and 0, and a string made of an
-  optional sign, digits and at most one dot as that number
-  (`FJsonObject::GetField` in
-  `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
-  `FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7).
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  Pass all six.
+- **A key left out of a camera object is not the current value.** A missing
+  key reads as 0, with no error, and so does `null`, an array, an object or a
+  string that is not numeric (read in the UE 5.8.4 source, not run, while the
+  toolkit targets UE 5.6 and 5.7). Pass all six.
 - **A failed scrub is swallowed**, and so is a `frame` the tool cannot read
   as a number. `open` still succeeds; the result just has no `frame` and the
-  message no ` at frame`. The read is the engine's
-  `FJsonObject::TryGetNumberField` into a `double`, and it accepts more than
-  a JSON number: `true` and `false` scrub to frame 1 and 0, and a string made
-  of an optional sign, digits and at most one dot scrubs to that number
-  (`"12"` to frame 12). `null`, an array, an object, an empty string and any
-  other string are not read, so no scrub is tried
-  (`FJsonValueBoolean::TryGetNumber` in
-  `Engine/Source/Runtime/Json/Private/Dom/JsonValue.cpp`,
-  `TJsonValueString::TryGetNumber` in `Public/Dom/JsonValue.h`; read in the
-  UE 5.8.4 source, not run).
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  When `frame` is present it is the number that was read, fraction
-  included, not a value read back from the Sequencer: `12.9` scrubs to frame
-  12 and the message says ` at frame 12`, but `frame` is 12.9. `scrub`
-  returns the truncated number instead.
+  message no ` at frame`. When `frame` is present it is the number that was
+  read, fraction included, not a value read back from the Sequencer: `12.9`
+  scrubs to frame 12 and the message says ` at frame 12`, but `frame` is
+  12.9.
+- The reads of the camera keys and of `frame` accept more than a JSON number,
+  such as `true` and `"12"` (read in the UE 5.8.4 source, not run, while the
+  toolkit targets UE 5.6 and 5.7). Section `open-values` says how each JSON
+  type is read; load it when `open` succeeded and the camera or the playhead
+  is not where you sent it, or `frame` in its result is not the number you
+  expect.
 - **The camera may not stay where you put it.** The scrub comes after the
   camera call. Whether evaluating the sequence, for example one with a camera
   cut track, takes the viewport camera over has not been verified. Compare
@@ -186,12 +179,7 @@ What the success does not prove:
 - **Nothing is checked about the level.** The sequence is opened whatever
   level is loaded. Whether its bindings resolve there is not reported.
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: sequence_path` | missing or empty |
-| `Failed to load Level Sequence: <path>` | nothing at that path, or the asset is not a Level Sequence. `asset_search` (skill `ue-assets`) finds the path |
-| `Failed to open editor for: <path>` | the engine did not open an editor |
-| `Editor not available`, `AssetEditorSubsystem not available` | the editor is not in a state to open asset editors |
+`open`'s errors are listed in section `failures`.
 
 ### scrub
 
@@ -252,34 +240,20 @@ skill documents. The message is `Sequencer closed`, with no data.
 
 ### take_start
 
-Starts the Take Recorder. Before it starts, the code:
+Starts the Take Recorder, and adds **no source**. **Load section `take-start`
+before you call it**: the steps the code takes, the result, and what its
+success does not prove. What must not be missed:
 
-1. fails with `Take Recorder is already recording` if a take runs;
-2. **clears the Take Recorder's sources**, including any the user set up in
-   the Take Recorder panel;
-3. sets the slate name, when `slate_name` is given and not empty;
-4. sets two of the user's Take Recorder settings: save recorded assets on, and
-   the countdown to 0 seconds;
-5. asks the subsystem to start recording.
-
-It adds **no source**. The result is `recording: true` plus `slate_name` when
-given, with the message `Take Recorder started`.
-
-What the success does not prove:
-
-- **That anything is being recorded.** With the sources cleared and none
-  added, what a take contains is the engine's business and has not been
-  verified. The tool has no operation to add a source. To record the player's
-  pawn in PIE, use `run_sequence` with `take_record` (skill `ue-pie-testing`).
-- **That the recorder reached the recording state.** `recording: true` is
-  written by the tool once the start call returned true; it is not read from
-  the recorder. Call `take_status` and look for `state: "started"`.
-- The two settings stay changed after the take. Whether the engine writes
-  them to the user's config has not been verified. Tell the user if they use
-  the Take Recorder themselves.
-
-`Failed to start Take Recorder` means the subsystem refused; the code gives no
-reason.
+- It **clears the Take Recorder's sources**, including any the user set up in
+  the Take Recorder panel.
+- It sets two of the user's Take Recorder settings, save recorded assets on
+  and the countdown to 0 seconds, and they stay changed after the take. Tell
+  the user if they use the Take Recorder themselves.
+- `recording: true` is written by the tool, not read from the recorder. Call
+  `take_status` and look for `state: "started"`.
+- With the sources cleared and none added, what a take contains has not been
+  verified. To record the player's pawn in PIE, use `run_sequence` with
+  `take_record` (skill `ue-pie-testing`).
 
 ### take_stop
 
@@ -344,22 +318,11 @@ all the same, so it ends the other take and writes that take's path into its
 manifest as `take_sequence_path`. Check `take_status` first, and `take_stop`
 what is running.
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `Unknown operation 'Open'. Valid: …` | the operation is case sensitive | lowercase it |
-| `open` succeeded, `camera_set` is `false` | only one camera object was given, or one was not an object | pass both, with all six values |
-| `open` succeeded, no `frame` in the result | the scrub after the open failed silently | `scrub`, and read its error |
-| `No active Sequencer found` | no Level Sequence editor is open, or the open one gave no Sequencer | `open` first, then call again |
-| the capture shows the game, not the sequence | PIE runs, and `capture_viewport` prefers it | stop PIE (skill `ue-pie-testing`) |
-| the capture is not from where the camera was put | the sequence or a later call moved the viewport camera | compare `get_state`'s camera fields; `ue-viewport` |
-| `scrub` and `get_state` act on another sequence | several Level Sequence editors are open | `close`, then `open` the one you mean |
-| `take_stop` succeeded with `sequence_path: ""` | the recorder produced no sequence | check `take_status`; record through `run_sequence` |
-| `take_start` succeeded and the take is empty | no source was added | record through `run_sequence` with `take_record` |
-| `Take Recorder is already recording` | a take runs, perhaps one a failed run left | `take_status`, `take_stop` |
-| `TakeRecorder requires UE 5.7+` | the plugin was built for an older engine | the take operations are not available there |
-| `Error: Task timed out after …ms (task_id: …)` | the bridge stopped waiting | skill `ue-tasks`; `get_state` or `take_status` before you retry |
+When a call returns an error, or a capture or a take is not what you
+expected, load section `failures`: `open`'s errors, and a table from what
+you see to what it means and what to do.
 
 ## Background in the plugin
 

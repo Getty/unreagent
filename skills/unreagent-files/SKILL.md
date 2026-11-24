@@ -23,6 +23,14 @@ These tools see files on disk. They do not see anything the running editor holds
 in memory, and they are the wrong instrument for `.uasset` / `.umap` content —
 see Do not hand-edit assets.
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `confinement` | every confinement rule in full with its error text (absolute paths, `..`, symlinks and junctions, link loops, reserved device names), what an unresolved `files.root` does, and the two fixes for a plugin linked in from outside the root | when a call returns a path error, when the root or a plugin lies behind a symlink or junction, or when `-files` started without the four tools |
+| `read-ranges` | how `read_file` moves a range's edges to UTF-8 character boundaries, the one case that leaves a character cut, and an `offset` at or past the end of the file | when a page does not begin or end where you asked, when you read with a `limit` below 7 (the one case that leaves a character cut), or when an `offset` lies at or past the end of the file |
+| `failures` | the failure table: each error text, what it means, what to do | when a call returns an error this file does not explain |
+
 ## Availability
 
 The four tools are registered only when file access is enabled. When it is not,
@@ -63,76 +71,36 @@ authoritative statement of the root and the mode in effect.
 
 ## Root confinement
 
-`files.root` defaults to `${PROJECT_DIR}`, the directory holding the `.uproject`,
-and is substituted at config load; an empty `files.root` gets the same default.
-There is no fallback to any other directory. When a placeholder in
-`files.root` cannot be resolved (for the default: no `.uproject` found next to
-the config and no `unreal.project` set), `files.enabled: true` stops the
-launcher at config load with `${PROJECT_DIR} is unresolved (…) but used by …`,
-`files.root` among the named fields, and `-files` starts without the four tools
-and logs
-`WARN file tools disabled: files.root names a placeholder that is unresolved — set unreal.project or files.root`.
-Where an error message below names `<root>`, that is `files.root` made
-absolute, as configured, not resolved through links.
+Every path is confined to `files.root`, by default `${PROJECT_DIR}`, the
+directory holding the `.uproject`. No path argument to these tools reaches
+outside the root: not through `..`, not through an absolute path, not through
+a symlink or junction. The rules in short:
 
-Every call opens the root afresh and resolves the path inside it one component
-at a time, links included, so nothing can be swapped in between the check and
-the use. No path argument to these tools reaches outside the root: not through
-`..`, not through an absolute path, not through a symlink or junction. What it
-costs you:
-
-- **Paths are relative to the root. Always.** There is no way to address a file
-  elsewhere on the machine.
-- **An absolute path is accepted only under the root.** It is made relative to
-  the root and then gets every check below; the root's own absolute path means
-  the root. A root that lies behind a symlink may be spelled either way, as
-  configured or as its real location. Behind a Windows junction only the
-  configured spelling works: Go does not resolve junctions, so the junction's
-  real location counts as outside the root. Any other absolute path is refused
-  with
-  `Error: path "<given>" must be relative to the project root "<root>"; an absolute path is accepted only under it`.
-  On a Windows host that includes a rooted path (`\Source\Foo.cpp`) and a
-  drive-relative one (`C:Source\Foo.cpp`).
-- **Escaping with `..` is refused** before anything is opened, with
-  `Error: path outside the allowed root`: `../x` and `Source/../../x` never
-  get through. A `..` that stays inside the root is not cleaned away but
-  walked: on a Linux host `Source/../Config/x.ini` works only while `Source`
-  exists as a directory, and otherwise fails with
-  `Error: openat <name>: no such file or directory` (or `not a directory`). A
-  Windows host cleans the path before walking it. Write `Config/x.ini` instead.
-  On a Windows host a relative path with a colon in it (`a.txt:stream`) gets
-  the `path outside the allowed root` error as well.
-- **A link that leaves the root is not followed.** A symlink or junction
-  anywhere on the path is refused when its target is absolute or lies outside
-  the root:
-  `Error: path "<given>": a link on the path (symlink or junction) is absolute or leads outside the allowed root "<root>" (<go-error>)`,
-  where `<go-error>` is Go's own, such as
-  `openat <name>: path escapes from parent` or
-  `mkdirat <dir>: path escapes from parent`. The refusal holds on the way to a
-  path that does not exist yet, so `write_file` creates neither the file nor
-  missing directories beyond such a link, and it holds through a dangling link.
-  An absolute target is refused even when it points back into the root, so a
-  Windows junction, whose target is always absolute, is never followed. A
-  relative link works normally as long as its target never leaves the root:
-  one that climbs out and back in (`Cfg` → `../MyGame/Config` in a root named
-  `MyGame`) is refused with the same error. The link itself still shows up
-  when you list its parent; only following it fails.
-- **A link loop, or more than 8 links on one path,** fails with
-  `Error: openat <name>: too many levels of symbolic links`.
-- **Windows reserved device names are refused** in any path component, on every
-  host: `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9` (also with the
-  superscript digits `¹ ² ³`), `CONIN$` and `CONOUT$`, in any letter case, also
-  with an extension or trailing spaces. `aux.h`, `NUL.txt` and
-  `Source/CON/x.txt` are all refused with
-  `Error: path component "<component>" is a reserved Windows device name`.
-  On Windows such a name opens a device instead of a file, and a file of that
-  name written on another host cannot be checked out on Windows. Names that only
-  start like one (`CONTRIBUTING.md`, `console.h`, `COM10.txt`) and `COM0` /
-  `LPT0` are ordinary names.
+- **Paths are relative to the root. Always.** An absolute path is accepted
+  only under the root; any other is refused.
+- **Escaping with `..` is refused** (`Error: path outside the allowed root`).
+  Do not write a `..` that stays inside the root either
+  (`Source/../Config/x.ini`): on a Linux host it is walked, not cleaned away,
+  and can fail. Write `Config/x.ini` instead.
+- **A link that leaves the root is not followed**: a symlink or junction
+  whose target is absolute or leaves the root on the way, so a Windows
+  junction never, and neither a relative link that climbs out of the root
+  and back in. The link itself still shows up when you list its parent; only
+  following it fails. Do not retry, and do not try an absolute spelling.
+- **Windows reserved device names are refused** in any path component, on
+  every host, also with an extension: `aux.h`, `NUL.txt` and
+  `Source/CON/x.txt` are all refused.
 - **An empty or omitted path is not a shortcut to the root** — that holds per
   tool, not in general. `list_dir` defaults to the root. `read_file`,
   `write_file` and `edit_file` reject an absent or empty `path` up front with
   `Error: 'path' missing`. Pass `path` explicitly to all three.
+
+**Load section `confinement` when a call returns a path error** (`must be
+relative to the project root`, `path outside the allowed root`, `a link on
+the path …`, `too many levels of symbolic links`, `is a reserved Windows
+device name`), when the root lies behind a symlink or junction, or when
+`-files` was given and the four tools are missing: it has each rule in full
+with its error text, and what an unresolved `files.root` does.
 
 What the confinement does not cover: a hard link is not a link in this sense
 but a second directory entry for the same file, so one inside the root reads and
@@ -141,22 +109,13 @@ inside the root is crossed as well.
 
 ### A plugin linked in from outside the root
 
-A plugin is often linked into `<Project>/Plugins/` from a shared checkout
-elsewhere, with a junction or a symlink. The file tools cannot follow that
-link: listing `Plugins` still shows the entry (without a trailing `/`, see
-list_dir), but every path through it fails with the link error above. Neither a
-retry nor an absolute spelling of the path gets through. Tell the user; both
-fixes are theirs:
-
-- **Put the plugin into the project**, as a real directory under `Plugins/`
-  rather than a link.
-- **Or set `files.root` to a directory that holds both** the project and the
-  plugin. The plugin is then reachable at its real location, not through the
-  link: a junction or an absolute symlink is still refused, and only a relative
-  symlink that stays inside the new root works. Every path is then relative to
-  the new root, so the project's own files gain the project directory as a
-  prefix (`MyGame/Source/…`); the `File tools active` log line shows the root in
-  effect.
+A plugin linked into `<Project>/Plugins/` from a checkout elsewhere, with a
+junction or a symlink, cannot be reached with the file tools: listing
+`Plugins` still shows the entry, but every path through it fails with the
+link error. Neither a retry nor an absolute spelling of the path gets
+through. Tell the user; both fixes are theirs. Load section `confinement`,
+"A plugin linked in from outside the root", for the two fixes before you
+tell them.
 
 ## Tools
 
@@ -197,27 +156,18 @@ the file size when the call opened it. No trailer line means you have the whole
 file. The second form appears when the file goes on past `Y`; call again with
 `offset=Y` to go on. Nothing is ever repeated. For valid UTF-8 read with a
 `limit` of 4 or more, nothing is skipped either, unless a page was left with a
-cut character (see below). Otherwise a page can begin up to 3 bytes after the
+cut character (section `read-ranges`). Otherwise a page can begin up to 3 bytes after the
 offset asked for: continuation bytes at its start are dropped, whether they are
 stray (invalid UTF-8, binary) or the rest of a character the previous page cut.
 The trailer's `X` shows where a page really begins, so an `X` larger than the
 `offset` you passed marks the gap. A log that is still being written grows
 between calls, so a later call can report a larger `Z`.
 
-Range edges move inward to UTF-8 character boundaries, by up to 3 bytes: a
-start inside a character moves forward past its continuation bytes, an end
-inside one moves back to the character's first byte. The trailer reports the
-range after the move. Neither edge moves at the start or the end of the file,
-so a file returned whole comes back byte for byte, a UTF-8 byte order mark at
-offset 0 included (it arrives as U+FEFF, the first character). A range that
-starts at offset 1 or 2 begins after it, at 3. One case leaves a character
-cut: when it begins at the range's first byte once the start has moved, the end
-stays, because moving it back would empty the range. That takes fewer than 4
-bytes left after the start moved, so a `limit` below 7, or below 4 from a
-character boundary.
-
-An offset past the end is an error that names the file size. An offset exactly
-at the end is not: it returns an empty range followed by `[bytes Z-Z of Z]`.
+Range edges move inward to UTF-8 character boundaries, by up to 3 bytes, and
+the trailer reports the range after the move. Load section `read-ranges` when
+a page does not begin or end where you asked, when you read with a `limit`
+below 7 (the one case that leaves a character cut), or when an `offset` lies
+at or past the end of the file.
 
 The end of a log, where a crash is, takes one call. With the default root:
 
@@ -284,35 +234,12 @@ previous content is gone.
 The rewrite is not atomic: the file is read, replaced in memory and written
 back.
 
-## Failure modes
+## When a call fails
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `-32602 unknown tool: read_file` | file tools disabled | user sets `files.enabled: true`, or runs with `-files` |
-| `-32602 unknown tool: write_file` while `read_file` works | `files.readOnly: true` | user clears `readOnly`; do not retry |
-| `Error: path "<given>" must be relative to the project root "<root>"; an absolute path is accepted only under it` | an absolute or rooted path that is not under the root | make it relative to the root; if it should be under it, compare with the `File tools active … under:` log line |
-| `Error: path outside the allowed root` | a relative path climbs out with `..`; on a Windows host also a relative path with a colon | drop the `..`; nothing above the root is reachable |
-| `Error: path "<given>": a link on the path (symlink or junction) is absolute or leads outside the allowed root "<root>" (…)` | a symlink or junction on the path has an absolute target or leads out of the root | do not retry; see A plugin linked in from outside the root |
-| `Error: openat <name>: too many levels of symbolic links` | a link loop, or more than 8 links on the path | do not retry; tell the user |
-| `Error: path component "<component>" is a reserved Windows device name` | `CON`, `NUL`, `AUX`, `COM1`, `aux.h`, … in some component | pick another name; such a file cannot exist on Windows |
-| `Error: 'path' missing` | `path` absent or empty | supply it; for `list_dir`, empty means the root |
-| `Error: 'old_string' not found` | no literal match | re-read the file; check whitespace and line endings |
-| `Error: 'old_string' missing` | `old_string` absent or empty | `edit_file` cannot insert into an empty match |
-| content ends in a line `[bytes X-Y of Z]` or `[bytes X-Y of Z; continue with offset=Y]` | `read_file` returned bytes `X` to `Y` (exclusive) of a `Z`-byte file, not the whole file; the line and the newline before it are not file content | to go on, call again with `offset=Y`; for the end of the file, a negative `offset` |
-| `Error: 'offset' <n> is past the end of "<given>" (<size> bytes)` | `offset` is larger than the file | use an offset up to the size named, or a negative one to count from the end |
-| `Error: 'limit' must be a positive number of bytes, got <n>` | `limit` is 0 or negative | omit it for the default of 48128, or pass a positive byte count |
-| `Error: 'offset' must be an integer, got …` (or `'limit'`) | neither a whole number nor an integer string, such as `1.5` or `"end"` | pass an integer number of bytes |
-| `Error: 'offset' must be an integer between -9223372036854775808 and 9223372036854775807, got …` (or `'limit'`) | the number does not fit a 64-bit integer | pass a byte count; a negative `offset` counts from the end |
-| `Error: 'content' missing` | `content` absent or not a string — typically a misspelled parameter name | rewrite with the correct parameter name; nothing was written |
-| `Error: open <root>: no such file or directory` | the root itself does not exist; every call fails | user fixes `files.root` |
-| `Error: openat <name>: no such file or directory` | nothing at that path under the root | check with `list_dir` |
-| `Error: path "<given>" is a directory; use list_dir` | `read_file` on a directory | use `list_dir` |
-| `Error: readdirent <abs path>: not a directory` | `list_dir` on a file | use `read_file` |
-
-The `open`, `openat` and `readdirent` rows quote a Linux host. On a Windows
-host the operating system's part of the message (`no such file or directory`,
-`not a directory`) reads differently. The directory error of `read_file` is the
-launcher's own and reads the same on every host.
+`-32602 unknown tool: …` is covered under Availability, a path error under
+Root confinement. For any other error, or when those two do not settle it,
+load section `failures`: a table from each error text to what it means and
+what to do.
 
 ## Do not hand-edit assets
 

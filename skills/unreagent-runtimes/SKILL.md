@@ -121,7 +121,7 @@ limit is lower than for a success because Claude Code cuts an error result
 over about 11,000 characters to its first and last 5,000.
 
 Output past 2 MiB also loses its middle, as `run_command` output does, and
-the markers count it too (`unreagent-build`).
+the markers count it too (`unreagent-build`, section `reply-cuts`).
 
 Any marker means output is gone: the launcher keeps none of it, and a rerun
 prints the same. Narrow the script instead: print only the lines you need, a

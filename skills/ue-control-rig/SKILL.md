@@ -29,6 +29,14 @@ What the tool cannot do:
   changed with this tool.
 - **It never saves.** See "Saving, compiling and undo".
 
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `operations` | per single operation, the result fields, messages and errors: what `inspect` returns for a graph, node, pin, link and the hierarchy; `list_structs`, `list_templates`; the three add operations with the `cpp_type` list of `add_var_node`; `remove_node`; `link`, `unlink`, `unlink_all`; the member-variable operations; `recompile` | before you call an operation in a way the recipes do not show, and when you need a field of a result |
+| `batch` | `batch` in full: the key table per `op`, the result, what a failed entry does | before you call `batch` |
+| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or a result you did not expect |
+
 ## Recipes
 
 Every call needs `rig_path` and `operation`. `rig_path` is left out of the
@@ -119,23 +127,12 @@ no check against `/Engine/` paths. The tool's example is a package path,
 `/Game/Rigs/CR_FootIK`. Errors: `Failed to load Control Rig: <path>` and
 `Asset is not a ControlRigBlueprint: <path> (is <class>)`.
 
-### inspect
+### The single operations
 
-Returns `graph`, `hierarchy` and `summary` (both parts as text).
-
-- `graph`: `name`, `path`, `graph_count`, `summary`, and `graphs[]`, each with
-  `name`, `node_count`, `link_count`, `nodes[]` and `links[]`.
-  - A node has `title`, `path`, `pins[]`, `pin_count`, and, for a unit node,
-    `struct_name` and `struct_path`. `path` is the name the write operations
-    take.
-  - A pin has `name`, `direction` and `cpp_type`, and `default_value` when it
-    is neither empty nor `()`. `direction` is one of `IN `, `OUT`, `I/O`,
-    `HID` or `???`; `IN ` has a trailing blank.
-  - A link has `source` and `target`, both pin paths.
-- `hierarchy`: `elements[]` (`type`, `name`), `total_elements`, `counts` (per
-  type) and `summary`. Types: `Bone`, `Control`, `Null`, `Curve`, `Connector`,
-  `Socket`, `Physics`, `Reference`, `Unknown`. Parents and transforms are not
-  reported.
+**Load section `operations` before you call an operation in a way the recipes
+above do not show, and when you need a field of a result**: it has, per
+operation, the result fields, the messages and the errors. What must not be
+missed is here. In the result of `inspect`:
 
 **Only top-level pins are listed.** Sub-pins, such as the members of a
 transform pin, do not appear; the header gives their path form as
@@ -144,60 +141,26 @@ transform pin, do not appear; the header gives their path form as
 When the rig has no hierarchy object, `hierarchy` holds only
 `error: "Hierarchy not available"`, and the call is still a success.
 
-### list_structs and list_templates
-
-`list_structs` returns `structs[]` (`name`, `path`), `count` and
-`total_available`. `list_templates` returns `templates[]` (notation strings),
-`count` and `total_available`. `filter` is a case-insensitive substring: on
-the struct's name or path, or on the notation.
+In `list_structs` and `list_templates`:
 
 **At most 500 entries are returned**, and then `truncated` is `true`.
 `total_available` counts everything before the filter, so it does not say how
 many matched. Always pass a `filter`.
 
-### add_node, add_template, add_var_node
+In the other operations:
 
-- `add_node` adds the unit struct at `struct_path`, such as
-  `/Script/ControlRig.RigUnit_GetTransform` (the header's example). The method
-  name is fixed to `Execute`.
-- `add_template` adds a template node from a `notation` string, as
-  `list_templates` returns it.
-- `add_var_node` adds a getter or setter for `var_name`.
-  - `node_name` is not read. The node is requested as `<var_name>_Get` or
-    `<var_name>_Set`.
-  - Without `cpp_type`, the type comes from the rig's member variable of that
-    name; when there is none:
-    `Cannot determine type for '<v>'. Pass cpp_type parameter (e.g. FTransform, float, FVector)`.
-  - With `cpp_type`, the tool knows the type objects of `bool`, `float`,
-    `double`, `int32`, `FName`, `FString`, `FText`, `FVector`, `FRotator`,
-    `FTransform`, `FQuat`, `FLinearColor`, `FRigElementKey` and `FVector2D`.
-    Any other type is passed on without a type object; whether the engine
-    accepts that is not visible in the tool's code. For such a type, declare
-    the member variable first and leave `cpp_type` out.
-
-All three return `node` (as in `inspect`) and the message `Added unit node`,
-`Added template node`, `Added variable getter` or `Added variable setter`.
-Without `node_name` the engine names the node. Take the name from `node.path`
-in either case.
-
-Errors: `Failed to add node (struct: <path>)`,
-`Failed to add template (notation: <n>)`,
-`Failed to add variable node for '<v>' (type: <t>)`. None says why.
-
-### remove_node
-
-`node_name` is the node's `path`. Error:
-`Failed to remove '<n>' (not found or protected)`.
-
-### link, unlink, unlink_all
-
-- `link` connects `output_pin` to `input_pin`; both are pin paths. Message:
-  `Linked <a> -> <b>`. Error: `Failed to link <a> -> <b>`, with no reason.
-- `unlink` removes that one link. Error: `Failed to unlink <a> -> <b>`.
-- `unlink_all` removes every link on `pin_path`, on its input side by default
-  and on its output side with `"as_input": false`. Message:
-  `Broke all input links on <pin>` or `Broke all output links on <pin>`.
-  Error: `Failed to break links on <pin>`.
+- A pin's `default_value` is in `inspect` only when it is neither empty nor
+  `()`. Its `direction` is one of `IN `, `OUT`, `I/O`, `HID` or `???`; `IN `
+  has a trailing blank.
+- `add_var_node` does not read `node_name`: the node is requested as
+  `<var_name>_Get` or `<var_name>_Set`. A `cpp_type` outside the list the
+  tool knows (section `operations`) is passed on without a type object, and
+  whether the engine accepts that is not visible in the tool's code: for
+  such a type, declare the member variable first and leave `cpp_type` out.
+- Without `node_name` the engine names the node. Take the name from
+  `node.path` in either case.
+- The `Failed to …` errors of the three add operations and of `link` give no
+  reason.
 
 ### set_default and set_expand
 
@@ -209,78 +172,28 @@ Errors: `Failed to add node (struct: <path>)`,
   changes the display only. Message: `Expanded <pin>` or `Collapsed <pin>`.
   Error: `Failed to set expansion on <pin>`.
 
-### add_member_var and remove_member_var
-
-`add_member_var` adds a variable `var_name` of `cpp_type` to the rig, public
-by default and never read-only. Message:
-`Added member variable '<name>' (<type>, public)` or `(…, private)`. Errors:
-`Failed to add member variable '<name>'`, `Failed to remove variable '<name>'`.
-
-### recompile
-
-Calls the rig's VM recompile and returns `Recompiled RigVM`. It takes no
-parameters besides `rig_path`.
-
 ### batch
 
-`operations` is a JSON array of objects. Each object names its operation in
-`op` (lowercased) and uses **the batch's own keys, not the parameter names
-above**:
+**Load section `batch` before you call `batch`**: it has the keys per `op`,
+the result and what a failed entry does. Its warnings, so that they are not
+missed:
 
-| `op` | Keys |
-|---|---|
-| `add_node` | `struct`, `name`, `x`, `y` |
-| `add_template` | `notation`, `name`, `x`, `y` |
-| `add_var_node` | `var`, `mode`, `cpp_type`, `x`, `y` |
-| `remove_node` | `name` |
-| `link`, `unlink` | `source`, `target` |
-| `unlink_all` | `pin`, `direction` |
-| `set_default` | `pin`, `value` |
-| `set_expand` | `pin`, `expanded` (default true) |
-| `add_member_var` | `name`, `type`, `public` (default true), `default` |
-| `remove_member_var` | `name` |
-| `recompile` | — |
-| `list_structs`, `list_templates` | `filter` |
-
-- **Two defaults are the opposite of the single operations.**
-  `add_var_node` adds a getter only when `mode` is `get` or `getter`; without
-  `mode` it adds a **setter**. `unlink_all` breaks the input side only when
-  `direction` is `in` or `input`; without `direction` it breaks the **output**
-  side.
-- `inspect` and `batch` are not batch operations:
-  `Unknown batch operation: '<op>'`.
-- `list_structs` and `list_templates` run, but the batch counts them as
-  errors, so a batch that contains one is always reported as failed. Call them
-  on their own.
-- A key the tool's top-level parameter names would suggest is not read.
-  - For a key the entry needs (`struct_path` for `struct`, `output_pin` and
-    `input_pin` for `source` and `target`, `pin_path` for `pin`), the
-    entry runs with an empty value and fails like any other. `var_name` for
-    `var` fails the same way when the entry has no `cpp_type`
-    (`Cannot determine type for ''. …`); with `cpp_type`, the empty name goes
-    to the engine, and whether that fails is not visible in the tool's code.
-  - **For an optional key, the entry succeeds with the default**, and nothing
-    tells you: `node_name` for `name` (the engine picks the node's name),
-    `default_value` for `default` (the variable has no default), `is_public`
-    for `public` (the variable is public), `is_getter` for `mode` (a setter),
-    `as_input` for `direction` (the output side).
-
-The result has `results[]` (one object per entry, in order: `success` with
-`message` and, for added nodes, `node`; or `error`), `ok_count`, `error_count`
-and `total`. The message is `Batch: <ok> OK, <n> errors, <total> total`.
-
-**A batch is not a transaction.** The header calls it "a single undo bracket",
-and the code does open one bracket around all entries. But a failing entry
-neither stops the batch nor undoes the entries before it: every entry runs,
-and the ones that worked stay. An entry that is not an object, or has no `op`,
-counts as an error (`[<i>] not a JSON object`, `[<i>] missing 'op' field`).
-
-**When any entry failed, the whole call is an error**, and through the bridge
-an error is only its message: `results` does not reach you, so you cannot see
-which entry failed. `inspect` the graph, or repeat the doubtful entries as
-single operations, which return their own error.
-
-Without `operations`: `Missing required parameter: operations (JSON array)`.
+- Each entry names its operation in `op` and uses **the batch's own keys, not
+  the parameter names above** (`struct`, `name`, `source`, `target`, `pin`,
+  `var`, `mode`, `direction`, `type`, `public`, `default`).
+- **Two defaults are the opposite of the single operations.** Without `mode`,
+  `add_var_node` adds a **setter**; without `direction`, `unlink_all` breaks
+  the **output** side.
+- **A top-level parameter name in an entry is not read. For an optional key,
+  the entry succeeds with the default**, and nothing tells you: `node_name`,
+  `default_value`, `is_public`, `is_getter`, `as_input`.
+- `list_structs` and `list_templates` run in a batch, but it counts them as
+  errors. Call them on their own.
+- **A batch is not a transaction.** A failing entry neither stops the batch
+  nor undoes the entries before it.
+- **When any entry failed, the whole call is an error**, and `results` does
+  not reach you. `inspect` the graph, or repeat the doubtful entries as
+  single operations, which return their own error.
 
 ## Saving, compiling and undo
 
@@ -335,33 +248,11 @@ something this tool reports at all.
 - **Misspelt parameters.** Calls the bridge queues do not warn about a
   parameter the tool does not declare (skill `ue-tasks`).
 
-## Errors
+## When a call fails
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or an empty string; `rig_path` and `operation` on every call |
-| `Unknown operation: '<op>'. Valid: …` | misspelt operation |
-| `Failed to load Control Rig: <path>` | nothing loads at `rig_path` as a Control Rig Blueprint |
-| `Asset is not a ControlRigBlueprint: <path> (is <class>)` | the asset is of another class |
-| `No graph model found in Control Rig` | the rig has no graph model; every operation except `inspect`, the member-variable operations and `recompile` needs one |
-| `Invalid blueprint or graph`, `Cannot obtain RigVM controller for graph` | the engine gave no controller for the graph |
-| `Failed to …` | the engine refused the edit (see the operation) |
-| `Batch: <ok> OK, <n> errors, <total> total` | at least one batch entry failed; the others were applied |
-| `Operation returned null result`, `Batch operation returned null result` | internal; not expected |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| `list_structs` fails with a load error | it needs a rig that loads, like every operation | pass a valid `rig_path` |
-| a batch `add_var_node` added a setter | `mode` was missing or not `get` | pass `"mode": "get"` |
-| a batch `unlink_all` broke the wrong side | `direction` was missing or not `in` | pass `"direction": "in"` |
-| a batch entry fails although the same call works alone | it used the single operation's parameter names | use the batch keys |
-| a batch with `list_structs` is always an error | the batch counts list entries as failed | call the lists on their own |
-| `Failed to link …` with no reason | the engine refused: wrong pin path, direction or type | `inspect` both nodes and compare pin names, `direction` and `cpp_type` |
-| a node in `inspect` cannot be removed or linked | it is in a graph other than the default model | not editable with this tool |
-| a change is gone after an editor restart | it was never saved | `asset` `save_asset` with the rig's path |
+When a call returns an error, or a result you did not expect, load section
+`failures`: the errors with their causes, and a table from what you see to
+what it means and what to do.
 
 ## Engine versions
 
