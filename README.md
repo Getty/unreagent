@@ -232,6 +232,9 @@ is C++ source and is built once).
    `unreagent.yaml` the launcher runs on built-in defaults and says so in its
    first log lines: `no config file (looked for <path>)`, then
    `no config file there — running on built-in defaults`.
+   When the launcher is the only process on its console (a double-click, or a
+   file dropped on the .exe) and it exits with an error, it prints a short hint
+   and waits for Enter, so the error stays readable before the window closes.
 4. **Tell the agent to set up the rest.** Claude Code opens in the window. On
    a folder it has not seen before it first asks whether you trust the folder,
    with "No, exit" preselected, so a reflex Enter ends the agent; it may also
@@ -759,6 +762,17 @@ shutdown lines. Windows console behaviour is unverified (cross-compiled only).
 | `1` | an `mcp.address` that is not `host:port` with a port from 1 to 65535 and a host that is empty, an IP address or a plain name (see `mcp` in the configuration quick reference; checked when `mcp.enabled` or `agent.hermes.enabled` is on) is a load error, before anything starts; or the MCP server cannot bind `mcp.address` (port taken, for example by a second unreagent on the same project, or not an address of this machine). The launcher binds before it writes any file, so the running instance's files stay as they are |
 | `1` | no agent configured **and MCP not serving** (off, or stopped serving after the bind), and the editor's last run was a quick failure (a failed start, or a failure within 10 s of its start) with no restart following: `restart: never`, an exhausted `maxRestarts`, or the fast-fail give-up. The 5-minute give-up (see Restart policy) is not one: its last run outlasted 10 s, so the launcher keeps running. The order does not matter: MCP that stops serving after such a give-up ends the launcher too, unless the editor was started again in between |
 | `2` | a usage error on the command line: a flag the launcher does not know or one missing its value, or a word that is not a sub-command (a file dropped onto the .exe included); for `hermes-setup`, any flag but `-config` and `-h` (a launcher flag such as `-no-agent` included), `-config` without its value, or a word among its arguments; `init` likewise for any flag but `-config`, `-check` and `-h`, or a word among its arguments. The launcher checks the command line first, so nothing is started or written |
+
+On Windows, an error exit (code 1 or 2) waits for Enter first when the launcher
+is the only process on its console and stdin and stderr are both that console:
+a double-click from Explorer, or a file dropped on the .exe, whose window would
+otherwise close with the error. From an existing terminal, or with stdin or
+stderr piped or redirected, nothing waits. Anything that gives the launcher its
+own console waits too (`start unreagent.exe`, a scheduled task with a visible
+console), so start it unattended with its output redirected or inside a shell.
+Exit codes are unchanged. An unknown launcher flag is not covered: the flag
+parser exits 2 by itself, without the wait. This behaviour has not been run on
+Windows yet.
 
 An agent that fails and **is** restarted produces no exit code until it stops
 failing or gives up. With the default `restart: on-failure`, a headless agent

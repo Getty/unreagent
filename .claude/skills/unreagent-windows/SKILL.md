@@ -29,6 +29,37 @@ is killed, not the tree) and why that is acceptable. Follow the pattern exactly:
 same type, same method set, no build-tag `if` inside shared files, and
 `GOOS=linux go build ./...` must stay green.
 
+The pair is not limited to `internal/supervisor`: `cmd/launcher` has one too,
+`exitpause_windows.go` / `exitpause_other.go` (below).
+
+## Error exit waits for Enter (k160)
+
+When the launcher is the only process on its console, an error exit would close
+that console, and the error with it. `main()` therefore calls
+`pauseBeforeExit(soleConsoleClient(), os.Stdin, os.Stderr)` after `run()` has
+returned (editor and agent have ended, their jobs are closed). The shared
+`pauseBeforeExit` (`exitpause.go`) takes `sole` as a parameter so it tests on
+Linux: with `sole` false it neither writes nor reads; with true it prints
+`exitPauseHint` and reads stdin until the first newline or a read error.
+`soleConsoleClient` is the pair: `exitpause_other.go` returns false always (a
+terminal there outlives the program); `exitpause_windows.go` decides:
+
+- `GetConsoleMode` must succeed on stdin and on stderr. A pipe or redirect
+  fails it, so scripted and redirected runs never wait.
+- `GetConsoleProcessList` with a **one-element buffer**: return 0 is failure
+  (no console); a return greater than the buffer length is the required
+  count, with the buffer not filled (another process is attached, e.g. the
+  shell, or a child still running); exactly 1 with `ids[0] == os.Getpid()` is
+  the sole client. Only that case waits. Source: `docs/research/2026-11-21-windows-processes.md`,
+  section 5.
+
+Limit: a count of 1 does not prove an Explorer start. `start unreagent.exe`, or
+Task Scheduler with a visible console, match too (their new console closes just
+the same, so waiting there is harmless). Do not read "sole" as "launched by
+Explorer".
+
+Status: unverified on Windows, cross-compiled only; the manual run is on k160.
+
 ## Win32 without CGO
 
 Win32 is called through `syscall.NewLazyDLL` + `NewProc`, never cgo:

@@ -673,6 +673,10 @@ Revision history for unreagent
     LLM Toolkit and asks you about the project to fill in CLAUDE.md; it also
     guides converting an existing project, and asks before it changes anything
     you made. Main session only. Not yet run in a Claude Code session.
+  - On Windows, an error exit waits for Enter when unreagent.exe is the only
+    process on its console (started from Explorer, or with a file dropped on
+    it), so the error stays readable before the window closes. Started from a
+    terminal, a pipe or a redirect, nothing changes. Not yet run on Windows.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

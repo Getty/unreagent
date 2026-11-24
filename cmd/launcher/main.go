@@ -47,10 +47,13 @@ func main() {
 	if !usage.printed {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 	}
+	code := 1
 	if isUsage {
-		os.Exit(2)
+		code = 2
 	}
-	os.Exit(1)
+	// After run(): the editor and the agent have ended (k160).
+	pauseBeforeExit(soleConsoleClient(), os.Stdin, os.Stderr)
+	os.Exit(code)
 }
 
 func run() error {

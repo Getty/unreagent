@@ -81,6 +81,7 @@ must not block or call the supervisor.
 | `skills.go` | skill delivery — `setupSkills`, `checkSkillDirs`, `materializeSkills` (`installSkillDir`, `sweepSkillDirs`), the `skills` tool (`skillsTool`), `applyNoSkillsMCP` |
 | `helpers.go` | argument readers and result helpers shared by the handlers; `writeFileAtomic(path, data, tighten)` and `writeTarget`, the writer of every file that can hold a secret (the MCP configs, hermes-setup's two files; skill `unreagent-config`, "Secrets") |
 | `hermes.go` | the `hermes-setup` sub-command |
+| `exitpause.go`, `exitpause_windows.go`, `exitpause_other.go` | the error exit's wait for Enter (k160): `pauseBeforeExit` (shared, called by `main()` after `run()`) and the platform-guarded `soleConsoleClient` (true only on Windows, alone on a real console); skill `unreagent-windows` |
 
 `run()` is the one place everything is wired together, so a new service, tool
 group, command or flag touches it as well as the file that owns the feature.
