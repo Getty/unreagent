@@ -220,23 +220,32 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   the entry's `node` command makes it a node-started server for bridge
   preparation (`hasNodeExtraServer`). `DefaultYAML` does not check for a
   `.uproject` itself — that check is `loadDefaults`'.
+- **`InitYAML(projectDir)`** (k256) has the same results and is `DefaultYAML`
+  plus `skills.materialize: true` and nothing else — `skills.dir` is not
+  written, its default is where the agents need it, and `skills.agents`
+  defaults to true. Both come from one encoder (`encodeDefaults`), so they
+  cannot drift apart; `TestInitYAMLIsTheDefaultsPlusMaterialize` pins the
+  difference. A start without a config still runs on `DefaultYAML` and writes
+  nothing into the project; only init turns materializing on.
 - **Decoded like a file.** `loadDefaults` hands those bytes to `decodeDoc`,
   the decoder behind `decodeYAML`, and steps 4 to 8 then run unchanged. There
-  is no second way to build the default `Config`, so `unreagent init` (next
-  bullet) can write the same bytes and get the same configuration; a start on the
-  defaults and a start on the written document are compared whole in
+  is no second way to build the default `Config`, so a written
+  document gets the same configuration; a start on the defaults and a start
+  on `DefaultYAML`'s document written out are compared whole in
   `TestDefaultYAMLRoundTrips`, which also pins the document's text. A default
   **value** that should differ on a start without a file goes into
   `defaultDoc`, never into a branch on `Info.Defaults` further down. The rule
   is about values, not checks: a check that refuses something on this path
   may branch on `Info.Defaults`, as the `unreal.project` refusal in the next
   bullet does.
-- **`unreagent init`** (k228, `cmd/launcher/init.go`) is `DefaultYAML`'s
-  second consumer. It loads the configuration first, and only on
-  `Info.Defaults` — neither `unreagent.yaml` nor `unreagent.yml` there, and no
-  `-check` — writes a header comment plus that document to `Info.ConfigPath`
-  (`writeDefaultConfig`). The file is created exclusively, so one that
-  appeared since the load is not overwritten either. With a config file in
+- **`unreagent init`** (k228, `cmd/launcher/init.go`) is `InitYAML`'s
+  consumer. It loads the configuration first (`LoadForInit`, below), and only
+  on `Info.Defaults` — neither `unreagent.yaml` nor `unreagent.yml` there, and
+  no `-check` — writes a header comment plus `InitYAML`'s document to
+  `Info.ConfigPath` (`writeDefaultConfig`). The file is created exclusively,
+  so one that appeared since the load is not overwritten either. It then
+  **reloads** the configuration, so it goes on with the file it wrote, the
+  local overlay over it, as a start loads it. With a config file in
   place it writes nothing. In every case it then prints a preflight of the
   loaded configuration; what that checks and what counts as blocking is in
   `preflight`, pinned by `cmd/launcher/init_test.go`
@@ -244,7 +253,7 @@ on `info.Defaults` in `load`; pinned by `internal/config/defaults_test.go`.
   `TestInitNeverOverwritesAConfig`). A load error ends it before anything is
   written or checked (`TestInitNeedsExactlyOneProject`). A missing engine is
   not one of them (k246): `initCommand` loads through
-  `config.LoadForPreflight` (below), so the defaults are still written — the
+  `config.LoadForInit` (below), so the document is still written — the
   document does not depend on the engine — and the preflight is printed in
   full with the engine as its BLOCKING finding, which makes the exit code 1
   (`TestInitWithoutEnginePrintsTheFullPreflight`).
@@ -282,7 +291,8 @@ this path: `load("", t.TempDir())` after `writeUProject`, with `UE_ROOT` set
 or `noEngine(t)`. Both are `loadMode(explicitPath, dir, false)`.
 
 `config.LoadForPreflight(explicitPath, dir)` (k246) is the same `loadMode`
-with `engineOptional` set, and the only other exported way in. It relaxes one
+with `engineOptional` set, and, with `LoadForInit`, the only other exported
+way in. It relaxes one
 thing: an engine that is not found is no load error. `Info.EngineRoot` is
 then `""`, every field that uses `${ENGINE}` keeps the placeholder as written
 (`unreal.editor` of the built-in defaults among them — `substitute` leaves it
@@ -296,10 +306,28 @@ permission rule on `${ENGINE}` — fails with a message that says so
 (`TestLoadForPreflightStillFails`). An empty `dir` is the executable's
 directory, as for `Load`; init's tests pass their own.
 
+`config.LoadForInit(explicitPath, dir)` (k256) is `LoadForPreflight` and, with
+no config file, decodes `InitYAML` instead of `DefaultYAML` (`loadDefaults`
+takes `forInit`); `Info.Defaults` is still true there. With a config file it is
+`LoadForPreflight`. Only `unreagent init` calls it, so `-check` previews the
+configuration init would write.
+
+`config.MaterializeSetting(path)` reads `skills.materialize` from one file —
+`(on, set)`; a file that is missing, unreadable or unparseable sets nothing. It
+is for init's fix lines (`materializeOffFix`, `materializeOnIn`), which name
+the file whose value wins (`unreagent.local.yaml` is laid over the config); it
+is no load.
+
+`SkillsConfig.Agents` (`skills.agents`, `*bool`, default true; k259) and
+`AgentFiles()` — `ViaFiles()` and `Agents` — decide whether the topic agents
+and the rules file are written next to `skills.dir`: only while the skills are
+materialized, since an agent names its skills by their materialized
+directories.
+
 **The launcher start uses `Load`; only a preflight may use the lenient
-load.** A `Config` from `LoadForPreflight` can hold a literal `${ENGINE}` in
+load.** A `Config` from `LoadForPreflight` or `LoadForInit` can hold a literal `${ENGINE}` in
 a path, so it is for reporting on, never for starting an editor, an agent or
-a command from. Its one caller is `initCommand`; `run()` and `hermes-setup`
+a command from. Their one caller is `initCommand` (`LoadForInit`); `run()` and `hermes-setup`
 stay on `Load`, and a start without an engine fails at load as before. Code
 that reads such a `Config` checks `Info.EngineRoot` before it uses an
 engine-bound field, as `preflight` in `cmd/launcher/init.go` does.
