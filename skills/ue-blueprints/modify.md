@@ -206,7 +206,7 @@ Errors name the expected form: `Failed to set numeric property '<p>'`,
 
 Through the bridge, `value` is listed as a string, because the tool declares
 it `any`. The tool reads `value` with the engine's `FJsonValue::TryGetNumber`,
-`TryGetBool` and `TryGetString` (main document, "Errors common to both
+`TryGetBool` and `TryGetString` (section `failures`, "Errors common to both
 tools", for the engine source). If your client sends only strings, struct values
 still work in UE text form, and for the other types:
 
@@ -229,8 +229,8 @@ still work in UE text form, and for the other types:
   `5` or `true`.
 
 By the plugin's domain notes, class defaults reach only actors spawned later,
-and actors already placed in a level keep their saved values (main document,
-"Failure modes").
+and actors already placed in a level keep their saved values (section
+`failures`, "Failure modes").
 
 ## add_debug_print, remove_debug_print
 

@@ -637,6 +637,11 @@ Revision history for unreagent
     files loaded on demand. ue-retarget gains the sections engine-versions
     and failures, and its SKILL.md names all four engine-version differences
     that fail silently.
+  - The shipped skills ue-game-framework, ue-anim-blueprint, ue-anim-montage,
+    ue-pie-testing, ue-widgets, ue-anim-sequence and ue-blueprints are split
+    the same way, and now say for each section when to load it. Their failure
+    tables moved into failures sections; ue-game-framework gains an aliases
+    section and ue-widgets a tree section.
   - With `skills.materialize` on and `skills.dir` at `<project>/.claude/skills`,
     every start writes the shipped topic agents as
     `.claude/agents/unreagent-<name>.md` and the launcher's rules file as

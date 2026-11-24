@@ -32,12 +32,13 @@ needs a `bone_name`. An unknown operation returns
 `Unknown operation: '<op>'. Valid: <list>`, plus ` Did you mean '<x>'?` when a
 valid name is close.
 
-This skill has two sections:
+This skill has three sections:
 
-| Section | Covers |
-|---|---|
-| `sequences` | `inspect_track`, `adjust_track`, `resample`, `extract_range`, `set_additive_type`, `replace_skeleton` |
-| `meshes` | `inspect_mesh`, `sync_mesh_bones`, `rename_bone`, `set_ref_pose`, `transform_vertices` |
+| Section | Covers | Load it |
+|---|---|---|
+| `sequences` | `inspect_track`, `adjust_track`, `resample`, `extract_range`, `set_additive_type`, `replace_skeleton` | before your first call of one of these that writes, and when a result field or an error of one needs explaining |
+| `meshes` | `inspect_mesh`, `sync_mesh_bones`, `rename_bone`, `set_ref_pose`, `transform_vertices` | before your first call of one of these that writes: they change a mesh that animations and placed actors depend on, and save by default |
+| `failures` | the error table, and the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see after a call is not what you expect |
 
 ## Curve operations do not run
 
@@ -87,6 +88,42 @@ A missing or empty required string returns
   1 there, and a bare number is a uniform scale (section `meshes`).
 - **Numbers that the code turns into integers are truncated**: `target_fps`,
   `start_frame`, `end_frame`, `ref_frame_index` and the `sample_frames` entries.
+
+## What a success does not prove
+
+Each operation's passage is in its section: load `sequences` before your
+first sequence write and `meshes` before your first mesh write. What no
+result shows:
+
+- **`adjust_track` `scale_override` is an absolute value, not a factor.** A
+  missing component is 0, and a value that is not an object, such as `1.0`,
+  sets every scale key to 0. Send all three components.
+- **`resample` does not change the frame rate**, only the keys, so expect a
+  resample to a rate other than the current one to change the play length
+  (not checked against a running editor). A track that could not be written
+  is not reported.
+- **`set_additive_type` writes all four settings on every call.** Leaving
+  out `base_pose_type` sets `RefPose`, leaving out `ref_pose_seq` clears the
+  sequence that was set, and leaving out `ref_frame_index` sets 0.
+- **`replace_skeleton` checks nothing about compatibility**: it only sets
+  the sequence's skeleton. Check a few bones with `inspect_track`
+  afterwards.
+- **`extract_range` can leave its copy behind**: `Trim tail failed`,
+  `Trim head failed` and `Duplicated asset is not an AnimSequence` come
+  after the duplicate was made.
+- **`inspect_mesh` may crash the editor**: the code reads LOD 0's skin
+  weight buffer without checking that the mesh has one (whether a mesh can
+  lack it is not verified). If the editor goes down during `inspect_mesh`,
+  do not repeat the call on that mesh.
+- **`sync_mesh_bones` skips a bone the engine refuses**, with the reason
+  only in the editor's log: compare `added_bones` with what you expected. A
+  misspelt name in `bone_names` gets the "nothing to add" success unless
+  some other requested bone is missing. The new bones get no skin weights.
+- **`rename_bone` renames only the mesh at `mesh_path`.** Other meshes on
+  the same skeleton keep the old name; run it on each of them afterwards.
+- **`set_ref_pose` takes absolute values, not offsets.** On a mesh it
+  changes the mesh's reference pose, and the skeleton asset's stays as it
+  was.
 
 ## Paths and loading
 
@@ -176,34 +213,12 @@ A missing or empty required string returns
   parameter the tool does not declare (skill `ue-tasks`). The curve parameters
   are declared, so they draw no warning either.
 
-## Errors
+## Errors and failure modes
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or an empty string |
-| `Missing required parameter: asset_paths (non-empty array)` | no `asset_paths` array, or an empty one |
-| `asset_paths contains no valid paths` | no entry of `asset_paths` could be read as a non-empty string |
-| `Unknown operation: '<op>'. Valid: …` | misspelt operation, or one of the curve operations |
-| `Failed to load anim sequence: <path>` / `Asset is not an AnimSequence: <path>` | the path does not load as an AnimSequence |
-| `Failed to load USkeletalMesh: <path>` | the path does not load as a skeletal mesh |
-| `Mesh has no USkeleton: <path>` | the mesh has no skeleton asset |
-| `Batch adjust: 0 succeeded, …` / `Resample to <fps> FPS: 0 succeeded, …` / `Replace skeleton: 0 succeeded, …` | every asset of a batch failed; run `inspect_track` for the reason |
-
-The errors of each operation are in its section.
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| `Unknown operation: 'get_curves'` | the curve operations are advertised but not dispatched | no `anim_edit` route; montage curves: `ue-anim-montage` |
-| a batch call failed with only a count | every asset failed, and the reasons are dropped | `inspect_track` on one of the assets |
-| `success` with `fail_count` above 0 | some assets failed | read `error` in `results` |
-| a test edit was saved with the call | `save` defaults to `true` | pass `"save": false` while trying things |
-| after `resample` the sequence plays at a different speed or length | the frame rate was not changed (section `sequences`) | reimport the source at the wanted rate instead |
-| `adjust_track` set every scale key to 0 | `scale_override` was partial or not an object | send all three components as an object |
-| `rename_bone` worked, but another mesh still has the old name | only the mesh at `mesh_path` is renamed | `rename_bone` on that mesh too; it takes the mesh-only path |
-| a change is gone after an editor restart | it was made with `"save": false` and never saved | `asset save_asset` |
+Load section `failures` when a call returns an error you cannot place, or
+what you see after a call is not what you expect: it has the error table and
+the failure table (what you see, what it means, what to do). The errors of
+each operation are in its section.
 
 ## Background in the plugin
 

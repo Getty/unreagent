@@ -21,13 +21,15 @@ The tool takes an `operation` string and lowercases it before dispatch.
 `reorder_children` is accepted for `reorder_child`. An unknown operation
 returns `Unknown operation: '<op>'. Valid: <list>`.
 
-This skill has three sections:
+This skill has five sections:
 
-| Section | Covers |
-|---|---|
-| `properties` | the keys of `set_property`, `set_slot` and `set_brush`; color formats |
-| `events` | `list_events`, `bind_event`, `bind_property`, `unbind_property`, `list_bindings` |
-| `animations` | `list_animations`, `inspect_animation`, `create_animation`, `add_animation_track` |
+| Section | Covers | Load it |
+|---|---|---|
+| `properties` | the keys of `set_property`, `set_slot` and `set_brush`; color formats | before your first `set_property`, `set_slot` or `set_brush`: the keys are only there |
+| `events` | `list_events`, `bind_event`, `bind_property`, `unbind_property`, `list_bindings` | before you bind an event or a property |
+| `animations` | `list_animations`, `inspect_animation`, `create_animation`, `add_animation_track` | before you add an animation track: the track types and the keyframe form are only there |
+| `tree` | `reparent_widget`, `reorder_child` and `clone_widget` in full: result fields and errors | when one of the three returns an error, or you need its result fields |
+| `failures` | the error table, and the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see after a call is not what you expect |
 
 ## Paths
 
@@ -76,6 +78,11 @@ the code requires them. Pass them anyway. A missing string parameter returns
 `Missing required parameter: <name>`. A missing object or array names its
 type, such as `Missing required parameter: properties (JSON object)`.
 
+The keys that go into `properties`, `slot_properties` and `brush` are only
+in section `properties`, and the track types and the form of `keyframes`
+only in section `animations`: load the section before your first such call.
+Load section `events` before you bind an event or a property.
+
 ## Reading
 
 - **`inspect`** returns `asset_path`, `blueprint_name`, `total_widgets` and
@@ -109,6 +116,18 @@ addresses widgets by them. Read the tree before you change it.
 with `unbind_property`, and a bound event's node with
 `blueprint_modify delete_node`. There is no operation to remove an
 animation or a track.
+
+What the sections hold that shows no error:
+
+- **A color string that is not a known name or a 6- or 8-digit hex becomes
+  white.** Hex digits are read as linear values, without sRGB conversion
+  (section `properties`).
+- **`bind_property` checks neither the property name nor the function.** It
+  stores what you pass, so read the binding back with `list_bindings`
+  (section `events`).
+- **Each `add_animation_track` call adds a new track**, even for a widget
+  and track type that already have one. Send all keys of a track in one call
+  (section `animations`).
 
 ## create
 
@@ -154,30 +173,22 @@ later call.
 `Widget not found: <n>`, `Failed to remove widget: <n>`. Run `inspect`
 afterwards to see what is left.
 
-**`reparent_widget`** moves a widget to another panel. The widget gets a new
-slot there; its old slot settings are not carried over, so set them again with
-`set_slot`. The result has `widget_name`, `old_parent`, `new_parent` and
-`new_slot_type`. Errors: `Cannot reparent the root widget`,
-`New parent widget not found: <p>`, `New parent '<p>' is not a panel widget (is <c>)`,
-`Cannot reparent '<w>' to '<p>' — would create a cycle (new parent is a descendant)`,
-`Failed to add widget to new parent` (the widget goes back to its old parent).
+**`reparent_widget`**, **`reorder_child`** and **`clone_widget`** move or
+copy a widget; their parameters are in the table under "Operations".
 
-**`reorder_child`** moves `child_name` to position `new_index` among the
-children of `parent_name`. The index is clamped to the valid range, and the
-result's `new_index` is the one used. Errors: `Parent widget not found: <p>`,
-`'<p>' is not a panel widget (is <c>)`, `Child widget not found: <c>`,
-`'<c>' is not a child of '<p>'`.
+- `reparent_widget` moves a widget to another panel. The widget gets a new
+  slot there; its old slot settings are not carried over, so set them again
+  with `set_slot`.
+- `reorder_child` clamps `new_index` to the valid range; the result's
+  `new_index` is the one used.
+- `clone_widget` deep-copies a widget and its children into `target_parent`,
+  by default the source's parent. The copy is named `new_name`, and its
+  children `<new_name>_<child name>`, made unique if needed. The copy and
+  each copied child get new slots; slot settings are not copied, so set them
+  with `set_slot`. Check the copy with `inspect`.
 
-**`clone_widget`** deep-copies a widget and its children into `target_parent`,
-by default the source's parent. The copy is named `new_name`, and its children
-`<new_name>_<child name>`, made unique if needed. The copy and each copied
-child get new slots; slot settings are not copied, so set them with
-`set_slot`. Check the copy with `inspect`. The result has `source_name`,
-`clone_name`, `widgets_cloned` and `target_parent`. Errors: `Source widget not found: <n>`,
-`Widget with name '<n>' already exists`, `Target parent not found: <p>`,
-`Target parent '<p>' is not a panel widget (is <c>)`,
-`No valid target parent (source widget has no parent and no target specified)`,
-`Failed to clone widget`, `Failed to add cloned widget to target parent`.
+Load section `tree` when one of the three returns an error, or you need its
+result fields.
 
 ## batch
 
@@ -224,30 +235,11 @@ and `clone_widget`; `reorder_children` is not accepted here.
 The messages of `set_property`, `set_slot` and `set_brush` list the keys they
 applied.
 
-## Errors
+## Errors and failure modes
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or empty |
-| `Failed to load Widget Blueprint: <path>` | no asset at that path |
-| `Asset is not a Widget Blueprint: <path> (is <class>)` | the asset is another kind |
-| `Widget not found: <n>` | no widget of that name; names come from `inspect` |
-| `No recognized properties were set. …` / `No recognized slot properties were set. …` | no key fit the widget class or slot type (section `properties`) |
-| `Unsupported slot type: <class>` | the parent panel's slot has no `set_slot` support |
-| `Widget '<n>' is not a variable in the Widget Blueprint. …` | `bind_event` before a compile, or Is Variable is off (section `events`) |
-| `Error: Batch: <n> OK, <m> errors, <t> total` | at least one batch op failed |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a change is gone after an editor restart | it was never saved | `save` after each finished change |
-| a key you sent is missing from the result message | the tool does not know it for that widget or slot | check the key in section `properties` |
-| a color came out white | the color string was not a known name or a 6- or 8-digit hex | use `#RRGGBB` or `#RRGGBBAA` |
-| a widget lost its position after `reparent_widget` | the new parent gave it a new slot | `set_slot` again |
-| an animation plays two tracks on one property | `add_animation_track` was called twice (section `animations`) | `inspect_animation`; the tool cannot remove a track, so it has to be removed in the editor by hand |
-| `bind_property` succeeded, but the binding does nothing | the property or function name is wrong; the tool does not check it | `list_bindings`, compile, and check the names |
+Load section `failures` when a call returns an error you cannot place, or
+what you see after a call is not what you expect: it has the error table and
+the failure table (what you see, what it means, what to do).
 
 ## Background in the plugin
 

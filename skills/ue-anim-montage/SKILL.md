@@ -25,12 +25,14 @@ The tool takes an `operation` string and lowercases it before dispatch.
 `Unknown operation: '<op>'. Valid: <list>`, plus ` Did you mean '<x>'?` when a
 valid name is close.
 
-This skill has two sections:
+This skill has three sections. The parameters of the notify and curve
+operations are only in their sections:
 
-| Section | Covers |
-|---|---|
-| `notifies` | `add_notify`, `add_notify_state`, `remove_notify`, `move_notify`, `rename_track`, `cleanup_tracks`, `set_notify_properties` |
-| `curves` | `get_curves`, `add_curve`, `remove_curve`, `set_curve_keys` |
+| Section | Covers | Load it |
+|---|---|---|
+| `notifies` | `add_notify`, `add_notify_state`, `remove_notify`, `move_notify`, `rename_track`, `cleanup_tracks`, `set_notify_properties` | before you add, remove or move a notify, set properties on one, or rename or clean up notify tracks |
+| `curves` | `get_curves`, `add_curve`, `remove_curve`, `set_curve_keys` | before you read, add or remove a float curve or set its keys |
+| `failures` | the error table, and the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or the montage is not what you expect after a call |
 
 ## Before the first call
 
@@ -106,8 +108,8 @@ absent.
 | `add_slot` | `slot_name` | — |
 | `remove_slot` | `slot_index` | — |
 | `set_blend_in`, `set_blend_out` | `blend_time` | `blend_option` (default `Linear`) |
-| notify operations | section `notifies` | |
-| curve operations | section `curves` | |
+| notify operations | section `notifies`; load it before the first one | |
+| curve operations | section `curves`; load it before the first one | |
 
 A missing or empty string parameter returns
 `Missing required parameter: <name>`, and so does a missing number such as
@@ -247,32 +249,12 @@ Saves the montage's package to disk: `Saved montage: <montage_path>`. Errors:
    the data each write returns.
 5. **Save.** `save`.
 
-## Errors
+## Errors and failure modes
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent, or an empty string |
-| `Cannot access engine or script Blueprints` | `montage_path` under `/Engine/` or `/Script/` |
-| `Failed to load AnimMontage '<path>'. …` | no montage at that path, or a path outside `/Game/`; use the object path |
-| `Failed to load AnimSequence '<path>'. …` | `animation_path` is not an animation sequence |
-| `Animation skeleton '<a>' is not compatible with montage skeleton '<m>'` | `add_segment` with an animation for another skeleton |
-| `Section '<n>' not found` / `Next section '<n>' not found` | misspelt section name; names come from `get_info` |
-| `Cannot remove the first section (Default)` | `remove_section` on the first section |
-| `Cannot remove the last slot track` | `remove_slot` with one slot left |
-| `Slot index …` / `Segment index … out of range` | stale or wrong index |
-| `Trigger time <t> out of range (0-<len>)` | a notify past the montage's length (section `notifies`) |
-
-## Failure modes
-
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a change is gone after an editor restart | it was never saved | `save` after each finished change |
-| every notify is out of range | the montage is shorter than the notify times; check `sequence_length` | add the segments first |
-| a segment started at an unexpected time | `add_segment` without `start_pos` appends after the last segment | pass `start_pos` |
-| a swapped segment plays the wrong range | `set_segment` kept the old animation times | pass `anim_start_time` and `anim_end_time` with `animation_path` |
-| the blend curve is linear | `blend_option` was misspelt | use one of the listed names |
-| a bare montage name loaded an unexpected asset | the name was found in one of the fallback folders | use the full object path |
+Load section `failures` when a call returns an error you cannot place, or
+the montage is not what you expect after a call: it has the error table and
+the failure table (what you see, what it means, what to do). The errors of
+the notify and curve operations are in their own sections.
 
 ## Background in the plugin
 

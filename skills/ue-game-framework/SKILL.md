@@ -18,8 +18,13 @@ plugin's MCP bridge it is listed as `unreal_game_framework`. It works only
 while the editor is running and the plugin is reachable; `unreagent-iterate`
 covers the wait for the plugin.
 
-Section `datatables` holds the DataTable operations in full: load it before
-`set_row`.
+This skill has three sections:
+
+| Section | Holds | Load it |
+|---|---|---|
+| `datatables` | the five DataTable operations in full: the `table_path` forms, every result field, the value form `set_row` accepts for each column type, the errors | before your first `set_row`, and when a DataTable call returns an error |
+| `aliases` | every short operation name the code accepts, and what it runs | when a call uses, or you are about to send, an operation name that is not one of the twelve |
+| `failures` | the errors of `set_game_mode_defaults`, how `paused` and `show_cursor` are read from a string or a number, and the failure table (what you see, what it means, what to do) | when `set_game_mode_defaults` returns an error, or what you see after a call is not what you expect |
 
 ## Recipes
 
@@ -69,7 +74,8 @@ Section `datatables` holds the DataTable operations in full: load it before
    column names and types and the row names.
 3. `{"operation": "get_row", "table_path": "<path>", "row_name": "<row>"}`.
 4. `{"operation": "set_row", "table_path": "<path>", "row_name": "<row>", "row_data": {"<column>": <value>}}`.
-   Only the columns you pass change. Value forms: section `datatables`.
+   Only the columns you pass change. Load section `datatables` before your
+   first `set_row`: it has the value form for each column type.
 5. Save: `asset` `{"operation": "save_asset", "asset_path": "<path>"}` (skill
    `ue-assets`).
 
@@ -108,6 +114,17 @@ Section `datatables` holds the DataTable operations in full: load it before
   and the table is not marked dirty. Run `get_row` after an error.
 - **Unknown keys inside a struct value are ignored** by `set_row`, without a
   message. An unknown column is an error.
+- **A transform cannot be sent back the way `get_row` shows it.** `set_row`
+  skips its `location`, `rotation` and `scale` and still reports the column
+  as updated. Pass a transform as one string in UE text form, and read the
+  row back.
+- **A misspelt `row_name` in `set_row` creates a new row**; the tool has no
+  "must exist" switch. Check `is_new_row`. An empty `row_data` (`{}`) with a
+  new `row_name` adds a row of defaults.
+- **`set_row` also reads a JSON number or boolean as its text**, and a text
+  column stores that text (read in the UE 5.8.4 source, not run, while the
+  toolkit targets UE 5.6 and 5.7). Send each value in the JSON type the
+  table names.
 
 ## Operations
 
@@ -132,23 +149,14 @@ alias resolution.
 
 ### Aliases
 
-The code accepts these besides the twelve names. The tool's description does
-not list them. Prefer the full names: an alias changes the name only, never
-the parameters.
-
-| Alias | Runs | Mind |
-|---|---|---|
-| `inspect`, `info`, `get_info` | `inspect_game_mode` | not `inspect_data_table` |
-| `set_defaults` | `set_game_mode_defaults` | — |
-| `add_widget` | `show_widget` | — |
-| `remove_all_widgets` | `remove_widget` | still needs `widget_class`, and removes that class only |
-| `pause`, `unpause` | `set_pause` | **`unpause` without `paused: false` pauses**: both run `set_pause`, whose default is `true` |
-| `cursor`, `mouse_cursor` | `set_mouse_cursor` | without `show_cursor` it shows the cursor |
-| `list`, `list_tables` | `list_data_tables` | — |
-| `inspect_table`, `table_info` | `inspect_data_table` | — |
-| `get`, `get_row_data` | `get_row` | — |
-
-`set_input_mode`, `set_row` and `delete_row` have no alias.
+The code accepts short names besides the twelve, such as `pause`, `unpause`,
+`inspect`, `list` and `get`; the tool's description does not list them.
+Prefer the full names: an alias changes the name only, never the parameters.
+So **`unpause` without `paused: false` pauses**, `remove_all_widgets` still
+needs `widget_class` and removes that class only, and `inspect` runs
+`inspect_game_mode`, not `inspect_data_table`. Load section `aliases` when a
+call uses, or you are about to send, an operation name that is not one of
+the twelve: it has every alias and what it runs.
 
 ## Class paths
 
@@ -192,15 +200,8 @@ consulted, so this error does not mean the game has no game mode.
 counts as absent, so a class cannot be cleared to `None` with this operation.
 The spectator class has no parameter. The result has `changes`, a list of
 strings such as `DefaultPawnClass=/Game/Characters/BP_Hero.BP_Hero_C`, and the
-message `Updated <n> game mode defaults`.
-
-| Error | Cause |
-|---|---|
-| `No DefaultGameMode set in WorldSettings` | the level has no GameMode Override. Unlike `inspect_game_mode`, a live game mode does not count |
-| `Failed to load pawn class: <path>` | not a class path, or not a pawn class |
-| `Failed to load player controller class: <path>` | likewise |
-| `Failed to load HUD class: <path>` | likewise |
-| `No class overrides specified. Provide at least one of: default_pawn_class, player_controller_class, hud_class` | all three absent or empty |
+message `Updated <n> game mode defaults`. Load section `failures` when it
+returns an error: it has each error and its cause.
 
 ## Player controller (PIE only)
 
@@ -239,37 +240,36 @@ requested and the message `Game paused` or `Game unpaused`.
 **`set_mouse_cursor`** — `show_cursor`, default `true`. The result has
 `show_cursor`.
 
-For both, **send a JSON boolean, `true` or `false`.** The tool reads the
-value through `ExtractOptionalBool` (`MCPToolBase.h`), which calls the
-engine's `FJsonObject::TryGetBoolField`, and that reads any string and any
-number. `true`, `yes`, `on` and `false`, `no`, `off` count in any case; every
-other string is `false` unless it starts with a non-zero integer, and a
-number is `true` when it is not 0.
-The editor language's words for True, Yes, False and No count as well
-(`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
-So `"false"` is read as `false`, and a
+For both, **send a JSON boolean, `true` or `false`.** A string or a number
+is not refused but read as a boolean: `"false"` is read as `false`, and a
 typo such as `"ture"` is read as `false` too. Only `null`, an array or an
 object is not read, and then the default `true` applies without an error
-(`TJsonValueString::TryGetBool`,
-`Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
-source, not run, while the toolkit targets UE 5.6 and 5.7). Read `paused` or
-`show_cursor` in the result.
+(read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
+5.7). Read `paused` or `show_cursor` in the result; when it is not what you
+sent, section `failures` has how every string and number is read.
 
 ## DataTables
 
 Five operations work on any DataTable, whatever its row type:
 `list_data_tables`, `inspect_data_table`, `get_row`, `set_row` and
 `delete_row`. They need neither a level nor PIE. Parameters, results, value
-forms and errors are in section `datatables`. In short:
+forms and errors are in section `datatables`. Load it before your first
+`set_row`, and when a DataTable call returns an error: `set_row` does not
+accept everything `get_row` returns, and an array, a map or a set goes in as
+one string in UE text form. In short:
 
 - `list_data_tables` searches `folder_path` and its subfolders and returns
   `tables` (each `path`, `name`, and `row_struct_name` when known) and
-  `count`;
-- `inspect_data_table` returns `columns` and `row_names`;
+  `count`; a folder that does not exist returns `count: 0`, not an error;
+- `inspect_data_table` returns `columns` and `row_names`. Take column names
+  from here: a row type made in the editor carries generated internal column
+  names, longer than the ones the editor displays;
 - `get_row` returns `row_name` and `row_data`;
 - `set_row` updates the given columns of a row, or adds the row when the name
   is new, and returns `row_data` and `is_new_row`;
-- `delete_row` returns `deleted_row_name`.
+- `delete_row` returns `deleted_row_name`. There is no undo step in the
+  tool: keep the `get_row` result first, so the row can be written back with
+  `set_row`.
 
 The tool cannot create a DataTable or change its row type. For the toolkit's
 character stats tables, `character_data` creates the table and checks values
@@ -285,15 +285,10 @@ field of the tool's own. A failure is only `Error: <message>`. Skill
 
 ## Failure modes
 
-| What you see | What it means | What to do |
-|---|---|---|
-| `PIE is not running. …` right after `start_pie` | the session is still starting | poll `pie_status`, then repeat |
-| `Failed to load widget class` or `… pawn class` for a path that exists | the asset path was passed, or the class has another base | add `.<Name>_C`; check the parent class |
-| the game paused after `unpause` | the alias ran `set_pause` with its default | `set_pause` with `paused: false` |
-| the widget shows twice | `show_widget` was repeated | `remove_widget`, then `show_widget` once |
-| the new pawn class is gone after an editor restart | the game mode asset was not saved, the game mode is a C++ class, or the value did not survive the Blueprint being compiled again, which this skill could not settle from the source | for a Blueprint game mode use `blueprint_modify` `set_cdo_default`, then compile and save (skill `ue-blueprints`, section `modify`); see "What a success does not prove" |
-| `No game mode configured. …` but the game plays | the level relies on the project's default game mode | set a GameMode Override in the level's World Settings, or read the project setting in the editor |
-| a row change is gone after a restart | the table was not saved | `asset` `save_asset` |
+Load section `failures` when `set_game_mode_defaults` returns an error, or
+what you see after a call is not what you expect: it has the failure table
+(what you see, what it means, what to do) and how `paused` and `show_cursor`
+are read. DataTable errors are in section `datatables`.
 
 ## Background in the plugin
 

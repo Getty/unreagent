@@ -30,13 +30,14 @@ frames, running a console command and passing injected input on to the game
 are the engine's work. The skill says what the plugin asks the engine to do,
 and marks what follows from that as unverified.
 
-This skill has three sections:
+This skill has four sections:
 
-| Section | Covers |
-|---|---|
-| `sequences` | `run_sequence` step by step, how a run ends, the manifest, `sequence_status`, and the older `execute_sequence` |
-| `input` | `inject_input` and continuous injection, the input monitor, montages |
-| `log` | `get_output_log`: which file, the filters, the `since` cursor |
+| Section | Covers | Load it |
+|---|---|---|
+| `sequences` | `run_sequence` step by step, how a run ends, the manifest, `sequence_status`, and the older `execute_sequence` | before you write or start a scripted run (the step format is only there), and when a run does not start or end, or its manifest or captures are not what you expect |
+| `input` | `inject_input` and continuous injection, the input monitor, montages | before your first injection, monitor or montage call, and when the game ignores an injected action or a value arrives changed |
+| `log` | `get_output_log`: which file, the filters, the `since` cursor | before you pass `get_output_log` more than `filter` and `lines`, and when a read misses lines you expect |
+| `failures` | the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see after a call is not what you expect |
 
 ## Before the first call
 
@@ -191,9 +192,15 @@ editor died. After a crash, use `logs`, then `read_file` with a negative
 `offset` on the log file (skill `unreagent-files`). To search a large log, use
 `run_python` (skill `unreagent-runtimes`).
 
+`get_output_log` takes the first log file it finds and names it in
+`log_file`. Check it: it can be an older log, such as a backup of an earlier
+session. Load section `log` before you pass more than `filter` and `lines`,
+and when a read misses lines you expect.
+
 ## Typical sequences
 
-**A scripted play test** (section `sequences`)
+**A scripted play test** (load section `sequences` first: the step format
+is only there)
 
 1. `stop_pie`, then `pie_status` until `running` is `false`.
 2. `run_sequence` with `steps`, a fresh `name` and an absolute `output_dir`
@@ -203,7 +210,7 @@ editor died. After a crash, use `logs`, then `read_file` with a negative
    an image reader of your client.
 5. `get_output_log` with `filter: "[PIE-DBG]"`, or `read_file` on the log file.
 
-**Trying input by hand** (section `input`)
+**Trying input by hand** (load section `input` before the first call)
 
 1. `start_pie`, then `pie_status` until `running` is `true`.
 2. `inject_input` for a single press, or `start_continuous` for a held stick.
@@ -211,25 +218,42 @@ editor died. After a crash, use `logs`, then `read_file` with a negative
    `pie_status` for the pawn's position.
 4. `stop_continuous` for each id, then `stop_pie`.
 
-**Watching the user play** (section `input`)
+**Watching the user play** (load section `input` before the first call)
 
 1. `start_monitor` with `start_pie: true`. The user plays.
 2. `stop_monitor`, then `get_output_log` with `filter: "[PIE-DBG]"`.
 
+What the injection, monitor and montage operations do without telling you;
+section `input` has each in full:
+
+- **`value_x` defaults to 1 for every action type**, so an Axis2D call
+  without values sends `(1, 0)`, not zero. Give every axis you mean.
+- **`update_continuous` builds the value from that call alone**: an axis you
+  leave out falls back to its default, so pass every axis each time.
+- **Stop each continuous injection you started.** `stop_pie` ends them all;
+  when PIE ends any other way they stop sending, but their ids stay, and
+  `pie_status` still counts them in a later session.
+- **A single `inject_input` is a single-frame one, and a digital action
+  with a `Pressed` trigger needs the value held across frames** (both from
+  the plugin's notes): use `start_continuous` and stop it again, or a `hold`
+  step in `run_sequence`.
+- **`start_monitor` says `Monitor started (PIE attached)` whenever PIE runs,
+  even when attaching failed**: check `pie_attached`.
+- **With `log_axes`, the monitor stops for good when PIE ends**, although
+  the tool's description says it stays active. Expect its frame cap of 60 to
+  stay (not verified) until `run_console_command` with `t.MaxFPS 0`.
+- **Montage section names are not checked.** A `start_section` or
+  `section_name` the montage does not have still returns success.
+
+Load section `input` as well when the game ignores an injected action or a
+value arrives changed: whether a mapping's triggers and modifiers apply to
+injected values has not been verified.
+
 ## Failure modes
 
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| `PIE is not running. Call start_pie first.` | no PIE session, or it has not started yet | `start_pie`, then poll `pie_status` |
-| `pie_status` stays `running: false` after `start_pie` | the editor has not started the session | poll again, then look for errors in the output log |
-| the game barely moves | probably the editor window is not in front (the plugin's notes) | ask the user to bring it to the front, or use `run_sequence` |
-| `Command '<entry>' is blocked for safety` | the command begins with a blocked entry | use the dedicated tool, or ask the user to run it |
-| `run_console_command` succeeds and nothing changes | the engine did not accept the command, or it did not reach PIE | check the log; in a run, use a `console` step |
-| `A sequence is already running. …` | a run is in progress, or is still waiting for PIE | `sequence_status`; section `sequences` |
-| a parameter seems to have no effect | its name is wrong, and queued calls do not warn | check the name, especially `action` versus `action_path` |
-| two agents' tests interfere | the plugin's state is shared | test one at a time |
-| everything is gone after an editor restart | the state lived in editor memory | start again |
+Load section `failures` when a call returns an error you cannot place, or
+what you see after a call is not what you expect: it has the failure table
+(what you see, what it means, what to do).
 
 ## Background in the plugin
 

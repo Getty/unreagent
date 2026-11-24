@@ -126,8 +126,8 @@ Creates one node. `pos_x` and `pos_y` default to 0. To set input pins at the
 same time, put `pin_values` inside `node_params`: an object of pin name to
 value string. Each value is read with the engine's `FJsonValue::TryGetString`:
 a JSON number or boolean is read as its text, `5`, `0.5` or `true`, and
-`null`, an array or an object is skipped (main document, "Errors common to
-both tools", for the engine source). Send strings, so the text is yours. A pin
+`null`, an array or an object is skipped (section `failures`, "Errors common
+to both tools", for the engine source). Send strings, so the text is yours. A pin
 value that does not apply is skipped without an error, as with `set_pin_value`.
 
 ```json

@@ -28,12 +28,18 @@ operation returns `Unknown operation: '<op>'. Valid: <list>`, plus
 ` Did you mean '<x>'?` when a valid name is close. The tool does not create,
 duplicate or delete an AnimBP (see "Creating an AnimBP").
 
-| Section | Covers |
-|---|---|
-| `state-machines` | `get_info`, `get_state_machine`, `get_state_machine_diagram`, `validate_blueprint`, `create_state_machine`, `connect_state_machine_to_output`, `add_state`, `remove_state`, `set_entry_state`, `set_state_animation`, `batch` |
-| `transitions` | `add_transition`, `remove_transition`, `set_transition_duration`, `set_transition_priority`, `get_transition_nodes`, `inspect_node_pins`, `set_pin_default_value`, `add_condition_node`, `delete_condition_node`, `connect_condition_nodes`, `connect_to_result`, `add_comparison_chain`, `setup_transition_conditions` |
-| `anim-nodes` | `add_anim_node`, `delete_anim_node`, `connect_anim_nodes`, `bind_variable`, `get_anim_node_property`, `set_anim_node_property`, `layout_graph`, `find_animations` |
-| `layers` | `list_layer_interfaces`, `list_layers`, `list_linked_layer_nodes`, `add_layer_interface`, `add_linked_layer_node`, `set_layer_instance`, `inspect_layer_graph` |
+This skill has five sections. No operation's parameters are in this file:
+load the section that covers an operation before you call it. Each holds its
+operations' parameters, results and errors, and what a success of each does
+not prove.
+
+| Section | Covers | Load it |
+|---|---|---|
+| `state-machines` | `get_info`, `get_state_machine`, `get_state_machine_diagram`, `validate_blueprint`, `create_state_machine`, `connect_state_machine_to_output`, `add_state`, `remove_state`, `set_entry_state`, `set_state_animation`, `batch` | before you read an AnimBP's state machines, create or change a state machine or a state, validate, or run `batch` |
+| `transitions` | `add_transition`, `remove_transition`, `set_transition_duration`, `set_transition_priority`, `get_transition_nodes`, `inspect_node_pins`, `set_pin_default_value`, `add_condition_node`, `delete_condition_node`, `connect_condition_nodes`, `connect_to_result`, `add_comparison_chain`, `setup_transition_conditions` | before you add, remove or time a transition, or read or build the condition logic inside one |
+| `anim-nodes` | `add_anim_node`, `delete_anim_node`, `connect_anim_nodes`, `bind_variable`, `get_anim_node_property`, `set_anim_node_property`, `layout_graph`, `find_animations` | before you add, delete, connect, bind or set an animation node, lay out a graph, or search animations with this tool |
+| `layers` | `list_layer_interfaces`, `list_layers`, `list_linked_layer_nodes`, `add_layer_interface`, `add_linked_layer_node`, `set_layer_instance`, `inspect_layer_graph` | before you read or change layer interfaces, layers or linked layer nodes, or pass `target_graph` |
+| `failures` | the errors common to every operation, and the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see after a call is not what you expect |
 
 ## Paths and validation
 
@@ -207,16 +213,7 @@ section `query`, documents their parameters and results.
 
 ## Errors common to every operation
 
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | `blueprint_path` or `operation` is absent or an empty string |
-| `Unknown operation: '<op>'. Valid: …` | misspelt operation |
-| `Cannot access engine or script Blueprints` | `/Engine/` or `/Script/` path |
-| `Failed to load Animation Blueprint: <path>` | nothing loads at that path as an AnimBP; search before you conclude it is missing |
-| `Asset is not an Animation Blueprint: <path>` | the path loads, but not as an AnimBP |
-| `AnimBlueprint has no target skeleton` | the AnimBP has no skeleton; see "The target skeleton" |
-| `State machine '<n>' not found. Available: …` | wrong name; the list shows the names the tool sees |
-| `<x> parameter required`, `<a>, <b>, and <c> parameters required` | the operation's own required parameters; each section lists them |
+The table of these errors and their causes is in section `failures`.
 
 The operations' own checks treat a parameter that is present but empty as
 missing. A parameter the tool cannot read as the type it expects falls back to
@@ -231,15 +228,13 @@ it does not declare them.
 
 ## Failure modes
 
-| What you see | What it means | What to do |
-|---|---|---|
-| plugin tools are missing or every call fails | the editor is not running or still loading | wait for the plugin (`unreagent-iterate`) |
-| a write succeeded, but the change is gone after a restart | the compile failed, so nothing was saved | `validate_blueprint`; fix the graph, or save with `asset save_asset` |
-| `create_state_machine` returned a name, but `get_state_machine` cannot find it | the state machine's real name can differ from the one you asked for | read the names with `get_info` and use those |
-| a node ID that worked before is not found | `blueprint_query` replaced it, or the node is in another graph | `get_transition_nodes` or `inspect_node_pins` to read the current IDs; pass the same graph parameters as when you created it |
-| `batch` or `setup_transition_conditions` "succeeded", but nothing changed | both report failure as success | read `data.success`, `failure_count` and `results` |
-| `setup_transition_conditions` run twice gives doubled conditions | it adds nodes on every run | delete the extra nodes with `delete_condition_node`, or build conditions one by one |
-| `validate_blueprint` says `0 error(s)`, but `is_valid` is false | the compiler's errors are not counted, only the tool's own checks | read `status`; get the messages with `blueprint_modify compile` |
+Load section `failures` when a call returns an error you cannot place, or
+what you see after a call is not what you expect: it has the errors common
+to every operation and the failure table (what you see, what it means, what
+to do). One of its rows is on the call the edit loop above has you make:
+`validate_blueprint` can say `0 error(s)` while `is_valid` is false. The
+compiler's errors are not counted, only the tool's own checks. Read
+`status`.
 
 ## Background in the plugin
 
