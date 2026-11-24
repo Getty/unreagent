@@ -1,0 +1,44 @@
+---
+class: standard
+completed: 2026-11-24T16:16:09Z
+created: 2026-11-21T10:39:06Z
+id: 160
+priority: medium
+started: 2026-11-24T16:00:50Z
+status: done
+tags:
+- windows
+- cli
+- needs-windows
+title: Keep the console open after an error exit when the launcher owns its console
+  (Windows)
+updated: 2026-11-24T16:16:59Z
+---
+
+Found during k48. When unreagent.exe is started from Explorer (double-click, or a file dropped onto it), Windows opens a console that closes as soon as the launcher exits, so every startup error (config error, failed MCP bind, the k48 usage error for a dropped file) is gone before the user can read it. Likely unverified until a Windows run.
+
+Done when: if the launcher is the only process attached to its console (GetConsoleProcessList returns 1), an error exit waits for a key press (with a short hint) before closing; a launch from an existing terminal is unchanged. Win32 via syscall.NewLazyDLL, no cgo; Windows behaviour needs a real run (labelled unverified until then).
+
+Research input 2026-11-21: docs/research/2026-11-21-windows-processes.md section 5 (console ownership, GetConsoleProcessList). Unchecked. Experiment W6 is the Windows run.
+
+Implemented (worker): cmd/launcher/exitpause.go (pauseBeforeExit(sole, in, out): hint + read stdin byte-wise up to the first newline or a read error; no-op when not sole), exitpause_windows.go (soleConsoleClient: GetConsoleMode on stdin AND stderr must succeed, then GetConsoleProcessList with a 1-element buffer must return 1 and hold our own pid; n>1 = buffer too small = others attached, 0 = no console), exitpause_other.go (false), exitpause_test.go; main() calls the pause before both os.Exit (2 usage, 1 error). Hint: 'unreagent stopped with the error above. Press Enter to close this window.' Files named exitpause* not console*: 'console' already names the launcher command console (lifecycle.go, console_test.go). Exit paths: main os.Exit(2)/(1) covered (all run() and sub-command errors, incl. dropped file, config error, MCP bind, editor give-up exit 1, agent exit 1); success exits never wait; NOT covered: an unknown launcher flag/missing flag value (flag.CommandLine is ExitOnError, flag pkg calls os.Exit(2) itself; only reachable from a shortcut, not a double-click/drop), -h (exit 0), runtime panics. Children: run() returns only after wg.Wait, so editor and agent have ended and their jobs are closed before the pause. Not session-bound: one-off commands (RunCommand: console 'c', MCP run_command) and runtime prep (RunOnce) use context.Background; their jobs close only at process exit. A console-subsystem one still running is attached to the console -> count > 1 -> no pause, exits as before. A GUI-subsystem one-off would keep running while the prompt waits (theory, no known case). Known edge: after a session that ran the launcher console loop (editor give-up exit 1, no agent, MCP off), commandLoop's goroutine may still block on stdin and take part of the first Enter -> a second Enter may be needed (or close the window). Risk for the maintainer: any parent that gives the launcher a NEW console (start unreagent.exe, Task Scheduler with a visible console) counts as sole and waits for Enter. Checks (Linux): gofmt -l clean, go vet ./..., GOOS=windows go vet ./..., go test -count=1 ./..., go test -count=1 -race ./cmd/launcher, make windows: all green. Windows behaviour UNVERIFIED (cross-compiled only). W6 manual run: (1) double-click unreagent.exe in a folder with a broken unreagent.yaml (e.g. mcp.address: bad) -> error + hint stay, Enter closes, exit code 1; (2) drop a file onto the exe -> usage error + hint, Enter closes; (3) from cmd.exe with the broken config -> error, prompt returns at once, no hint, echo %ERRORLEVEL% = 1; (4) same from PowerShell ( 1, no hint); (5) unreagent.exe < NUL and | more from cmd -> no hint, no wait; (6) Windows Terminal as default terminal: double-click -> hint shown; note whether Terminal also keeps the tab open on exit 1; (7) give-up case: config without agent, mcp.enabled false, unreal.editor pointing at a missing exe -> exit 1 after the editor give-up; count the Enters needed.
+
+Ready for review: error exits pause for Enter when the launcher is alone on its console (exitpause*.go, main.go). Linux checks green incl. make windows; Windows behaviour unverified (cross-compiled only), manual W6 steps in the previous note. Follow-ups: README exit-code/start lines, unknown-flag exit path not covered.
+
+README: documented the Windows error-exit pause (start step ~line 232, Exit codes section ~line 766); described only, not run on Windows.
+
+Skill text: unreagent-windows now records the exitpause file pair, the GetConsoleProcessList/GetConsoleMode semantics, the not-proof-of-Explorer limit and the unverified-on-Windows status (manual run still open here); unreagent-core's cmd/launcher file table names the three exitpause files.
+
+Review (unreagent-reviewer), verdict: COMMIT. Windows behaviour UNVERIFIED (cross-compiled only); W6 steps in the worker note still needed. Reviewed: cmd/launcher/main.go (diff), exitpause.go, exitpause_windows.go, exitpause_other.go, exitpause_test.go; README.md and .claude/skills/* not reviewed (parallel agents). Check run by reviewer: gofmt -l cmd internal skills agents clean; go vet ./... ok; GOOS=windows go vet ./... ok; go test -count=1 ./... ok; go test -count=1 -race ./cmd/launcher ok; make windows ok.
+Win32 OK: GetConsoleProcessList(LPDWORD, DWORD) -> DWORD, [1]uint32 buffer, count 1; 0 = failure, >1 = required count with buffer untouched, so n==1 && ids[0]==pid is right (the pid compare is redundant but harmless). Only r1 of Call() is used, no separate GetLastError (22f8ca6 hazard not reintroduced). syscall.GetConsoleMode on os.Stdin/os.Stderr Fd works for both input and output handles; a nil os.Stdin (no handle) gives Fd()=invalid -> false. Build tags match job_windows.go. main.go:47-56: error printed before the hint, run() has returned (wg.Wait, jobs closed) before the wait, exit code 2/1 kept.
+Unattended contexts: pipes/redirects (Claude Code Bash, CI runners, services) fail GetConsoleMode -> no wait. cmd/PowerShell/Windows Terminal: the shell is attached -> count >= 2 (OpenConsole/conhost is the host, not a client) -> no wait.
+Findings:
+1. (low, maintainer decision) exitpause_windows.go:21-25 - besides "start unreagent.exe", a Task Scheduler task set to run whether the user is logged on or not gets a hidden console with console stdin: count 1, so an error exit waits for an Enter nobody can press until the task time limit (default 72h). Same for any CREATE_NEW_CONSOLE parent. Unattended scheduled use of the launcher seems unlikely; if it matters, add a guard (e.g. IsWindowVisible(GetConsoleWindow())) or a timeout. Worth a line in the comment and the W6 run.
+2. (low, known) Command-loop edge is real but safe: os.Stdin reads on Windows go through poll.FD.readLock and one shared readConsole buffer, so commandLoop goroutine and the pause read one at a time and split bytes - no panic, no data race. If the loop takes the Enter, ctx is already cancelled (NotifyContext stop deferred in run), it returns, and a second Enter is needed. Acceptable as documented.
+3. (low, tests) exitpause_test.go:35 asserts a property of the constant, not of the code - harmless. exitpause_test.go:67 - a pause that ignores the read error hangs until the go test timeout instead of failing fast; a select with time.After would fail it clearly. Not blocking. The other assertions do fail when the logic breaks (reads when not sole, no hint, reads past the first line or not at all).
+4. (info) Uncovered paths: flag.CommandLine ExitOnError (bad flag, exit 2) and panics. Not reachable by double-click (no args) or drop (Explorer passes full paths, never "-..."); the drop lands in unknownSubcommand -> usageError -> covered. No other os.Exit/log.Fatal in cmd/launcher.
+No German, scope within cmd/ (unreagent-worker per OWNERS).
+
+No visibility guard for a hidden console (e.g. a scheduled task): on Windows 11 with Windows Terminal as the default host a double-click runs under ConPTY, where the console window handle is a hidden pseudo-window, so an IsWindowVisible guard would likely switch the pause off in the main case. Left as is and documented in the README; revisit only if an unattended start is actually hit. Windows run (W6) still open: the manual steps are in the worker's note.
+
+Committed as ba742d5 (Changes entry included). Windows behaviour unverified; W6 still open.
