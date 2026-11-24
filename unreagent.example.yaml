@@ -271,7 +271,10 @@ mcp:
   #   serverInfo object passes; any other id-1 response fails at once (an
   #   error names its code and message, a result without serverInfo says
   #   so); other lines are skipped, 20 s timeout)
-  #   -> is UNREAL_MCP_URL reachable?
+  #   -> wait for UNREAL_MCP_URL: once the port opens, poll the toolkit's
+  #   GET /mcp/status (3 s per request) and log the tool count; warn if the
+  #   port is open but nothing answers within 5 minutes (blocked game thread,
+  #   e.g. a modal "Restore Packages" dialog, or a still-loading editor)
   # strict: false   # true = ONLY these servers (ignore the project's own .mcp.json)
   # extraServers:
   #   ue-llm-toolkit:

@@ -1,6 +1,14 @@
 Revision history for unreagent
 
 {{$NEXT}}
+  - The editor readiness check polls the UE LLM Toolkit's GET /mcp/status
+    (3 s per request, inside the existing 5-minute wait) instead of logging
+    "is reachable" on a bare TCP connect, and logs ready with the tool count,
+    project and engine version. A 404, a redirect, or a 200 that is not the
+    toolkit's JSON is reported as reachable but probably another server. A port
+    that is open but never answers /mcp/status gets its own warning pointing at
+    a blocked editor game thread (for example a modal dialog). Extra http/sse
+    servers keep the bare connect.
   - hermes-setup merges into the existing Hermes config instead of replacing
     it: other keys and MCP servers survive, the original is copied to .bak and
     an existing .bak is never overwritten. If a release up to 0.0.9 wiped your

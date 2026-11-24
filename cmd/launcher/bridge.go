@@ -8,13 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/conflict-industries/unreagent/internal/config"
 	"github.com/conflict-industries/unreagent/internal/supervisor"
@@ -547,11 +551,13 @@ func jsErrorLine(line string) bool {
 }
 
 // endpointWaitWindow is how long waitForEndpoint keeps trying a URL before it
-// warns; endpointPollInterval is the pause between two tries. Vars so tests
-// can shorten them.
+// warns; endpointPollInterval is the pause between two tries;
+// endpointStatusTimeout bounds one GET of the toolkit's status route. Vars so
+// tests can shorten them.
 var (
-	endpointWaitWindow   = 5 * time.Minute
-	endpointPollInterval = 5 * time.Second
+	endpointWaitWindow    = 5 * time.Minute
+	endpointPollInterval  = 5 * time.Second
+	endpointStatusTimeout = 3 * time.Second
 )
 
 // endpoint is the kind of URL waitForEndpoint watches, with the words its log
@@ -591,21 +597,31 @@ func dialAddr(u *url.URL) string {
 	return net.JoinHostPort(u.Hostname(), port)
 }
 
-// waitForEndpoint reports once as soon as rawURL accepts a TCP connection — the
-// editor needs time to start up, and so does a server in it. The probe is a
-// bare connect: no request, no MCP session, nothing for the server to act on.
-// If no connection is made within endpointWaitWindow, there is one warning
-// naming the usual suspects. It returns silently once ctx ends.
+// waitForEndpoint reports once as soon as rawURL is up — the editor needs
+// time to start up, and so does a server in it. If it is not up within
+// endpointWaitWindow, there is one warning naming the usual suspects. It
+// returns silently once ctx ends.
+//
+// What "up" means depends on ep. For an http/sse entry (remoteEndpoint) it is
+// a bare TCP connect: no request, no MCP session, nothing for the server to
+// act on. For the editor's own server (editorEndpoint) a connect is not
+// enough (k205): the toolkit's listener accepts seconds before it serves HTTP
+// — requests are handled on the game thread, which a modal dialog can block
+// for good. Once the port is open, each try GETs <url>/mcp/status (the path
+// the bridge uses) with endpointStatusTimeout; only a 200 with a JSON object
+// counts as ready. A 404, a redirect or a 200 that is not JSON means another
+// listener or a toolkit without the route, so the connect is reported as it
+// was, tool count unknown. A timeout or any other answer is "not ready yet".
 //
 // The lines show scheme, host and path only: user info and query can carry a
 // token, and headers are never read here.
 //
 // notRunning, when not nil, is asked at the warning for what the launcher
 // knows about the editor (k253): a non-empty answer replaces the hint, which
-// only guesses at a firewall or a localhost-only server. It applies to the
-// editor's own server (editorEndpoint) alone.
+// only guesses at a firewall, a localhost-only server or a blocked game
+// thread. It applies to the editor's own server (editorEndpoint) alone.
 func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL string, notRunning func() string, logger func(string)) {
-	window, pause := endpointWaitWindow, endpointPollInterval
+	window, pause, statusTimeout := endpointWaitWindow, endpointPollInterval, endpointStatusTimeout
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
 		logger("WARN MCP server '" + name + "': " + ep.field + " is not a URL with a host — its reachability is not checked.")
@@ -613,29 +629,159 @@ func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL strin
 	}
 	addr := dialAddr(u)
 	shown := ep.what + (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+	prefix := "MCP server '" + name + "': " + shown
 
 	wctx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	dialer := net.Dialer{Timeout: 3 * time.Second}
+	var status *statusProbe
+	if ep == editorEndpoint {
+		status = newStatusProbe(u, statusTimeout)
+	}
+	opened := false  // some try connected; the window can end inside a later dial
+	lastAnswer := "" // the last non-200 answer of the status route, e.g. "HTTP 503"
 	for {
-		if conn, err := dialer.DialContext(wctx, "tcp", addr); err == nil {
+		conn, err := dialer.DialContext(wctx, "tcp", addr)
+		if err == nil {
+			opened = true
 			_ = conn.Close()
-			logger("MCP server '" + name + "': " + shown + " is reachable.")
-			return
+			if status == nil {
+				logger(prefix + " is reachable.")
+				return
+			}
+			if line, done := status.try(wctx, &lastAnswer); done {
+				logger(prefix + line)
+				return
+			}
 		}
 		select {
 		case <-time.After(pause):
 		case <-wctx.Done():
-			if ctx.Err() == nil { // the window ran out, not the launcher
-				hint := ep.hint
-				if notRunning != nil && ep == editorEndpoint {
-					if why := notRunning(); why != "" {
-						hint = why
-					}
-				}
-				logger(fmt.Sprintf("WARN MCP server '%s': %s not reachable after %s — %s", name, shown, window, hint))
+			if ctx.Err() != nil { // the launcher ends, not the window
+				return
 			}
+			hint := ep.hint
+			what := fmt.Sprintf(" not reachable after %s", window)
+			if opened && status != nil {
+				what = fmt.Sprintf(": port open, but the toolkit did not answer %s within %s", statusPath, window)
+				if lastAnswer != "" {
+					what += " (last answer: " + lastAnswer + ")"
+				}
+				hint = "is the editor's game thread blocked, e.g. by a modal dialog such as \"Restore Packages\" after a crash, or is it still loading? No editor tool can run until it answers."
+			}
+			if notRunning != nil && ep == editorEndpoint {
+				if why := notRunning(); why != "" {
+					hint = why
+				}
+			}
+			logger("WARN " + prefix + what + " — " + hint)
 			return
 		}
 	}
+}
+
+// statusPath is the toolkit's status route, relative to UNREAL_MCP_URL; the
+// bridge appends the same path (lib.js checkUnrealConnection).
+const statusPath = "/mcp/status"
+
+// statusBodyLimit caps how much of a status answer is read: it lists every
+// tool with its description, a few dozen kilobytes for the toolkit's set.
+const statusBodyLimit = 4 << 20
+
+// statusProbe GETs the toolkit's status route for waitForEndpoint.
+type statusProbe struct {
+	url    string
+	client *http.Client
+}
+
+func newStatusProbe(u *url.URL, timeout time.Duration) *statusProbe {
+	su := url.URL{Scheme: u.Scheme, User: u.User, Host: u.Host, Path: strings.TrimSuffix(u.Path, "/") + statusPath}
+	return &statusProbe{
+		url: su.String(),
+		client: &http.Client{
+			Timeout: timeout,
+			// Loopback as a rule: no proxy from the environment, and no
+			// connection kept open in the editor between tries.
+			Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+			// A redirect is an answer from something that is not the toolkit;
+			// try reports it instead of following it.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}
+}
+
+// try GETs the status route once. done reports an answer that ends the watch,
+// with the rest of its log line: a 200 with a JSON object (ready), or an
+// answer that is not the toolkit's — a 404, a 3xx, a 200 that is not JSON.
+// Anything else — a timeout, a reset, another status code — means not ready
+// yet; another code is kept in *lastAnswer for the warning.
+func (p *statusProbe) try(ctx context.Context, lastAnswer *string) (line string, done bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
+	if err != nil {
+		return "", false
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	switch code := resp.StatusCode; {
+	case code == http.StatusOK:
+		about, ok := describeStatus(io.LimitReader(resp.Body, statusBodyLimit))
+		if !ok {
+			return " is reachable and answers " + statusPath + " with 200, but not with the toolkit's JSON — probably another server on that port; tool count unknown.", true
+		}
+		return " is ready — " + about + ".", true
+	case code == http.StatusNotFound:
+		return " is reachable, but " + statusPath + " answers 404 — another server on that port, or a toolkit without the status route; tool count unknown.", true
+	case code >= 300 && code < 400:
+		return " is reachable, but " + statusPath + " redirects (HTTP " + strconv.Itoa(code) + ") — not the toolkit's answer; tool count unknown.", true
+	default:
+		*lastAnswer = "HTTP " + strconv.Itoa(resp.StatusCode)
+		return "", false
+	}
+}
+
+// describeStatus is what the log line says about a 200 status answer: the
+// tool count, plus project and engine when present. ok is false when the body
+// is not a JSON object at all (an HTML page, say): that is not the toolkit. A
+// JSON object without a usable count still means ready; only the count is
+// unknown then.
+func describeStatus(body io.Reader) (string, bool) {
+	var raw json.RawMessage
+	if err := json.NewDecoder(body).Decode(&raw); err != nil || !bytes.HasPrefix(raw, []byte("{")) {
+		return "", false
+	}
+	var st struct {
+		ToolCount     *float64 `json:"toolCount"`
+		ProjectName   string   `json:"projectName"`
+		EngineVersion string   `json:"engineVersion"`
+	}
+	// A field of the wrong type fails the decode but the others still fill
+	// in; the count is unknown then (the pointer may be set to a zero value).
+	if err := json.Unmarshal(raw, &st); err != nil || st.ToolCount == nil || *st.ToolCount < 0 || *st.ToolCount != math.Trunc(*st.ToolCount) {
+		return "the toolkit answers " + statusPath + ", tool count unknown", true
+	}
+	s := fmt.Sprintf("the toolkit lists %d tools", int64(*st.ToolCount))
+	var about []string
+	if v := logSafe(st.ProjectName); v != "" {
+		about = append(about, "project "+v)
+	}
+	if v := logSafe(st.EngineVersion); v != "" {
+		about = append(about, "engine "+v)
+	}
+	if len(about) > 0 {
+		s += " (" + strings.Join(about, ", ") + ")"
+	}
+	return s, true
+}
+
+// logSafe is s for a log line, or "" when it is long or carries a rune that
+// is not printable — control and format characters such as U+202E included:
+// it comes from whatever listens on the port.
+func logSafe(s string) string {
+	if len(s) > 120 || strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return ""
+	}
+	return s
 }

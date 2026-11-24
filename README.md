@@ -85,8 +85,10 @@ answer a real `initialize` handshake
 object passes; any other response with id 1 fails at once — an error names
 its code and message, a result without `serverInfo` says so; any other
 stdout line is skipped, and 20 seconds without an answer fail it)? And once
-the in-editor server (`UNREAL_MCP_URL`) is reachable, that's logged too — or
-a warning with the usual suspects if it isn't. These checks run only for
+the in-editor server (`UNREAL_MCP_URL`) answers, that's logged too (once the
+port opens, the launcher asks the toolkit's `GET /mcp/status` and logs the tool
+count, plus project and engine version when it reports them) — or a warning
+with the usual suspects if it doesn't. These checks run only for
 stdio entries (those with a `command`). An HTTP / SSE entry such as Unreal
 MCP gets only a reachability watch, see
 [Option A: Unreal MCP](#option-a-unreal-mcp-ue-58-built-in-experimental) below.
@@ -895,8 +897,9 @@ Things to know:
 
 - **Reachability watch only.** The launcher's startup checks (binary,
   `node_modules`, `initialize` smoke test) run only for stdio entries with a
-  `command`. An HTTP / SSE entry is instead watched for reachability, like
-  the in-editor `UNREAL_MCP_URL`: once bridge preparation is done, the
+  `command`. An HTTP / SSE entry is instead watched for reachability (the
+  in-editor `UNREAL_MCP_URL` gets a stricter watch, see
+  [Troubleshooting](#troubleshooting-failed-to-reconnect--32000)): once bridge preparation is done, the
   launcher tries a TCP connect to the URL's host and port for 5 minutes and
   logs one line, either
   `MCP server 'unreal-mcp': http://127.0.0.1:8010/mcp is reachable.` or, if
@@ -1052,7 +1055,7 @@ Windows with npm 10.9.2). A bridge without a lock gets none written either.
 
 What the launcher does **automatically** on startup (see above): install
 bridge `node_modules`, check binary / script, `initialize` smoke test, wait
-for port 3000 — every step with a clear message in `unreagent.log`. In window
+for the toolkit on port 3000 to answer — every step with a clear message in `unreagent.log`. In window
 mode the first line of a `WARN` from this preparation (a missing bridge
 command, a failed install or smoke test, an unreachable `UNREAL_MCP_URL`, a
 failed runtime preparation) also goes to stderr; the full text stays in
@@ -1125,7 +1128,19 @@ suspects, in this order:
    the folder — `npm install` can report a partial tree as up to date, so
    installing again does not repair it.
 4. **Editor (not yet) reachable** — port 3000 only appears once the editor
-   is fully up; the launcher logs once it is.
+   is fully up; the launcher logs once it is. A bare connect is not enough
+   here: once the port is open, the launcher polls the toolkit's
+   `GET /mcp/status` (3 s per request, inside the same 5-minute wait). A 200
+   is logged as ready, with the tool count and, when the body carries them,
+   project name and engine version. A 404 is logged as reachable but without
+   the status route (another server on the port, or a toolkit without the
+   route); the tool count is then unknown. A redirect, or a 200 that is not
+   the toolkit's JSON, is reported the same way: reachable, but probably
+   another server on that port. If the port is open but nothing
+   answers before the deadline, the warning says so and points at a blocked
+   game thread (for example a modal "Restore Packages" dialog left by a crash
+   — answer it in the editor window) or an editor that is still loading. If
+   the port never opens, the plain "not reachable" warning appears.
 
 For **Unreal MCP** the chain is shorter, because there is no bridge process:
 if Claude Code shows the server as failed, the usual suspects are, in this
@@ -1137,7 +1152,8 @@ editor was not up yet when the agent started (reconnect with `/mcp`); or the
 port or path in the `extraServers` URL does not match the "Model Context
 Protocol" settings (or `-ModelContextProtocolPort`). Since the launcher
 only watches HTTP entries for reachability (a TCP connect, not an MCP
-check), `unreagent.log` tells you whether the port answered at all: a
+check; this is the extra-server watch, the toolkit's own port gets the
+status poll described in the chain above), `unreagent.log` tells you whether the port answered at all: a
 `... is reachable.` line means the editor's server was up (reconnect with
 `/mcp`), the `not reachable after 5m0s` warning means it never answered
 within 5 minutes, so check the plugins, port and path first. When the launcher

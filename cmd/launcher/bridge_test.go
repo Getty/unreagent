@@ -1101,7 +1101,8 @@ func TestPrepareMCPBridgesEditorWatchWaitsForLaterInstall(t *testing.T) {
 		t.Fatalf("bridge preparation still running 10s after the last release:\n%s", log.String())
 	}
 	for _, name := range names {
-		waitForLine(t, &log, "MCP server '"+name+"': in-editor server "+srv.URL+"/mcp is reachable.", 5*time.Second)
+		// The stub answers 404 on the status route: the bare-connect fallback (k205).
+		waitForLine(t, &log, "MCP server '"+name+"': in-editor server "+srv.URL+"/mcp is reachable, but /mcp/status answers 404", 5*time.Second)
 	}
 }
 
