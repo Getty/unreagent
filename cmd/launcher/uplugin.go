@@ -88,12 +88,7 @@ func checkPluginEngineVersions(project, engineDir string, args []string, logger 
 	if len(plugins) == 0 {
 		return
 	}
-	disablePlugins := false
-	for _, a := range args {
-		if strings.Contains(strings.ToLower(a), "disableplugins=") {
-			disablePlugins = true
-		}
-	}
+	disablePlugins := disablesPlugins(args)
 	refusal := "the editor asks on every start whether to load it anyway and waits for an answer (No starts it without the plugin)"
 	if hasEditorSwitch(args, "unattended") {
 		refusal = "the editor asks whether to load it anyway, and under -unattended the answer is No: the editor starts without it"
@@ -137,6 +132,18 @@ func checkPluginEngineVersions(project, engineDir string, args []string, logger 
 		logger(fmt.Sprintf("WARN plugin '%s': its EngineVersion %q does not match the engine's compatible version %s, so %s. Remove \"EngineVersion\" from %s, or set it to %q.",
 			name, declared, engine, refusal, path, engine.short()))
 	}
+}
+
+// disablesPlugins reports an editor argument that holds "DisablePlugins=",
+// in any case: it may switch off any plugin, which the launcher does not
+// read.
+func disablesPlugins(args []string) bool {
+	for _, a := range args {
+		if strings.Contains(strings.ToLower(a), "disableplugins=") {
+			return true
+		}
+	}
+	return false
 }
 
 // pluginName is the name the engine gives the plugin of a .uplugin file.

@@ -16,11 +16,13 @@ import (
 const (
 	// helperRunsEnv names the file the "runs" helper appends one line to per
 	// run; helperPatternEnv how each run ends: 'f' fails at once, 's' fails
-	// after the duration in helperSlowEnv, 'o' exits 0 at once. Runs past the
-	// end of the pattern repeat its last letter.
+	// after the duration in helperSlowEnv, 'l' after the one in helperLongEnv,
+	// 'o' exits 0 at once. Runs past the end of the pattern repeat its last
+	// letter.
 	helperRunsEnv    = "UNREAGENT_TEST_RUNS"
 	helperPatternEnv = "UNREAGENT_TEST_PATTERN"
 	helperSlowEnv    = "UNREAGENT_TEST_SLOW"
+	helperLongEnv    = "UNREAGENT_TEST_LONG"
 )
 
 // helperRuns is the "runs" helper mode: it counts its own runs in a file, so
@@ -47,6 +49,9 @@ func helperRuns(out *bufio.Writer) {
 		os.Exit(0)
 	case 's':
 		d, _ := time.ParseDuration(os.Getenv(helperSlowEnv))
+		time.Sleep(d)
+	case 'l':
+		d, _ := time.ParseDuration(os.Getenv(helperLongEnv))
 		time.Sleep(d)
 	}
 	out.Flush()

@@ -1590,3 +1590,67 @@ agent:
 		})
 	}
 }
+
+// k251 through run(), the k226 Path B step 4 shape: a project plugin whose
+// module has no binary, and an editor stand-in (under the engine editor's
+// Windows name) that fails every run after the fast-fail window. The start
+// WARN names the plugin module; the restart policy gives up after three runs
+// instead of restarting without end, through the one give-up path: the
+// supervisor's line names the editor's crash-loop window, and the editor's
+// failure line repeats the plugin pointer. It takes over 30 s: each run must
+// outlast supervisor.FastFailWindow. A real Windows editor is untested.
+func TestRunGivesUpOnAnEditorThatFailsEveryRunAfterTheFastFailWindow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("three editor runs of over 10 s each")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	editor := filepath.Join(dir, "UE", "Engine", "Binaries", "Win64", "UnrealEditor.exe")
+	if err := os.MkdirAll(filepath.Dir(editor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ran := supervisor.FastFailWindow + 300*time.Millisecond
+	script := fmt.Sprintf("#!/bin/sh\nsleep %.1f\nexit 1\n", ran.Seconds())
+	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(dir, "Demo.uproject")
+	mustWriteFile(t, project, `{"FileVersion": 3}`)
+	plugin := filepath.Join(dir, "Plugins", "Kit")
+	mustWriteFile(t, filepath.Join(plugin, "Kit.uplugin"), `{"Modules": [{"Name": "Kit", "Type": "Editor", "LoadingPhase": "PostEngineInit"}]}`)
+	mustWriteFile(t, filepath.Join(plugin, "Source", "Kit", "Kit.Build.cs"), "")
+	yaml := `unreal:
+  editor: ` + editor + `
+  project: ` + project + `
+  unattended: false
+  restartDelaySeconds: 1
+mcp:
+  enabled: false
+permissions:
+  enabled: false
+runtimes:
+  python: { enabled: false }
+  node: { enabled: false }
+commands:
+  compile: { command: echo }
+agent:
+  enabled: false
+`
+	l := startLauncherIn(t, dir, yaml)
+	l.waitLine(t, "WARN plugin modules look unbuilt: Kit (plugin Kit)")
+	giveUp := fmt.Sprintf("[ue] failed 3 times in a row, each within %s of its start — giving up (no automatic restart)", editorCrashLoopWindow)
+	l.waitLineWithin(t, giveUp, 60*time.Second)
+	l.waitLine(t, "The editor failed and is not restarted. The project's plugin modules still look unbuilt: Kit (plugin Kit)")
+	if err := l.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	if code := l.exitCode(t); code != 0 {
+		t.Fatalf("exit code %d after a signal, want 0:\n%s\nstderr: %s", code, l.stdout, l.stderr.String())
+	}
+	if n := strings.Count(l.stdout.String(), "[ue] started (pid"); n != 3 {
+		t.Errorf("the editor started %d times, want 3:\n%s", n, l.stdout)
+	}
+	if strings.Contains(l.stdout.String(), "[ue] restart 3") {
+		t.Errorf("a fourth run was armed:\n%s", l.stdout)
+	}
+}

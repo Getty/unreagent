@@ -34,7 +34,7 @@ type ServiceSpec struct {
 	Autostart    bool
 	StartDelay   time.Duration
 	Restart      string // never | on-failure | always
-	MaxRestarts  int    // 0 = unlimited — but one that keeps failing at its start is given up on (giveUp in runService)
+	MaxRestarts  int    // 0 = unlimited — but one that keeps failing at its start, or within CrashLoopWindow, is given up on (giveUp in runService)
 	RestartDelay time.Duration
 	// PreStart is called before every (re)start of the process (e.g. to clean
 	// up recovery files); Start says which start it is.
@@ -46,7 +46,7 @@ type ServiceSpec struct {
 	Foreground bool
 	// OnExit fires when the process ends and is NOT restarted automatically
 	// (policy, MaxRestarts exhausted, a start that cannot be retried, or the
-	// fast-fail give-up) but was still "desired" — i.e. an unexpected end, not
+	// fast-fail or CrashLoopWindow give-up) but was still "desired" — i.e. an unexpected end, not
 	// a manual stop. A StopService that is already waiting when the process
 	// ends on its own wins over the exit: OnExit does not fire for it. Nor
 	// does it for a StartService or RestartService waiting then, which is
@@ -97,6 +97,16 @@ type ServiceSpec struct {
 	// only; elsewhere there is no job to look into and the grace never
 	// applies.
 	ReporterGrace time.Duration
+	// CrashLoopWindow, when above 0, widens the give-up of the unlimited
+	// default (MaxRestarts 0) to a service that fails the same way on every
+	// run but only after FastFailWindow: fastFailLimit failed runs in a row
+	// (non-zero exit or failed start), each ending within CrashLoopWindow of
+	// its start, are given up on too (k251). A run that outlasts it or exits
+	// 0 resets that count, as a StartService or RestartService does. The run's
+	// length is measured from its spawn to its exit, before the output drain
+	// and before any ReporterGrace. A configured MaxRestarts keeps its exact
+	// meaning, as for the FastFailWindow give-up.
+	CrashLoopWindow time.Duration
 }
 
 // Retry tells ServiceSpec.OnStartRetry about a failed start that is retried.
@@ -136,9 +146,9 @@ type Start struct {
 	// or without StartDelay) and for StartService / RestartService.
 	Automatic bool
 	// AfterGiveUp is true for the first start after the service failed and was
-	// not restarted — the fast-fail give-up, a used-up MaxRestarts, a policy
-	// that does not restart the failure, a start that cannot be retried (what
-	// OnExit reports with Success false). Only StartService or RestartService
+	// not restarted — the fast-fail or CrashLoopWindow give-up, a used-up
+	// MaxRestarts, a policy that does not restart the failure, a start that
+	// cannot be retried (what OnExit reports with Success false). Only StartService or RestartService
 	// start it then, so it is never Automatic.
 	AfterGiveUp bool
 	// ReplacesRestart is true for a StartService or RestartService that comes
@@ -616,9 +626,11 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		desired     = spec.Autostart
 		// startedAt is when the running process started; quickFails counts
 		// the failed runs in a row that ended within fastFailWindow of their
-		// start.
+		// start, shortFails those that ended within spec.CrashLoopWindow
+		// (none while it is 0).
 		startedAt  time.Time
 		quickFails int
+		shortFails int
 		// lastErr is why the last start attempt failed; a successful start
 		// clears it (ServiceStatus.LastError).
 		lastErr string
@@ -638,30 +650,42 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		held *Start
 	)
 
-	// countRun is told whether the run that just ended failed early: a failed
-	// start, or a non-zero exit within fastFailWindow of its start. Only such
-	// runs count; a clean exit or a run that outlasts the window resets the
-	// count — under restart: always a job that finishes quickly with exit 0 is
-	// what was asked for.
-	countRun := func(failedEarly bool) {
-		if failedEarly {
-			quickFails++
-		} else {
+	// countRun is told whether the run that just ended failed (a failed
+	// start, or a non-zero exit) and how long it ran, 0 for a failed start.
+	// Only failures count, each toward the window it ended within: a clean
+	// exit, or a run that outlasts a window, resets that window's count —
+	// under restart: always a job that finishes quickly with exit 0 is what
+	// was asked for.
+	countRun := func(failed bool, ran time.Duration) {
+		quickFails, shortFails = quickFails+1, shortFails+1
+		if !failed || ran >= s.fastFailWindow {
 			quickFails = 0
+		}
+		if !failed || ran >= spec.CrashLoopWindow {
+			shortFails = 0
 		}
 	}
 	// giveUp is asked when the policy would restart the service. It reports
-	// (and logs) a service that keeps failing right after its start, which is
+	// (and logs) a service that keeps failing soon after its start, which is
 	// restarted no more. The rule only bounds the unlimited default
 	// (MaxRestarts 0): a configured maxRestarts keeps its exact meaning, and a
 	// long-lived service is still restarted without bound. Design choice for
 	// k70: fastFailLimit failures in a row, each within the window, and only
-	// failures count (see k70).
+	// failures count (see k70); k251 adds the spec's CrashLoopWindow as a
+	// second, wider window with the same limit.
 	giveUp := func() bool {
-		if spec.MaxRestarts > 0 || quickFails < fastFailLimit {
+		if spec.MaxRestarts > 0 {
 			return false
 		}
-		s.logf("[%s] failed %d times in a row, each within %s of its start — giving up (no automatic restart)", spec.Name, quickFails, s.fastFailWindow)
+		window := s.fastFailWindow
+		switch {
+		case quickFails >= fastFailLimit:
+		case shortFails >= fastFailLimit:
+			window = spec.CrashLoopWindow
+		default:
+			return false
+		}
+		s.logf("[%s] failed %d times in a row, each within %s of its start — giving up (no automatic restart)", spec.Name, fastFailLimit, window)
 		return true
 	}
 
@@ -792,7 +816,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 				return
 			}
 			// No process to time: a failed start is the earliest failure there is.
-			countRun(true)
+			countRun(true, 0)
 			if desired && shouldRestart(spec, restarts, false) && !giveUp() {
 				restarts++
 				// As after an exit: the log says that a retry comes (k152).
@@ -866,7 +890,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 		switch msg.kind {
 		case ctrlStart:
 			desired = true
-			restarts, quickFails, lastExit = 0, 0, ""
+			restarts, quickFails, shortFails, lastExit = 0, 0, 0, ""
 			pre := Start{ReplacesRestart: replacesRestart()}
 			backoff = nil
 			if cmd == nil {
@@ -881,7 +905,7 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			s.logf("[%s] stopped (manual)", spec.Name)
 		case ctrlRestart:
 			desired = true
-			restarts, quickFails, lastExit = 0, 0, ""
+			restarts, quickFails, shortFails, lastExit = 0, 0, 0, ""
 			pre := Start{ReplacesRestart: replacesRestart()}
 			backoff = nil
 			stop()
@@ -940,9 +964,11 @@ func (s *Supervisor) runService(ctx context.Context, svc *service) {
 			}
 
 		case err := <-waitChOrNil(waitCh):
-			// Timed before the drain, which may wait for a grandchild.
-			failedEarly := err != nil && time.Since(startedAt) < s.fastFailWindow
-			countRun(failedEarly)
+			// Timed before the drain, which may wait for a grandchild, and
+			// before a job is kept for its crash reporter.
+			ran := time.Since(startedAt)
+			failedEarly := err != nil && ran < s.fastFailWindow
+			countRun(err != nil, ran)
 			if job != nil {
 				if err != nil && spec.ReporterGrace > 0 && s.reporterIn(spec.Name, job, spec.ReporterGrace) {
 					// A failed run whose crash reporter is still in its job,

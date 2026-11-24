@@ -478,6 +478,54 @@ func TestInitFindingsNameTheFix(t *testing.T) {
 			"0 blocking, 3 warning(s)")
 		wantNone(t, out, "needed only for")
 	})
+	// k251: the toolkit added by the command init prints, not built yet. The
+	// project's own module is built, so only the plugin's line can warn.
+	const kitModules = `{"Modules": [{"Name": "UELLMToolkit", "Type": "Editor", "LoadingPhase": "PostEngineInit"}]}`
+	t.Run("toolkit there, its module unbuilt", func(t *testing.T) {
+		tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
+		tr.toolkit(kitModules, true)
+		mustWriteFile(t, filepath.Join(tr.dir, filepath.FromSlash(toolkitPlugin), "Source", "UELLMToolkit", "UELLMToolkit.Build.cs"), "")
+		tr.built()
+		mustWriteFile(t, tr.config(), "commands:\n  compile: {command: build.bat, args: [GameEditor]}\n")
+		out, err := tr.run(true)
+		if err != nil {
+			t.Fatalf("init failed on warnings alone: %v\n%s", err, out)
+		}
+		wantAll(t, out,
+			"[ok]       project modules: built",
+			"[WARN]     plugin modules: UELLMToolkit (plugin UELLMToolkit) look unbuilt — no Binaries/Win64/UnrealEditor-<Name>.dll for them in their plugin's directory",
+			"a heuristic, not verified against a real project",
+			"cannot load that plugin and shuts down (seen once, UE 5.8.4: exit 0xC0000005 about 80 s after its start), and the launcher gives up on it after a few tries",
+			"build the project's editor target (GameEditor, Win64, Development) in your IDE, or run what the launcher's compile command runs:",
+			"    build.bat GameEditor")
+	})
+	t.Run("toolkit there and built", func(t *testing.T) {
+		tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
+		tr.toolkit(kitModules, true)
+		plugin := filepath.Join(tr.dir, filepath.FromSlash(toolkitPlugin))
+		mustWriteFile(t, filepath.Join(plugin, "Source", "UELLMToolkit", "UELLMToolkit.Build.cs"), "")
+		mustWriteFile(t, filepath.Join(plugin, "Binaries", "Win64", "UnrealEditor-UELLMToolkit.dll"), "")
+		tr.built()
+		out, _ := tr.run(true)
+		wantAll(t, out, "[ok]       plugin modules: built, as far as unreagent can tell", "0 blocking, 0 warning(s)")
+	})
+	t.Run("no plugin module to check", func(t *testing.T) {
+		tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
+		tr.toolkit(`{}`, true)
+		tr.built()
+		out, _ := tr.run(true)
+		wantNone(t, out, "plugin modules")
+	})
+	t.Run("plugin modules not checked under -NoEnginePlugins", func(t *testing.T) {
+		tr := newInitTree(t, buildVersion584, "node", "npm", "claude")
+		tr.toolkit(kitModules, true)
+		mustWriteFile(t, filepath.Join(tr.dir, filepath.FromSlash(toolkitPlugin), "Source", "UELLMToolkit", "UELLMToolkit.Build.cs"), "")
+		tr.built()
+		mustWriteFile(t, tr.config(), "unreal:\n  args: [-NoEnginePlugins]\n")
+		out, _ := tr.run(true)
+		wantAll(t, out, "[info]     plugin modules: not checked — the editor's arguments carry -NoEnginePlugins or -DisablePlugins=")
+		wantNone(t, out, "plugin modules: UELLMToolkit")
+	})
 }
 
 // A word among the arguments and a bad flag are usage errors before anything

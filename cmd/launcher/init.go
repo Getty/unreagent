@@ -242,6 +242,7 @@ func preflight(cfg *config.Config, info config.Info) []finding {
 
 	if info.Project != "" {
 		fs = append(fs, moduleFinding(cfg, info))
+		fs = append(fs, pluginModuleFindings(cfg, info)...)
 	}
 
 	if cfg.Permissions.Enabled {
@@ -391,10 +392,36 @@ func moduleFinding(cfg *config.Config, info config.Info) finding {
 	if len(missing) == 0 {
 		return finding{levelOK, "project modules: built, as far as unreagent can tell" + moduleHeuristic, ""}
 	}
+	return finding{levelWarn, "project modules: " + strings.Join(missing, ", ") + " look unbuilt — no Binaries/Win64/UnrealEditor-<Name>.dll for them" + moduleHeuristic +
+		". An editor that misses a module's binary exits at startup, and the launcher gives up on it after a few tries", moduleBuildFix(cfg, info)}
+}
+
+// moduleBuildFix is the preflight's fix for unbuilt modules: the project's
+// editor target in the IDE, or the launcher's compile command where it can be
+// named.
+func moduleBuildFix(cfg *config.Config, info config.Info) string {
 	fix := "build the project's editor target (" + info.ProjectName + "Editor, Win64, Development) in your IDE"
 	if c, ok := cfg.Commands["compile"]; ok && c.Command != "" && !withoutEngine(info, strings.Join(append([]string{c.Command}, c.Args...), " ")) {
 		fix += ", or run what the launcher's compile command runs:\n    " + strings.Join(append([]string{c.Command}, c.Args...), " ")
 	}
-	return finding{levelWarn, "project modules: " + strings.Join(missing, ", ") + " look unbuilt — no Binaries/Win64/UnrealEditor-<Name>.dll for them" + moduleHeuristic +
-		". An editor that misses a module's binary exits at startup, and the launcher gives up on it after a few tries", fix}
+	return fix
+}
+
+// pluginModuleFindings is the preflight's line on whether the modules of the
+// project's plugins are built (k251) — the guess modules.go describes, with
+// its label; none when no enabled project plugin with source declares a
+// module the editor loads.
+func pluginModuleFindings(cfg *config.Config, info config.Info) []finding {
+	if pluginModulesUnchecked(editorArgs(cfg.Unreal, func(string) {})) {
+		return []finding{{levelInfo, "plugin modules: not checked — the editor's arguments carry -NoEnginePlugins or -DisablePlugins=, which change the plugins it enables in a way unreagent does not read", ""}}
+	}
+	missing, checked := unbuiltPluginModules(info.Project, nil)
+	switch {
+	case checked == 0:
+		return nil
+	case len(missing) == 0:
+		return []finding{{levelOK, "plugin modules: built, as far as unreagent can tell" + pluginModuleHeuristic, ""}}
+	}
+	return []finding{{levelWarn, "plugin modules: " + strings.Join(missing, ", ") + " look unbuilt — no Binaries/Win64/UnrealEditor-<Name>.dll for them in their plugin's directory" + pluginModuleHeuristic +
+		". " + strings.ToUpper(pluginModuleEffect[:1]) + pluginModuleEffect[1:] + ", and the launcher gives up on it after a few tries", moduleBuildFix(cfg, info)}}
 }

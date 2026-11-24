@@ -178,7 +178,14 @@ func startLauncherCmd(t *testing.T, dir, yaml string, piped bool, args []string)
 // waitLine waits for a stdout line containing want.
 func (l *launcherRun) waitLine(t *testing.T, want string) {
 	t.Helper()
-	timeout := time.After(15 * time.Second)
+	l.waitLineWithin(t, want, 15*time.Second)
+}
+
+// waitLineWithin is waitLine with its own time limit, for a line that comes
+// only after slow runs.
+func (l *launcherRun) waitLineWithin(t *testing.T, want string, within time.Duration) {
+	t.Helper()
+	timeout := time.After(within)
 	for {
 		select {
 		case line, ok := <-l.lines:
@@ -189,7 +196,7 @@ func (l *launcherRun) waitLine(t *testing.T, want string) {
 				return
 			}
 		case <-timeout:
-			t.Fatalf("launcher did not log %q within 15s:\n%s", want, l.stdout)
+			t.Fatalf("launcher did not log %q within %s:\n%s", want, within, l.stdout)
 		}
 	}
 }
@@ -1785,7 +1792,7 @@ func TestEditorGiveUpRepeatsTheModulePointer(t *testing.T) {
 	project := filepath.Join(dir, "Game.uproject")
 	mustWriteFile(t, project, `{"Modules": [{"Name": "Game"}]}`)
 	routes := editorRoutes{console: true}
-	pointer := func(ends bool) string { return giveUpModulesPointer(project, editor, true, routes, ends) }
+	pointer := func(ends bool) string { return giveUpModulesPointer(project, editor, nil, true, routes, ends) }
 	for _, c := range []struct {
 		name  string
 		exit  supervisor.Exit

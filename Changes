@@ -613,6 +613,17 @@ Revision history for unreagent
     retry, now pass --no-save: a plugin's tracked package-lock.json is no
     longer rewritten at the first start, and npm still installs the versions
     the lock pins. runtimes.node is unchanged.
+  - `unreagent init`, the start and the editor's give-up now name an enabled
+    project plugin whose C++ module has no editor binary, with the compile
+    command. The check stays silent where it cannot be sure (binary-only,
+    content-only or disabled plugins, modules the editor does not load on
+    Win64, `-NoEnginePlugins` / `-DisablePlugins=`).
+  - An editor that fails every run after more than 10 s is no longer restarted
+    without end: with `maxRestarts` 0, three failed runs in a row, each within
+    5 minutes of its start, stop the restarts. A longer run, an exit 0 or a
+    manual start resets the count; `ue_start` begins a fresh one. An editor
+    that fails only after more than 5 minutes is still restarted. Unverified
+    on Windows.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

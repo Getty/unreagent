@@ -685,6 +685,19 @@ func editorPreStart(u config.UnrealConfig, projectDir string, logger func(string
 // which waits for the job: a launcher shutdown closes the job at once.
 const crashReporterGrace = 30 * time.Second
 
+// editorCrashLoopWindow is the editor's ServiceSpec.CrashLoopWindow (k251):
+// with unreal.maxRestarts 0, three failed runs in a row that each ended
+// within it end the restarts. The one run it is made for: an editor that
+// missed a plugin module's binary failed after about 82 s, every run (k226).
+// A run that lasts longer, or exits 0, is taken as healthy and resets the
+// count, so an editor that crashes now and then during real work is still
+// restarted without bound; one that crashes three times in a row within
+// five minutes of its start is not, and 'start ue' or ue_start starts it
+// again with a fresh count. The five minutes are a choice, not a measured
+// bound: long enough above 82 s, short enough that a crash loop ends within
+// about a quarter of an hour.
+const editorCrashLoopWindow = 5 * time.Minute
+
 // followsCrash reports whether st is a start that keeps the last crash's
 // evidence for diagnosis: the restart policy's, a start somebody asks for in
 // its place while it is pending (console start or r, ue_start, ue_restart

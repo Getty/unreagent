@@ -221,9 +221,18 @@ With `unreal.cleanOnRestart` on, the line ends
 `… Saved\Crashes — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart).`
 Without an agent of the launcher's own, a quick failure gets a longer line
 that ends with the same hint. With `unreal.project` unset, no hint is logged.
-An editor that runs longer than 10 s before each crash is restarted without
-end, and `restarts` keeps climbing. A `maxRestarts` above 0 stops after that
-many restarts instead, however long each run lasted. `ue_stop` breaks any loop,
+A second rule covers an editor that fails the same way on every run but
+takes longer than 10 s to do so (a plugin module that was never compiled, about
+80 s per run): 3 failed runs in a row, each ending within 5 minutes of its
+start, give up with
+`[ue] failed 3 times in a row, each within 5m0s of its start — giving up (no automatic restart)`.
+The cause is the same on every run: read the log (`logs`, the editor's log
+file), fix it (for an unbuilt module, compile it, which the follow-up line
+names), then `ue_start`, which begins a fresh count. A run of 5 minutes or
+more, an exit 0, `ue_start` and `ue_restart` reset the count. An editor that
+runs longer than 5 minutes before each crash is restarted without end, and
+`restarts` keeps climbing. A `maxRestarts` above 0 stops after that many
+restarts instead, however long each run lasted. `ue_stop` breaks any loop,
 and `ue_start` tries again with the count reset. The output of the last
 attempts stays in `logs`.
 
@@ -350,6 +359,7 @@ and neither file is touched: such a run leaves no log file, and an
 [ue] restart 1 in 3s
 [ue] no automatic restart (policy=on-failure)
 [ue] failed 3 times in a row, each within 10s of its start — giving up (no automatic restart)
+[ue] failed 3 times in a row, each within 5m0s of its start — giving up (no automatic restart)
 The editor failed and is not restarted. Any crash dumps are in <project dir>\Saved\Crashes.
 [ue] start failed: <error>
 [ue] program not found — no further attempt (check path / installation)
@@ -460,7 +470,7 @@ nothing in `status` reflects this. Check the plugin itself:
 | `ue_start` returns `Error: service "ue" did not start: …` with `desired: true, restarts: 1` | the spawn failed, and a retry is scheduled | the error names the cause |
 | `running: true` at start, then `lastExit`, a new `pid` or a higher `restarts` | the editor died during startup. The launcher restarts it, or gave up (next row) | `ue_stop`, then read `logs` |
 | `running: false, desired: true` and `lastExit` that stay past the restart delay | the editor failed and no restart is coming, for example after 3 quick failures in a row | read `logs` and `Saved/Crashes/`, fix the cause, then `ue_start` |
-| `restarts` climbs every few seconds | a crash loop of an editor that runs more than 10 s each time, or one under a `maxRestarts` limit | `ue_stop` breaks it |
+| `restarts` climbs every few seconds | a crash loop of an editor that runs more than 5 minutes each time, or one under a `maxRestarts` limit | `ue_stop` breaks it |
 | `lastExit` is exit 1 some seconds after every start, and `logs` hold `Message dialog closed, result: Ok` with a module-not-found text (the form seen under the default arguments) or `Incompatible or missing module` (seen on a start without `-unattended`) | the project's C++ module is not built; the UE 5.8.4 source treats a module built for another engine version the same way (not run). The editor exits instead of waiting for a click while `-unattended` or `-stdout` is among its arguments; with neither (`unreal.unattended` off and an `unreal.args` list without `-stdout`) it stays running at a `Missing <Project> Modules` box instead (UE 5.8.4 source, not run) | `ue_stop`, `run_command` `compile`, then `ue_start` |
 | the editor runs, `unreal_status` stays `connected: false` for minutes, and `logs` or `Saved/Logs/` hold `Skipping load of '<plugin>'` or `'<plugin>' is Incompatible` | the plugin's `.uplugin` sets an `EngineVersion` other than this engine's compatible version (`<major>.<minor>.0`), and under `-unattended` the editor skips it instead of asking (UE 5.8.4 source; seen on Windows with UE 5.7.4 and 5.8.4) | removing the `EngineVersion` field from the `.uplugin` lifts the check, and so does setting it to `<major>.<minor>.0` of the engine: `5.8.0` for UE 5.8.4, not `5.8.4` (seen: `5.7.0` loads on 5.7.4). An engine build marked as a licensee version compares its own patch number instead (read in the UE 5.8.4 source, not run). The plugin must still be built for this engine. It is a change to a third-party plugin: ask the user, then `ue_restart` |
 | `ue_start`, `ue_stop` or `ue_restart` returns `Error: service "ue" is not responding: it did not take the request within 10s; nothing was done` | the control loop was busy for more than 10 s and never took the call | wait, call `status`, then retry |

@@ -354,6 +354,12 @@ mcp:
 #   # not restarted again; one log line says so. A clean exit 0, a run longer
 #   # than 10s, or a manual ue_start/restart resets the count. An explicit
 #   # maxRestarts > 0 keeps exactly that bound and the rule is off.
+#   # A second rule, for the editor only and also with maxRestarts: 0: 3 failed
+#   # runs in a row, each ending within 5 minutes of its start, stop the
+#   # restarts too (one log line; the launcher keeps running). A run of 5
+#   # minutes or more, an exit 0 or a manual ue_start/ue_restart/"start ue"
+#   # resets that count. There is no option for the 5 minutes. An editor that
+#   # fails only after more than 5 minutes is still restarted without end.
 #   restart: on-failure
 #   maxRestarts: 0            # default 0 (5 = give up after 5 restarts)
 #   restartDelaySeconds: 3    # default 3 (0 = default); below 0 is a load error

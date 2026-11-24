@@ -220,16 +220,17 @@ func run() error {
 	// and which plugins -DisablePlugins= switches off.
 	checkPluginEngineVersions(cfg.Unreal.Project, engineDirOf(cfg.Unreal.Editor, info.EngineRoot),
 		ueArgs, alertWarnings(logger, alert, logPath))
-	// A module without its binary makes the editor exit at startup, again
-	// after every restart, until the launcher gives up on it (k229): name it
-	// and the compile command first. Nothing is built here.
+	// A module without its binary makes the editor fail at startup, again
+	// after every restart, until the launcher gives up on it (k229; a plugin's
+	// module, k251): name it and the compile command first. Nothing is built
+	// here.
 	_, compile := cfg.Commands["compile"]
 	// The routes the fix text may name: no launcher console with an
 	// interactive agent in the window, no agent tools without MCP (k247).
 	// Fixed at startup: after an interactive agent exits and the user keeps a
 	// console with 'k', a later give-up still names no console.
 	routes := editorRoutes{console: !agentInteractive, agent: cfg.MCP.Enabled}
-	checkProjectModules(cfg.Unreal.Project, cfg.Unreal.Editor, compile, routes, alertWarnings(logger, alert, logPath))
+	checkProjectModules(cfg.Unreal.Project, cfg.Unreal.Editor, ueArgs, compile, routes, alertWarnings(logger, alert, logPath))
 	ueProjectDir := ""
 	if cfg.Unreal.Project != "" {
 		ueProjectDir = filepath.Dir(cfg.Unreal.Project)
@@ -254,6 +255,9 @@ func run() error {
 		// The editor's crash reporter finishes its report after the editor
 		// has exited (k154).
 		ReporterGrace: crashReporterGrace,
+		// An editor that fails every run after the fast-fail window is
+		// given up on too (k251).
+		CrashLoopWindow: editorCrashLoopWindow,
 		PreStart: func(st supervisor.Start) {
 			giveUp.started()
 			preStart(st)
@@ -466,7 +470,7 @@ func run() error {
 	// Its line, the editor's give-up, goes to the console as well (k192).
 	onEditorExit = makeEditorExitHandler(sess, alertAll(logger, alert), cfg.Agent.Enabled, &mcpServing, &giveUp, cfg.Unreal, ueProjectDir,
 		func(ends bool) string {
-			return giveUpModulesPointer(cfg.Unreal.Project, cfg.Unreal.Editor, compile, routes, ends)
+			return giveUpModulesPointer(cfg.Unreal.Project, cfg.Unreal.Editor, ueArgs, compile, routes, ends)
 		})
 	if cfg.Agent.Enabled {
 		onAgentExit = makeAgentExitHandler(ctx, sess, sup, cfg, logger, agentInteractive, con)
