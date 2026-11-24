@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-11-24T01:51:11Z
+created: 2026-11-21T05:59:34Z
+id: 136
+priority: medium
+started: 2026-11-24T01:51:11Z
+status: archived
+tags:
+- ue
+- toolkit
+- decision
+title: 'execute_script waits for a human Allow click: decide how unreagent handles
+  unattended use'
+updated: 2026-11-24T01:51:11Z
+---
+
+Found in k26 (ue-python skill). The UE LLM Toolkit shows an approval window for every execute_script call (ScriptExecutionManager.cpp:62-64, ScriptPermissionDialog.cpp:39-52/:137-153); no setting skips it. With nobody at the editor each script waits 10 minutes and fails, and an approval given later still runs it. unreagent passes -unattended by default (internal/config/config.go:66, cmd/launcher/main.go:155); how the window behaves under -unattended is unverified. This limits every agent workflow that relies on in-editor Python, and all Class B skills. Options: document it prominently (README + ue-python, already done in the skill); test on the Windows box what -unattended does to the window; propose an upstream setting (public tracker: maintainer's call, see k132); or steer agents to host-side run_python where possible. Needs one Windows check before deciding.
+
+Research input 2026-11-21: docs/research/2026-11-21-unreal-editor.md section 1 (what -unattended is documented to suppress: cooperating dialogs only). Unchecked; says nothing about the toolkit's own approval window. Needs the Windows run with an editor.
+
+Scout read of the UE 5.8.4 engine source on 2026-11-22 (source only, nothing run; paths relative to the engine root). -unattended is no lever here: the toolkit's approval window is a Slate modal (AddModalWindow); the engine cancels modal windows only under -RunningUnattendedScript (SlateApplication.cpp ~2134), and that would deny the script, not approve it. The decision stays: document, host-side run_python, or a toolkit change.
