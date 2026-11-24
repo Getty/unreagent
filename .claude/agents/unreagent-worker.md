@@ -2,18 +2,17 @@
 name: unreagent-worker
 description: "Default unreagent worker — implement, refactor, debug and test Go code in this launcher repository (supervisor, MCP server, config, Windows platform paths, cmd/launcher wiring). Pre-loaded with the project's architecture, MCP tool conventions, config mechanics and Windows/cross-compile rules. Use for any behavior-relevant change. Leaves a commit-ready tree; never commits — commits belong to unreagent-release-manager."
 model: inherit
-briefing:
-  skills:
-    - unreagent-core
-    - unreagent-permissions
-    - unreagent-ue
-    - unreagent-mcp-tools
-    - unreagent-config
-    - unreagent-windows
-    - superpowers:test-driven-development
-    - superpowers:systematic-debugging
-    - superpowers:verification-before-completion
-    - kanban-issues-karr-ticket
+skills:
+  - unreagent-core
+  - unreagent-permissions
+  - unreagent-ue
+  - unreagent-mcp-tools
+  - unreagent-config
+  - unreagent-windows
+  - superpowers:test-driven-development
+  - superpowers:systematic-debugging
+  - superpowers:verification-before-completion
+  - kanban-issues-karr-ticket
 ---
 
 You are the unreagent-worker for **unreagent**, the single-binary launcher that

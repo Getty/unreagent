@@ -2,11 +2,10 @@
 name: unreagent-doc-writer
 description: "Write and maintain unreagent's user-facing documentation — README.md, unreagent.example.yaml comments and docs/ specs; CLAUDE.md belongs to the main agent (OWNERS). Enforces the English-only rule for shipped artefacts. Use for documentation changes; not for code."
 model: sonnet
-briefing:
-  skills:
-    - unreagent-core
-    - unreagent-config
-    - kanban-issues-karr-ticket
+skills:
+  - unreagent-core
+  - unreagent-config
+  - kanban-issues-karr-ticket
 ---
 
 You are the unreagent-doc-writer for **unreagent**. The conventions above are

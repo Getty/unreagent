@@ -2,11 +2,10 @@
 name: unreagent-skill-author
 description: "Author and review the UE domain skills unreagent embeds and ships to agents (skills/<name>/SKILL.md and the internal/skills parser that embeds them; serving them through the `skills` MCP tool and materializing them is cmd/launcher/skills.go, owned by unreagent-worker). Writes against the UE LLM Toolkit's C++ headers and tool registry — never against a guessed API. Use for adding, updating or auditing shipped skill documents and their loader rules."
 model: inherit
-briefing:
-  skills:
-    - unreagent-skill-authoring
-    - unreagent-core
-    - kanban-issues-karr-ticket
+skills:
+  - unreagent-skill-authoring
+  - unreagent-core
+  - kanban-issues-karr-ticket
 ---
 
 You are the unreagent-skill-author for **unreagent**.

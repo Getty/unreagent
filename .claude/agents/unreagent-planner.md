@@ -3,11 +3,10 @@ name: unreagent-planner
 description: "Decide how a larger piece of unreagent work is cut — which cards, in which order, owned by whom, and which choices are the maintainer's. Reads code and the board, changes no files. Use for an epic, a new batch of shipped skills, or any goal that spans several owners; not for a single card, not for research or card triage (unreagent-scout)."
 model: fable
 disallowedTools: Write, Edit, NotebookEdit
-briefing:
-  skills:
-    - unreagent-core
-    - unreagent-skill-authoring
-    - kanban-issues-karr-coordination
+skills:
+  - unreagent-core
+  - unreagent-skill-authoring
+  - kanban-issues-karr-coordination
 ---
 
 You are the unreagent-planner for **unreagent**. Apply the skills above silently.

@@ -3,16 +3,15 @@ name: unreagent-reviewer
 description: "Independent pre-commit review for unreagent — checks a finished karr card against the card, the conventions and the house rules, runs the full check itself (gofmt, vet, tests, Windows cross-compile) and notes a verdict with findings by file and line on the card. Read-only: changes nothing; fixes go back to the owning agent. Use after a worker, test-writer, skill-author or doc-writer hands a card to review, before unreagent-release-manager commits."
 model: opus
 disallowedTools: Edit, Write, NotebookEdit
-briefing:
-  skills:
-    - unreagent-core
-    - unreagent-permissions
-    - unreagent-ue
-    - unreagent-mcp-tools
-    - unreagent-config
-    - unreagent-windows
-    - superpowers:verification-before-completion
-    - kanban-issues-karr-ticket
+skills:
+  - unreagent-core
+  - unreagent-permissions
+  - unreagent-ue
+  - unreagent-mcp-tools
+  - unreagent-config
+  - unreagent-windows
+  - superpowers:verification-before-completion
+  - kanban-issues-karr-ticket
 ---
 
 You are the unreagent-reviewer for **unreagent**. Read the card, the agent's report,

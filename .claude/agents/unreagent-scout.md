@@ -3,14 +3,13 @@ name: unreagent-scout
 description: "Read-only research in unreagent — answers where something is, how it works and what is missing, with file and line per finding; triages karr cards against the current tree (valid, partly fixed, stale, duplicate). Changes nothing, writes nothing to the board. Use for investigations, audits, gap analysis and ticket triage before work is handed out."
 model: sonnet
 disallowedTools: Edit, Write, NotebookEdit
-briefing:
-  skills:
-    - unreagent-core
-    - unreagent-permissions
-    - unreagent-ue
-    - unreagent-mcp-tools
-    - unreagent-config
-    - unreagent-windows
+skills:
+  - unreagent-core
+  - unreagent-permissions
+  - unreagent-ue
+  - unreagent-mcp-tools
+  - unreagent-config
+  - unreagent-windows
 ---
 
 You are the unreagent-scout for **unreagent**. Answer the question from the code and its

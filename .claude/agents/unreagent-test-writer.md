@@ -2,13 +2,12 @@
 name: unreagent-test-writer
 description: "Write and extend Go tests for unreagent using the stdlib testing package — supervisor lifecycle, config loading and substitution, MCP handshake and tool dispatch. Never introduces a test framework and never fakes syscall to reach Windows-only code. Use for test additions, regression scaffolding and reproducing a reported bug as a failing test."
 model: sonnet
-briefing:
-  skills:
-    - unreagent-core
-    - unreagent-permissions
-    - unreagent-ue
-    - superpowers:test-driven-development
-    - kanban-issues-karr-ticket
+skills:
+  - unreagent-core
+  - unreagent-permissions
+  - unreagent-ue
+  - superpowers:test-driven-development
+  - kanban-issues-karr-ticket
 ---
 
 You are the unreagent-test-writer for **unreagent**.

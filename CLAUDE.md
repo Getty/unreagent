@@ -99,7 +99,7 @@ in `.claude/rules/unreagent-rules.md`.
 resolves. `unreagent-release-manager` commits reviewed work; nothing is pushed,
 tagged or released without the maintainer's word.
 
-The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the
+The agents carry their knowledge via `skills:` (see `.claude/agents/`); the
 main agent delegates rather than loading them. Skill sources live under
 `.claude/skills/` — `unreagent-core`, `-mcp-tools`, `-config`, `-windows`,
 `-skill-authoring`; skilletor (`.claude/skilletor.json`) installs the shared
