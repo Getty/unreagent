@@ -1135,6 +1135,7 @@ var stampedLine = regexp.MustCompile(`^\d\d:\d\d:\d\d  `)
 // logged at, not the switch's. The clock steps a minute per line, so a line
 // stamped again on its way into the log would show.
 func TestRunReplaysTheStartupLinesIntoTheLauncherLog(t *testing.T) {
+	skipEpicDefaultFixtureOnWindows(t)
 	t.Setenv("UE_ROOT", "")
 	t.Setenv(clockStepEnv, "1")
 	dir := t.TempDir()

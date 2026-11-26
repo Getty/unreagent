@@ -369,6 +369,7 @@ func TestRunAppliesMCPAllowedOrigins(t *testing.T) {
 // ("C:/Program Files/Epic Games/UE_*") are relative paths, so they resolve
 // under the launcher's working directory, where the test installs a 5.9.
 func TestRunWarnsWhenTheEngineAssociationIsNotInstalled(t *testing.T) {
+	skipEpicDefaultFixtureOnWindows(t)
 	for _, tc := range []struct {
 		name, assoc string
 		warn        bool

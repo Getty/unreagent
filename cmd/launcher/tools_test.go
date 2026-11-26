@@ -271,7 +271,7 @@ func TestUEStartAndRestartFailWhenTheEditorDoesNotStart(t *testing.T) {
 		// The start error leads the text, ahead of the snapshot — which carries
 		// lastError as well, so finding it anywhere in the text proves nothing.
 		lastErr := statusOf(t, sup, "ue").LastError
-		if !strings.Contains(lastErr, missing) {
+		if !strings.Contains(lastErr, quotedInError(missing)) {
 			t.Fatalf("%s on a missing editor: lastError = %q, want the start error naming %s", tool, lastErr, missing)
 		}
 		if want := `Error: service "ue" did not start: ` + lastErr + "\n"; !strings.HasPrefix(res.Text, want) {

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -523,4 +524,40 @@ func TestWriteFileAtomicFollowsASymlinkedFile(t *testing.T) {
 		t.Errorf("the link was changed: Readlink = %q, %v; want %q", dest, err, real)
 	}
 	assertNoTempFiles(t, dir)
+}
+
+// quotedInError is path as exec.Error prints it: the start error of a missing
+// program quotes the path with %q, which doubles the backslashes of a Windows
+// path. A path without characters %q escapes comes back unchanged, so off
+// Windows this is the path itself.
+func quotedInError(path string) string {
+	q := strconv.Quote(path)
+	return q[1 : len(q)-1]
+}
+
+// skipEpicDefaultFixtureOnWindows skips a test whose fixture installs a fake
+// engine at the Epic default "C:/Program Files/Epic Games/UE_<ver>" below the
+// test's directory. That works only off Windows, where the path is relative
+// and so resolves under the launcher's working directory; on Windows it is
+// absolute and the fixture cannot be built (nor can the engine search be kept
+// away from a real install). The launcher process tests skip there as well.
+func skipEpicDefaultFixtureOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake engine lives at an Epic default path that is only relative off Windows")
+	}
+}
+
+// quotedInError is what lets the start-error tests pass on Windows: it must
+// double the backslashes of a Windows path as exec.Error's %q does, and leave
+// a plain path alone.
+func TestQuotedInError(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{`C:\Users\u\no-such-editor`, `C:\\Users\\u\\no-such-editor`},
+		{"/tmp/x/no-such-editor", "/tmp/x/no-such-editor"},
+	} {
+		if got := quotedInError(tc.path); got != tc.want {
+			t.Errorf("quotedInError(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
 }

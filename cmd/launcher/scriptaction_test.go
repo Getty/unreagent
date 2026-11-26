@@ -328,19 +328,20 @@ func TestScriptActionCreateFailureNamesDirectoryAndSkipsSystemTempFallback(t *te
 
 // TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess drives a
 // real, successful scriptAction run without depending on uv or node: the
-// configured "command" is plain POSIX sh. "${0%/*}" is shell parameter
-// expansion (no external `dirname` needed) that strips the last path
-// segment off $0, which `sh -c '...' <arg>` binds to the first positional
-// argument — here, the script file scriptAction generated. Printing it
-// proves the file was created inside dir, and re-reading dir afterward
-// proves the deferred os.Remove cleaned it up.
+// configured "command" is plain POSIX sh. `sh -c '...' <arg>` binds $0 to
+// the first positional argument — here, the script file scriptAction
+// generated. The script prints it as given and the test takes filepath.Dir of
+// it (a shell expansion such as "${0%/*}" splits at "/" only and would not
+// find the directory in a Windows path with backslashes). Its directory being
+// dir proves the file was created there, and re-reading dir afterward proves
+// the deferred os.Remove cleaned it up.
 func TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not in PATH — skipping")
 	}
 	dir := t.TempDir()
 	sup := supervisor.New(nil)
-	handler := scriptAction(sup, "sh", []string{"-c", `echo "${0%/*}"`}, dir, "txt", "test")
+	handler := scriptAction(sup, "sh", []string{"-c", `echo "$0"`}, dir, "txt", "test")
 
 	res := handler(map[string]interface{}{"code": "irrelevant payload"})
 
@@ -351,7 +352,7 @@ func TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess(t *testing.
 	if !strings.HasPrefix(res.Text, prefix) {
 		t.Fatalf("scriptAction result = %q, want an %q prefix", res.Text, prefix)
 	}
-	if gotDir := strings.TrimSpace(strings.TrimPrefix(res.Text, prefix)); gotDir != dir {
+	if gotDir := filepath.Dir(strings.TrimSpace(strings.TrimPrefix(res.Text, prefix))); gotDir != dir {
 		t.Errorf("script ran from directory %q, want %q", gotDir, dir)
 	}
 

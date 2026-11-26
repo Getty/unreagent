@@ -275,7 +275,7 @@ func TestConsoleNamesAFailedStart(t *testing.T) {
 		fc.waitOutput(t, failed, i+1)
 	}
 	lastErr := statusOf(t, sup, "ue").LastError
-	if !strings.Contains(lastErr, missing) {
+	if !strings.Contains(lastErr, quotedInError(missing)) {
 		t.Fatalf("lastError = %q, want the start error naming %s", lastErr, missing)
 	}
 	if got := strings.Count(fc.out.String(), failed+lastErr+"\n"); got != len(starts) {
@@ -420,7 +420,7 @@ func TestPromptNamesAFailedAgentStart(t *testing.T) {
 	sess, sup, _ := agentSessionOn(t, fc.con, missing)
 	fc.waitOutput(t, "> ", 1)
 	lastErr := statusOf(t, sup, "agent").LastError
-	if !strings.Contains(lastErr, missing) {
+	if !strings.Contains(lastErr, quotedInError(missing)) {
 		t.Fatalf("lastError = %q, want the start error naming %s", lastErr, missing)
 	}
 	want := "\nAgent did not start: " + lastErr + "\n"
