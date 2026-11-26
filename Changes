@@ -708,8 +708,13 @@ Revision history for unreagent
   - New config key unreal.mcp {enabled, port} for Epic's Unreal MCP server:
     off by default, port 8000 (an explicit 0 also means 8000). A port outside
     1-65535, a port equal to mcp.address's, or a hand-written
-    mcp.extraServers.unreal-mcp next to the switch is a load error. The
-    switch is not wired to the editor or the agent yet.
+    mcp.extraServers.unreal-mcp next to the switch is a load error, as is
+    the switch without mcp.enabled. With unreal.mcp.enabled the editor gets
+    -ModelContextProtocolStartServer and -ModelContextProtocolPort=N (never
+    doubled), and the agent's MCP config and every mcp.writeConfig file hold
+    the unreal-mcp http entry. Any ModelContextProtocolPort= in unreal.args
+    other than exactly -ModelContextProtocolPort=<unreal.mcp.port> is a load
+    error. Not yet run on Windows.
   - On Windows, skills written into a directory that another launcher or a
     program such as a virus scanner is using no longer warn at once: the
     sweep of leftover work directories retries its rename briefly, then

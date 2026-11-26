@@ -16,9 +16,12 @@ import (
 )
 
 // buildMCPServers assembles the mcpServers map: our launcher server (HTTP) plus
-// all additional (in-editor) MCP servers from the config. If a bearer token is
-// set, the unreagent entry gets the matching Authorization header, so the
-// embedded agent (Claude Code) does not lock itself out.
+// all additional (in-editor) MCP servers from the config, and with
+// unreal.mcp on the editor's Unreal MCP server as the http entry
+// config.UnrealMCPServerName (k265; config.Load has refused an extra server
+// of that name then). If a bearer token is set, the unreagent entry gets the
+// matching Authorization header, so the embedded agent (Claude Code) does
+// not lock itself out.
 func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
 	unreagent := map[string]interface{}{"type": "http", "url": mcpURL}
 	if cfg.MCP.Token != "" {
@@ -31,6 +34,9 @@ func buildMCPServers(cfg *config.Config, mcpURL string) map[string]interface{} {
 	}
 	for name, def := range cfg.MCP.ExtraServers {
 		servers[name] = def
+	}
+	if cfg.Unreal.MCP.Enabled {
+		servers[config.UnrealMCPServerName] = map[string]interface{}{"type": "http", "url": cfg.Unreal.MCP.URL()}
 	}
 	return servers
 }

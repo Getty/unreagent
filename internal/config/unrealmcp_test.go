@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -80,9 +81,8 @@ func TestUnrealMCPPortCollidesWithMCPAddress(t *testing.T) {
 	errContains(t, err, "unreal.mcp.port", "mcp.address", "8765")
 
 	for name, base := range map[string]string{
-		"different ports":  "unreal: {mcp: {enabled: true, port: 8001}}\nmcp: {enabled: true, address: \"127.0.0.1:8000\"}\n",
-		"launcher MCP off": "unreal: {mcp: {enabled: true}}\nmcp: {enabled: false, address: \"127.0.0.1:8000\"}\n",
-		"unreal MCP off":   "unreal: {mcp: {enabled: false}}\nmcp: {enabled: true, address: \"127.0.0.1:8000\"}\n",
+		"different ports": "unreal: {mcp: {enabled: true, port: 8001}}\nmcp: {enabled: true, address: \"127.0.0.1:8000\"}\n",
+		"unreal MCP off":  "unreal: {mcp: {enabled: false}}\nmcp: {enabled: true, address: \"127.0.0.1:8000\"}\n",
 	} {
 		if _, _, err := Load(writeConfigFiles(t, t.TempDir(), base, "")); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -114,5 +114,104 @@ func TestUnrealMCPRefusesHandWrittenEntry(t *testing.T) {
 	other := strings.Replace(entry, "unreal-mcp:", "epic:", 1)
 	if _, _, err := Load(writeConfigFiles(t, t.TempDir(), "unreal: {mcp: {enabled: true}}\n"+other, "")); err != nil {
 		t.Errorf("entry under another name: %v", err)
+	}
+}
+
+// k265: the switch hands the agent the unreal-mcp entry through the MCP
+// config the launcher writes, and there is none without mcp.enabled. Like
+// permissions.enabled, the switch then has nothing to work through, and the
+// load says so instead of starting the editor's server for nobody.
+func TestUnrealMCPNeedsMCPEnabled(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	for _, base := range []string{
+		"unreal: {mcp: {enabled: true}}\n",
+		"unreal: {mcp: {enabled: true}}\nmcp: {enabled: false, address: \"127.0.0.1:8000\"}\n",
+	} {
+		_, _, err := Load(writeConfigFiles(t, t.TempDir(), base, ""))
+		errContains(t, err, "unreal.mcp.enabled requires mcp.enabled", "-ModelContextProtocolStartServer")
+	}
+	if _, _, err := Load(writeConfigFiles(t, t.TempDir(), "unreal: {mcp: {enabled: false}}\nmcp: {enabled: false}\n", "")); err != nil {
+		t.Errorf("both off: %v", err)
+	}
+}
+
+// k265: with the switch on, an unreal.args element that mentions
+// ModelContextProtocolPort= in any case is refused unless it is exactly the
+// launcher's own flag for unreal.mcp.port: "-" or "/", the name in any case,
+// "=", and digits naming that port (leading zeros allowed). The engine finds
+// the name anywhere on its command line (FParse::Value), and the launcher
+// does not model how that line is built and searched, so anything else that
+// mentions it could set another port, where the agent is not sent. Without
+// the switch unreal.args are not looked at.
+func TestUnrealMCPPortFlagInUnrealArgs(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	load := func(enabled bool, args ...string) error {
+		list, _ := json.Marshal(args) // a JSON array is a YAML flow sequence
+		base := fmt.Sprintf("unreal: {mcp: {enabled: %v, port: 8123}, args: %s}\nmcp: {enabled: true}\n", enabled, list)
+		_, _, err := Load(writeConfigFiles(t, t.TempDir(), base, ""))
+		return err
+	}
+	for _, arg := range []string{
+		"-ModelContextProtocolPort=8000",
+		"-modelcontextprotocolport=8124",
+		"/ModelContextProtocolPort=9000",
+		"ModelContextProtocolPort=8123",     // no prefix
+		"-X_ModelContextProtocolPort=8123",  // something before the name
+		"-XModelContextProtocolPort=8123",   // even a letter
+		"-ModelContextProtocolPort=9000 x",  // a blank and more (review round 2)
+		"-ModelContextProtocolPort=8123 x",  // the same, with the right port
+		"-ModelContextProtocolPort=8123,1",  // anything after the digits
+		"-ModelContextProtocolPort=8123abc", // anything after the digits
+		"-ModelContextProtocolPort=+8123",   // a sign
+		"-ModelContextProtocolPort=",
+		"-ModelContextProtocolPort=abc",
+		`-Foo="ModelContextProtocolPort=9000"`, // inside quotes
+		"--ModelContextProtocolPort=8123",
+	} {
+		err := load(true, "-stdout", arg)
+		errContains(t, err, fmt.Sprintf("%q", arg), "unreal.mcp.port is 8123")
+	}
+	// The launcher's own flag for 8123 in any spelling is no conflict;
+	// editorArgs then adds no second flag. An element without "=" after the
+	// name, or with a longer name, does not mention it.
+	for _, arg := range []string{
+		"-ModelContextProtocolPort=8123",
+		"-MODELCONTEXTPROTOCOLPORT=8123",
+		"/modelcontextprotocolport=08123",
+		"-ModelContextProtocolPort",
+		"-ModelContextProtocolPortX=1",
+	} {
+		if err := load(true, arg); err != nil {
+			t.Errorf("%q: %v", arg, err)
+		}
+	}
+	if err := load(false, "-ModelContextProtocolPort=1 x"); err != nil {
+		t.Errorf("switch off: %v", err)
+	}
+}
+
+// UnrealPortArg recognises the launcher's own port flag only: "-" or "/",
+// the name in any case, "=", and nothing but digits naming a port from 1 to
+// 65535.
+func TestUnrealPortArg(t *testing.T) {
+	for arg, want := range map[string]int{
+		"-ModelContextProtocolPort=8123":                 8123,
+		"/modelcontextprotocolport=00001":                1,
+		"-ModelContextProtocolPort=65535":                65535,
+		"-ModelContextProtocolPort=65536":                0,
+		"-ModelContextProtocolPort=0":                    0,
+		"-ModelContextProtocolPort=":                     0,
+		"-ModelContextProtocolPort=1 ":                   0,
+		"-ModelContextProtocolPort=-1":                   0,
+		"ModelContextProtocolPort=8123":                  0,
+		"+ModelContextProtocolPort=8123":                 0,
+		"-ModelContextProtocolPortX=8123":                0,
+		"-ModelContextProtocolPort=99999999999999999999": 0,
+		"": 0,
+	} {
+		port, ok := UnrealPortArg(arg)
+		if port != want || ok != (want != 0) {
+			t.Errorf("UnrealPortArg(%q) = %d, %v; want %d", arg, port, ok, want)
+		}
 	}
 }

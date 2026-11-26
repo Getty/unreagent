@@ -148,6 +148,36 @@ func (u UnrealMCPConfig) URL() string {
 	return "http://127.0.0.1:" + strconv.Itoa(u.Port) + "/mcp"
 }
 
+// UnrealMCPPortFlag is the editor switch that sets the Unreal MCP server's
+// port, written -ModelContextProtocolPort=N.
+const UnrealMCPPortFlag = "ModelContextProtocolPort"
+
+// UnrealPortArg reports whether arg is exactly the launcher's own port flag,
+// "-" or "/", UnrealMCPPortFlag in any case, "=" and nothing but digits
+// naming a port from 1 to 65535 (leading zeros allowed), and returns that
+// port. Every other unreal.args element that mentions the flag is refused
+// at load (validUnrealMCP): the engine finds "ModelContextProtocolPort=" anywhere
+// on the command line it rebuilds from its arguments (FParse::Value), and the
+// launcher does not model that (k265 review).
+func UnrealPortArg(arg string) (port int, ok bool) {
+	if arg == "" || (arg[0] != '-' && arg[0] != '/') {
+		return 0, false
+	}
+	name, digits, found := strings.Cut(arg[1:], "=")
+	if !found || !strings.EqualFold(name, UnrealMCPPortFlag) || digits == "" || strings.Trim(digits, "0123456789") != "" {
+		return 0, false
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" || len(digits) > 5 {
+		return 0, false
+	}
+	n, _ := strconv.Atoi(digits)
+	if n > 65535 {
+		return 0, false
+	}
+	return n, true
+}
+
 // AgentConfig describes the agent process (e.g. Claude Code).
 type AgentConfig struct {
 	Enabled             bool              `yaml:"enabled"`
@@ -923,21 +953,34 @@ func validHermesServerName(name string) error {
 }
 
 // validUnrealMCP checks unreal.mcp while it is enabled: a port from 1 to
-// 65535; not the port of mcp.address while the launcher's own server listens
-// there (the hosts are not compared, since a wildcard or LAN address takes
-// the editor's loopback port too); and no hand-written mcp.extraServers entry
-// under UnrealMCPServerName, the name the launcher gives the editor's server
-// itself. validate has already checked mcp.address when mcp.enabled.
+// 65535; mcp.enabled, since the agent gets the entry only through the MCP
+// config the launcher writes, and there is none without it (k265); not the
+// port of mcp.address (the hosts are not compared, since a wildcard or LAN
+// address takes the editor's loopback port too); no -ModelContextProtocolPort
+// in unreal.args naming another port, which would start the editor's server
+// where the agent is not sent (k265); and no hand-written mcp.extraServers
+// entry under UnrealMCPServerName, the name the launcher gives the editor's
+// server itself. validate has already checked mcp.address when mcp.enabled.
 func (c *Config) validUnrealMCP() error {
 	port := c.Unreal.MCP.Port
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("unreal.mcp.port invalid: %d (must be a number from 1 to 65535; default %d)", port, DefaultUnrealMCPPort)
 	}
-	if c.MCP.Enabled {
-		_, p, _ := net.SplitHostPort(c.MCP.Address)
-		// Compared as numbers: validMCPAddress takes a leading zero.
-		if n, err := strconv.ParseUint(p, 10, 16); err == nil && n == uint64(port) {
-			return fmt.Errorf("unreal.mcp.port %d is the port of mcp.address %q: the editor's Unreal MCP server and the launcher's MCP server cannot share it — set another unreal.mcp.port or mcp.address", port, c.MCP.Address)
+	if !c.MCP.Enabled {
+		return fmt.Errorf("unreal.mcp.enabled requires mcp.enabled (the launcher hands the agent the %s entry through the MCP config it writes, and writes none without mcp.enabled) — to start the editor's server for another client, put -ModelContextProtocolStartServer in unreal.args instead", UnrealMCPServerName)
+	}
+	_, p, _ := net.SplitHostPort(c.MCP.Address)
+	// Compared as numbers: validMCPAddress takes a leading zero.
+	if n, err := strconv.ParseUint(p, 10, 16); err == nil && n == uint64(port) {
+		return fmt.Errorf("unreal.mcp.port %d is the port of mcp.address %q: the editor's Unreal MCP server and the launcher's MCP server cannot share it — set another unreal.mcp.port or mcp.address", port, c.MCP.Address)
+	}
+	mention := strings.ToLower(UnrealMCPPortFlag) + "="
+	for _, a := range c.Unreal.Args {
+		if !strings.Contains(strings.ToLower(a), mention) {
+			continue
+		}
+		if n, ok := UnrealPortArg(a); !ok || n != port {
+			return fmt.Errorf("unreal.args carries %q, but unreal.mcp.port is %d: the editor finds %s= anywhere on its command line and could serve Unreal MCP where the agent is not sent — remove it from unreal.args (the launcher adds -%s=%d itself); the only form accepted there is -%s=%d", a, port, UnrealMCPPortFlag, UnrealMCPPortFlag, port, UnrealMCPPortFlag, port)
 		}
 	}
 	if _, ok := c.MCP.ExtraServers[UnrealMCPServerName]; ok {

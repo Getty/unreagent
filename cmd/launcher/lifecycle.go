@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -710,6 +712,12 @@ func followsCrash(st supervisor.Start) bool {
 
 // editorArgs is the editor's argument list: the project, unreal.args, and
 // -unattended unless unreal.unattended is off or the args already carry it.
+// With unreal.mcp on (k265), -ModelContextProtocolStartServer and
+// -ModelContextProtocolPort=<unreal.mcp.port> follow, each unless the args
+// already carry it: the start switch as hasEditorSwitch finds it, under its
+// deprecated name -StartModelContextProtocolServer too, the port flag when an
+// argument is exactly that flag for unreal.mcp.port (config.UnrealPortArg;
+// config.Load has refused any other argument that mentions it).
 func editorArgs(u config.UnrealConfig, logger func(string)) []string {
 	args := append([]string{}, u.Args...)
 	if u.Project != "" {
@@ -718,6 +726,18 @@ func editorArgs(u config.UnrealConfig, logger func(string)) []string {
 	if boolVal(u.Unattended) && !hasEditorSwitch(args, "unattended") {
 		args = append(args, "-unattended")
 		logger("Unreal: -unattended active (no crash dialog, no recovery prompt)")
+	}
+	if u.MCP.Enabled {
+		if !hasEditorSwitch(args, "ModelContextProtocolStartServer") && !hasEditorSwitch(args, "StartModelContextProtocolServer") {
+			args = append(args, "-ModelContextProtocolStartServer")
+		}
+		if !slices.ContainsFunc(args, func(a string) bool {
+			p, ok := config.UnrealPortArg(a)
+			return ok && p == u.MCP.Port
+		}) {
+			args = append(args, "-"+config.UnrealMCPPortFlag+"="+strconv.Itoa(u.MCP.Port))
+		}
+		logger("Unreal: Unreal MCP server on " + u.MCP.URL())
 	}
 	return args
 }
