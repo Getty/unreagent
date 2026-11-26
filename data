@@ -1,0 +1,31 @@
+---
+class: standard
+completed: 2026-11-26T06:40:16Z
+created: 2026-11-22T04:00:12Z
+id: 220
+priority: high
+started: 2026-11-26T06:40:16Z
+status: done
+tags:
+- epic
+- unreal-mcp
+title: 'Epic: support Epic''s Unreal MCP (UE 5.8) next to the UE LLM Toolkit'
+updated: 2026-11-26T06:40:16Z
+---
+
+Container card, unclaimed. Facts from the scout read of the UE 5.8.4 source on 2026-11-22 (Engine/Plugins/Experimental/ModelContextProtocol, ToolsetRegistry, Toolsets/*; source only, nothing run):
+- Server: JSON-RPC over HTTP POST at http://127.0.0.1:8000/mcp, loopback, no auth, sessions via Mcp-Session-Id (lost on editor restart: 404 'reinitialize'). Not started by enabling the plugin: needs -ModelContextProtocolStartServer or bAutoStartServer; port via -ModelContextProtocolPort=N. Probe: POST ping works without a session; GET is 405.
+- Tools: by default three meta-tools (list_toolsets, describe_toolset, call_tool); about 278 C++ tools in 21 toolset classes behind them. With bEnableToolSearch=false each tool registers as <Toolset>.<Function>. No confirmation dialog on the server side. No run-Python, console-command or call-any-function tool. Filtering: ToolsetRegistrySettings BlockedNames/AllowedNames in Config/DefaultEditorPerProjectUserSettings.ini.
+- Coverage against the toolkit: absent — blueprints, assets, level actors, materials, animation, sequencer, control rig, retarget, audio, metasounds, lighting, character, enhanced input, scripts, task queue. Present and deeper — Niagara (56), UMG (23). Present — log entries, viewport capture, PIE start/stop. Only there — PCG (31), Dataflow (22), physics assets (17), GAS (14), MVVM (9), Slate UI automation (14), automation tests (7), config settings (8), plugin management (17), gameplay tags, data registries, Live Coding compile (1, not in AllToolsets).
+- Conclusion: it cannot replace the toolkit in this tree; it can run next to it.
+- unreagent today: mcp.extraServers passes an http entry through as written (cmd/launcher/mcpconfig.go); an entry without command gets only a TCP reachability watch (bridge.go waitForEndpoint). The permission layer sees every call as mcp__<server>__call_tool; the real tool is in the arguments.
+- Unverified, needs the Windows machine with an installed 5.8: whether a Launcher build ships these NoRedist plugins; whether the empty toolset modules (AnimationAssistant, StateTree, AIModule, Conversation, SequencerAnimMixer) carry tools in Content; behaviour under -unattended with offscreen rendering; how Claude Code handles the lost session after an editor restart.
+The cut into cards and the Decide: cards come from unreagent-planner.
+
+Planner read of the 5.8.4 source, 2026-11-22, three additions: (1) call_tool takes tool_name (required), toolset_name (optional; omitted = a top-level MCP tool) and arguments (ModelContextProtocolToolSearch.cpp 102-143). (2) The ToolsetRegistry ships its own agent-skill mechanism: UAgentSkillToolset with ListSkills/GetSkills (ToolsetRegistry/AgentSkill.h); PCG, Dataflow and ChaosCloth carry skills. Whether it is reachable through call_tool and what it returns is not established. (3) GenerateClientConfig is a console command only (ModelContextProtocolEngineModule.cpp 40); it writes into the project directory on installed builds and the engine root on source builds, preserving existing entries — unreagent's writeMCPConfigs replaces its target whole on every start. Permission finding: the current layer cannot express a rule on the inner tool; a bracket rule reads only command, file_path, path, pattern, notebook_path, url, query (genericInputKeys/matchInner), so only the bare mcp__<server>__call_tool name works — all tools or none.
+
+Maintainer decision, 2026-11-22: Unreal MCP gets its own switch in unreagent's config (on/off and port). The launcher appends the start flag and the port flag itself and hands the agent the http entry under a fixed server name; not documentation-only, not recognition of a hand-written entry by name. Implementation waits for k221 items 1-3 and for k207 to land.
+
+Main agent 2026-11-26: cut into k264-k270 (planner). k264→k265→k266→k267 serial (all touch run()/cmd/launcher); k268, k269 after k266; k270 starts now. Q5 (inner-tool permission rules): no card, nobody hit it.
+
+2026-11-26 06:39 Implementation complete on Linux (k264-k270 done); Windows run against a real UE 5.8 editor still open.
