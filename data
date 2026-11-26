@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-11-26T04:10:31Z
+created: 2026-11-22T07:11:56Z
+id: 234
+priority: medium
+started: 2026-11-26T03:36:27Z
+status: done
+tags:
+- windows
+- tests
+title: 'Windows: six cmd/launcher tests fail on a native Windows run'
+updated: 2026-11-26T04:11:02Z
+---
+
+Found while working k213 and k211 on Windows 2026-11-22 (Windows 11 Pro 26H2, go1.27.0 windows/amd64, native run, not a cross-compile). On main 1ea8353 and f4a906c, `go test ./cmd/launcher/` fails these tests natively on Windows (same set and messages before and after k213, confirmed by unreagent-reviewer in a base worktree):
+
+- TestConsoleNamesAFailedStart, TestPromptNamesAFailedAgentStart, TestUEStartAndRestartFailWhenTheEditorDoesNotStart: exec.Error quotes the program path with %q, so on Windows LastError holds doubled backslashes and strings.Contains(lastErr, path) misses.
+- TestRunReplaysTheStartupLinesIntoTheLauncherLog, TestRunWarnsWhenTheEngineAssociationIsNotInstalled (both subtests): the fixture joins an absolute "C:\Program Files\Epic Games\UE_5.9\..." onto t.TempDir(); mkdir fails on Windows.
+- TestScriptActionWritesToConfiguredDirectoryAndCleansUpOnSuccess: the script reports its own file path as the working directory, not the directory.
+
+Effect: a Windows run of the suite is red on a clean tree, so a real regression there is hidden among known failures; reviewers currently gate on "no failure beyond base" plus a -skip run. Also noted in k214: the run()-level tests skip on Windows.
+
+Owner: unreagent-test-writer. Done when the six pass natively on Windows (or skip there with a stated reason where the behaviour is Linux-only), without weakening what they assert on Linux. TestMaterializeTwoRunsAtOnce is a separate card (a possible real race, not a test-portability issue).
+
+Main agent 2026-11-23: absorbs k244 (run the k106 bridge marker tests on Windows with the k215 fake npm) — same Windows test run.
+
+Main agent 2026-11-26: maintainer asked to work the Linux-doable cards; started from Linux. Windows-native verification stays open and is labeled unverified.
+
+2026-11-26 03:41 Tests made portable, Linux-verified only; Windows native run NOT done (no wine/Windows here): unverified. Changes: quotedInError() helper (exec.Error %q doubles backslashes) in console_test/tools_test (3 tests); the two run() tests skip on Windows via skipEpicDefaultFixtureOnWindows (fixture needs the C:/ Epic default path to be relative; they also depend on startLauncherCmd, which already skips on Windows - the failure was the fixture mkdir running before that skip); script test prints $0 and compares filepath.Dir. Added TestQuotedInError. k244 bridge marker tests not ported: they use shell-script fake npm/node (newScripts skips on Windows); a port needs a test-binary fake node as well as npm, a separate piece of work. gofmt/vet/go test ./... green, GOOS=windows vet + test -c compile (syso LFS pointer temporarily moved aside for -c). No commit.
+
+2026-11-26 04:06 Review (unreagent-reviewer) 2026-11-26: READY, Windows-native UNVERIFIED. Reviewed the uncommitted diff in worktree agent-a41501c607ae90d10 (cmd/launcher console_test.go, tools_test.go, lifecycle_test.go, main_test.go, scriptaction_test.go, helpers_test.go). Ran there: gofmt -l cmd internal skills (empty), go vet ./..., go test ./... (all ok), GOOS=windows GOARCH=amd64 go vet ./..., GOOS=windows go test -c ./cmd/launcher, make windows: all green (syso was an LFS pointer; git lfs pull fetched it). The seven touched tests run and PASS on Linux, none skip. (1) quotedInError matches Go's Windows path: exec.Command on an absolute path -> lookExtensions -> lookPathExts returns &exec.Error{file,...}, whose Error() uses strconv.Quote; on Linux the error is an unquoted fork/exec PathError and the helper is the identity for TempDir paths, so the Linux assertion is unchanged. (2) Both run() test skips are justified and stated: the joined fixture path has a colon component on Windows, and both tests reach startLauncherCmd, which already skips on Windows, so no coverage is lost. (3) scriptaction: filepath.Dir of $0 == dir is the same claim on Linux as before, not weaker. Findings: [minor, scope] the card absorbed k244, which this change does not do (worker says so); the main agent decides whether k234 closes without it and k244 returns to its own card. [nit] scriptaction_test.go:344 echo of $0: an escape-interpreting echo (dash, bash with xpg_echo) would mangle a backslash path; Git for Windows' sh is bash without xpg_echo, so likely fine; printf with %s would remove the doubt. Not blocking.
+
+Committed 1fd124c on main (test-only; no Changes entry). Windows-native run still unverified; k244 part not done.
