@@ -48,6 +48,9 @@ Skills you are likely to need on top:
 - `ue-tasks`: a call that returned a task id or may run longer than the bridge
   waits.
 - `ue-enhanced-input`: the Input Actions a test injects.
+- `ue-unreal-mcp`: when `mcp__unreal-mcp__*` tools are present — Epic's
+  Unreal MCP runs automation tests, Live Coding compiles and PIE through
+  toolsets.
 
 ## Report
 

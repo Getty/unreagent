@@ -1,6 +1,10 @@
 Revision history for unreagent
 
 {{$NEXT}}
+  - New shipped skill ue-unreal-mcp for Epic's Unreal MCP server (UE 5.8):
+    the three meta-tools, the call_tool argument shape, the toolset
+    catalogue, measured catches, agent skills and the server and launcher
+    wiring. The build-test agent loads it on demand.
   - With unreal.mcp on (and mcp.enabled, agent.claudeIntegration), the
     agent's first start waits until the editor's Unreal MCP server answers a
     JSON-RPC ping, at most 5 minutes, then starts with one warning. It starts

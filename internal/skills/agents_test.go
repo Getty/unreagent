@@ -33,6 +33,10 @@ var onDemandSkills = map[string]string{
 	// Belongs to animation work, but with it the agent would carry four tool
 	// skills; key and skeleton edits are the rarer task there (k256 cut).
 	"ue-anim-sequence": "animation",
+	// Only for projects that run Epic's Unreal MCP (k270); its toolsets cut
+	// across every topic, and build-test's are the most used (automation
+	// tests, Live Coding, PIE).
+	"ue-unreal-mcp": "build-test",
 }
 
 // mainSessionOnlySkills are shipped skills that belong to no topic agent
