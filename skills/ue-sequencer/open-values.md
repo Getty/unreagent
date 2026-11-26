@@ -1,7 +1,7 @@
 # sequencer: how `open` reads the camera keys and `frame`
 
 The two items below belong to the list "What the success does not prove" of
-`open` in the skill itself. `scrub` reads its `frame` like `open` does.
+`open` in section `operations`. `scrub` reads its `frame` like `open` does.
 
 - **A key left out of a camera object is not the current value.** The code
   reads all six keys with the engine's `FJsonObject::GetNumberField`, without

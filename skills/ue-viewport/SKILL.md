@@ -2,20 +2,20 @@
 name: ue-viewport
 description: >
   Take a screenshot of the level viewport, the Play In Editor view or an asset
-  editor's 3D preview with capture_viewport: camera placement, the preview
-  camera presets, animation frames, and getting the JPEG into a file you can
-  look at. Use before you check a change visually, or when a capture came back
-  as a long base64 string.
+  editor's 3D preview with capture_viewport: which target to capture, camera
+  placement and presets, animation frames, a look-adjust-recapture loop, and
+  getting the JPEG into a file you can look at. Use before you check a change
+  visually, or when a capture came back as a long base64 string.
 toolkit_tools: [capture_viewport]
 ---
 
 # UE viewport capture: capture_viewport
 
 The UE LLM Toolkit plugin's **`capture_viewport`** tool renders one picture of
-a viewport and returns it as a 1024x576 JPEG. Through the plugin's MCP bridge
-it is listed as `unreal_capture_viewport`. It works only while the editor is
-running and the plugin is reachable. `unreagent-iterate` covers the wait for
-the plugin.
+a viewport and returns it as a 1024x576 JPEG. The bridge lists it as
+`unreal_capture_viewport`. It works only while the editor runs and the plugin
+answers (`unreagent-iterate` covers the wait). Written from the toolkit's C++
+and bridge source (commit c1b6709); not exercised against a running editor.
 
 All parameters are optional:
 
@@ -27,82 +27,62 @@ All parameters are optional:
 | `camera_location` | object `{x, y, z}` | not while PIE runs, unless `asset_path` is given |
 | `camera_rotation` | object `{pitch, yaw, roll}`, in degrees | the same |
 
-This skill was written from the toolkit's C++ and bridge source. It has not
-been exercised against a running editor.
-
-This skill has two sections:
+## Sections — load them
 
 | Section | Holds | Load it |
 |---|---|---|
-| `asset-preview` | the asset editor mode in full: the form of `asset_path`, which editors work and their errors, the three camera presets with their positions, your own camera, `frame` for animation assets | before you pass `asset_path` |
-| `failures` | the failure table (what you see, what it means, what to do) | when a call returns an error, or the picture is not what you expect |
+| `verify-loop` | which target for which check, the look-adjust-recapture loop step by step, aiming a camera at a point, before/after comparisons, what changes a picture (view modes, stats) | before you check a change visually |
+| `asset-preview` | the asset editor mode in full: `asset_path`, which editors work and their errors, the presets' positions, `frame` for animation assets | before you pass `asset_path` |
+| `save-picture` | the `run_python` HTTP sketch that writes the JPEG to a file, when a direct call is safe, its timeouts | when you need to see the picture, not only its fields |
+| `failures` | every error text, and what you see when the picture is wrong, with the fix | when a call fails, or the picture is not what you expect |
 
-## Before the first call
+## Must not get wrong
 
 - **Results through the bridge.** Success is the tool's message, a blank line,
-  then JSON. By default the bridge runs the call as a task, so the JSON is a
-  task envelope and the fields named here sit under its `data` key (skill
-  `ue-tasks`). Failure is only `Error: <message>`.
-- **The picture is text.** The bridge passes `image_base64` on as part of
-  that JSON. It is not turned into an image, so your client shows you a long
-  string, not a picture. "Getting the picture" below shows how to look at it.
-- **Read-only in name only.** The tool is marked read-only, but it changes
-  editor state and leaves it changed: it opens asset editors, moves the editor
-  or preview camera, and pauses animation previews.
-- **It runs on the game thread**, like every toolkit call. Rendering and
-  reading the pixels happen inside the call.
+  then JSON. By default the bridge runs the call as a task, so the fields
+  named here sit under the envelope's `data` key (skill `ue-tasks`). Failure
+  is only `Error: <message>`.
+- **The picture is text.** `image_base64` arrives as part of that JSON, not
+  as an image: a long string that costs as much context as the JPEG. See
+  "Getting the picture".
+- **Read-only in name only.** The tool is marked read-only, but it opens
+  asset editors, moves the editor or preview camera, and pauses animation
+  previews, and leaves them so.
+- **It runs on the game thread**, like every toolkit call. Drawing and reading
+  the pixels happen inside the call.
 
 ## Which viewport
 
 | Call | Captures | `viewport_type` |
 |---|---|---|
-| with `asset_path` | the 3D preview in that asset's editor | `AssetEditor` |
+| with `asset_path` | the 3D preview in that asset's editor, also while PIE runs | `AssetEditor` |
 | without `asset_path`, PIE running | the PIE viewport | `PIE` |
 | without `asset_path`, no PIE | the editor's active viewport | `Editor` |
 
-### Level and PIE
-
-- **PIE comes first.** While a PIE session runs, a call without `asset_path`
-  always captures the PIE view. The level viewport cannot be captured until
-  PIE has stopped.
-- **The active viewport** is the engine's choice: normally the level
-  viewport. Which one counts as active when several level viewports are open,
-  or an asset editor was used last, has not been verified. Check
+- **PIE comes first.** While PIE runs, a call without `asset_path` always
+  captures the PIE view, and `camera_location` / `camera_rotation` are ignored
+  without a word (the tool's description says otherwise). Stop PIE to capture
+  the level.
+- **The active viewport** is the engine's choice, normally the level
+  viewport; with several open, which one counts is unverified. Check
   `viewport_type` and `camera_location` in the result.
 - **Camera.** `camera_location` and `camera_rotation` move the editor camera
-  before the capture, and it stays there afterwards. Give all three keys of
-  each: a key you leave out becomes 0, not the current value, so
-  `{"camera_location": {"z": 500}}` puts the camera at `(0, 0, 500)`. A value
-  that is not an object is ignored. While PIE runs, both are ignored without a
-  word, although the tool's own description says they work with level
-  viewports.
+  before the capture, and it stays there. **Give all three keys of each**: a
+  missing key becomes 0, not the current value, so `{"z": 500}` puts the
+  camera at `(0, 0, 500)`. A value that is not an object is ignored.
 - **Freshness.** Without a camera change the tool reads the pixels the
   viewport last drew; with one, it draws the viewport once first. Whether a
-  frame is current while the editor sits in the background has not been
-  verified. If a picture looks stale, capture again with an explicit camera.
-- `camera` and `frame` are not read in this mode.
+  frame is current while the editor sits in the background is unverified: if
+  a picture looks stale, capture again with an explicit camera.
+- `camera` and `frame` are read only with `asset_path`.
 
-### Asset editor preview
-
-Load section `asset-preview` before you pass `asset_path`: it has which
-editors work and their errors, the presets' positions, and the rules for
-`frame`. What you must know before that:
-
-- **`asset_path`** is loaded as an object path. Pass the full form,
-  `/Game/Characters/SK_Hero.SK_Hero`.
-- **The editor opens if needed**, and stays open.
-- **The camera presets are fixed positions, not fitted to the asset's size**:
-  a much larger or smaller asset can be cut off or tiny. An unknown `camera`
-  name gives the `front` position without an error, and the result's
-  `camera_preset` still echoes the name you passed.
-- **Your own camera.** The same missing-key rule applies as in the level
-  viewport. The preview camera stays where you put it.
-- **`frame`** needs `asset_path` and an animation asset. A negative `frame`
-  is ignored. A frame past the end is taken as the end, without an error:
-  compare `frame_time` with `play_length`. An Animation Sequence converts
-  frames with its own sampling rate; any other animation asset is treated as
-  30 fps, and its `total_frames` is 0. The preview stays paused at that
-  frame.
+**Asset preview, the short form** (section `asset-preview` has the rest):
+pass the object path, `/Game/Characters/SK_Hero.SK_Hero`; the editor opens if
+needed and stays open. Without your own camera, **a preset is always applied**
+— fixed positions, not fitted to the asset's size, and an unknown `camera` name
+silently gives `front` while `camera_preset` echoes your name. `frame` needs an
+animation asset; a frame past the end is clamped without an error (compare
+`frame_time` with `play_length`), and the preview stays paused there.
 
 ## The result
 
@@ -116,130 +96,62 @@ editors work and their errors, the presets' positions, and the rules for
 | `camera_location`, `camera_rotation` | not for `PIE` | where the camera was for this picture |
 | `asset_path` | `AssetEditor` | as you passed it |
 | `camera_preset` | `AssetEditor` without your own camera | the name you passed, or `front` |
-| `frame`, `frame_time`, `play_length`, `total_frames`, `frame_rate` | with `frame` | the frame used, its time and the animation's length in seconds, the frame count, and the rate as a string such as `30/1` |
+| `frame`, `frame_time`, `play_length`, `total_frames`, `frame_rate` | with `frame` | the frame used, its time and the animation's length in seconds, the frame count, the rate as a string such as `30/1` |
 
 The message is `Captured <viewport_type> viewport: 1024x576 JPEG`.
 
-**Every picture is 1024x576**, whatever the viewport's shape. It is stretched
-to that size, not cropped or letterboxed, so a viewport that is not 16:9 comes
-out distorted. `original_width` and `original_height` tell you by how much.
+**Every picture is 1024x576**, stretched to it, not cropped or letterboxed: a
+viewport that is not 16:9 comes out distorted. `original_width` and
+`original_height` tell you by how much.
+
+**Keep `camera_location` and `camera_rotation` from the result.** Passing the
+same six values again is the only way to get a second picture from the same
+spot, for a before/after comparison.
 
 ## Getting the picture
 
-Through the bridge, a capture is only useful for its other fields, and the
-base64 string costs as much context as the whole JPEG. To look at the picture,
-get it into a file and open that file with a reader of your client that shows
-images. unreagent's `read_file` returns text only (skill `unreagent-files`).
+To look at a capture you need it as a file and a reader of your client that
+shows images; unreagent's `read_file` returns text only (skill
+`unreagent-files`).
 
-**In PIE:** the `capture` steps and auto-capture of `gameplay_debug`'s
-`run_sequence` write JPEG files to disk themselves (skill `ue-pie-testing`,
-section `sequences`).
+- **In PIE:** the `capture` steps and auto-capture of `gameplay_debug`
+  `run_sequence` write JPEG files themselves (skill `ue-pie-testing`, section
+  `sequences`).
+- **Any mode:** a `run_python` script can call the plugin over plain HTTP,
+  decode the image and print only the file's path. Load section
+  `save-picture` for the script. **Call it only while the editor is idle**:
+  a direct call that waits 30 s for the game thread answers with a timeout and
+  can crash the editor later (skill `ue-tasks`).
+- **Without either**, use only the other fields: `viewport_type`, the camera,
+  `original_width`, the frame fields. Do not paste the base64 string anywhere.
 
-**Any mode, through `run_python`:** the plugin also answers plain HTTP. A
-script on the host can call the tool there, decode the image and print only
-the file's path. `run_python` is off unless the project enables it (skill
-`unreagent-runtimes`). This is a sketch, not exercised against an editor:
+## Which capture for which check
 
-```python
-import base64, json, os, urllib.error, urllib.request
+Load section `verify-loop` before you check a change visually: it has the
+full decision table and the loop. The short form:
 
-# The bridge's UNREAL_MCP_URL; the port is 3000 unless the editor was
-# started with -MCPPort=<n>.
-URL = "http://127.0.0.1:3000/mcp/tool/capture_viewport"
-params = {"asset_path": "/Game/Characters/SK_Hero.SK_Hero", "camera": "front"}
-
-req = urllib.request.Request(URL, data=json.dumps(params).encode(),
-                             headers={"Content-Type": "application/json"})
-try:
-    with urllib.request.urlopen(req, timeout=60) as r:
-        res = json.load(r)
-except urllib.error.HTTPError as e:  # a failed tool answers with HTTP 400
-    res = json.load(e)
-if not res.get("success"):
-    # Tool failures carry "message"; the server's own errors carry "error".
-    # A string passed to SystemExit is printed and gives exit code 1.
-    raise SystemExit("capture failed: " + str(
-        res.get("message") or res.get("error") or json.dumps(res)))
-
-out = os.path.abspath("Saved/agent-captures/capture.jpg")
-os.makedirs(os.path.dirname(out), exist_ok=True)
-with open(out, "wb") as f:
-    f.write(base64.b64decode(res["data"]["image_base64"]))
-print(out)
-```
-
-The body is the tool's arguments as they are; the answer is
-`{success, message, data}` without a task around it. Errors of the HTTP server
-itself (a bad body, no tool name) come as `{success: false, error}` instead.
-Unknown parameter names are reported in the message instead of being ignored.
-The relative path lands in the runtime's working directory, normally the
-project.
-
-**Call directly only while the editor is idle**: no other toolkit call,
-script, import or `run_sequence` in progress. Which thread handles the request
-is up to the engine's HTTP server; the plugin's comments say one other than
-the game thread. In that case a direct call waits at most 30 s for the game
-thread to run it, then answers
-`Tool 'capture_viewport' execution timed out after 30 seconds`. That answer is
-not an ordinary error. From the plugin's code (`UnrealClaudeMCPServer.cpp`, an
-upstream bug), the job is still queued on the game thread when the answer
-goes out, and when it runs later it writes into memory the plugin has already
-given back. That can crash the editor. Do not retry: check with unreagent's
-`status` that the editor is still running (skill `unreagent-iterate`) before
-anything else. On the game thread there is no such answer: the sketch's own
-60 s timeout ends the wait with a Python exception, and the capture may still
-run. Skill `ue-tasks`, "A 30 s timeout can crash the editor", covers both
-cases for every toolkit call.
-
-## Typical sequences
-
-**Check a placement in the level**
-
-1. With PIE stopped, capture with `camera_location` and `camera_rotation`
-   aimed at the spot. Give all six values.
-2. Write it to a file and look at it ("Getting the picture").
-3. Capture again from a second angle before you conclude anything about
-   depth.
-
-**Check a pose in an animation**
-
-Load section `asset-preview` before you pass `asset_path`.
-
-1. `asset_path` set to the animation, `frame` set to the frame, and a
-   `camera` preset, or your own camera when the presets do not frame it.
-2. Confirm `frame_time` against `play_length`, so you know the frame was not
-   clamped.
-3. The preview stays paused at that frame, and the tool has no way to resume
-   it. Tell the user if they work in that editor.
-
-**Look at the running game**
-
-Capture without `asset_path` while PIE runs, or use `gameplay_debug`
-`capture_pie`, which also returns the frame number and game time (skill
-`ue-pie-testing`).
-
-## When a call fails
-
-Load section `failures` when a call returns an error, or the picture is not
-what you expect: a table from what you see to what it means and what to do.
+| You check | Capture |
+|---|---|
+| a placed actor, light, material, fog in the level | stop PIE, level viewport with your own camera, two angles |
+| a mesh, skeletal mesh or animation on its own | `asset_path`, a preset first, your own camera when it does not frame |
+| a pose at a frame | `asset_path` + `frame` |
+| behaviour at runtime: movement, gameplay, effects that run only in game | PIE: `gameplay_debug` `capture_pie`, or `capture` steps in `run_sequence` for files (skill `ue-pie-testing`) |
+| a Level Sequence shot | skill `ue-sequencer` (scrub, then a level capture) |
 
 ## Background in the plugin
 
-- The plugin's `Resources/domains/assets.md`, section "Visual Inspection",
-  has capture examples and rules for judging what you see. Its "Response
-  auto-saves image to disk" is done by the toolkit's own shell wrapper, not by
-  the MCP bridge. Skill `ue-context` says where the domain documents are.
+The plugin's `Resources/domains/assets.md`, section "Visual Inspection", has
+capture examples and inspection rules; skill `ue-context` says where it is.
+Its "Response auto-saves image to disk" is the toolkit's own shell wrapper,
+not the MCP bridge.
 
 ## See also
 
-- `ue-pie-testing`: PIE sessions, `capture_pie`, and capture steps that write
-  files.
+- `ue-pie-testing`: PIE, `capture_pie`, capture steps that write files, and
+  `run_console_command` (view modes, stats) in section `console`.
 - `ue-assets`: `asset_search`, for the path of the asset to capture.
-- `ue-level-actors`: placing the actors you want to look at.
-- `ue-lighting`: lights, fog and post-process volumes, whose effect a capture
-  shows.
-- `ue-sequencer`: opening a Level Sequence and scrubbing it to a frame before
-  a level-viewport capture.
+- `ue-level-actors`: placing the actors you look at, and their locations.
+- `ue-lighting`: lights, fog, post-process, whose effect a capture shows.
+- `ue-sequencer`: scrubbing a Level Sequence before a level capture.
 - `ue-tasks`: the task envelope and bridge timeouts.
-- `unreagent-runtimes`: `run_python`, for the HTTP sketch.
-- `unreagent-files`: `read_file`, which returns text only.
+- `unreagent-runtimes`, `unreagent-files`: `run_python`, `read_file`.

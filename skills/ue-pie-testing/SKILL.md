@@ -4,72 +4,69 @@ description: >
   Play-test in Play In Editor through the UE LLM Toolkit: start and stop PIE,
   run scripted input sequences that capture frames and write a manifest,
   inject Enhanced Input actions, play montages, log input with the monitor,
-  run console commands, and read the editor's output log (gameplay_debug,
-  run_console_command, get_output_log). Use before you test a gameplay change
-  in PIE, or to read the log of a running editor.
+  run console commands, read the editor's output log and assert on it
+  (gameplay_debug, run_console_command, get_output_log). Use before you test
+  a gameplay change in PIE, or to read the log of a running editor.
 toolkit_tools: [gameplay_debug, run_console_command, get_output_log]
 ---
 
 # UE play testing in the editor
 
 Three tools of the UE LLM Toolkit plugin cover testing a game inside the
-editor:
+editor; the bridge lists them as `unreal_gameplay_debug`,
+`unreal_run_console_command` and `unreal_get_output_log`:
 
 | Tool | For |
 |---|---|
 | `gameplay_debug` | Play In Editor (PIE): sessions, scripted runs, input injection, captures, the input monitor, montages |
-| `run_console_command` | one console command in the editor |
+| `run_console_command` | one console command in the editor's world |
 | `get_output_log` | the editor's log file, filtered |
 
-They work only while the editor is running and the plugin is reachable.
-`unreagent-iterate` covers the wait for the plugin.
+They work only while the editor runs and the plugin answers
+(`unreagent-iterate` covers the wait). Written from the toolkit's C++ and
+bridge source (commit c1b6709); not exercised against a running editor.
+Starting PIE, drawing frames, running a console command and passing injected
+input on to the game are the engine's work: the skill says what the plugin
+asks for, and marks what follows from that as unverified.
 
-This skill was written from the toolkit's C++ and bridge source. It has not
-been exercised against a running editor. Starting and stopping PIE, drawing
-frames, running a console command and passing injected input on to the game
-are the engine's work. The skill says what the plugin asks the engine to do,
-and marks what follows from that as unverified.
-
-This skill has four sections:
+## Sections — load them
 
 | Section | Covers | Load it |
 |---|---|---|
-| `sequences` | `run_sequence` step by step, how a run ends, the manifest, `sequence_status`, and the older `execute_sequence` | before you write or start a scripted run (the step format is only there), and when a run does not start or end, or its manifest or captures are not what you expect |
-| `input` | `inject_input` and continuous injection, the input monitor, montages | before your first injection, monitor or montage call, and when the game ignores an injected action or a value arrives changed |
-| `log` | `get_output_log`: which file, the filters, the `since` cursor | before you pass `get_output_log` more than `filter` and `lines`, and when a read misses lines you expect |
-| `failures` | the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see after a call is not what you expect |
+| `recipes` | end-to-end loops with the exact calls: a scripted test with assertions on manifest and log, the manual start-inject-look-stop loop, the ladder for input that does not arrive, watching the user, a stat glance | before you run any test; it is the workflow |
+| `sequences` | `run_sequence` step by step, the step format, how a run ends, the manifest, `sequence_status`, the older `execute_sequence` | before you write or start a scripted run, and when a run does not start, end, or write what you expect |
+| `input` | `inject_input` and continuous injection, the input monitor, montages | before your first injection, monitor or montage call |
+| `log` | `get_output_log`: which file, the filters, the `since` cursor, the lines a run writes | before you pass more than `filter` and `lines`, or assert on log lines |
+| `console` | `run_console_command`'s checks and blocklist, `console` steps, commands useful for verification (stat, view modes, show flags) with their sources | before you run a console command |
+| `failures` | what you see, what it means, what to do | when a call fails, or the result is not what you expect |
 
-## Before the first call
+## Must not get wrong
 
-- **Tool names.** The bridge lists the tools as `unreal_gameplay_debug`,
-  `unreal_run_console_command` and `unreal_get_output_log`.
 - **Results through the bridge.** Success is the tool's message, a blank line,
-  then JSON. By default the bridge runs the call as a task, so the JSON is a
-  task envelope and the fields named here sit under its `data` key (skill
-  `ue-tasks`). Failure is only `Error: <message>`.
+  then JSON. By default the bridge runs the call as a task, so the fields
+  named here sit under the envelope's `data` key (skill `ue-tasks`). Failure
+  is only `Error: <message>`.
 - **Misspelt parameters are ignored without a word** on queued calls (skill
-  `ue-tasks`). This bites here: the operations take `action_path`, but the
-  steps of `run_sequence` take `action`.
-- **One state for every caller.** The plugin keeps the running sequence, the
-  continuous injections, the monitor and the log cursor in editor memory. Every
-  agent and every session that calls the plugin shares them, and an editor
-  restart loses them.
+  `ue-tasks`); the editor log still gets `Tool '<tool>': unknown params: <names>`.
+  This bites here: the operations take `action_path`, the steps of
+  `run_sequence` take `action`.
+- **One state for every caller.** The running sequence, the continuous
+  injections, the monitor and the log cursor live in editor memory. Every
+  agent and session shares them; an editor restart loses them.
 - **PIE starts and stops later.** `start_pie` and `stop_pie` only ask the
-  editor, and return at once. Poll `pie_status` until `running` changes.
-  Starting a session in a large project can keep the game thread busy for a
-  while, so poll seldom (skill `ue-tasks`, "A 30 s timeout can crash the
-  editor").
-- **Expect the game to wait for every toolkit call.** Toolkit calls run on the
-  game thread, and PIE most likely ticks on it too (not verified), so the game
-  would not advance while a call runs.
+  editor and return at once. Poll `pie_status` until `running` changes, and
+  poll seldom: a large project's start can keep the game thread busy (skill
+  `ue-tasks`, "A 30 s timeout can crash the editor").
+- **The game waits for every toolkit call.** Toolkit calls run on the game
+  thread, and PIE most likely ticks on it too (not verified).
 - **Focus.** The plugin's notes say PIE runs at about 3 fps while the editor
-  window is not in front. `run_sequence` asks the system to bring the PIE
-  window to the front and runs `t.MaxFPS 60`. The manual operations do neither.
+  window is not in front. `run_sequence` brings the PIE window to the front
+  and sets `t.MaxFPS 60`; the manual operations do neither.
 
 ## gameplay_debug at a glance
 
-`gameplay_debug` takes an `operation` string. The name is not case sensitive,
-and five short forms exist: `run`, `status`, `start`, `stop` and `capture`.
+`gameplay_debug` takes an `operation` string, not case sensitive, with five
+short forms: `run`, `status`, `start`, `stop` and `capture`.
 
 | Operation | Required | Optional | Details |
 |---|---|---|---|
@@ -93,175 +90,122 @@ and five short forms exist: `run`, `status`, `start`, `stop` and `capture`.
 Every operation first needs the editor's world and otherwise fails with
 `No world context available`. A required text parameter that is absent or
 empty returns `Missing required parameter: <name>`. An unknown operation
-returns `Unknown operation: '<op>'. Valid: run_sequence, start_pie, …` with the
-whole list, and ` Did you mean '<name>'?` when one is close.
+returns `Unknown operation: '<op>'. Valid: run_sequence, start_pie, …`, with
+` Did you mean '<name>'?` when one is close.
 
 ## PIE sessions
 
-**`start_pie`** asks the editor for a PIE session and returns
-`PIE session requested` with `requested: true` and the `note`
-`PIE start is async. Poll pie_status until running.` When a session already
-runs, it returns `PIE session already running` with `already_running: true`.
+**`start_pie`** asks for a session and returns `PIE session requested` with
+`requested: true` and the `note` `PIE start is async. Poll pie_status until running.`
+With a session running: `PIE session already running`, `already_running: true`.
 
 **`stop_pie`** clears every continuous injection, cancels a running sequence
-(section `sequences`, "How a run ends"), asks the editor to end PIE, and
-returns `PIE stop requested` with `stop_requested: true`. Without a session it
-returns only `No PIE session running` and does nothing else: a sequence still
-waiting for PIE to start is not cancelled.
+(without a manifest), asks the editor to end PIE, and returns
+`PIE stop requested` with `stop_requested: true`. Without a session it returns
+only `No PIE session running` and does nothing else: a sequence still waiting
+for PIE is not cancelled. It does not stop the monitor.
 
-**`pie_status`** returns `running`, and the message `PIE is running` or
+**`pie_status`** returns `running` and the message `PIE is running` or
 `PIE is not running`. While PIE runs, it adds:
 
 | Field | Present | Holds |
 |---|---|---|
 | `frame_number` | while running | the engine's frame counter |
-| `game_time`, `real_time` | while the PIE world exists | seconds of game time, and of real time, in PIE |
+| `game_time`, `real_time` | while the PIE world exists | seconds of game and real time in PIE |
 | `pawn_location` | while the first player controls a pawn | `{x, y, z}` |
-| `continuous_injections` | while running | how many continuous injections are active |
+| `continuous_injections` | while running | active continuous injections |
+
+**Ready for input means `running: true` and `pawn_location` present.**
+`running` alone says the session exists, not that a pawn is possessed.
 
 **`capture_pie`** captures the PIE viewport as a 1024x576 JPEG, quality 70,
 stretched to that size like `capture_viewport`. The result has
 `image_base64`, `width`, `height`, `format`, `frame_number`, `game_time` and
-`viewport_type: "PIE"`, and the message is
-`Captured PIE viewport at frame <n> (t=<seconds>)`. The image arrives as base64
-text, not as a picture: skill `ue-viewport`, "Getting the picture". To get
-JPEG files on disk, use the `capture` steps of `run_sequence`. Errors:
-`PIE viewport not available. Is PIE running?`,
-`PIE viewport has invalid size`, `Failed to read PIE viewport pixels`, and
-`Failed to create image wrapper`, `Failed to set image data` or
-`Failed to compress JPEG` when encoding fails.
+`viewport_type: "PIE"`; the message is
+`Captured PIE viewport at frame <n> (t=<seconds>)`. The image is base64 text,
+not a picture (skill `ue-viewport`, "Getting the picture"); for JPEG files on
+disk, use `capture` steps in `run_sequence`. Errors:
+`PIE viewport not available. Is PIE running?`, `PIE viewport has invalid size`,
+`Failed to read PIE viewport pixels`, and `Failed to create image wrapper`,
+`Failed to set image data` or `Failed to compress JPEG`.
 
 ## run_console_command
 
-Runs one console command. `command` (string) is required.
-
-Before anything runs, the command is checked, and the first rule that matches
-fails the call:
-
-| Rule | Error |
-|---|---|
-| no editor | `Editor not available. Is the Unreal Editor running with UELLMToolkit plugin loaded?` |
-| no editor world | `No active world. Open a level in the editor first` |
-| absent or empty | `Missing required parameter: command` |
-| more than 2048 characters | `Command exceeds maximum length of 2048 characters` |
-| begins with a blocked command | `Command '<blocked>' is blocked for safety` |
-| contains `;`, `\|` or `&&` | `Command chaining is not allowed` |
-| contains a backtick, `$(` or `${` | `Shell escape sequences are not allowed` |
-
-The blocked commands are matched against the start of the command, ignoring
-case and surrounding spaces: `quit`, `exit`, `crash`, `forcegc`, `forcecrash`,
-`debug crash`, `mem`, `memreport`, `obj`, `exec`, `savepackage`,
-`deletepackage`, `net`, `admin`, `shutdown`, `restartlevel`, `open`,
-`servertravel`, `toggledebugcamera`, `enablecheats`, `stat slow`, `gc.` and
-`r.`. Anything beginning with one of them is refused, such as every rendering
-variable `r.…`, although the tool's own description suggests `r.SetRes`. The
-error names the blocked entry, not your command. To open a level, use
-`open_level` (skill `ue-levels`).
-
-The command runs against the **editor's world**, also while PIE runs. The
-tool's description lists `slomo 0.5` as working in PIE only; whether such game
-commands reach the PIE session from here has not been verified. A `console`
-step of `run_sequence` runs against the PIE world instead (section
-`sequences`).
-
-The result has `command` and `output`, whatever the command wrote back, with
-trailing whitespace removed; the message is `Executed command: <command>`.
-**Success means only that the command passed the checks and was handed to the
-engine.** The tool does not check whether the engine accepted it, and many
-commands write to the log or the screen, not to `output`. Check the effect: in
-the log (`get_output_log` with `filter`), with `capture_viewport`, or by
-reading the state back.
-
-The tool's description gives `stat fps`, `stat unit`, `show collision`,
-`show bounds` and `ce <EventName>` as examples. The plugin's notes say never to
-run `SaveAll`: it opens the editor's own confirmation dialog. Save through the
-asset tools (skill `ue-assets`).
+Runs one command (`command`, required) against the **editor's world**, also
+while PIE runs; a `console` step of `run_sequence` runs in the PIE world
+instead. It refuses commands that begin with a blocked entry — among them
+`open`, `exit`, `quit`, `obj`, `mem`, `net`, `gc.` and **every `r.…`
+variable** — and any command with `;`, `|`, `&&`, a backtick, `$(` or `${`.
+The result has `command` and `output`. **Success means only that the command
+was handed to the engine**: many commands write to the log or the screen, not
+to `output`, so check the effect. Never run `SaveAll` (plugin notes: it opens
+a confirmation dialog). Load section `console` for the full checks and the
+verification commands (`stat unit`, `viewmode …`, `show …`).
 
 ## Which log to read
 
-| Source | What it reads | Use it when |
+| Source | Reads | Use it when |
 |---|---|---|
-| `get_output_log` | the editor's log file, through the plugin: filters, up to 1000 lines, a `since` cursor | the editor is up and the plugin answers: errors after a call, `[PIE-DBG]` lines from a run (section `log`) |
-| unreagent's `logs`, `service: "ue"` | the editor's console output as the launcher buffered it | the editor is starting, hung, crashed or stopped, or the plugin does not answer |
-| `read_file` on `Saved/Logs/<ProjectName>.log` | the file `get_output_log` normally reads, on disk | a long log, the end of a crashed session; to search it, see below |
+| `get_output_log` | the editor's log file through the plugin: filters, up to 1000 lines, a `since` cursor | the plugin answers: errors after a call, a run's lines (section `log`) |
+| unreagent's `logs`, `service: "ue"` | the editor's console output as the launcher buffered it | the editor is starting, hung, crashed or stopped |
+| `read_file` on `Saved/Logs/<ProjectName>.log` | the file `get_output_log` normally reads | a long log, the end of a crashed session, a run's lines between its anchors |
 
-`logs` needs no plugin and keeps the last lines across editor restarts; skill
-`unreagent-iterate` says how much it holds and what it leaves out.
-`get_output_log` needs the plugin to answer, so it cannot tell you why the
-editor died. After a crash, use `logs`, then `read_file` with a negative
-`offset` on the log file (skill `unreagent-files`). To search a large log, use
-`run_python` (skill `unreagent-runtimes`).
+`logs` needs no plugin (skill `unreagent-iterate`); `get_output_log` cannot
+tell you why the editor died. After a crash use `logs`, then `read_file` with
+a negative `offset` (skill `unreagent-files`); to search a large log,
+`run_python` (skill `unreagent-runtimes`). `get_output_log` takes the first
+log file it finds and names it in `log_file`: check it, it can be an older
+session's.
 
-`get_output_log` takes the first log file it finds and names it in
-`log_file`. Check it: it can be an older log, such as a backup of an earlier
-session. Load section `log` before you pass more than `filter` and `lines`,
-and when a read misses lines you expect.
+**Do not assert on `since` reads**: from the code, each incremental read
+drops the first new line (section `log`). Read with a plain `filter`, or the
+file itself.
 
-## Typical sequences
+## The test loop
 
-**A scripted play test** (load section `sequences` first: the step format
-is only there)
+Load section `recipes` before you test: it has each loop with the exact
+calls. In short, a scripted test:
 
-1. `stop_pie`, then `pie_status` until `running` is `false`.
+1. `stop_pie` if PIE runs; `pie_status` until `running` is `false`.
 2. `run_sequence` with `steps`, a fresh `name` and an absolute `output_dir`
-   inside the project, such as `<project>/Saved/pie-debug/<name>`.
+   inside the project, `<project>/Saved/pie-debug/<name>`.
 3. `sequence_status` until `state` is `completed` or `failed`.
-4. `read_file` on `<output_dir>/manifest.json`. Look at the capture files with
-   an image reader of your client.
-5. `get_output_log` with `filter: "[PIE-DBG]"`, or `read_file` on the log file.
+4. `read_file` on `<output_dir>/manifest.json`: `status`, `error`,
+   `steps_executed`, the captures, the `diag` positions.
+5. `get_output_log` with `filter: "PIESequenceRunner"` and
+   `min_verbosity: "Warning"` for skipped steps; your game's lines by
+   `categories` and `filter`.
+6. Look at the capture files; report each claim as passed or failed.
 
-**Trying input by hand** (load section `input` before the first call)
-
-1. `start_pie`, then `pie_status` until `running` is `true`.
-2. `inject_input` for a single press, or `start_continuous` for a held stick.
-3. `capture_pie` or `capture_viewport` (skill `ue-viewport`), and
-   `pie_status` for the pawn's position.
-4. `stop_continuous` for each id, then `stop_pie`.
-
-**Watching the user play** (load section `input` before the first call)
-
-1. `start_monitor` with `start_pie: true`. The user plays.
-2. `stop_monitor`, then `get_output_log` with `filter: "[PIE-DBG]"`.
-
-What the injection, monitor and montage operations do without telling you;
-section `input` has each in full:
+What injection, monitor and montages do without telling you (section
+`input` has each in full):
 
 - **`value_x` defaults to 1 for every action type**, so an Axis2D call
-  without values sends `(1, 0)`, not zero. Give every axis you mean.
-- **`update_continuous` builds the value from that call alone**: an axis you
-  leave out falls back to its default, so pass every axis each time.
+  without values sends `(1, 0)`. Give every axis you mean.
+- **`update_continuous` builds the value from that call alone**: an axis
+  left out falls back to its default.
 - **Stop each continuous injection you started.** `stop_pie` ends them all;
   when PIE ends any other way they stop sending, but their ids stay, and
   `pie_status` still counts them in a later session.
-- **A single `inject_input` is a single-frame one, and a digital action
-  with a `Pressed` trigger needs the value held across frames** (both from
-  the plugin's notes): use `start_continuous` and stop it again, or a `hold`
-  step in `run_sequence`.
+- **A single `inject_input` is one frame**, and a digital action with a
+  `Pressed` trigger needs the value held across frames (plugin notes): use
+  `start_continuous` and stop it, or a `hold` step of 100 ms or more.
+- **Digital `input` and `hold` steps always send `true`**: their `value_x`
+  is ignored (section `sequences`).
 - **`start_monitor` says `Monitor started (PIE attached)` whenever PIE runs,
   even when attaching failed**: check `pie_attached`.
-- **With `log_axes`, the monitor stops for good when PIE ends**, although
-  the tool's description says it stays active. Expect its frame cap of 60 to
-  stay (not verified) until `run_console_command` with `t.MaxFPS 0`.
-- **Montage section names are not checked.** A `start_section` or
-  `section_name` the montage does not have still returns success.
-
-Load section `input` as well when the game ignores an injected action or a
-value arrives changed: whether a mapping's triggers and modifiers apply to
-injected values has not been verified.
-
-## Failure modes
-
-Load section `failures` when a call returns an error you cannot place, or
-what you see after a call is not what you expect: it has the failure table
-(what you see, what it means, what to do).
+- **With `log_axes`, the monitor stops for good when PIE ends**, although the
+  description says it stays; its `t.MaxFPS 60` stays (not verified) until
+  `t.MaxFPS 0`.
+- **Montage section names are not checked**: a wrong one still succeeds.
 
 ## Background in the plugin
 
-- The plugin's `Resources/domains/debug.md` is its own guide to PIE
-  automation, and skill `ue-context` says where it is. Where it differs from the
-  code: its `hold` example passes `"value": true`, which no step reads; its
-  "zero-value hold" between two presses does not release a digital action
-  (section `sequences`); it says injected input "Bypasses IMC modifiers" while
+- `Resources/domains/debug.md` is the plugin's guide to PIE automation (skill
+  `ue-context` says where). Where it differs from the code: its `hold`
+  example passes `"value": true`, which no step reads; its "zero-value hold"
+  between two presses does not release a digital action (section
+  `sequences`); it says injected input "Bypasses IMC modifiers" while
   `gameplay_debug`'s description says it respects them (section `input`); and
   its advice to grep the log file means, here, `read_file` or `run_python`.
 - `Resources/domains/tooling.md` has the `SaveAll` warning.
@@ -269,11 +213,10 @@ what you see after a call is not what you expect: it has the failure table
 ## See also
 
 - `ue-viewport`: `capture_viewport`, and getting a picture out of base64.
-- `ue-enhanced-input`: the Input Actions and Mapping Contexts that injected
-  input goes through.
+- `ue-enhanced-input`: the Input Actions injection triggers (injection
+  bypasses the Mapping Contexts, section `input`).
+- `ue-game-framework`: game mode and pawn, when PIE has no pawn.
 - `ue-levels`: opening the level to test in.
-- `ue-tasks`: the task envelope and bridge timeouts.
-- `ue-context`: where the plugin's domain documents are.
-- `unreagent-iterate`: `logs`, and starting the editor.
-- `unreagent-files`: `read_file` for manifests and log files.
-- `unreagent-runtimes`: `run_python` for searching a large log.
+- `ue-tasks`, `ue-context`: the task envelope; where the plugin docs are.
+- `unreagent-iterate`, `unreagent-files`, `unreagent-runtimes`: `logs`,
+  `read_file`, `run_python`.

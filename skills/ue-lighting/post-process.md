@@ -41,6 +41,9 @@ holds `actor_name`, `actor_label` and `settings_applied`; the message is
   `BlendRadius`, `BlendWeight`, `Priority` in the code this tool reads them
   from); `set_property` of skill `ue-level-actors` is the tool for actor
   properties. That path has not been verified for a post-process volume.
+- Settings without a key — the exposure method, physical camera exposure,
+  the GI and reflection method, MegaLights — cannot be set here at all:
+  sections `exposure` and `rendering-paths` name the other paths.
 - A `color_grading_lut` path that does not load as a texture is skipped
   without an error.
 - A `bloom_method` other than `convolution` or `fft` selects the standard

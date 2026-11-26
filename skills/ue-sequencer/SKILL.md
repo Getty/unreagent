@@ -17,62 +17,85 @@ off. Through the plugin's MCP bridge it is listed as `unreal_sequencer`. It
 works only while the editor is running and the plugin is reachable;
 `unreagent-iterate` covers the wait for the plugin.
 
-It does not create a sequence, add tracks or keys, play a sequence, or render
-one. No toolkit tool does.
+**It does not create a sequence, add cameras, tracks, cuts or keys, play a
+sequence, or render one. No toolkit tool does.** Section `camera-cuts` has
+the decision rule and a labelled Python path for that.
 
 This skill was written from the toolkit's C++ source (`MCPTool_Sequencer.h`,
 `MCPTool_Sequencer.cpp`, `SequencerController.cpp`, at toolkit commit
-9f6a0f7). It has not been exercised against a running editor. Opening an asset
-editor, evaluating a sequence and recording a take are the engine's work. The
-skill says what the plugin asks the engine to do, and marks what follows from
-that as unverified.
+c1b6709). It has not been exercised against a running editor. Opening an
+asset editor, evaluating a sequence and recording a take are the engine's
+work; facts marked "UE 5.8.4 source" were read there, not run, and the rest
+of the engine's behaviour is marked unverified.
 
-This skill has three sections:
+## Sections — load the one your task needs
 
 | Section | Holds | Load it |
 |---|---|---|
-| `open-values` | how `open` reads the six camera keys and `frame` from each JSON type, with the engine source it was read in | when `open` succeeded and the camera or the playhead is not where you sent it, or `frame` in its result is not the number you expect |
-| `take-start` | `take_start` in full: the steps the code takes before recording, the result, what its success does not prove | before you call `take_start` |
-| `failures` | `open`'s error table, and the failure table (what you see, what it means, what to do) | when a call returns an error, or a capture or a take is not what you expected |
+| `camera-cuts` | camera cut track vs cinematic shot track; what `create_camera` does to the viewport; a short, unexercised Python path to a sequence with two cuts; the loop that verifies each cut frame by frame | before you build or change a sequence's cameras or cuts, or check that its cuts fall where they should |
+| `operations` | every operation in detail: `open`'s parameters and what its success does not prove, `scrub`, `get_state`'s fields, `close`, `take_stop`, `take_status`, the engine version gate | before an operation the recipes below do not show, or when a result field is not what you expect |
+| `open-values` | how `open` and `scrub` read the camera keys and `frame` from each JSON type | when the camera or the playhead is not where you sent it |
+| `take-start` | `take_start` in full: the steps the code takes, the result, what its success does not prove | before you call `take_start` |
+| `failures` | `open`'s errors, and the failure table (what you see, what it means, what to do) | when a call returns an error, or a capture or a take is not what you expected |
+
+## Must not get wrong
+
+- **`operation` is case sensitive**, with no aliases.
+- **`playback_end_frame` is one past the last frame**: the engine's playback
+  range has an exclusive upper bound (`UMovieScene::SetPlaybackRange`, UE
+  5.8.4 source). Scrub to `playback_end_frame - 1` for the last frame.
+- **`scrub` and `get_state` act on the first open Level Sequence editor.**
+  Keep one open; confirm with `get_state`'s `sequence_path`.
+- **A capture after a scrub needs an explicit camera** to redraw the frame
+  (skill `ue-viewport`, "Freshness"), and PIE must be stopped.
+- **`take_start` clears the Take Recorder's sources and adds none**, and
+  changes two of the user's Take Recorder settings, at least for the
+  session. To record the
+  player in PIE, use `run_sequence` with `take_record` (skill
+  `ue-pie-testing`).
+- **`close` closes every open Level Sequence editor**, unsaved or not.
 
 ## Recipes
 
-Argument names are exact, and **`operation` is case sensitive**.
+Argument names are exact.
 
 **Look at one frame of a sequence**
 
 1. Stop PIE if it runs (skill `ue-pie-testing`): a level-viewport capture
    takes the PIE view while a session is up.
 2. `sequencer` `{"operation": "open", "sequence_path": "/Game/Cinematics/SEQ_Intro", "frame": 120, "camera_location": {"x": -400, "y": 0, "z": 200}, "camera_rotation": {"pitch": -10, "yaw": 0, "roll": 0}}`.
-   Give `camera_location` and `camera_rotation` together, with all six values.
-3. Check the result: `camera_set` must be `true`, and a `frame` field must be
-   present. If `frame` is missing, the scrub failed without an error; send
-   `scrub` yourself.
+   Give `camera_location` and `camera_rotation` together, with all six
+   values; omit both when the sequence's own camera cuts should frame it.
+3. Check the result: when you passed a camera, `camera_set` must be `true`;
+   a `frame` field must be present. If `frame` is missing, the scrub failed
+   without an error; send `scrub` yourself.
 4. `sequencer` `{"operation": "get_state"}`. Confirm `sequence_path` and
    `current_frame`, and note `camera_location` and `camera_rotation`.
 5. `capture_viewport` with `camera_location` and `camera_rotation` set to the
    values from step 4, all six (skill `ue-viewport`), and write the picture
-   to a file as that skill describes. Without a camera the capture reads
-   whatever the viewport last drew, which may be from before the scrub; with
-   one it draws the viewport first (`ue-viewport`, "Freshness"). Passing the
-   viewport's own values keeps the camera where it is.
+   to a file as that skill describes. Passing the viewport's own values keeps
+   the camera where it is and makes the capture draw first.
 
 **Step through frames**
 
 1. `sequencer` `{"operation": "get_state"}` for `playback_start_frame`,
    `playback_end_frame` and `display_rate`.
-2. `sequencer` `{"operation": "scrub", "frame": 48}`, then `capture_viewport`
-   with an explicit camera, as in step 5 above, so that it draws the frame
-   you scrubbed to. Repeat per frame.
-3. `sequencer` `{"operation": "close"}` when done. It closes every open Level
-   Sequence editor.
+2. `sequencer` `{"operation": "scrub", "frame": 48}`, then `get_state` and
+   `capture_viewport` with its camera, as in steps 4–5 above. Repeat per
+   frame, staying below `playback_end_frame`.
+3. `sequencer` `{"operation": "close"}` when done.
+
+**Check a sequence's camera cuts**
+
+Load section `camera-cuts`: three frames per cut (first, middle, last), the
+camera-cut lock, and what a wrong picture means.
 
 **Record gameplay as a take**
 
 Do not use this tool. `gameplay_debug` `run_sequence` with `take_record: true`
-starts PIE, adds the player's pawn as the recording source, stops the take and
-writes its path to the manifest (skill `ue-pie-testing`, section `sequences`).
-`take_start` here adds no source.
+starts PIE, adds the player's pawn as the recording source, stops the take,
+saves it and writes its path to the manifest (skill `ue-pie-testing`, section
+`sequences`). `take_start` here adds no source.
 
 **A take is still recording**
 
@@ -87,23 +110,22 @@ end the plugin leaves it alone, and it may still be recording.
 
 1. Take the path from the manifest's `take_sequence_path`, from `take_stop`'s
    `sequence_path`, or from `take_status`'s `last_sequence_path`.
-2. Continue as in "Look at one frame of a sequence".
+2. Confirm the asset exists with `asset_search` (skill `ue-assets`), then
+   continue as in "Look at one frame of a sequence".
 
 ## Before the first call
 
 - **Result shape.** Success is the message, a blank line, then JSON. By
   default the bridge goes through the task queue, so that JSON is a task
-  envelope, and the tool's own fields, the ones named in this skill, sit under
-  its `data` key (skill `ue-tasks`). Failure is `Error: <message>` with no
-  data.
+  envelope, and the tool's own fields sit under its `data` key (skill
+  `ue-tasks`). Failure is `Error: <message>` with no data.
 - **No aliases, no lowercasing.** An operation in another case, or any other
   word, returns `Unknown operation '<op>'. Valid: take_start, take_stop,
   take_status, open, scrub, get_state, close`. A missing `operation` returns
   `Missing required parameter: operation`.
-- **Marked as modifying, and it is.** The tool changes editor state: it opens
-  and closes asset editors, moves the level viewport's camera, moves the
-  playhead, and changes Take Recorder settings. It changes no asset by its own
-  code, and saves none.
+- **Marked as modifying, and it is.** The tool opens and closes asset
+  editors, moves the level viewport's camera, moves the playhead, and changes
+  Take Recorder settings. It changes no asset by its own code, and saves none.
 - **No PIE check.** No operation looks at whether PIE runs. How the Sequencer
   editor and the Take Recorder behave during a session is the engine's
   business.
@@ -114,189 +136,47 @@ end the plugin leaves it alone, and it may still be recording.
 |---|---|---|---|
 | `open` | `sequence_path` | `frame`, `camera_location`, `camera_rotation` | `sequence_path`, `camera_set`, `frame` (only when the scrub worked) |
 | `scrub` | `frame` | — | `frame` |
-| `get_state` | — | — | see below |
+| `get_state` | — | — | `current_frame`, `display_rate`, `playback_speed`, `playback_start_frame`, `playback_end_frame`, `sequence_name`, `sequence_path`, `camera_location`, `camera_rotation` (section `operations` says when each is present) |
 | `close` | — | — | none |
 | `take_start` | — | `slate_name` | `recording`, `slate_name` (when given) |
 | `take_stop` | — | — | `recording`, `sequence_path` |
 | `take_status` | — | — | `is_recording`, `state`, `last_sequence_path` (when there is one) |
 
 The tool's description and the dispatch list the same seven operations.
+`frame` is a **display frame**, as the Sequencer's timeline shows it, cut off
+towards zero; it is not checked against the playback range. The Take
+Recorder operations exist only on **UE 5.7 or later**: before that they fail
+with `TakeRecorder requires UE 5.7+` (`take_status`: `Failed to get Take
+Recorder status`).
 
 ### Which Sequencer
 
 `scrub` and `get_state` do not take a path. They act on "the active
 Sequencer", which the code finds by walking all assets that have an editor
 open and taking the **first Level Sequence** whose editor gives a Sequencer.
-With one Level Sequence open, that is the one. With several, which comes first
-is not defined by the toolkit. Keep one open, and confirm with `get_state`'s
-`sequence_path`.
+With several open, which comes first is not defined by the toolkit. Keep one
+open, and confirm with `get_state`'s `sequence_path`. With none open, both
+fail with `No active Sequencer found`.
 
-With none open, both fail with `No active Sequencer found`.
+### What `open` does not prove
 
-### open
+The short form; section `operations` has the full list.
 
-Loads the Level Sequence and opens its editor, then, in this order, sets the
-viewport camera and scrubs.
+- The camera is set only when **both** camera objects are given;
+  `camera_set: true` means the call was made, not that a camera moved, and a
+  key left out reads as 0.
+- A failed scrub inside `open` is swallowed: no `frame` in the result.
+- A sequence with camera cuts may take the viewport camera over after the
+  scrub (not verified). Compare `get_state`'s camera with what you sent.
+- Nothing checks that the sequence's bindings resolve in the open level.
 
-| Parameter | Meaning |
-|---|---|
-| `sequence_path` | required. A package path, `/Game/Cinematics/SEQ_Intro`, or an object path, `/Game/Cinematics/SEQ_Intro.SEQ_Intro`. A path without a dot gets the object name appended |
-| `frame` | a number: the display frame to scrub to, as in `scrub` |
-| `camera_location` | `{x, y, z}` |
-| `camera_rotation` | `{pitch, yaw, roll}`, in degrees |
+### take_start, take_stop, take_status
 
-The message is `Opened sequence: <path>`, with ` at frame <n>` when the scrub
-worked and ` with camera positioned` when the camera was set.
-
-What the success does not prove:
-
-- **The camera is set only when both camera objects are given.** With one of
-  them, or with a value that is not an object, neither is used, there is no
-  error, and `camera_set` is `false`.
-- **`camera_set: true` means the call was made**, not that a camera moved. The
-  code sets the camera of the level editor's first active viewport and ignores
-  whether there was one.
-- **A key left out of a camera object is not the current value.** A missing
-  key reads as 0, with no error, and so does `null`, an array, an object or a
-  string that is not numeric (read in the UE 5.8.4 source, not run, while the
-  toolkit targets UE 5.6 and 5.7). Pass all six.
-- **A failed scrub is swallowed**, and so is a `frame` the tool cannot read
-  as a number. `open` still succeeds; the result just has no `frame` and the
-  message no ` at frame`. When `frame` is present it is the number that was
-  read, fraction included, not a value read back from the Sequencer: `12.9`
-  scrubs to frame 12 and the message says ` at frame 12`, but `frame` is
-  12.9.
-- The reads of the camera keys and of `frame` accept more than a JSON number,
-  such as `true` and `"12"` (read in the UE 5.8.4 source, not run, while the
-  toolkit targets UE 5.6 and 5.7). Section `open-values` says how each JSON
-  type is read; load it when `open` succeeded and the camera or the playhead
-  is not where you sent it, or `frame` in its result is not the number you
-  expect.
-- **The camera may not stay where you put it.** The scrub comes after the
-  camera call. Whether evaluating the sequence, for example one with a camera
-  cut track, takes the viewport camera over has not been verified. Compare
-  `get_state`'s `camera_location` with what you sent.
-- **Nothing is checked about the level.** The sequence is opened whatever
-  level is loaded. Whether its bindings resolve there is not reported.
-
-`open`'s errors are listed in section `failures`.
-
-### scrub
-
-Moves the playhead of the active Sequencer to a **display frame**: a frame
-number at the sequence's display rate, as the Sequencer's timeline shows it.
-The code converts it to the sequence's tick resolution and sets the time
-directly.
-
-- `frame` is required, and it is read like `open`'s `frame`: `true` scrubs
-  to frame 1 and `"12"` to frame 12. Only a missing `frame`, or one that
-  read rejects (`null`, an array, an object, any other string), returns
-  `Missing required parameter: frame`. A fraction is cut off towards zero
-  (`12.9` becomes 12).
-- **The frame is not checked against the playback range.** A frame before the
-  start or after the end is sent to the Sequencer as it is; what the Sequencer
-  does with it has not been verified. Take the range from `get_state`.
-- The result's `frame` is the truncated number you sent, unlike `open`,
-  which returns the fraction with it. To see where the playhead is, call
-  `get_state`.
-- A success says the time was set. It does not say that the viewport has drawn
-  that frame; skill `ue-viewport`, "Freshness", covers what a capture reads.
-
-The message is `Scrubbed to frame <n>`.
-
-### get_state
-
-Read-only. The message is `Sequencer state retrieved`.
-
-| Field | Present | Holds |
-|---|---|---|
-| `current_frame` | always | the playhead as a display frame, rounded down |
-| `display_rate` | always | a string, numerator over denominator, such as `30/1` |
-| `playback_speed` | always | the Sequencer's playback speed |
-| `playback_start_frame`, `playback_end_frame` | when the playback range has both bounds | the range's lower and upper bound in display frames, rounded down |
-| `sequence_name`, `sequence_path` | when a sequence is focused | the focused sequence's name and object path (`/Game/…/SEQ_Intro.SEQ_Intro`) |
-| `camera_location`, `camera_rotation` | when the level editor has an active viewport | that viewport's camera, `{x, y, z}` and `{pitch, yaw, roll}` |
-
-- `playback_end_frame` is the range's upper bound as the engine stores it.
-  Whether that frame itself is still inside the range has not been verified;
-  do not rely on a picture taken exactly there.
-- The camera is the level viewport's, whether or not the Sequencer controls
-  it. The fields say nothing about a camera actor in the sequence.
-- "Focused" is the engine's term; with a sub-sequence open inside the editor
-  it may be that sub-sequence, not the asset you opened. Not verified.
-
-### close
-
-Closes the editors of **every** open Level Sequence. The header says "Close
-the active Sequencer"; the code closes all of them, and that is what this
-skill documents. The message is `Sequencer closed`, with no data.
-
-- With none open it fails: `No open Level Sequence editors found`. Treat that
-  as "already closed".
-- The code does not save the sequence and does not look at whether it has
-  unsaved changes. This tool itself makes none, but the user may have. What
-  the engine does on closing a dirty sequence has not been verified.
-- The viewport camera stays where it was put.
-
-### take_start
-
-Starts the Take Recorder, and adds **no source**. **Load section `take-start`
-before you call it**: the steps the code takes, the result, and what its
-success does not prove. What must not be missed:
-
-- It **clears the Take Recorder's sources**, including any the user set up in
-  the Take Recorder panel.
-- It sets two of the user's Take Recorder settings, save recorded assets on
-  and the countdown to 0 seconds, and they stay changed after the take. Tell
-  the user if they use the Take Recorder themselves.
-- `recording: true` is written by the tool, not read from the recorder. Call
-  `take_status` and look for `state: "started"`.
-- With the sources cleared and none added, what a take contains has not been
-  verified. To record the player's pawn in PIE, use `run_sequence` with
-  `take_record` (skill `ue-pie-testing`).
-
-### take_stop
-
-Stops the running take and returns `recording: false` and `sequence_path`,
-the package path of the recorded Level Sequence. The message is
-`Take Recorder stopped. Sequence: <path>`.
-
-- With no take running: `Take Recorder is not recording`.
-- **An empty `sequence_path` is still a success.** The code asks for the last
-  recorded sequence, falls back to the sequence that was being recorded, and
-  returns `""` when it has neither (the log then has `Take recording stopped
-  but no sequence was produced`).
-- **A path is not a saved asset.** This operation does not save the sequence
-  itself; it relies on the save-recorded-assets setting that a start through
-  the toolkit switches on. `run_sequence` saves its take explicitly. Whether
-  the stop has finished writing by the time the call returns has not been
-  verified. Confirm the asset with `asset_search` (skill `ue-assets`) before
-  you build on it.
-- It stops whatever take is running, also one started by `run_sequence` or by
-  the user.
-
-### take_status
-
-Read-only. Returns `is_recording`, `state` and, when the recorder has a last
-recorded sequence, `last_sequence_path`. The message is
-`Take Recorder state: <state> (recording: true|false)`.
-
-`state` is one of `pre_initialization`, `counting_down`, `pre_record`,
-`ticking_after_pre`, `started`, `stopped`, `cancelled`, or `unknown`.
-
-`last_sequence_path` is an **object path** (`/Game/…/Take.Take`), while
-`take_stop` returns the package path. `open` accepts both.
-
-### Engine version
-
-The Take Recorder code is compiled only for **UE 5.7 or later**. On an older
-engine `take_start` and `take_stop` return `TakeRecorder requires UE 5.7+`,
-and `take_status` returns `Failed to get Take Recorder status`. `open`,
-`scrub`, `get_state` and `close` are not version-gated.
-
-`take_status` returns the same `Failed to get Take Recorder status` when the
-Take Recorder subsystem is missing. `take_start` and `take_stop` say
-`TakeRecorderSubsystem not available` in that case.
+**Load section `take-start` before you call `take_start`.** `take_stop`
+stops whatever take runs, also one started by `run_sequence` or the user; an
+empty `sequence_path` is still a success, and a path is not yet a confirmed
+saved asset. `take_status`'s `state: "started"` is the only proof that a
+take records. Details: section `operations`.
 
 ## sequencer or run_sequence
 
@@ -320,9 +200,8 @@ what is running.
 
 ## When a call fails
 
-When a call returns an error, or a capture or a take is not what you
-expected, load section `failures`: `open`'s errors, and a table from what
-you see to what it means and what to do.
+Load section `failures`: `open`'s errors, and a table from what you see to
+what it means and what to do.
 
 ## Background in the plugin
 
@@ -332,7 +211,10 @@ Recorder. Skill `ue-context` says where its other documents are.
 ## See also
 
 - `ue-viewport`: `capture_viewport`, for the picture after `open` or `scrub`.
-- `ue-pie-testing`: `run_sequence` with `take_record`, section `sequences`.
-- `ue-assets`: `asset_search`, for the path of a Level Sequence.
+- `ue-pie-testing`: `run_sequence` with `take_record`, section `sequences`;
+  `get_output_log`.
+- `ue-python`: `execute_script`, for authoring (section `camera-cuts`).
+- `ue-assets`: `asset_search` for a Level Sequence's path, `asset save_all`.
+- `ue-level-actors`: `get_level_actors`, for camera actors' positions.
 - `ue-tasks`: the task envelope and bridge timeouts.
 - `unreagent-iterate`: the wait for the plugin, and the editor log.

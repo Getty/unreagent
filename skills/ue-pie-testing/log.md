@@ -111,6 +111,12 @@ The plugin keeps one read position in the log file, in editor memory:
   whole line is lost. This has not been verified against an editor. Do not
   rely on `since` for a line that must not be missed, such as a single error
   or a `[PIE-DBG]` event.
+- **A single new line is never returned.** When exactly one complete line
+  arrived, the drop above leaves nothing; the read answers
+  `No complete new lines since last read`, and the cursor stays where it was.
+- **Filters do not hold the cursor back.** A `since` read moves the cursor
+  past every new line, also past the lines `filter`, the categories or
+  `lines` left out.
 
 The plugin's notes give the safer pattern for a finished run: read the file
 afterwards. A plain read with `filter` gets the last matching lines,
@@ -119,11 +125,44 @@ substring cannot express, read the file itself with `read_file` and a
 negative `offset` (skill `unreagent-files`), or search it with `run_python`
 (skill `unreagent-runtimes`).
 
+## Lines a run writes
+
+All in category `LogUnrealClaude`. The `[PIE-DBG]` lines of a run carry the
+pawn's state: `[PIE-DBG] <event> | frame=<n> t=<game s> | pos=(…) rot=(P=… Y=… R=…) vel=(…) speed=<cm/s>`,
+written only while the first player has a pawn.
+
+| Event in the line | When |
+|---|---|
+| `PIE_READY`, `SETTLE_DONE` | PIE is up; the settle ended |
+| `INPUT <action>` | an `input` step |
+| `HOLD_START <action> <value> dur=<ms>ms`, `HOLD_TICK_<n> step=<i>`, `HOLD_END step=<i> ticks=<n>` | a `hold` step: start, the 1st and every 30th tick, end |
+| `TAPE_START <action> frames=<n>`, `TAPE_END step=<i> ticks=<n>` | an `input_tape` step |
+| `CAPTURE <name>`, `CONSOLE <command>` | a `capture` or `console` step |
+| `SEQUENCE_DONE` | the run completed (not on a failure) |
+
+Beside them, without pawn state: `[PIE-DBG] HOLD_TICK step=… tick=… action=… frame=…`,
+`[PIE-DBG] HOLD_END …`, `[PIE-DBG] TAPE_TICK step=… tick=<i>/<n> action=… val=(x,y) frame=…`
+(first, last and every 60th frame), `[PIE-DBG] TAPE_END …`.
+
+**`[REPLAY-POS]` lines are not `[PIE-DBG]`**: one per engine frame while a tape
+plays, `[REPLAY-POS] frame=<n> loc=(…) rot=(…) ctrl=(…)` with the control
+rotation. Filter for `[REPLAY-POS]` to get them.
+
+The run's own progress lines start with `PIESequenceRunner:`: `run_sequence
+started with …, output=<dir>`, `PIE ready, settling for <ms>ms`, one per
+step, `Completed <n> steps, …` or `Failed - <error>` (verbosity `Error`),
+`Wrote manifest to <path>`. Skipped steps and failed captures are `Warning`
+lines with the same prefix. The monitor's lines are in section `input`.
+
 ## Useful filters
 
 - `filter: "[PIE-DBG]"`: the lines of `run_sequence` and the monitor.
-- `filter: "PIESequenceRunner"`: a run's own progress and warnings, such as
-  a step that found no player controller.
+- `filter: "[REPLAY-POS]"`: the per-frame pawn positions of an `input_tape`.
+- `filter: "unknown params"`: a misspelt parameter name, which queued calls
+  drop without a word; the plugin logs
+  `Tool '<tool>': unknown params: <names>` as a `Warning` for every call.
+- `filter: "PIESequenceRunner"`, with `min_verbosity: "Warning"`: a run's
+  skipped steps, failed captures and its failure.
 - `categories: ["LogUnrealClaude"]`: everything the plugin logged.
 - `min_verbosity: "Warning"` with `compact: true` and
   `strip_timestamps: true`: a short list of what went wrong.

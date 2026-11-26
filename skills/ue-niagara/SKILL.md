@@ -15,74 +15,88 @@ editor. Through the plugin's MCP bridge it is listed as `unreal_niagara`. It
 works only while the editor is running and the plugin is reachable;
 `unreagent-iterate` covers the wait for the plugin.
 
-This skill was written from the toolkit's C++ source. It has not been exercised
-against a running editor.
+Written from the toolkit's C++ source (commit c1b6709) and, where it says so,
+from the UE 5.8.4 engine source; the toolkit targets UE 5.6 and 5.7. Nothing
+here has been exercised against a running editor.
 
-This skill has two sections:
+## Sections — load the one you need before the call
 
-| Section | Holds | Load it |
+| Section | What is in it | Load it |
 |---|---|---|
-| `spawn` | `spawn_system` in full: its parameters and defaults, the result, why it is a preview and not a placed actor, its errors | before you call `spawn_system` |
-| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or a parameter or a spawned effect is not in the state you expect |
+| `workflows` | end-to-end step lists with the exact calls: inspecting a system, tuning its user parameters, putting an effect into the level that stays, checking it with `capture_viewport` | at the start of any Niagara task |
+| `reading` | `inspect`, `list`, `get_parameters`, `get_emitter_info` in full: every result field, the value formats, the renderer details | before you read a system, or when a result field is unclear |
+| `set-parameter` | `set_parameter` in full: the value per type, the loose coercions that pass a typo, the errors | before you call `set_parameter` |
+| `spawn` | `spawn_system` in full: why it is a transient preview owned by World Settings, `label`, culling, its errors | before you call `spawn_system` |
+| `limits` | what cannot be done with this tool (authoring systems and emitters, per-instance overrides, removing a spawned preview) and where each goes | before you promise a VFX change, or when no operation fits |
+| `failures` | the error table and the failure table (what you see, what it means, what to do) | when a call returns an error, or a parameter or effect is not in the state you expect |
+
+## Operations
 
 The tool takes an `operation` string, lowercases it and accepts these aliases:
 
 | Operation | Aliases | Required | Optional |
 |---|---|---|---|
 | `inspect` | `info`, `get_info` | `asset_path` | — |
-| `list` | `find`, `search` | — | `folder_path`, `recursive` |
+| `list` | `find`, `search` | — | `folder_path` (`/Game/`), `recursive` (`true`) |
 | `get_parameters` | `params`, `get_params` | `asset_path` | — |
 | `get_emitter_info` | `emitter`, `emitter_info` | `asset_path`, and `emitter_name` or `emitter_index` | — |
 | `set_parameter` | `set_param` | `asset_path`, `parameter_name`, `value` | — |
-| `spawn_system` | `spawn` | `asset_path` | `location`, `rotation`, `scale`, `auto_destroy`, `label` |
+| `spawn_system` | `spawn` | `asset_path` | `location`, `rotation`, `scale`, `auto_destroy` (`true`), `label` |
 
 `path` and `system_path` are accepted in place of `asset_path`. An unknown
 operation returns
 `Unknown operation: '<op>'. Valid: inspect, list, get_parameters, get_emitter_info, set_parameter, spawn_system`,
 plus ` Did you mean '<x>'?` when a valid name is close.
 
-## What the tool cannot do
+## Must not get wrong
 
-- **No authoring.** It cannot create a system or an emitter, add or remove
-  emitters, modules or renderers, or change anything but the default value of
-  a user parameter.
-- **User parameters only.** `set_parameter` reaches the system's exposed
-  `User.` parameters, nothing inside an emitter.
-- **Seven parameter types.** float, int, bool, vector2, vector3, vector4 and
-  color can be set. Any other type fails (see `set_parameter`).
-- **It changes no placed effect.** `set_parameter` writes the system asset.
-  There is no operation that sets a parameter on a Niagara component in the
-  level.
+- **No authoring.** The tool creates no system or emitter, adds or removes no
+  emitter, module or renderer, and changes nothing but the default value of a
+  `User.` parameter on the system asset. Everything else: section `limits`.
+- **`set_parameter` writes the asset's default**, so every use of the system
+  that does not override the parameter changes. There is no operation for one
+  placed component's value.
+- **Seven settable types**: float, int, bool, vector2, vector3, vector4,
+  color. Read the type with `get_parameters` first.
+- **Send every component of a vector or colour.** A missing component, `a`
+  included, reads as 0 without an error: a colour without `a` gets alpha 0.
+- **A bool takes any string or number.** A typo such as `"ture"` sets
+  `false` without an error. Send JSON `true` or `false`.
+- **`spawn_system` is a preview, not placement.** UE's run-time spawn creates
+  a transient Niagara component owned by the level's World Settings actor; it
+  is never saved with the level (UE 5.8.4 source, section `spawn`). For an
+  effect that must stay, section `workflows`.
+- **Never pass `label` to `spawn_system`.** It renames the owning actor,
+  which is World Settings.
+- **No path check.** Systems under `/Engine/` and plugin content load and can
+  be changed in memory; do not `set_parameter` outside `/Game/` (below).
 
 ## Saving
 
 **No operation saves.** `set_parameter` marks the system's package dirty, and
-`spawn_system` marks the level dirty. The change stays in the editor's memory,
-where an editor stop or crash loses it. Save with the `asset` tool (skill
-`ue-assets`): `save_asset` with the system's `asset_path`, or `save_all`. No
-operation has an undo.
+`spawn_system` marks the level dirty (its effect is not saved even so). The
+change stays in the editor's memory, where an editor stop or crash loses it.
+Save with the `asset` tool (skill `ue-assets`): `save_asset` with the system's
+`asset_path`, or `save_all`. No operation has an undo: read the old value
+with `get_parameters` before you change it.
 
 ## Results through the bridge
 
 - **Success** is the tool's message, a blank line, then JSON. By default the
   bridge goes through the task queue, so that JSON is a task envelope
   (`task_id`, `status`, `success`, `message`, …), and the tool's own fields,
-  the ones named in this skill, sit under its `data` key. Skill `ue-tasks`
-  covers the task tools.
+  the ones named in this skill, sit under its `data` key (skill `ue-tasks`).
 - **Failure** is only `Error: <message>`, with no data.
 - **Timeouts.** After 300 s the bridge returns
   `Error: Task timed out after 300000ms (task_id: …)`. That ends the wait, not
-  the work. Read the state back with `get_parameters` or the level tools
-  before you retry (skill `ue-tasks`).
+  the work. Read the state back with `get_parameters` before you retry.
 
 ## Paths
 
 `asset_path` is loaded as given: the asset path (`/Game/FX/NS_Fire`) and the
 object path that `list` returns (`/Game/FX/NS_Fire.NS_Fire`) both work.
 Anything that does not load as a Niagara system fails with
-`Failed to load Niagara system: <path>`. The tool runs no path check of its
-own, so systems under `/Engine/` and plugin content load as well. That
-includes `set_parameter`, which then changes a system outside your project.
+`Failed to load Niagara system: <path>`.
 
 **Do not `set_parameter` on a system outside `/Game/`.** A change to an
 `/Engine/` system stays in memory and cannot be saved: `asset save_asset`
@@ -92,185 +106,36 @@ has not been verified, and it is not the project's content either way. Tell
 the user, who can duplicate the system into `/Game/` in the Content Browser;
 `asset duplicate` rejects `/Engine/` paths as well.
 
-To find systems, use `list` here or the toolkit's `asset_search` tool with
+To find systems, use `list` here or `asset_search` with
 `class_filter: "NiagaraSystem"` (skill `ue-assets`), which also pages and
 filters by name.
 
-## inspect
+## Short reference
 
-The whole system in one call. The result has `system_name`, `asset_path` (the
-object path), `emitter_count`, `emitters[]` and `user_parameters[]`. The
-message is `Niagara system inspected`.
+- **`inspect`**: `system_name`, `asset_path` (object path), `emitter_count`,
+  `emitters[]` (`name`, `enabled`, usually `sim_target`, `local_space`,
+  `renderer_count`, `renderer_types`) and `user_parameters[]`.
+- **`get_parameters`**: `parameters[]` with `name` (without `User.`), `type`,
+  `value`, `size_bytes`. Vectors and colours come back as **strings** such as
+  `"(1, 0.5, 0)"`; send objects to `set_parameter`.
+- **`set_parameter`**: `parameter_name` with or without `User.`, any case.
+  Values: a number for float and int, `true`/`false` for bool,
+  `{"x","y"}`, `{"x","y","z"}`, `{"x","y","z","w"}`, `{"r","g","b","a"}`.
+- **`spawn_system`**: `location`, `rotation` (`pitch`, `yaw`, `roll`,
+  degrees), `scale`; a missing key keeps its default.
 
-- Each emitter has `name` and `enabled`. When the emitter has data, which is
-  the usual case, it adds `sim_target` (`CPU` or `GPU`), `local_space`,
-  `renderer_count` and `renderer_types`, the renderer classes without
-  `Niagara` and `RendererProperties`, such as `Sprite`, `Mesh`, `Ribbon` or
-  `Light`.
-- `user_parameters[]` has the same entries as `get_parameters`, without
-  `size_bytes`.
-
-## list
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `folder_path` | `/Game/` | content folder |
-| `recursive` | `true` | include subfolders |
-
-Lists the Niagara systems in the folder from the asset registry, without
-loading them. Emitter assets are not listed, nor classes derived from
-`NiagaraSystem`. There is no paging and no name filter. The result has
-`folder`, `count` and `systems[]`, each with `name` and `path` (the object
-path). The message is `Found <n> Niagara systems`. An empty list is a success.
-
-## get_parameters
-
-The system's user parameters. The result has `system_name`, `asset_path` (as
-you passed it), `parameter_count` and `parameters[]`. The message is
-`Found <n> user parameters`. Each entry has:
-
-| Field | Meaning |
-|---|---|
-| `name` | the parameter's name without the `User.` prefix |
-| `type` | `float`, `int`, `bool`, `vector2`, `vector3`, `vector4`, `color`, `quaternion`, `matrix`, or the engine's own type name for anything else |
-| `value` | the default value, see below |
-| `size_bytes` | the value's size |
-
-`value` is a JSON number for `float` and `int` and a boolean for `bool`.
-Vectors and colors come back as **strings**, such as `"(1, 0.5, 0)"` for a
-vector3 or `"(1, 0, 0, 1)"` for a color in r, g, b, a order. Other types come
-back as their type in angle brackets, such as `"<matrix>"`, and a parameter
-without data as `"<no data>"`. To set a vector, send an object, not this
-string (see `set_parameter`).
-
-## get_emitter_info
-
-One emitter in more detail. Pass `emitter_name` (compared without regard to
-case) or `emitter_index` (0-based). When both are given, `emitter_name` wins.
-A negative `emitter_index` counts as not given.
-
-- Neither: `Must specify either emitter_name or emitter_index`.
-- No emitter of that name: `Emitter '<name>' not found. Available: <names>`.
-- Index too high: `Emitter index <n> out of range (0-<last>)`.
-
-The result has `name` and `enabled`. When the emitter has data, it adds
-`sim_target`, `local_space`, `deterministic`, `random_seed` and `renderers[]`.
-The message is `Emitter info retrieved`.
-
-Each renderer has `class_name` (shortened as in `inspect`) and `enabled`, plus:
-
-| Renderer | Extra fields |
-|---|---|
-| Sprite | `alignment`, `facing_mode`, `sub_image_size` (`"<w>x<h>"`) |
-| Mesh | `facing_mode`, `mesh_count` |
-| Ribbon | `facing_mode`, `shape_mode`, `draw_direction` |
-| Light | `type: "Light"` |
-
-The enum values are UE's own names for those settings.
-
-## set_parameter
-
-Sets the default value of one user parameter on the system asset.
-
-- **`parameter_name`** is the name with or without `User.`, compared without
-  regard to case. A name that is not there fails with
-  `Parameter '<name>' not found on system '<path>'. Available: <names>`.
-- **`value`** must match the parameter's type:
-
-| Type | `value` |
-|---|---|
-| `float` | a JSON number |
-| `int` | a JSON number, rounded to the nearest integer |
-| `bool` | `true` or `false` |
-| `vector2` | `{"x": …, "y": …}` |
-| `vector3` | `{"x": …, "y": …, "z": …}` |
-| `vector4` | `{"x": …, "y": …, "z": …, "w": …}` |
-| `color` | `{"r": …, "g": …, "b": …, "a": …}` |
-
-- **Pass every component.** The tool gives no component a default, `a`
-  included, and reads each with the engine's `FJsonObject::GetNumberField`,
-  which cannot report a failure: a missing component reads as 0, and so does
-  `null`, an array, an object or a string that is not numeric. `true` and
-  `false` read as 1 and 0, and a string made of an optional sign, digits and
-  at most one dot as that number.
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  A colour without `a` gets alpha 0. The only
-  trace of a missing or unreadable component is a `LogJson` line in the
-  editor log
-  (`FJsonObject::GetField` in
-  `Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`,
-  `FJsonValue::AsNumber` in `JsonValue.cpp` beside it; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7).
-- **A value of the wrong kind fails** and names the expected form, with two
-  hyphens:
-  `Parameter '<name>' is float -- 'value' must be a number`. The same pattern
-  covers `int`, `bool` (`must be a boolean`), `vector2`
-  (`must be an object {x,y}`), `vector3` (`{x,y,z}`), `vector4`
-  (`{x,y,z,w}`) and `color` (`{r,g,b,a}`).
-- **The check is looser than those messages** (`FJsonObject::TryGetNumberField`
-  into a `double`, and `TryGetBoolField`; same source and version as above).
-  For `float` and `int`, a string made of an optional sign, digits and at most
-  one dot, such as `"2.5"`, passes as a number, and so do `true` and `false`,
-  as 1 and 0; an `int` is rounded.
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  **For `bool`, any string and any number
-  passes**: `true`, `yes`, `on` and `false`, `no`, `off` count in any case,
-  and every other string is `false` unless it starts with a non-zero integer.
-  The editor language's words for True, Yes, False and No count as well
-  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
-  A typo sets `false`, and `must be a boolean` is left for `null`, an array or
-  an object. Send the JSON types from the table.
-- **Any other type** fails with
-  `Unsupported parameter type '<type>' for parameter '<name>'`. Read the type
-  with `get_parameters` first.
-
-Through the bridge, `value` is listed as a string, because the tool declares
-it `string/number/object`, a type the bridge does not map. No parameter type
-takes a string: send the JSON number, boolean or object from the table.
-
-The result has `parameter_name` (as you passed it), `type` and `asset_path`.
-The message is `Set parameter '<name>' on '<system>'`. The package is marked
-dirty: save it.
-
-The tool writes the value straight into the system's parameter store. Whether
-open Niagara editors, or effects already placed in the level, show the new
-default before the system is saved and reloaded has not been verified for this
-skill. Read it back with `get_parameters`, which reads the same store.
-
-## spawn_system
-
-Spawns the system in the level open in the editor and activates it. Load
-section `spawn` before you call `spawn_system`: it has the parameters and
-their defaults, the result and the errors. What you must know before that:
-
-- **Treat this operation as a preview, not as placing an actor.** It creates
-  a Niagara component, not an actor of its own. Which actor the component
-  belongs to has not been verified for this skill; it is probably one the
-  level already has, such as World Settings.
-- **`label` renames that actor**, whichever it is. Spawn once without `label`
-  and look at `actor_name` before you pass one.
-- **The effect is probably not saved with the level.** The level is marked
-  dirty, but whether the component survives a save and reload has not been
-  verified. With `auto_destroy` left at `true`, an effect that does not loop
-  probably removes itself once it has played.
+Sections `reading`, `set-parameter` and `spawn` have each in full.
 
 ## A typical sequence
 
 1. `list` `{"folder_path": "/Game/FX/"}` or `asset_search` to find the system.
-2. `get_parameters` `{"asset_path": "/Game/FX/NS_Fire"}`: read the names and
-   types.
+2. `get_parameters` `{"asset_path": "/Game/FX/NS_Fire"}`: names, types, old
+   values.
 3. `set_parameter`
    `{"asset_path": "/Game/FX/NS_Fire", "parameter_name": "SpawnRate", "value": 200}`.
-4. `get_parameters` again to check the new default.
-5. Save: `asset save_asset` `{"asset_path": "/Game/FX/NS_Fire"}`.
-
-## When a call fails
-
-Load section `failures` when a call returns an error, or a parameter or a
-spawned effect is not in the state you expect: it has the error table (error,
-cause) and the failure table (what you see, what it means, what to do).
+4. `get_parameters` again: the new default is there.
+5. `asset save_asset` `{"asset_path": "/Game/FX/NS_Fire"}`.
+6. Look at it: section `workflows`, "Verify".
 
 ## Background in the plugin
 
@@ -279,8 +144,11 @@ The plugin ships no context notes for Niagara: `unreal_get_ue_context`
 
 ## See also
 
-- `ue-assets`: `asset_search`, `save_asset` and `save_all`.
-- `ue-level-actors`: `get_level_actors`, to see which actor `actor_name` names.
+- `ue-assets`: `asset_search`, `save_asset`, `save_all`.
+- `ue-level-actors`: `spawn_actor` and `set_property`, the route to a placed
+  Niagara actor (section `workflows`).
+- `ue-viewport`: checking an effect in a picture.
+- `ue-materials`: the materials a Niagara renderer uses are ordinary
+  materials and instances.
+- `ue-python`: the `execute_script` routes in section `limits`.
 - `ue-tasks`: the task envelope and timeouts.
-- `ue-context`: the plugin's context notes.
-- `unreagent-iterate`: starting the editor and waiting for the plugin.

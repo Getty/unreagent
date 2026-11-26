@@ -12,20 +12,22 @@ All input goes to the **first player controller's local player**, through its
 Enhanced Input subsystem, as the value of one Input Action. The plugin hands
 the value to the engine's injection call with no extra modifiers or triggers.
 The game reacts only if the pawn's bindings use the action (skill
-`ue-enhanced-input`). Whether the action must also be in one of that player's
-applied mapping contexts is the engine's behaviour, and it has not been
-verified here. The plugin's tool description says injection goes through the
-mappings, while its `debug.md` says it bypasses the mapping contexts'
-modifiers (next paragraph). When the game ignores an action, check that a
-context mapping it is applied as well.
+`ue-enhanced-input`). **Injection skips the key mapping and the mapping
+context**: the engine stores the injected value with the caller's modifiers
+and triggers, of which the plugin passes none, and hands it straight to the
+action's processing, never through a mapping (UE 5.8.4 source,
+`EnhancedPlayerInput.cpp:284-291`, `:646-667`, `:216`; the plugin's call at
+`MCPTool_GameplayDebug.cpp:254`). So the action need not be in any applied
+context, and a working injection says nothing about the key mapping.
 
-Whether the mapping's own triggers and modifiers apply to injected values is
-the engine's behaviour, and the plugin contradicts itself on it:
-`gameplay_debug`'s description says the input respects "the full Enhanced
-Input pipeline (triggers, modifiers, mappings)", the plugin's `debug.md`
-says it "Bypasses IMC modifiers". This has not been verified. When a value
-seems to arrive negated, swizzled or scaled differently than you sent it,
-suspect this first.
+The mapping's triggers and modifiers (Swizzle, Negate, Hold on the context)
+therefore do **not** apply; the Input Action asset's own triggers and
+modifiers still do (`EnhancedPlayerInput.cpp:683-694`). The plugin's
+`gameplay_debug` description ("the full Enhanced Input pipeline (triggers,
+modifiers, mappings)") is wrong on this; its `debug.md` ("Bypasses IMC
+modifiers") matches the source. Send the value the game should receive
+after the mapping's modifiers, such as `{x: 0, y: 1}` for forward, not a raw
+key value.
 
 ## Values
 
@@ -138,6 +140,16 @@ says it stays active. `log_axes` also runs `t.MaxFPS 60` on attaching; only
 and `axis_threshold`.
 
 Read the lines with `get_output_log` and `filter: "[PIE-DBG]"` (section `log`).
+
+**As a check on injection.** The monitor reads each tracked action's value
+from the player input of the same Enhanced Input subsystem that
+`inject_input` and `start_continuous` hand their values to. Running it while you inject shows
+in the log whether the value arrived (`INPUT <action> triggered`); that
+injected values show up there is the engine's behaviour and unverified.
+Section `recipes`, "Input does not reach the pawn", has the whole ladder.
+The monitor reads the pawn's bindings once, when it attaches; a pawn that
+has no Enhanced Input component then is never attached (`pie_attached`
+stays `false`, and it tries again every tick).
 
 ## Montages
 

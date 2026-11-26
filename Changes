@@ -244,6 +244,13 @@ Revision history for unreagent
     triggers and modifiers are not saved, a taken spawn name is fatal, and
     save_as duplicates a level that is already on disk. New sections cover
     workflows, game mode, player controller, runtime setup and level types.
+  - The material, lighting, Niagara, audio, MetaSounds, sequencer, viewport and
+    PIE skills (ue-materials, ue-lighting, ue-niagara, ue-audio,
+    ue-metasounds, ue-sequencer, ue-viewport, ue-pie-testing) are checked
+    against the toolkit source and reworked: on UE 5.8 the MetaSounds
+    add_graph_input and add_graph_output always crash the editor, lights the
+    toolkit spawns are unitless, and gameplay_debug input injection bypasses
+    mapping contexts. Each skill gains workflow and limits sections.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.

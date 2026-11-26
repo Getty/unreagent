@@ -2,7 +2,7 @@
 
 These are all the keys the `lighting` tool reads. The tool's description and
 header name none of them; the tables come from `LightingEditor.cpp` at toolkit
-commit 9f6a0f7, and the last column is the line in that file that reads the
+commit c1b6709, and the last column is the line in that file that reads the
 key. Any other key is ignored without an error.
 
 Rules for every table:
@@ -33,8 +33,8 @@ Rules for every table:
   list; inspect afterwards.
 - **No value is range-checked** by the toolkit, apart from the byte colours.
 - **Units and meaning are the engine's.** Each key is written to the engine
-  field named in the table. This document does not restate what the field
-  does.
+  field named in the table. The units that trip agents up are under
+  "Intensity units" below and in section `exposure`.
 
 ## Colours
 
@@ -52,6 +52,31 @@ got it wrong:
 For `color`, the two readings meet badly at the low end: `{r: 1, g: 0, b: 0}`
 is full red, not a byte value of 1. `inspect_light` returns the stored colour
 as `light_color` in bytes, whichever form you sent.
+
+## Intensity units
+
+`intensity` is written as a plain number into the light's `Intensity` field;
+the tool never reads or sets the units. What the number means (UE 5.8.4
+source, read, not run):
+
+| Light | Unit of `intensity` |
+|---|---|
+| directional | lux (the engine default is 10) |
+| point, spot, rect spawned by `spawn_light` or `spawn_actor` | **unitless**: both spawn through the world's `SpawnActor`, and only the editor's actor factories (`ActorFactoryPointLight.cpp` and its spot and rect siblings) switch a new light to the project's default units, `r.DefaultFeature.LightUnits`, candela by default |
+| point, spot, rect placed by hand in the editor | the project's default units, candela unless changed, or whatever the user picked in the Details panel |
+| sky light | a scale on the captured sky, not a photometric unit |
+
+`ComputeLightBrightness` multiplies a unitless intensity by 16 and a candela
+intensity by 10000, so **1 cd = 625 unitless**. That holds for rect lights
+always, and for point and spot lights only while `bUseInverseSquaredFalloff`
+is on, the default; with it off neither factor applies and the units do not
+change the brightness (UE 5.8.4 `PointLightComponent.cpp` and
+`RectLightComponent.cpp`, `ComputeLightBrightness`).
+The same `{"intensity": 5000}` is about 8 cd on a light the tool spawned, and
+5000 cd on a hand-placed one. `inspect_light` does not report the units: if
+you did not spawn the light, ask, or read `IntensityUnits` through Python
+(skill `ue-python`). Changing the units is section `lumen-scene`, "What the
+lighting tool cannot set".
 
 ## Lights: spawn_light, set_light_properties
 

@@ -10,6 +10,11 @@
 | a colour came out far too bright | a 0–1 colour key was given 0–255 | section `properties` says which scale each colour key takes |
 | a volume spawned with `extent` and without `infinite` shows no effect, or not where expected | `extent` is ignored, and the code gives the volume no size; its bounds are unverified | `infinite: true`; check `is_infinite` in the result |
 | `"name": "Sun"` on a spawn named nothing | `name` is an alias of `actor_name`, which the spawns do not read | pass `label` |
+| a light spawned by the toolkit is far too dim, while a hand-placed one with the same `intensity` is bright | the spawned light is unitless, the hand-placed one in candela: 1 cd = 625 unitless | section `properties`, "Intensity units" |
+| the whole picture is far too dark or too bright after setting `exposure_min_brightness` / `exposure_max_brightness` | EV100 sent to a project in cd/m2, or the reverse | section `exposure`, "Which unit Min and Max are in" |
+| brightness differs between two captures of an unchanged scene | auto exposure is still adapting | section `exposure`, "A fixed exposure with this tool" |
+| lights change, bounce light does not | the project is not on Lumen, or the level is baked and needs a lighting build | section `rendering-paths` |
+| the sky light ignores a new sun angle | no recapture since the change | `set_sky_light` with `"recapture": true` |
 | `Actor not found: <name>` | no actor with that label or object name | `list_lights` |
 | `Properties object is required` / `Settings object is required` | the object is missing or not a JSON object; note `settings` for post-process, `properties` for the rest | fix the parameter name |
 | `Failed to load cubemap: <path>` | not a loadable cube texture; earlier keys of the call were applied | find the path with `asset_search` (skill `ue-assets`), inspect, send again |

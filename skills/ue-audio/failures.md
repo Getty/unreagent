@@ -24,6 +24,12 @@
 | `properties_set` is missing a key you sent | a value the tool could not read as the listed type, a wrong key name, or an unknown enum name | fix the key and send it again, numbers and booleans as JSON numbers and booleans |
 | `is_spatialized` shows the old value after `set_audio_properties` | the key sets a different flag | see `set_audio_properties` in the main skill |
 | a change to a placed actor's audio is gone after a save and reload | the tool did not mark the level dirty | use `set_property` for placed actors |
-| `inspect` on a MetaSound says `SoundWave` | the SoundWave test runs first | use the `metasound` tool (`ue-metasounds`) |
+| `inspect` on a MetaSound says `SoundWave` | a MetaSound Source is a SoundWave subclass, and the SoundWave test runs first | use the `metasound` tool's `inspect` (`ue-metasounds`) |
 | `list_sounds` takes long | it loads every SoundWave in the folder | narrow `folder_path`, drop `recursive` |
 | a new Sound Cue plays wrong or looks empty in its editor (neither is verified) | the tool adds the wave player to no editor graph | test the cue before you build on it; this tool cannot add the graph node |
+| an `asset_search` for `SoundWave` also returns MetaSounds | it matches subclasses, and a MetaSound Source is one | use `list_sounds` with `class_filter`, which matches each class exactly |
+| a component added with `auto_activate: false` plays nothing in PIE | nothing calls Play | the Blueprint must start it (section `workflows`, "An audio component on a Blueprint"; graph work is skill `ue-blueprints`) |
+| `add_audio_component` succeeded but the Blueprint shows a compile error | the tool compiles but does not check the result | read and fix the error with skill `ue-blueprints` |
+| a second `add_audio_component` with the same name | the tool does not check names; the result is not verified | read `get_audio_components` first and pick a new name |
+| an ambient sound placed at the origin | `location` missing or not an object `{x, y, z}` | move it with `move_actor` (skill `ue-level-actors`) |
+| the attenuation asset has the default shape or algorithm | the name was misspelt and skipped without an error | create a new asset with the right name, or fix it in the editor; no operation edits an attenuation asset |

@@ -1,8 +1,9 @@
 # lighting: the fields `inspect_light` returns
 
 What this result must not be taken for (the read names are not the write
-names, what cannot be read back, `settings_sample`) is in the skill itself,
-under `inspect_light`.
+names, what cannot be read back, `settings_sample`) is in section
+`operations`, under `inspect_light`. The result names no intensity units and
+no mobility (section `properties`, "Intensity units").
 
 Returns `actor_name`, `actor_label`, `class`, `type`, `location`, `rotation`
 and the fields of that type:

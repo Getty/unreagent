@@ -1,7 +1,8 @@
 # UE viewport capture: the asset editor preview
 
 The level and PIE modes, the missing-key rule for a camera of your own, the
-result's fields and "Getting the picture" are in the skill itself.
+result's fields and "Getting the picture" are in the skill itself; which
+target suits which check is in section `verify-loop`.
 
 ## Asset editor preview
 
@@ -12,6 +13,8 @@ result's fields and "Getting the picture" are in the skill itself.
   path with `asset_search` (skill `ue-assets`).
 - **The editor opens if needed**, and stays open. The tool's description says
   the editor must already be open; its parameter text and its code open it.
+  When the editor does not come up, the call fails with
+  `Failed to open editor for asset: <path>`.
 - **Which editors work.** The tool looks for the Persona preview tab, then
   for the Blueprint editor's viewport tab, and inside the tab for a viewport
   widget of the plain editor or the animation editor type. Persona assets
@@ -56,7 +59,9 @@ Otherwise the call fails with
   animation asset is treated as 30 fps, and its `total_frames` is 0.
 - The time is clamped to the animation's length: a frame past the end is
   taken as the end, without an error. Compare `frame_time` with `play_length`.
-- The tool looks for the first skeletal mesh component that previews exactly
-  this asset, pauses it and moves it to that time. The preview stays paused
+- The tool looks for the first skeletal mesh component, in any world the
+  engine has, whose single-animation preview plays exactly this asset, pauses
+  it and moves it to that time. With two editors previewing the same
+  animation, the posed one may not be the captured one. The preview stays paused
   there. Without such a component the call fails with
   `Could not find preview component playing this animation. Make sure the animation preview is visible.`

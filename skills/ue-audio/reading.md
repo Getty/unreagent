@@ -14,16 +14,18 @@ path), `asset_name` and `type`. The rest depends on the type:
 | `SoundCue` | `duration`, `volume_multiplier`, `pitch_multiplier`, `nodes[]` (`class`, and `sound_wave` for a wave player), `node_count`; `sound_class`, `attenuation_settings` and `first_node` when set |
 | `SoundAttenuation` | `shape`, `inner_radius`, `outer_radius`, `falloff_distance`, `distance_algorithm`, `db_attenuation_at_max`, `is_spatialized`, `spatialization_algorithm` |
 | `SoundClass` | `volume`, `pitch`, `properties` (`volume`, `pitch`, `low_pass_filter_frequency`, `attenuation_distance_scale`) |
-| `MetaSoundSource` | `duration`, `hint` (use the `metasound` tool) |
+| `MetaSoundSource` | `duration`, `hint`; in practice not returned, see below |
 
 - The message sums it up, such as `SoundWave: SW_Rain (12.40s, 2ch, 48000Hz)`.
 - Asset paths in the fields are object paths.
 - **A SoundWave has no subtitle field**, though the tool's description
   promises one.
-- **A MetaSound probably comes back as `SoundWave`.** The tool tests for a
-  SoundWave before it tests for a MetaSound Source, and in UE 5 a MetaSound
-  Source is most likely a kind of SoundWave. Use skill `ue-metasounds` for
-  MetaSounds.
+- **A MetaSound comes back as `SoundWave`.** The tool tests for a SoundWave
+  first (`AudioEditor.cpp`, toolkit c1b6709), and a MetaSound Source is one:
+  `UMetaSoundSource` derives from `USoundWaveProcedural`, which derives from
+  `USoundWave` (UE 5.8.4 `MetasoundSource.h`, `SoundWaveProcedural.h`). The
+  `MetaSoundSource` row in the table above is therefore not reached. Use the
+  `metasound` tool's `inspect` (skill `ue-metasounds`).
 - **Attenuation radii.** `inner_radius` is the shape's first extent and
   `outer_radius` is that plus `falloff_distance`. For a sphere that is the
   radius; for a capsule, box or cone, the other extents are not reported.
@@ -42,7 +44,8 @@ path), `asset_name` and `type`. The rest depends on the type:
 | `class_filter` | all five | `SoundWave`, `SoundCue`, `SoundAttenuation`, `SoundClass` or `MetaSoundSource`, case-insensitive |
 
 Lists from the asset registry. Only these five classes match exactly:
-subclasses, such as other kinds of sound wave, are not listed. There is no
+subclasses, such as other kinds of sound wave, are not listed. A MetaSound
+Source is listed under its own class `MetaSoundSource`, without `duration`. There is no
 paging and no name filter. Any other `class_filter` fails with
 `Unknown class filter: '<filter>'. Valid: SoundWave, SoundCue, SoundAttenuation, SoundClass, MetaSoundSource`.
 

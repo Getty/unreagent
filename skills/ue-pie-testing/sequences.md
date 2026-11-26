@@ -199,14 +199,18 @@ as well. Use `captures` for those.
 Read the manifest with `read_file`. The images are binary: open them with an
 image reader of your client. During the run, the plugin also logs
 `[PIE-DBG]` lines with the pawn's position, rotation and velocity at each step
-and at the start and end of the run; section `log` covers reading them.
+and at the start and end of the run; section `log`, "Lines a run writes",
+lists them, and section `recipes` turns them into assertions.
 
 ## Captures
 
 - **`auto_capture_every_n_frames`** captures the PIE view every N frames
   through the engine's frame grabber, from the end of the settle until the run
   ends. Files are named `f<frame>_t<game time>.jpg`, the frame zero-padded to
-  six digits.
+  six digits. The frame and time are those of the moment the plugin got the
+  image back from the grabber, which buffers a few frames, so they can be
+  somewhat later than the frame shown. Encoding and writing run in the
+  background; a file that failed is simply missing.
 - **`take_record`** starts the Take Recorder during the settle and stops it
   when the run completes. On any other end the plugin does not stop it; what
   the Take Recorder does when PIE ends is the engine's business and has not
