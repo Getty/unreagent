@@ -1357,6 +1357,9 @@ func TestInstallSkillDirPausesBetweenAttempts(t *testing.T) {
 // Two launchers started at once over the shipped set, for real: both succeed
 // and the set is whole every time. TestMaterializeWithASecondRunInEveryGap
 // pins the interleavings one by one; this catches the ones between its steps.
+// On Windows it also catches a sweep refused while the other run has a file
+// open in its work directory (k235; TestSweepRetriesARenameRefusedWhileInUse
+// pins the retry on Linux).
 func TestMaterializeTwoRunsAtOnce(t *testing.T) {
 	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
 	all := append(shippedSkills(t), testSkills()...)
@@ -1444,6 +1447,93 @@ func TestSweepRemovesEveryLeftoverItCan(t *testing.T) {
 	maps.DeleteFunc(got, func(p, _ string) bool { return strings.HasPrefix(p, skillDirPrefix+".tmp-") })
 	if want := materialized(testSkills()); !maps.Equal(got, want) {
 		t.Errorf("skills.dir outside the held leftovers = %v; want the set in place, %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
+// --- k235: a sweep rename refused while a file in it is open ----------------
+
+// errTestInUse stands in for the error Windows gives a rename of a directory
+// in which another process holds a file open (ERROR_ACCESS_DENIED,
+// ERROR_SHARING_VIOLATION): a second launcher writing its new copy, a sweep
+// still removing what it claimed, a virus scanner. POSIX renames such a
+// directory, so on Linux it is injected.
+var errTestInUse = errors.New("test: in use")
+
+// inUseSweep makes errTestInUse count as "in use" and the sweep's rename of a
+// leftover fail with it failures times (-1: always), then rename for real. It
+// returns the count of rename attempts on leftovers.
+func inUseSweep(t *testing.T, failures int, fail error) *int {
+	t.Helper()
+	savedErrs, savedRename := renameInUseErrors, sweepRename
+	renameInUseErrors = []error{errTestInUse}
+	attempts := 0
+	sweepRename = func(oldpath, newpath string) error {
+		if strings.HasPrefix(filepath.Base(oldpath), skillDirPrefix+".tmp-left") {
+			attempts++
+			if failures < 0 || attempts <= failures {
+				return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: fail}
+			}
+		}
+		return os.Rename(oldpath, newpath)
+	}
+	t.Cleanup(func() { renameInUseErrors, sweepRename = savedErrs, savedRename })
+	return &attempts
+}
+
+// The sweep tries a rename refused as "in use" again after skillRetryPauses,
+// as installSkillDir does: a second launcher's work directory is free again
+// once that launcher's write is done. Without it, two launchers at once on
+// Windows each warned about the other's work directory (k235).
+func TestSweepRetriesARenameRefusedWhileInUse(t *testing.T) {
+	setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+	attempts := inUseSweep(t, 2, errTestInUse)
+	dir := t.TempDir()
+	left := filepath.Join(dir, skillDirPrefix+".tmp-left")
+	mustWriteFile(t, filepath.Join(left, "unreagent-x", skillFile), "a second launcher's copy")
+	if err := materializeSkills(dir, testSkills()); err != nil {
+		t.Fatalf("materializeSkills: %v; want the third attempt to take the leftover", err)
+	}
+	if *attempts != 3 {
+		t.Errorf("rename attempts on the leftover = %d; want 3", *attempts)
+	}
+	if want, got := materialized(testSkills()), tree(t, dir); !maps.Equal(got, want) {
+		t.Errorf("tree = %v; want only the set, %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
+	}
+}
+
+// A rename still in use after the last attempt is reported, saying why and
+// that the next start tries again; the leftover stays. Any other failure is
+// not tried again (k164's held leftover keeps its one attempt).
+func TestSweepReportsARenameStillInUse(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		fail     error
+		attempts int
+		says     string
+	}{
+		{"in use", errTestInUse, 3, "still in use after 3 attempts"},
+		{"another error", fs.ErrPermission, 1, fs.ErrPermission.Error()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			setRetryPauses(t, time.Millisecond, 2*time.Millisecond)
+			attempts := inUseSweep(t, -1, c.fail)
+			dir := t.TempDir()
+			left := filepath.Join(dir, skillDirPrefix+".tmp-left")
+			mustWriteFile(t, filepath.Join(left, "unreagent-x", skillFile), "a second launcher's copy")
+			err := materializeSkills(dir, testSkills())
+			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), left) {
+				t.Fatalf("materializeSkills: %v; want an error naming %s and %q", err, left, c.says)
+			}
+			if c.fail == errTestInUse && !strings.Contains(err.Error(), "the next start tries again") {
+				t.Errorf("error %q; want it to say the next start tries again", err)
+			}
+			if *attempts != c.attempts {
+				t.Errorf("rename attempts on the leftover = %d; want %d", *attempts, c.attempts)
+			}
+			if _, err := os.Lstat(left); err != nil {
+				t.Errorf("leftover: %v; want it kept", err)
+			}
+		})
 	}
 }
 

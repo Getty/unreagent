@@ -710,6 +710,10 @@ Revision history for unreagent
     1-65535, a port equal to mcp.address's, or a hand-written
     mcp.extraServers.unreal-mcp next to the switch is a load error. The
     switch is not wired to the editor or the agent yet.
+  - On Windows, skills written into a directory that another launcher or a
+    program such as a virus scanner is using no longer warn at once: the
+    sweep of leftover work directories retries its rename briefly, then
+    reports the directory as in use. Not yet run on Windows.
 
 0.0.9   2026-11-13 19:32:24Z
   - ${ENGINE} is detected from the EngineAssociation in the .uproject:

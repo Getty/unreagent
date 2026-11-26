@@ -389,7 +389,7 @@ func sweepSkillDirs(dir string, keep map[string]bool) error {
 		}
 		path := filepath.Join(dir, e.Name())
 		gone := filepath.Join(dir, skillDirPrefix+".tmp-"+rand.Text())
-		if err := os.Rename(path, gone); err != nil {
+		if err := sweepRenameRetrying(path, gone); err != nil {
 			if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
 				errs = append(errs, err)
 			}
@@ -401,6 +401,43 @@ func sweepSkillDirs(dir string, keep map[string]bool) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sweepRename is os.Rename; tests replace it to refuse a rename as Windows
+// does while a file in the directory is open.
+var sweepRename = os.Rename
+
+// sweepRenameRetrying is the sweep's rename of a leftover to its fresh name.
+// Windows refuses to rename a directory while a file in it is open
+// (renameInUseErrors), and a second launcher's work directory is one while
+// that launcher writes its new copy into it, as is one a second sweep is still
+// removing (k235). Such a refusal is tried again after each of
+// skillRetryPauses, as installSkillDir does; by then the other run has
+// usually moved on, and the sweep takes the directory as on POSIX. One still
+// refused after the last attempt is returned saying so; any other failure at
+// once.
+func sweepRenameRetrying(oldpath, newpath string) error {
+	for i := 0; ; i++ {
+		err := sweepRename(oldpath, newpath)
+		if err == nil || !renameInUse(err) {
+			return err
+		}
+		if i == len(skillRetryPauses) {
+			return fmt.Errorf("%w (still in use after %d attempts: a second launcher materializing into the same directory, or a program such as a virus scanner, holds a file in it; the next start tries again)", err, i+1)
+		}
+		time.Sleep(skillRetryPauses[i])
+	}
+}
+
+// renameInUse reports whether err is one of renameInUseErrors, the refusal
+// of a rename that only lasts while another process holds a file open.
+func renameInUse(err error) bool {
+	for _, e := range renameInUseErrors {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // unprovenSkillDirs lists the directories in dir that the materialization of
