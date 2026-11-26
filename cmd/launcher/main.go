@@ -223,6 +223,13 @@ func run() error {
 	// and which plugins -DisablePlugins= switches off.
 	checkPluginEngineVersions(cfg.Unreal.Project, engineDirOf(cfg.Unreal.Editor, info.EngineRoot),
 		ueArgs, alertWarnings(logger, alert, logPath))
+	// Epic's Unreal MCP plugins are off unless the .uproject enables them;
+	// without them the server never answers and the agent's hold waits it
+	// out (k267). A warning, never a stop.
+	if cfg.Unreal.MCP.Enabled {
+		checkUnrealMCPPlugins(cfg.Unreal.Project, engineDirOf(cfg.Unreal.Editor, info.EngineRoot),
+			ueArgs, alertWarnings(logger, alert, logPath))
+	}
 	// A module without its binary makes the editor fail at startup, again
 	// after every restart, until the launcher gives up on it (k229; a plugin's
 	// module, k251): name it and the compile command first. Nothing is built

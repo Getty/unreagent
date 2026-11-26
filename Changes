@@ -1,6 +1,10 @@
 Revision history for unreagent
 
 {{$NEXT}}
+  - With unreal.mcp on, a startup WARN and an unreagent init preflight line
+    name a .uproject that does not enable the plugin ModelContextProtocol (no
+    entry, or Enabled: false) or enables no toolset plugin (AllToolsets or a
+    single toolset). The start goes on. Not yet run on Windows.
   - New shipped skill ue-unreal-mcp for Epic's Unreal MCP server (UE 5.8):
     the three meta-tools, the call_tool argument shape, the toolset
     catalogue, measured catches, agent skills and the server and launcher

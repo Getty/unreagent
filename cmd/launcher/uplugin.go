@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf16"
 )
 
@@ -269,19 +270,43 @@ func boolMember(m map[string]json.RawMessage, name string, def bool) (v, ok bool
 // does a .uproject that cannot be read.
 func projectPluginSwitches(project string) map[string]bool {
 	switches := map[string]bool{}
+	refs, _ := projectPluginRefs(project)
+	for name, ref := range refs {
+		switches[name] = ref == refOn
+	}
+	return switches
+}
+
+// pluginRef is what the first .uproject entry for a plugin says.
+type pluginRef int
+
+const (
+	refOn      pluginRef = iota // Enabled is JSON true and no referenceLimits field is there
+	refOff                      // Enabled is JSON false
+	refUnclear                  // anything else: an Enabled that is no JSON boolean, or true with a referenceLimits field
+)
+
+// projectPluginRefs reads the Plugins entries of the .uproject: the
+// lower-cased name of each to what its first entry says (see
+// projectPluginSwitches for the engine's reading). ok is false when the
+// .uproject cannot be read or is no JSON object; a Plugins member that is
+// no list, and an entry that is no object or whose Name is no string,
+// decide nothing.
+func projectPluginRefs(project string) (refs map[string]pluginRef, ok bool) {
+	refs = map[string]pluginRef{}
 	data, err := readUEJSON(project)
 	if err != nil {
-		return switches
+		return refs, false
 	}
 	m, err := firstMembers(data, "Plugins")
 	if err != nil {
-		return switches
+		return refs, false
 	}
-	var refs []json.RawMessage
-	if json.Unmarshal(m["Plugins"], &refs) != nil {
-		return switches
+	var list []json.RawMessage
+	if json.Unmarshal(m["Plugins"], &list) != nil {
+		return refs, true
 	}
-	for _, raw := range refs {
+	for _, raw := range list {
 		ref, err := firstMembers(raw, append([]string{"Name", "Enabled"}, referenceLimits...)...)
 		if err != nil {
 			continue
@@ -290,17 +315,22 @@ func projectPluginSwitches(project string) map[string]bool {
 		if !isString {
 			continue
 		}
-		enabled, _ := jsonBool(ref["Enabled"])
-		for _, field := range referenceLimits {
-			if _, limited := ref[field]; limited {
-				enabled = false
+		state := refUnclear
+		if enabled, isBool := jsonBool(ref["Enabled"]); isBool && !enabled {
+			state = refOff
+		} else if isBool {
+			state = refOn
+			for _, field := range referenceLimits {
+				if _, limited := ref[field]; limited {
+					state = refUnclear
+				}
 			}
 		}
-		if _, seen := switches[strings.ToLower(name)]; !seen {
-			switches[strings.ToLower(name)] = enabled
+		if _, seen := refs[strings.ToLower(name)]; !seen {
+			refs[strings.ToLower(name)] = state
 		}
 	}
-	return switches
+	return refs, true
 }
 
 // referenceLimits are the fields of a plugin reference that can keep the
@@ -574,4 +604,127 @@ func firstMembers(data []byte, names ...string) (map[string]json.RawMessage, err
 		return nil, errors.New("more than one JSON value")
 	}
 	return found, nil
+}
+
+// Epic's Unreal MCP server (unreal.mcp, k265) lives in the engine plugin
+// ModelContextProtocol; the tools it serves are those the ToolsetRegistry
+// holds, which the toolset plugins register (AllToolsets depends on most of
+// them, 21 of the 27 in 5.8.4; each depends on ToolsetRegistry). Every one of them
+// is an engine plugin with EnabledByDefault false or unset, and an engine
+// plugin is enabled by default only when it says true
+// (FPlugin::IsEnabledByDefault, PluginManager.cpp 421-435), so only the
+// .uproject's Plugins list, the command line or the target can enable them.
+// Read in the installed 5.8.4: Engine/Plugins/Experimental/
+// ModelContextProtocol/ModelContextProtocol.uplugin, Toolsets/*/*.uplugin,
+// and ModelContextProtocolEditor.cpp with ModelContextProtocolToolsetRegistry
+// Adapter.cpp (the server's tools are the registry's, re-read whenever a
+// toolset registers). Not run.
+const (
+	unrealMCPPlugin = "ModelContextProtocol"
+	allToolsets     = "AllToolsets"
+)
+
+// mcpPluginWarning is one finding of unrealMCPPluginCheck: a short head for
+// the console, the detail with the .uproject's path, and the fix.
+type mcpPluginWarning struct{ head, detail, fix string }
+
+// line is the warning as the launcher logs it after "WARN ": the head alone
+// on the first line, so that alertWarnings shows only that on the console
+// and points to the log for the rest.
+func (w mcpPluginWarning) line() string { return w.head + "\n" + w.detail + "\nFix: " + w.fix }
+
+// unrealMCPPluginCheck names, for a start with unreal.mcp on, the plugins
+// the .uproject leaves off that Epic's Unreal MCP server needs: one warning
+// when ModelContextProtocol has no entry or one with Enabled false (the
+// editor then starts no server), one when no toolset plugin is enabled (the
+// server answers, without the toolsets' tools). A toolset is AllToolsets or
+// a plugin of the engine's Plugins/Experimental/Toolsets, by directory name;
+// the plugins that merely carry "Toolset" in their name (ToolsetRegistry,
+// the modeling plugins) are none.
+//
+// Where it cannot tell it says nothing: an entry that is refUnclear counts as
+// enabling. notChecked holds one report per check it cannot make, as a
+// complete line: both checks when the .uproject cannot be read or the
+// editor's arguments carry -EnablePlugins= (found anywhere, in any case),
+// -EnableAllPlugins or -NoEnginePlugins (under which the engine skips the
+// .uproject's Plugins list, PluginManager.cpp 1607); the toolset check when
+// AllToolsets is not enabled and the engine's Toolsets directory cannot be
+// read (engineDir "" without an engine). The target's own plugin list, or a
+// plugin that depends on one of these, can enable them too: the warning then
+// is wrong, which its text cannot rule out. -DisablePlugins= can only switch
+// plugins off, so it can make the check miss a missing plugin, never warn
+// wrongly.
+func unrealMCPPluginCheck(project, engineDir string, args []string) (warnings []mcpPluginWarning, notChecked []string) {
+	const skipped = "Unreal MCP plugins: not checked — "
+	for _, a := range args {
+		if strings.Contains(strings.ToLower(a), "enableplugins=") {
+			return nil, []string{skipped + "the editor's arguments carry -EnablePlugins=, which the launcher does not read"}
+		}
+	}
+	if hasEditorSwitch(args, "EnableAllPlugins") {
+		return nil, []string{skipped + "the editor's arguments carry -EnableAllPlugins, which enables every plugin"}
+	}
+	if hasEditorSwitch(args, "NoEnginePlugins") {
+		return nil, []string{skipped + "the editor's arguments carry -NoEnginePlugins, under which the engine skips the .uproject's Plugins list, so only -EnablePlugins= could enable them"}
+	}
+	refs, ok := projectPluginRefs(project)
+	if !ok {
+		return nil, []string{skipped + "the .uproject cannot be read as a JSON object"}
+	}
+
+	wait := fmt.Sprintf("%d minutes", int(endpointWaitWindow/time.Minute))
+	switch ref, listed := refs[strings.ToLower(unrealMCPPlugin)]; {
+	case !listed:
+		warnings = append(warnings, mcpPluginWarning{
+			head: "Unreal MCP: the .uproject does not enable the plugin " + unrealMCPPlugin,
+			detail: fmt.Sprintf("%s has no Plugins entry for %s, an engine plugin that is off unless the project enables it: the editor starts no Unreal MCP server, and an agent start held for it waits the full %s.",
+				project, unrealMCPPlugin, wait),
+			fix: fmt.Sprintf("add {\"Name\": %q, \"Enabled\": true} to its Plugins list (in the editor: Edit > Plugins, Unreal MCP), or set unreal.mcp.enabled: false.", unrealMCPPlugin),
+		})
+	case ref == refOff:
+		warnings = append(warnings, mcpPluginWarning{
+			head: "Unreal MCP: the .uproject switches the plugin " + unrealMCPPlugin + " off",
+			detail: fmt.Sprintf("%s lists %s with \"Enabled\": false: the editor starts no Unreal MCP server, and an agent start held for it waits the full %s.",
+				project, unrealMCPPlugin, wait),
+			fix: "set that entry's Enabled to true, or set unreal.mcp.enabled: false.",
+		})
+	}
+
+	if ref, listed := refs[strings.ToLower(allToolsets)]; listed && ref != refOff {
+		return warnings, nil
+	}
+	toolsetsDir := filepath.Join(engineDir, "Plugins", "Experimental", "Toolsets")
+	entries, err := os.ReadDir(toolsetsDir)
+	if engineDir == "" || err != nil {
+		return warnings, []string{"Unreal MCP toolsets: not checked — AllToolsets is not enabled, and without the engine's " + toolsetsDir + " there is no list of the single toolsets"}
+	}
+	for _, e := range entries {
+		if ref, listed := refs[strings.ToLower(e.Name())]; e.IsDir() && listed && ref != refOff {
+			return warnings, nil
+		}
+	}
+	off := ""
+	if refs[strings.ToLower(allToolsets)] == refOff {
+		off = fmt.Sprintf(" (%s is listed with \"Enabled\": false)", allToolsets)
+	}
+	warnings = append(warnings, mcpPluginWarning{
+		head: "Unreal MCP: the .uproject enables no toolset plugin",
+		detail: fmt.Sprintf("%s enables neither %s nor any single toolset of %s%s. All are off unless the project enables them, so the Unreal MCP server answers without the toolsets' editor tools.",
+			project, allToolsets, toolsetsDir, off),
+		fix: fmt.Sprintf("add {\"Name\": %q, \"Enabled\": true} to its Plugins list, or the toolset plugins you want.", allToolsets),
+	})
+	return warnings, nil
+}
+
+// checkUnrealMCPPlugins logs unrealMCPPluginCheck's warnings as WARN lines;
+// a check it cannot make says nothing at a start (init's preflight names
+// it). It never stops the start.
+func checkUnrealMCPPlugins(project, engineDir string, args []string, logger func(string)) {
+	if project == "" {
+		return
+	}
+	warnings, _ := unrealMCPPluginCheck(project, engineDir, args)
+	for _, w := range warnings {
+		logger("WARN " + w.line())
+	}
 }

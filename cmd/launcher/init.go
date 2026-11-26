@@ -291,6 +291,19 @@ func preflight(cfg *config.Config, info config.Info) []finding {
 		add(levelInfo, "plugin EngineVersion: not checked — without an engine there is no version to hold the project plugins' EngineVersion against", "")
 	}
 
+	if info.Project != "" && cfg.Unreal.MCP.Enabled {
+		warnings, notChecked := unrealMCPPluginCheck(info.Project, engineDir, editorArgs(cfg.Unreal, func(string) {}))
+		for _, w := range warnings {
+			add(levelWarn, w.head+" — "+w.detail, w.fix)
+		}
+		for _, n := range notChecked {
+			add(levelInfo, n, "")
+		}
+		if len(warnings) == 0 && len(notChecked) == 0 {
+			add(levelOK, "Unreal MCP plugins: the .uproject enables ModelContextProtocol and a toolset plugin, as far as the check can tell", "")
+		}
+	}
+
 	if info.Project != "" {
 		fs = append(fs, moduleFinding(cfg, info))
 		fs = append(fs, pluginModuleFindings(cfg, info)...)
