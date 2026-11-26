@@ -57,7 +57,13 @@ placeholder system exists.
    **merges by key**: base-only keys survive, and each key the local file
    gives replaces that entry's value whole, even when the value is a map or
    struct (`commands.hello: {command: x}` drops the base entry's `args` and
-   `description`). So `{}` cannot clear a base map; `~` (null) can. Users
+   `description`). So `{}` cannot clear a base map; `~` (null) can. Null does
+   **not** reset a struct section: yaml.v3's `decoder.null`
+   (`vendor/gopkg.in/yaml.v3/decode.go` 554-563) zeroes only an interface,
+   pointer, map or slice, so `unreal: {mcp: ~}` leaves `unreal.mcp` as the
+   base set it, and the same holds for `skills:`, `agent.hermes:` and every
+   other struct; an overlay switches one off by its field, `enabled: false`
+   (`TestLocalOverlayUnrealMCP`). Users
    expecting to append one item to `agent.args` will instead replace the list
    — remember this when documenting a new list- or map-valued field.
 4. `applyDefaults()` — fills unset values and returns the built-in commands it
@@ -73,7 +79,10 @@ placeholder system exists.
    and `agent.restartDelaySeconds` 3, `agent.startDelaySeconds` 5), so the
    smallest configurable delay is 1 second — for the restart delay that floor
    keeps a crashing process out of a tight restart loop; a negative delay is
-   rejected in step 8. A nil list is "not set" as well, and null in the overlay
+   rejected in step 8. `unreal.mcp.port` is a plain `int` of the same kind: 0,
+   an explicit `port: 0` included, is the plugin's default 8000
+   (`DefaultUnrealMCPPort`); `unreal.mcp.enabled` is a plain `bool`, default
+   off. A nil list is "not set" as well, and null in the overlay
    decodes to nil: `unreal.args: ~` restores the default
    `-stdout -FullStdOutLogOutput`, `unreal.args: []` clears it.
 5. `resolveProject` — before the engine, because engine auto-detection reads
@@ -115,7 +124,8 @@ placeholder system exists.
    starting with a letter, which already rules out every YAML number and
    date, then anything YAML would read as a boolean or null; an empty name is
    already `unreagent` from step 4), an `mcp.address` the listener or the
-   client URL cannot take (`validMCPAddress`) and an `mcp.allowedOrigins`
+   client URL cannot take (`validMCPAddress`), an `unreal.mcp` the launcher
+   cannot hand on (`validUnrealMCP`) and an `mcp.allowedOrigins`
    entry that is no Origin header a browser sends (`validOrigin`):
    - `validMCPAddress` wants host:port with a port from 1 to 65535:
      `net.Listen` would take port 0 or a service name, but the client URL
@@ -130,6 +140,24 @@ placeholder system exists.
      error ends with the hint
      `want host:port, e.g. 127.0.0.1:8765 or [::1]:8765`. An empty address
      is already `127.0.0.1:8765` from step 4.
+   - `validUnrealMCP` (k264, k265), in this order, each a load error:
+     `unreal.mcp.port` outside 1-65535; `unreal.mcp.enabled` without
+     `mcp.enabled` — the agent gets the `unreal-mcp` entry only through the
+     MCP config the launcher writes, and it writes none then; the message
+     points at `-ModelContextProtocolStartServer` in `unreal.args` for an
+     outside client; the port equal to `mcp.address`'s, compared as numbers
+     (`validMCPAddress` takes `08765`) and without comparing hosts, since a
+     wildcard or LAN address takes the loopback port too; any `unreal.args`
+     element containing `modelcontextprotocolport=` in any case that is not
+     exactly `-` or `/`, the name in any case, `=` and digits naming
+     `unreal.mcp.port` (`UnrealPortArg`) — the engine finds the name
+     anywhere on its rebuilt command line and the first hit wins (skill
+     `unreagent-ue`), so this refuses fail-closed instead of modelling that
+     line, and the error quotes the element and the one accepted form; the
+     project path is not checked; and a hand-written
+     `mcp.extraServers.unreal-mcp` (`UnrealMCPServerName`), from the base or
+     the overlay, naming both keys. The start switch in `unreal.args` is not
+     checked: `editorArgs` adds it only when it is missing.
    - `validOrigin`: the server compares each entry with the whole header,
      case-insensitively and without wildcards, so only that form can match —
      http and https as `scheme://host[:port]` with a port from 1 to 65535,
@@ -158,7 +186,8 @@ placeholder system exists.
    when `agent.enabled`, except serverName, which runs on
    `agent.hermes.enabled` alone — the only flag `hermes-setup` checks; the
    address check when `mcp.enabled` or `agent.hermes.enabled` (`hermes-setup`
-   writes the client URL with the server off, too); the origins check only
+   writes the client URL with the server off, too); `validUnrealMCP` only
+   when `unreal.mcp.enabled`; the origins check only
    when `mcp.enabled`; the skills check only when `skills.enabled`.
 
    Clients never get `mcp.address` as written: only the listener does.
@@ -176,6 +205,40 @@ engine every `Load` fails unless `unreal.editor` is set literally — the
 `hermes-setup` sub-command included, which calls `config.Load` as well.
 `example/unreagent.yaml` (`editor: ping`) loads without one; that is pinned by
 `TestExampleDemoConfigLoads`.
+
+## `unreal.mcp` — Epic's Unreal MCP server (k264-k266)
+
+`unreal.mcp: {enabled, port}` (`UnrealMCPConfig` in
+`internal/config/config.go`) switches the editor's own MCP server (UE 5.8,
+plugin `ModelContextProtocol`) on and hands it to the agent. Off by default;
+`DefaultYAML` and `InitYAML` leave it out (`TestDefaultsLeaveUnrealMCPOff`).
+The engine facts behind each piece are in skill `unreagent-ue`. What the key
+reaches:
+
+- **Editor arguments** — `editorArgs` (`cmd/launcher/lifecycle.go`) appends
+  `-ModelContextProtocolStartServer` unless `hasEditorSwitch` finds it, or the
+  deprecated `-StartModelContextProtocolServer`, in the args, and
+  `-ModelContextProtocolPort=<port>` unless an element is exactly that flag
+  for the configured port; it logs `Unreal: Unreal MCP server on <URL>`.
+- **The client URL** — `UnrealMCPConfig.URL()`,
+  `http://127.0.0.1:<port>/mcp`, always loopback (the plugin listens there);
+  nothing else builds it.
+- **The MCP entry** — `buildMCPServers` (`cmd/launcher/mcpconfig.go`) adds
+  `unreal-mcp` (`UnrealMCPServerName`, the name the plugin's own
+  `GenerateClientConfig` writes) as `{type: http, url: URL()}`, so the
+  agent's `--mcp-config` and every `mcp.writeConfig` target hold it. The
+  Hermes entry (`hermes-setup`) does not.
+- **The agent's first start and the watch** — skill `unreagent-core`
+  (invariant 6): the agent is held until the server answers a ping, or the
+  server is watched by ping when nothing is held.
+- With the switch off, `editorArgs` and `buildMCPServers` are byte-identical
+  to a build without it (`TestEditorArgsUnchangedWithUnrealMCPOff`,
+  `TestBuildMCPServersUnchangedWithUnrealMCPOff`); `validUnrealMCP` does not
+  run.
+
+Tests: `internal/config/unrealmcp_test.go`, `cmd/launcher/unrealmcp_test.go`,
+`cmd/launcher/bridge_ping_test.go`. README and `unreagent.example.yaml` (steps
+6 and 7 of the checklist below) are k268's.
 
 ## Without a config file — the defaults path (k227)
 
@@ -366,8 +429,8 @@ Everything else stays literal on purpose: `engineRoot` and `unreal.project`
 (the placeholders are derived from them), names and keys (`agent.env` names,
 `agent.hermes.serverName`, extra-server names), enums, `mcp.address`,
 `mcp.allowedOrigins`, `mcp.token` (a token must never change under the
-user's hands) and command descriptions. The doc comment on `substitute`
-lists both sides — keep it in step with the code.
+user's hands), `unreal.mcp` (a switch and a port) and command descriptions.
+The doc comment on `substitute` lists both sides — keep it in step with the code.
 
 An unresolved placeholder (resolved to `""`) in a used field is a load error:
 the result would be a garbage path such as
