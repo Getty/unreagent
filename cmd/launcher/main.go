@@ -240,6 +240,9 @@ func run() error {
 	}
 	// Like onAgentExit below: set once the session exists.
 	var onEditorExit func(supervisor.Exit)
+	// The editor's ends without a restart, for the agent's hold on Unreal MCP
+	// (k266): it stops waiting at the first. Buffered, and never blocked on.
+	editorEnded := make(chan supervisor.Exit, 1)
 	// The editor's give-up while MCP serves, for a later serve failure to end
 	// the session with (k155); every start of the editor takes it back.
 	var giveUp editorGiveUp
@@ -266,6 +269,10 @@ func run() error {
 			preStart(st)
 		},
 		OnExit: func(e supervisor.Exit) {
+			select {
+			case editorEnded <- e:
+			default:
+			}
 			if onEditorExit != nil {
 				onEditorExit(e)
 			}
@@ -361,13 +368,16 @@ func run() error {
 			}
 		}
 		logger("Agent command: " + cfg.Agent.Command + " " + strings.Join(redactAgentArgs(agentArgs, cfg.MCP.Token, ownMCPConfig), " "))
+		// An agent held for Epic's Unreal MCP server is not started by the
+		// supervisor: holdAgentForUnrealMCP starts it, in place of the start
+		// delay (k266).
 		if err := sup.AddService(supervisor.ServiceSpec{
 			Name:         "agent",
 			Command:      cfg.Agent.Command,
 			Args:         agentArgs,
 			Dir:          agentWorkdir,
 			Env:          agentEnv,
-			Autostart:    true,
+			Autostart:    !agentHeldForUnrealMCP(cfg),
 			StartDelay:   secs(cfg.Agent.StartDelaySeconds),
 			Restart:      cfg.Agent.Restart,
 			MaxRestarts:  cfg.Agent.MaxRestarts,
@@ -482,7 +492,7 @@ func run() error {
 	// A broken bridge or runtime is what the agent trips over, so their
 	// warnings reach the user's console in window mode too (k56, k79).
 	prepLogger := alertWarnings(logger, alert, logPath)
-	if cfg.MCP.Enabled && len(cfg.MCP.ExtraServers) > 0 {
+	if cfg.MCP.Enabled && (len(cfg.MCP.ExtraServers) > 0 || cfg.Unreal.MCP.Enabled) {
 		prepareMCPBridges(ctx, sup, cfg, agentWorkdir, prepLogger)
 	}
 
@@ -491,6 +501,22 @@ func run() error {
 	// again — the select below shuts down right away.
 	if ctx.Err() == nil {
 		sup.Start(ctx, &wg)
+		// After sup.Start, so the agent's service loop takes the start.
+		if agentHeldForUnrealMCP(cfg) {
+			line := fmt.Sprintf("Agent: its first start waits until the Unreal MCP server at %s answers a ping (at most %s): Claude Code gives up for good on a server that does not answer at its start", cfg.Unreal.MCP.URL(), endpointWaitWindow)
+			logger(line)
+			alertLines(alert, line)
+			// In wg, so no line of it comes after run() returns.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				holdAgentForUnrealMCP(ctx, cfg.Unreal.MCP.URL(), editorEnded, editorNotRunning(sup), prepLogger, func() {
+					if _, err := sup.StartService("agent"); err != nil {
+						prepLogger("WARN Agent: the start after the Unreal MCP wait failed: " + err.Error())
+					}
+				})
+			}()
+		}
 		go prepareRuntimes(sup, cfg, agentWorkdir, prepLogger)
 		// In interactive mode stdin belongs to the agent — no command loop of our own.
 		if !agentInteractive {

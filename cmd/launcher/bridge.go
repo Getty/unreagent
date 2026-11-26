@@ -83,7 +83,9 @@ type bridgeModules struct {
 //
 // An http/sse entry (no command) starts no process, so only the last check
 // applies to it: its url is watched the same way, asynchronously — the agent
-// is not held back for it (k87).
+// is not held back for it (k87). Nor for Epic's Unreal MCP server
+// (unreal.mcp), which is watched by a ping here unless the agent's first
+// start waits for it (agentHeldForUnrealMCP, k266).
 //
 // ctx is the launcher's signal context: once it is cancelled, the install or
 // smoke test in progress is stopped, the remaining bridges are skipped and no
@@ -149,6 +151,12 @@ func prepareMCPBridges(ctx context.Context, sup *supervisor.Supervisor, cfg *con
 	// window before the editor has even been started (k87, k163).
 	if ctx.Err() != nil {
 		return
+	}
+	// Epic's Unreal MCP server (unreal.mcp, k266) is watched the same way,
+	// by a ping; while the agent's first start waits for it, the hold in
+	// run() is that watch.
+	if cfg.Unreal.MCP.Enabled && !agentHeldForUnrealMCP(cfg) {
+		watches = append(watches, watch{config.UnrealMCPServerName, unrealMCPEndpoint, cfg.Unreal.MCP.URL()})
 	}
 	for _, w := range watches {
 		go waitForEndpoint(ctx, w.name, w.ep, w.url, editorNotRunning(sup), logger)
@@ -566,7 +574,18 @@ type endpoint struct {
 	field string // config key the URL is under, named when it does not parse
 	what  string // how the lines name the server ahead of its URL ("" = the URL alone)
 	hint  string // what the give-up warning suggests
+	probe probeKind
+	then  string // appended to the give-up warning ("" = nothing)
 }
+
+// probeKind is what waitForEndpoint asks once a connect succeeded.
+type probeKind int
+
+const (
+	probeNone   probeKind = iota // the connect is "up"
+	probeStatus                  // GET <url>/mcp/status, the toolkit's route (k205)
+	probePing                    // POST a JSON-RPC ping to <url> (k266)
+)
 
 var (
 	// editorEndpoint is a stdio bridge's UNREAL_MCP_URL: the in-editor server
@@ -575,6 +594,7 @@ var (
 		field: "UNREAL_MCP_URL",
 		what:  "in-editor server ",
 		hint:  "is the editor running with the plugin? Firewall? Is the server listening on localhost only?",
+		probe: probeStatus,
 	}
 	// remoteEndpoint is the url of an http/sse entry, which the agent connects
 	// to itself — at its own start, possibly before the server is up.
@@ -582,6 +602,21 @@ var (
 		field: "url",
 		hint:  "is the server running, and does the url match its port and path? The agent may have marked the server failed; once it answers, /mcp in Claude Code reconnects it.",
 	}
+	// unrealMCPEndpoint is Epic's Unreal MCP server in the editor, which
+	// unreal.mcp switches on (k266).
+	unrealMCPEndpoint = endpoint{
+		field: "unreal.mcp.port",
+		what:  "Unreal MCP server ",
+		hint:  "is the editor running with the ModelContextProtocol plugin enabled, and is unreal.mcp.port free for it?",
+		probe: probePing,
+	}
+	// heldAgentEndpoint is unrealMCPEndpoint while the agent's first start
+	// waits for it (holdAgentForUnrealMCP): its warning says the agent starts.
+	heldAgentEndpoint = func() endpoint {
+		ep := unrealMCPEndpoint
+		ep.then = "the agent starts now without it: a headless agent stays without Unreal MCP for its whole run, an interactive one gets it through /mcp in Claude Code once the server answers."
+		return ep
+	}()
 )
 
 // dialAddr is the host:port waitForEndpoint connects to for u: the URL's own
@@ -600,18 +635,27 @@ func dialAddr(u *url.URL) string {
 // waitForEndpoint reports once as soon as rawURL is up — the editor needs
 // time to start up, and so does a server in it. If it is not up within
 // endpointWaitWindow, there is one warning naming the usual suspects. It
-// returns silently once ctx ends.
+// returns silently once ctx ends. The result is true when the watch ended on
+// an answer (a probe's line or, without a probe, a connect), false when the
+// window or ctx ended it.
 //
-// What "up" means depends on ep. For an http/sse entry (remoteEndpoint) it is
-// a bare TCP connect: no request, no MCP session, nothing for the server to
-// act on. For the editor's own server (editorEndpoint) a connect is not
-// enough (k205): the toolkit's listener accepts seconds before it serves HTTP
-// — requests are handled on the game thread, which a modal dialog can block
-// for good. Once the port is open, each try GETs <url>/mcp/status (the path
-// the bridge uses) with endpointStatusTimeout; only a 200 with a JSON object
-// counts as ready. A 404, a redirect or a 200 that is not JSON means another
-// listener or a toolkit without the route, so the connect is reported as it
-// was, tool count unknown. A timeout or any other answer is "not ready yet".
+// What "up" means depends on ep.probe. For an http/sse entry (remoteEndpoint,
+// probeNone) it is a bare TCP connect: no request, no MCP session, nothing
+// for the server to act on. For a server in the editor a connect is not
+// enough: the editor's listeners accept seconds before it serves HTTP —
+// requests are handled on the game thread, which a modal dialog can block
+// for good. Once the port is open, each try asks the server, bounded by
+// endpointStatusTimeout:
+//   - the toolkit (editorEndpoint, probeStatus, k205): GET <url>/mcp/status
+//     (the path the bridge uses); only a 200 with a JSON object counts as
+//     ready. A 404, a redirect or a 200 that is not JSON means another
+//     listener or a toolkit without the route, so the connect is reported as
+//     it was, tool count unknown;
+//   - Epic's Unreal MCP server (unrealMCPEndpoint, probePing, k266): a
+//     JSON-RPC ping POSTed to <url> without a session; only a 200 carrying
+//     the ping's result counts (pingProbe).
+//
+// A timeout or any other answer is "not ready yet".
 //
 // The lines show scheme, host and path only: user info and query can carry a
 // token, and headers are never read here.
@@ -619,13 +663,13 @@ func dialAddr(u *url.URL) string {
 // notRunning, when not nil, is asked at the warning for what the launcher
 // knows about the editor (k253): a non-empty answer replaces the hint, which
 // only guesses at a firewall, a localhost-only server or a blocked game
-// thread. It applies to the editor's own server (editorEndpoint) alone.
-func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL string, notRunning func() string, logger func(string)) {
+// thread. It applies to the servers in the editor (those with a probe) alone.
+func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL string, notRunning func() string, logger func(string)) bool {
 	window, pause, statusTimeout := endpointWaitWindow, endpointPollInterval, endpointStatusTimeout
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
 		logger("WARN MCP server '" + name + "': " + ep.field + " is not a URL with a host — its reachability is not checked.")
-		return
+		return false
 	}
 	addr := dialAddr(u)
 	shown := ep.what + (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
@@ -634,50 +678,122 @@ func waitForEndpoint(ctx context.Context, name string, ep endpoint, rawURL strin
 	wctx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	dialer := net.Dialer{Timeout: 3 * time.Second}
-	var status *statusProbe
-	if ep == editorEndpoint {
-		status = newStatusProbe(u, statusTimeout)
+	var probe interface {
+		try(ctx context.Context, lastAnswer *string) (line string, done bool)
+	}
+	switch ep.probe {
+	case probeStatus:
+		probe = newStatusProbe(u, statusTimeout)
+	case probePing:
+		probe = newPingProbe(u, statusTimeout)
 	}
 	opened := false  // some try connected; the window can end inside a later dial
-	lastAnswer := "" // the last non-200 answer of the status route, e.g. "HTTP 503"
+	lastAnswer := "" // the probe's last answer that did not end the watch, e.g. "HTTP 503"
 	for {
 		conn, err := dialer.DialContext(wctx, "tcp", addr)
 		if err == nil {
 			opened = true
 			_ = conn.Close()
-			if status == nil {
+			if probe == nil {
 				logger(prefix + " is reachable.")
-				return
+				return true
 			}
-			if line, done := status.try(wctx, &lastAnswer); done {
+			if line, done := probe.try(wctx, &lastAnswer); done {
 				logger(prefix + line)
-				return
+				return true
 			}
 		}
 		select {
 		case <-time.After(pause):
 		case <-wctx.Done():
 			if ctx.Err() != nil { // the launcher ends, not the window
-				return
+				return false
 			}
 			hint := ep.hint
 			what := fmt.Sprintf(" not reachable after %s", window)
-			if opened && status != nil {
+			if opened && probe != nil {
 				what = fmt.Sprintf(": port open, but the toolkit did not answer %s within %s", statusPath, window)
+				if ep.probe == probePing {
+					what = fmt.Sprintf(": port open, but it did not answer a ping within %s", window)
+				}
 				if lastAnswer != "" {
 					what += " (last answer: " + lastAnswer + ")"
 				}
 				hint = "is the editor's game thread blocked, e.g. by a modal dialog such as \"Restore Packages\" after a crash, or is it still loading? No editor tool can run until it answers."
 			}
-			if notRunning != nil && ep == editorEndpoint {
+			if notRunning != nil && probe != nil {
 				if why := notRunning(); why != "" {
 					hint = why
 				}
 			}
-			logger("WARN " + prefix + what + " — " + hint)
-			return
+			line := "WARN " + prefix + what + " — " + hint
+			if ep.then != "" {
+				line += " — " + ep.then
+			}
+			logger(line)
+			return false
 		}
 	}
+}
+
+// agentHeldForUnrealMCP reports whether the agent's first start waits for
+// Epic's Unreal MCP server (k266): with unreal.mcp on, an agent, and an
+// editor the launcher starts itself. Claude Code marks an http server that
+// does not answer at its start as failed for good after about 6 s, and a
+// headless session never tries again (k221 item 5), while the editor's
+// server first answered 44 s after the start (k221 item 2). An editor left
+// to a manual start gets no hold: nothing says when it comes. Nor does an
+// agent that gets no unreal-mcp entry: the launcher hands it one only in the
+// MCP config it writes with mcp.enabled and agent.claudeIntegration (run(),
+// buildMCPServers), so there is nothing for it to wait for.
+func agentHeldForUnrealMCP(cfg *config.Config) bool {
+	return cfg.Unreal.MCP.Enabled && cfg.Agent.Enabled && !cfg.Unreal.ManualStart &&
+		cfg.MCP.Enabled && cfg.Agent.ClaudeIntegration
+}
+
+// holdAgentForUnrealMCP waits until the Unreal MCP server at rawURL answers a
+// ping, then calls startAgent once (k266). At the end of endpointWaitWindow
+// it calls startAgent anyway, after one warning that says so. When the
+// editor ends and is not restarted (a value on editorEnded: the editor
+// service's OnExit, the give-up of k69/k251 among them) the server cannot
+// answer any more: the wait ends at once with one warning naming that, and
+// the agent starts, so it can fix the editor as the give-up line says. When
+// ctx ends first it starts nothing. Only the agent's first start is held: a
+// later restart is the supervisor's, as before.
+func holdAgentForUnrealMCP(ctx context.Context, rawURL string, editorEnded <-chan supervisor.Exit, notRunning func() string, logger func(string), startAgent func()) {
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var ended *supervisor.Exit
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		select {
+		case e := <-editorEnded:
+			ended = &e
+			cancel()
+		case <-wctx.Done():
+		}
+	}()
+	// waitForEndpoint's own warning, if any, is the hold's one warning.
+	warned := false
+	answered := waitForEndpoint(wctx, config.UnrealMCPServerName, heldAgentEndpoint, rawURL, notRunning, func(line string) {
+		warned = warned || strings.HasPrefix(line, "WARN ")
+		logger(line)
+	})
+	cancel()
+	<-watchDone
+	if ctx.Err() != nil {
+		return
+	}
+	if ended != nil && !answered && !warned {
+		how := "failed"
+		if ended.Success {
+			how = "exited"
+		}
+		logger("WARN MCP server '" + config.UnrealMCPServerName + "': " + heldAgentEndpoint.what + rawURL +
+			" will not answer: the editor " + how + " and is not restarted — " + heldAgentEndpoint.then)
+	}
+	startAgent()
 }
 
 // statusPath is the toolkit's status route, relative to UNREAL_MCP_URL; the
@@ -696,17 +812,19 @@ type statusProbe struct {
 
 func newStatusProbe(u *url.URL, timeout time.Duration) *statusProbe {
 	su := url.URL{Scheme: u.Scheme, User: u.User, Host: u.Host, Path: strings.TrimSuffix(u.Path, "/") + statusPath}
-	return &statusProbe{
-		url: su.String(),
-		client: &http.Client{
-			Timeout: timeout,
-			// Loopback as a rule: no proxy from the environment, and no
-			// connection kept open in the editor between tries.
-			Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
-			// A redirect is an answer from something that is not the toolkit;
-			// try reports it instead of following it.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
+	return &statusProbe{url: su.String(), client: probeClient(timeout)}
+}
+
+// probeClient is the HTTP client of a probe of waitForEndpoint.
+func probeClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		// Loopback as a rule: no proxy from the environment, and no
+		// connection kept open in the editor between tries.
+		Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		// A redirect is an answer from something that is not the server
+		// asked; the probe reports it instead of following it.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
@@ -784,4 +902,89 @@ func logSafe(s string) string {
 		return ""
 	}
 	return s
+}
+
+// pingRequest is the JSON-RPC ping pingProbe POSTs, pingID its id. k221
+// measured the editor's answer: 200 {"jsonrpc":"2.0","id":N,"result":{}},
+// without a session; a GET is 405.
+const (
+	pingID      = 1
+	pingRequest = `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+)
+
+// pingProbe POSTs a JSON-RPC ping to Epic's Unreal MCP server for
+// waitForEndpoint (k266).
+type pingProbe struct {
+	url    string
+	client *http.Client
+}
+
+func newPingProbe(u *url.URL, timeout time.Duration) *pingProbe {
+	return &pingProbe{url: u.String(), client: probeClient(timeout)}
+}
+
+// try POSTs the ping once, without a session. done is true only for a 200
+// that carries the ping's result. Anything else — a timeout, a reset, another
+// status code, a 200 with an error or without a result — is "not ready yet",
+// kept in *lastAnswer for the warning. Unlike statusProbe, no answer ends the
+// watch early, a 404 or a redirect neither: the editor's listener accepts
+// long before it answers, what it says on the way is not known (k221 saw
+// only timeouts), and an early end would start the agent too soon.
+func (p *pingProbe) try(ctx context.Context, lastAnswer *string) (line string, done bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, strings.NewReader(pingRequest))
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Both, as the streamable HTTP transport asks of a client: the server
+	// may answer a POST as an event stream.
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		*lastAnswer = "HTTP " + strconv.Itoa(resp.StatusCode)
+		return "", false
+	}
+	if !pingAnswered(resp.Header.Get("Content-Type"), io.LimitReader(resp.Body, statusBodyLimit)) {
+		*lastAnswer = "HTTP 200 without a ping result"
+		return "", false
+	}
+	return " is ready — it answers ping.", true
+}
+
+// pingAnswered reports whether body, of the given Content-Type, is the
+// answer to pingRequest. An event stream counts when one of its data lines
+// is.
+func pingAnswered(contentType string, body io.Reader) bool {
+	if media, _, _ := strings.Cut(contentType, ";"); strings.EqualFold(strings.TrimSpace(media), "text/event-stream") {
+		sc := bufio.NewScanner(body)
+		sc.Buffer(nil, statusBodyLimit)
+		for sc.Scan() {
+			if data, ok := strings.CutPrefix(sc.Text(), "data:"); ok && isPingResult([]byte(data)) {
+				return true
+			}
+		}
+		return false
+	}
+	raw, err := io.ReadAll(body)
+	return err == nil && isPingResult(raw)
+}
+
+// isPingResult reports whether raw is a JSON-RPC 2.0 response to pingRequest
+// (its id) that carries a result object and no error.
+func isPingResult(raw []byte) bool {
+	var r struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      *float64        `json:"id"`
+		Result  json.RawMessage `json:"result"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return false
+	}
+	return r.JSONRPC == "2.0" && r.ID != nil && *r.ID == pingID && r.Error == nil &&
+		bytes.HasPrefix(bytes.TrimSpace(r.Result), []byte("{"))
 }

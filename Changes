@@ -1,6 +1,11 @@
 Revision history for unreagent
 
 {{$NEXT}}
+  - With unreal.mcp on (and mcp.enabled, agent.claudeIntegration), the
+    agent's first start waits until the editor's Unreal MCP server answers a
+    JSON-RPC ping, at most 5 minutes, then starts with one warning. It starts
+    at once with a warning when the editor fails or exits and is not
+    restarted. An open port alone no longer counts as up.
   - The editor readiness check polls the UE LLM Toolkit's GET /mcp/status
     (3 s per request, inside the existing 5-minute wait) instead of logging
     "is reachable" on a bare TCP connect, and logs ready with the tool count,
