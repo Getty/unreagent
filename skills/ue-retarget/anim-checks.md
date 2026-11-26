@@ -15,6 +15,11 @@ skeleton, `skeleton` (its path) and `bone_count` (the skeleton's bones, not
 the animation's tracks). The success message is the fixed text
 `Animation inspected`.
 
+`num_frames` is the same count `sample_bones` reports as `total_frames`; valid
+frame indices there run from 0 to `num_frames - 1`. Frame rate is
+`(num_frames - 1) / length` for an animation of more than one key (arithmetic
+on the two fields, not a field of its own).
+
 It returns no frame rate, no track list, no curves and no notifies. One bone's
 keys: `anim_edit` `inspect_track` (skill `ue-anim-sequence`, section
 `sequences`).
@@ -93,7 +98,8 @@ the message
   has a track with keys, `total_displacement_xy` (first key to last),
   `range_xy` (the diagonal of the XY extent over all keys), `pos_key_count`
   and `trajectory_samples[]` (up to 10 keys, evenly spaced: `frame`, `x`, `y`,
-  `z`). `root_bone` is `NOT_FOUND` when the skeleton's bone 0 has no track.
+  `z`). `root_bone` is `NOT_FOUND` when the skeleton's bone 0 has no track,
+  or the animation has no skeleton.
 - `issues[]`, each with `type`:
   - `bone_pop`: `bone`, `frame`, `prev_frame`, `distance`;
   - `quaternion_flip`: `bone`, `frame`, `prev_frame`, `dot_product`;
@@ -124,7 +130,21 @@ Reading the result:
   movement of a bone can exceed 50 cm between keys, and a real pop of a small
   bone can stay below it. Lower `pop_threshold` for hands and fingers.
 - The root check looks at bone 0 only and at X and Y only. Movement that is
-  on the pelvis and not on the root does not show there.
+  on the pelvis and not on the root does not show there. On a skeleton whose
+  bone 0 is the hips (a Mixamo export), the check runs on the hips: a walk
+  cycle's sway reads as "movement" even in place.
+- **Reading a `quaternion_flip`.** A quaternion `q` and `-q` are the same
+  rotation. A `dot_product` near **-1** is such a sign change between two keys:
+  the pose does not jump, and the engine's quaternion blends take the shorter
+  way (`FQuat::Slerp` and `FastLerp` correct the sign; engine math, the
+  effect on playback unverified). A value near **0** means the bone turned
+  about 180° between two keys: a real jump, usually a retarget or import
+  fault. The check flags every `dot < rotation_flip_threshold` and cannot tell
+  the two apart, so read the values, not the count. The dot is the cosine of
+  half the turn between the keys (unit quaternions): about 0.71 for 90°,
+  0 for 180°. The default 0 misses a positive-signed jump of up to 180°; to
+  catch every step over about 90°, pass `0.7` and expect the harmless sign
+  changes in the list as well.
 - **`total_issues: 0` does not mean the animation looks right.** Nothing here
   compares the result with the source animation, checks contact with the
   ground, or looks at the mesh. Look at frames with `capture_viewport` (skill

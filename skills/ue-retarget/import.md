@@ -29,7 +29,7 @@ whenever the import must not save or must not replace.
 | `dest_path` | required | content folder for the result, such as `/Game/Anims` |
 | `skeleton_path` | required | a Skeleton, or a skeletal mesh whose skeleton is used |
 | `import_mesh` | `false` | `true` imports the FBX as a skeletal mesh with its animations; `false` as animation only |
-| `custom_sample_rate` | `0` | animation sample rate, truncated to an integer. 0 keeps the default sample rate |
+| `custom_sample_rate` | `0` | animation sample rate in frames per second, truncated to an integer. Above 0 it also turns off "use default sample rate" (30 fps). 0 changes neither setting: the import then uses its configured defaults, where the engine's own tooltip says 0 means "find automatically the best sample rate" (UE 5.8.4 `FbxAnimSequenceImportData.h`; the configured default of the 30 fps switch is unverified) |
 | `snap_to_frame_boundary` | `false` | snap the animation length to the closest frame boundary |
 
 The parameter is `dest_path`. The plugin's `domains/assets.md` shows an
@@ -37,8 +37,22 @@ example with `destination`, which the code does not read.
 
 The import runs automated, replaces an existing asset of the same name, asks
 the engine to save the result (the tool does not check that it did), and
-imports neither materials nor textures. There is no dry run
-and no way to switch any of that off here.
+imports neither materials nor textures. It also sets bone-track import and
+scene conversion (FBX axes to UE axes) on. There is no dry run and no way to
+switch any of that off here.
+
+When to set the two timing options:
+
+- `custom_sample_rate`: the file was authored at a rate the project needs to
+  keep (60 fps mocap, for example), or `inspect_anim` after a first import
+  shows a `num_frames` that does not fit the source's frame count. The
+  plugin's `domains/assets.md` ("Frame Rate") recommends re-importing with it
+  rather than changing a sequence's rate afterwards, because, it says,
+  `SetFrameRate()` can crash on non-multiple rate changes (plugin claim,
+  unverified).
+- `snap_to_frame_boundary`: the FBX's length is not a whole number of frames
+  at the import rate (sub-frame end time), which shows as a last key that is
+  odd or a `length` slightly off.
 
 Returns `imported_assets[]` (`name`, `path`, `class`) and the message
 `Imported <n> asset(s) from <file name without extension>`.
@@ -54,10 +68,16 @@ What the code cannot tell you:
   `anim-checks`).
 - **Root motion.** The import does not set it; call `set_root_motion`
   (section `retargeter`).
-- **Interchange.** The options above belong to the legacy FBX factory. The
-  plugin's `domains/assets.md` says UE 5.7 imports through Interchange.
-  Whether every option still applies there cannot be seen in this code: check
-  the result with `inspect_anim` (`num_frames`, `length`).
+- **Interchange.** The options above are the legacy FBX factory's
+  (`UFbxImportUI`). In UE 5.8.4 source the console variable
+  `Interchange.FeatureFlags.Import.FBX` defaults to on, and the engine has a
+  converter (`InterchangeFbxAssetImportDataConverter`) that maps the legacy
+  options — skeleton, sample rate, frame snap, materials, textures — onto the
+  Interchange pipeline. Whether this tool's import task goes through that
+  converter was not traced: check the result with `inspect_anim` (`skeleton`,
+  `num_frames`, `length`). The plugin's `domains/assets.md` says UE 5.7
+  imports through Interchange too; in which version the switch came is not
+  established here.
 
 ## batch_import_fbx
 

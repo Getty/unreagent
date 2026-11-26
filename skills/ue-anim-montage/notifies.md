@@ -16,7 +16,47 @@ time; a notify state spans a range. Each sits on a notify track, addressed by
 - `notify_tracks`: `index` and `track_name`.
 
 Re-read the indices after every add or remove. The write operations return
-the montage in this shape.
+the montage in this shape. Indices can also change when the montage is
+loaded again: the engine sorts notifies by time on load
+(`UAnimSequenceBase::PostLoad` → `RefreshCacheData` → `SortNotifies`,
+`AnimSequenceBase.cpp`, UE 5.8.4 source). Never store a `notify_index` across
+sessions.
+
+`notify_class` is the class's name (`GetClass()->GetName()`), and for a
+state `notify_state_class` holds the class name too, despite the key's
+spelling; a Blueprint class shows with its `_C` suffix.
+
+## Notify or notify state, and which class
+
+- **Notify** (`add_notify`): one event at `trigger_time`. **Notify state**
+  (`add_notify_state`): begin, tick and end over `start_time` to
+  `start_time + duration` (Epic, "Animation Notifies"). Use a state for
+  anything with a window: hit detection, combo input, trails, disabling root
+  motion.
+- Engine classes by module: `AnimNotify_PlaySound`,
+  `AnimNotify_PlayParticleEffect`, `AnimNotifyState_Trail`,
+  `AnimNotifyState_TimedParticleEffect`, `AnimNotifyState_DisableRootMotion`
+  are in `Engine` (a short name works). Montage Notify and Montage Notify
+  Window are in `AnimGraphRuntime`: pass
+  `/Script/AnimGraphRuntime.AnimNotify_PlayMontageNotify` or
+  `/Script/AnimGraphRuntime.AnimNotify_PlayMontageNotifyWindow` (engine
+  source, `AnimGraphRuntime/Public/AnimNotifies/AnimNotify_PlayMontageNotify.h`).
+  Their `NotifyName` property is what the Play Montage node's On Notify Begin
+  / End pins report; set it with `properties: {"NotifyName": "Hit"}`.
+- **Tick type.** Each notify event has a Montage Tick Type, Queued (default,
+  fired after evaluation, cheaper) or Branching Point (synchronous, exact
+  frame; Epic recommends it when gameplay branches on the notify). The tool
+  does not set it, so every notify it adds is Queued (`FAnimNotifyEvent`
+  constructor, `AnimTypes.h`), unless its class is a native branching point:
+  both Montage Notify classes and `AnimNotifyState_DisableRootMotion` are
+  (`bIsNativeBranchingPoint`, engine source). Set Branching Point in the
+  montage editor when you need it on another class.
+- **Notifies that need an asset cannot be completed here.**
+  `AnimNotify_PlaySound` has `Sound` (a sound asset), the particle notifies a
+  particle system. An object value in `properties` always creates a new
+  sub-object of `_class`; it never references an existing asset. Leave such
+  a notify for the montage editor, Python (skill `ue-python`), or a Blueprint
+  notify class whose defaults already hold the asset.
 
 ## Adding
 
@@ -24,6 +64,11 @@ the montage in this shape.
 |---|---|---|
 | `add_notify` | `notify_name`, `trigger_time` | `track_index` (default 0), `notify_class`, `properties` |
 | `add_notify_state` | `notify_name`, `start_time`, `duration` | `track_index` (default 0), `notify_class`, `properties` |
+
+**`add_notify_state` reads `start_time`, not `trigger_time`.** The tool's
+own description shows `trigger_time` in its notify-state example
+(`MCPTool_MontageModify.h:54`); that call fails with
+`Missing required parameter: start_time` (`MCPTool_MontageModify.cpp:537-541`).
 
 - **Times are in seconds and must lie inside the montage**:
   `Trigger time <t> out of range (0-<length>)`, and for a state
@@ -41,7 +86,11 @@ the montage in this shape.
   a Blueprint's class path ends in `_C`. Failure:
   `Failed to load notify class: <value>`.
 - **Without `notify_class`** the notify is untyped: it has a name and a time,
-  and `set_notify_properties` cannot reach it.
+  and `set_notify_properties` cannot reach it. At runtime the engine calls an
+  event named `AnimNotify_<notify_name>` on the anim instance for it
+  (`AnimTypes.cpp`, UE 5.8.4 source), so an AnimBP event graph handles it by
+  that name. The tool does not add the name to the skeleton's notify list;
+  whether the AnimBP editor then offers the event is unverified.
 - **`properties`** sets properties on the new notify right away, as
   `set_notify_properties` does. When that fails, the notify stays, and the
   call returns `Notify added but property setting failed: <reason>`.
@@ -121,3 +170,7 @@ There is no operation to change a notify's time; remove it and add it again.
 - **No rollback.** The call stops at the first property that fails, and the
   ones it had already set stay set. Read the notify back with `get_info` and
   set the rest again.
+
+Epic background (UE 5.9 page): notify vs notify state, Montage Notify and
+the Play Montage node, tick types, notify tracks:
+https://dev.epicgames.com/documentation/unreal-engine/animation-notifies-in-unreal-engine

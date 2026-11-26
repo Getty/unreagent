@@ -10,67 +10,40 @@ toolkit_tools: [blend_space]
 # UE blend spaces: blend_space
 
 The UE LLM Toolkit plugin's **`blend_space`** tool reads and edits blend space
-assets: their axes, the interpolation of each axis, and the samples (one
-animation sequence at one position each). It creates blend spaces and aim
-offsets, 1D and 2D. Through the plugin's MCP bridge it is listed as
-`unreal_blend_space`. It works only while the editor is running and the plugin
-is reachable; `unreagent-iterate` covers the wait for the plugin.
+assets: their axes, the smoothing of each axis, and the samples (one animation
+sequence at one position each). It creates blend spaces and aim offsets, 1D and
+2D. Through the bridge it is listed as `unreal_blend_space`. It works only while
+the editor runs and the plugin is reachable (`unreagent-iterate`).
 
-This skill was written from the toolkit's C++ source. It has not been exercised
-against a running editor.
+Written from the toolkit's C++ source (`MCPTool_BlendSpace.*`,
+`BlendSpaceEditor.cpp`, `BlendSpaceReader.cpp`) and the UE 5.8.4 engine source;
+not exercised against a running editor.
 
-The tool takes an `operation` string and lowercases it before dispatch. `get`,
-`get_info`, `info` and `get_samples` run `inspect`. An unknown operation
-returns `Unknown operation: '<op>'. Valid: <list>`, plus ` Did you mean '<x>'?`
-when a valid name is close.
+## Sections
 
-This skill has three sections:
-
-| Section | Holds | Load it |
+| Section | What is in it | Load it when |
 |---|---|---|
-| `inspect-result` | the fields inside `inspect`'s `axes`, `samples`, `settings` and `geometry` | when you need the name or meaning of a field inside one of these four, or a value there is not what you expect |
-| `batch` | `batch` in full: the shape of `operations`, an example, the per-op errors, the result | before you call `batch` |
-| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or the asset is not in the state you expect |
+| `workflows` | step-by-step builds: 1D speed, 2D locomotion (speed × direction), aim offset, swapping an animation pack, repairing a broken blend space | before you build or rebuild a blend space |
+| `operations` | every operation in full: `create`'s `type` table, sample ops, `set_axis` fields, `save`, `list`, every `inspect` field, how numbers and booleans are read | before a call the workflows do not show, or when you need a result field |
+| `batch` | `batch`'s `operations` shape, per-op errors, the result | before you call `batch` |
+| `ue-facts` | what the engine does with samples and axes: range growth, which samples count as valid, smoothing types, Use Grid, sync markers, aim offset additive rules, version notes, with sources | when a sample is refused, the axes changed on their own, or you choose smoothing settings |
+| `failures` | error table and symptom → cause → fix table | when a call fails or the asset is not what you expect |
 
 ## Before the first call
 
-- **Result shape.** Success is the tool's message, a blank line, then JSON. By
-  default the bridge goes through the task queue, so that JSON is a task
-  envelope (`task_id`, `status`, `success`, `message`, …), and the tool's own
-  fields, the ones named in this skill, sit under its `data` key. Failure is
-  `Error: <message>` with no data. Skill `ue-tasks` covers the task tools.
-- **Nothing saves except `save`.** Every write marks the asset as modified and
-  lives only in the running editor until you call `save`, or the `asset`
-  tool's `save_asset` or `save_all` (skill `ue-assets`).
-- **No undo.** No operation opens an editor transaction. Undo a change with
-  the inverse operation: `remove_sample` after `add_sample`, `move_sample` back
-  to the old position.
+- **Result shape.** Success is the message, a blank line, then JSON. Through
+  the task queue (the default) that JSON is a task envelope and the tool's
+  fields sit under `data` (skill `ue-tasks`). **Failure is only
+  `Error: <message>`, with no data.**
+- **Nothing saves except `save`** (or `asset` `save_asset`, skill `ue-assets`).
+  Every write lives only in the running editor until then.
+- **No undo.** No operation opens an editor transaction. Undo with the inverse
+  operation.
 - **Timeouts.** After 300 s the bridge returns
-  `Error: Task timed out after 300000ms (task_id: …)`. That ends the wait, not
-  the work. Read the asset back with `inspect` before you retry (skill
-  `ue-tasks`).
-
-## Paths
-
-Every operation except `list` and `create` needs `asset_path`. The tool takes
-`blueprint_path` or `path` in its place when `asset_path` is absent.
-
-- The path goes to the engine's loader as given. There is no path check and no
-  `/Game/` fallback, unlike the Blueprint tools (skill `ue-blueprints`). The
-  tool's own examples use package paths, such as `/Game/Anims/BS_Walk`.
-  `create`, `list` and `inspect` report object paths, such as
-  `/Game/Anims/BS_Walk.BS_Walk`. Prefer that form.
-- A path that does not load as a blend space returns
-  `Failed to load blend space: <path>`. The tool can also return
-  `Asset is not a BlendSpace: <path> (is <class>)`. Which of the two a wrong
-  asset type gives is up to the engine's loader.
-- A failed load does not prove the asset is missing. Search with `list` or
-  `asset_search` before you create one under that name.
-
-`animation_path` takes an animation sequence. It fails with
-`Failed to load animation: <path>` or
-`Asset is not an AnimSequence: <path> (is <class>)`. The tool accepts only
-animation sequences as samples, no montages and no other blend spaces.
+  `Error: Task timed out after 300000ms (task_id: …)`; the work may still
+  finish. `inspect` before you retry.
+- `operation` is lowercased; `get`, `get_info`, `info`, `get_samples` mean
+  `inspect`. `blueprint_path` or `path` stand in for a missing `asset_path`.
 
 ## Operations
 
@@ -87,195 +60,96 @@ animation sequences as samples, no montages and no other blend spaces.
 | `save` | `asset_path` | — |
 | `batch` | `asset_path`, `operations` | — |
 
-A missing or empty string parameter returns
-`Missing required parameter: <name>`. So does a `sample_index` or
-`axis_index` that is absent or negative. The blend space is loaded before
-these indices are checked, so a bad path is reported first.
+`type` for `create`: `BlendSpace1D`, `BlendSpace` (2D), `AimOffsetBlendSpace1D`,
+`AimOffsetBlendSpace`. Paths go to the engine's loader as given, no `/Game/`
+fallback; use the object path the results report
+(`/Game/Anims/BS_Walk.BS_Walk`). Samples are animation sequences only — no
+montages, no nested blend spaces. Send numbers and booleans as JSON numbers and
+booleans (section `operations` says what a string turns into).
 
-Send numbers and booleans as JSON numbers and booleans. What the tool reads
-otherwise (`ExtractOptionalNumber` and `ExtractOptionalBool` in
-`MCPToolBase.h`, and the engine's `FJsonObject::TryGetNumberField` and
-`TryGetBoolField` in `set_axis` and `batch`; the engine side is
-`TJsonValueString` in `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`,
-read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
-5.7):
+## Must not get wrong
 
-- Every number is read as a `double`, and an index is truncated afterwards.
-  The read also takes a string made of an optional sign, digits and at most
-  one dot, such as `"150"`, and `true` and `false` as 1 and 0. Any other
-  string counts as absent: the default applies without an error, and a
-  `sample_index` or `axis_index` is reported as missing.
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-- **A boolean is read from any string and any number.** `true`, `yes`, `on`
-  and `false`, `no`, `off` count in any case; every other string is `false`
-  unless it starts with a non-zero integer. A typo in `snap_to_grid`,
-  `wrap_input` or `recursive` therefore sets `false`, with no error.
-  The editor language's words for True, Yes, False and No count as well
-  (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
+1. **Set the axes before you add samples.** A new asset has the engine's
+   default axes (0–100, 4 divisions). A sample outside the range makes the
+   engine grow the range one grid step at a time **and add a grid division per
+   step**, so `add_sample` at x=600 on a fresh asset leaves an axis 0–600 with
+   24 divisions (section `ue-facts`).
+2. **`move_sample` without `y` moves a 2D sample to y=0.** Always pass both.
+3. **`rate_scale` left out, 0 or negative means "do not touch"**, not 1.0 —
+   the schema's stated default of 1.0 is not what the code does. Values above
+   0 are clamped to 0.01–64.
+4. **`remove_sample` moves the last sample into the freed index**, and every
+   rebuild also drops samples sitting on the same position. Re-read indices
+   with `inspect` after any removal before the next index-based call.
+5. **An unknown `interp_type` is ignored silently.** Use `Average`, `Linear`,
+   `Cubic`, `EaseInOut`, `ExponentialDecay` or `SpringDamper` (any case).
+6. **`create`'s `type` is matched by substring.** Anything without `1D` or
+   `AimOffset` creates a 2D `BlendSpace`. Check the result's `type`.
+7. **`inspect` and `list` never say "aim offset".** `inspect.type` is
+   `BlendSpace1D` or `BlendSpace`; `list` calls even a 1D aim offset
+   `BlendSpace`. Track what you created, or check the class with `asset_search`.
+8. **Aim offset samples must be additive, Mesh Space** (additive type
+   `RotationOffsetMeshSpace`); a plain sequence is refused with
+   `AddSample failed …`. Prepare the sequences first (skill `ue-anim-sequence`).
+9. **A failed `batch` hides which op failed.** The call is an error with only
+   `Batch: <n> OK, <m> errors, <t> total`; the ops that worked stay applied.
+10. **Narrowing an axis does not remove samples outside it**; the engine marks
+    them invalid and they stop contributing, and `inspect` does not show the
+    flag. Keep every sample inside the range you set.
 
-## Reading
+## Decision rules
 
-**`inspect`** returns:
-
-- `name`, `path` (object path), `type`, `dimensions` (1 or 2), `anim_length`,
-  `loop`.
-- `type` is `BlendSpace1D` or `BlendSpace`; it never says that the asset is an
-  aim offset.
-- `axes`, `samples` (`sample_count` counts them), `settings` and `geometry`.
-  The tool reads the `settings` but cannot set them. Load section
-  `inspect-result` when you need the name or meaning of a field inside one of
-  these four, or a value there is not what you expect.
-
-**`list`** searches the asset registry for blend spaces of every kind in
-`folder_path`, such as `/Game/Anims`. **It searches only that folder** unless
-you pass `recursive: true`. It returns `count` and `blend_spaces`, each with
-`name`, `path` (object path) and `type`. That `type` is `BlendSpace1D` only for
-a plain 1D blend space; every other kind, a 1D aim offset included, is listed as
-`BlendSpace`. Use `inspect` for the dimensions. No match is a success with
-`count: 0`.
-
-`asset_search` with `class_filter: "BlendSpace"` finds them too, subclasses
-included, and can search everywhere (skill `ue-assets`).
-
-## create
-
-Creates `<package_path>/<name>` for the skeleton at `skeleton_path`, for
-example `package_path: "/Game/Anims"`, `name: "BS_Walk"`. The result has
-`path` (the object path for every later call) and `type`. The message is
-`Created <type>: <path>`. The tool does not save the new asset.
-
-`type` is not validated; the tool reads it case-insensitively by substring:
-
-| `type` contains | Creates |
-|---|---|
-| `AimOffset` and `1D` | `AimOffsetBlendSpace1D` |
-| `AimOffset`, no `1D` | `AimOffsetBlendSpace` |
-| `1D`, no `AimOffset` | `BlendSpace1D` (the default) |
-| neither | `BlendSpace` (2D) |
-
-A misspelt value therefore creates a 2D blend space without an error. Check the
-result's `type`.
-
-- The tool does not check whether an asset of that name already exists, and
-  what the engine then does is not covered here. Check with `list` first.
-- The axes of the new asset are the engine's defaults. Set them with
-  `set_axis` before you add samples.
-- Errors: `Failed to load skeleton: <path>`, `Asset is not a Skeleton: <path>`,
-  `Failed to create blend space: <package_path>/<name>`.
-
-## Samples
-
-Samples are addressed by `sample_index`, as `inspect` lists them.
-
-- **`add_sample`** adds `animation_path` at (`x`, `y`) and returns its
-  `sample_index`. `x` and `y` default to 0; a 1D blend space uses `x`.
-  According to a comment in the plugin, the engine widens the axis range to fit
-  the new sample; read the axes back with `inspect`. Whether the animation fits
-  the blend space (its skeleton, additive settings for an aim offset) is the
-  engine's check, and a refusal reads
-  `AddSample failed for <path> at (<x>, <y>)`.
-- **`remove_sample`** deletes the sample at `sample_index`. **The last sample
-  moves into the freed index**, so every index you noted for the last sample is
-  stale. The message says so, and the result has `remaining_samples`. Run
-  `inspect` before the next index-based call.
-- **`move_sample`** sets the position of `sample_index` to (`x`, `y`). **Both
-  default to 0**: on a 2D blend space, a call with only `x` moves the sample to
-  `y = 0`. Pass both. Failure: `EditSampleValue failed for index <n>`, the
-  engine's refusal of that position.
-- **`set_sample_animation`** replaces the animation of `sample_index` and keeps
-  its position. It first checks that the animation fits the blend space's
-  skeleton: `Animation <path> is not compatible with this blend space's skeleton`.
-- An index out of range: `Sample index <n> out of range (0-<last>)`.
-
-**`rate_scale`** is the playback speed of one sample. In `add_sample` and
-`move_sample`, a value above 0 is clamped to 0.01–64 and applied. **Leaving it
-out, or passing 0 or a negative value, leaves the sample's rate untouched**:
-the tool sets none on a new sample and keeps the current value on a moved
-one. The tool's parameter list states a default of 1.0, but the code's
-default is -1, which means "do not set". `inspect` shows the value that is in
-effect.
-
-After `add_sample`, `remove_sample`, `move_sample` and `set_axis` the tool has
-the engine re-validate the samples and rebuild the blend space's geometry.
-
-## set_axis
-
-Changes only the fields you pass, on axis `axis_index`: 0 on a 1D blend space,
-0 or 1 on a 2D one (`Axis index <n> out of range (0-<last> for 1D)` or
-`… for 2D)`).
-
-| Parameter | Sets |
-|---|---|
-| `axis_name` (or `name`, which wins when both are given) | the axis display name |
-| `min`, `max` | the axis range |
-| `grid_divisions` | the number of grid divisions (an integer) |
-| `snap_to_grid`, `wrap_input` | the two axis flags |
-| `interp_time` | interpolation time in seconds |
-| `interp_type` | `Average`, `Linear`, `Cubic`, `EaseInOut`, `ExponentialDecay` or `SpringDamper`, case-insensitive |
-| `damping_ratio` | damping for `SpringDamper` |
-| `max_speed` | the maximum interpolation speed |
-
-- **An unknown `interp_type` is ignored without an error**, and the axis keeps
-  its interpolation type. Check `axes[].interpolation.type` with `inspect`.
-- The tool does not check that `min` is below `max`.
-- The message is `Configured axis <n> ('<name>': <min> to <max>, <divisions> divisions)`.
-  It does not echo the interpolation settings.
-- Binding an axis to a variable of an Animation Blueprint is
-  `anim_blueprint_modify`'s job (skill `ue-anim-blueprint`).
-
-## batch
-
-Runs several of `add_sample`, `remove_sample`, `move_sample`,
-`set_sample_animation` and `set_axis` on one asset in one call. Load section
-`batch` before you call `batch`: it has the shape of `operations`, an
-example, the per-op errors and the result. What goes wrong without a word:
-
-- A `remove_sample` moves the last sample into the freed index for every op
-  after it.
-- A failed op does not stop the ones after it, and nothing is rolled back.
-- **With one failed op, the call is an error, and the bridge passes only the
-  message** `Batch: <n> OK, <m> errors, <t> total`: which op failed, and why,
-  does not reach you. Run `inspect`, then repeat the missing change as a
-  single operation to get its error.
-- `batch` does not save.
-
-## save
-
-Saves the asset at `asset_path`, also when it has no unsaved changes:
-`Saved: <path>`, or `Failed to save: <path>`. It does not check that the asset
-is a blend space.
+- **One driving value** (speed only, or pitch only): `BlendSpace1D` /
+  `AimOffsetBlendSpace1D`. **Two** (speed and direction, yaw and pitch): 2D.
+- **Full-body cycles that replace the pose** (walk, run, strafe): a blend
+  space. **Additive poses layered on top** (aim, look): an aim offset.
+- **Several changes on one asset**: one `batch` (one geometry rebuild), then
+  `inspect`. **One change you need the error of**: the single operation.
+- **New sample vs. new animation on a slot**: `set_sample_animation` keeps the
+  position and index and checks the skeleton; `remove_sample` + `add_sample`
+  shuffles indices.
+- **Smoothing**: start with `SpringDamper`, `interp_time` 0.1–0.2,
+  `damping_ratio` 1.0 on the speed axis; `max_speed` limits how fast the input
+  may change (section `ue-facts` has what each knob does).
 
 ## The edit loop
 
-1. **Find or create.** `list` (with `recursive: true` for a whole tree) or
-   `create`.
+1. **Find or create.** `list` (`recursive: true` for a tree) or
+   `asset_search` with `class_filter: "BlendSpace"` (subclasses included,
+   skill `ue-assets`). Only then `create`; the tool does not check for an
+   existing asset of that name.
 2. **Read.** `inspect`: axes, sample indices, positions.
-3. **Set the axes first**, then add samples. Several changes go in one
-   `batch`.
-   Load section `batch` before you call `batch`.
-4. **Read back.** `inspect` after `remove_sample`, after a range change, and
-   after any `batch` that failed.
-5. **Save.** `save`.
+3. **Axes first** (`set_axis`), then samples. Several changes: one `batch`.
+4. **Verify** with `inspect`:
+   - every `axes[]` has the `min`, `max`, `grid_divisions` and
+     `interpolation.type` you meant (no silent range growth);
+   - `sample_count` and each `samples[]` `animation` / `position` match your
+     plan, no sample shows `None`;
+   - with `settings.interpolate_using_grid` false (new assets),
+     `geometry.triangles` is above 0 on a 2D blend space whose samples span an
+     area, `geometry.segments` above 0 on a 1D one with two or more samples;
+     0 means the engine built no blend geometry from them;
+   - `anim_length` is above 0 (it counts valid samples only, so 0 with samples
+     present means none of them is valid).
+5. **Save.** `save`, then confirm with `inspect` after a later reload if it
+   matters.
+
+Playing the blend space and binding its axes to variables is
+`anim_blueprint_modify`'s job (skill `ue-anim-blueprint`; the plugin's
+`Resources/domains/blueprints.md`, "Blend Space Parameter Binding", says a 1D
+node's input pin is `X` whatever the axis is called).
 
 ## When a call fails
 
-Load section `failures` when a call returns an error, or the asset is not in
-the state you expect: it has the error table (error, cause) and the failure
-table (what you see, what it means, what to do).
-
-## Background in the plugin
-
-The plugin's `Resources/domains/blueprints.md` has short notes on blend space
-parameter binding in Animation Blueprints and on axis interpolation tuning.
-`unreal_get_ue_context` with `category: "animation"` serves its Animation
-Blueprint notes; their blend space snippets call the plugin's internal C++,
-not this tool (skill `ue-context`).
+Load section `failures`: the error table and the symptom table. When
+`add_sample` or `move_sample` is refused, section `ue-facts` lists the engine's
+reasons (duplicate position, out of range, skeleton, additive type).
 
 ## See also
 
-- `ue-anim-blueprint`: playing a blend space in an Animation Blueprint state
-  and binding its axes to variables.
-- `ue-anim-sequence`: the animation sequences used as samples.
+- `ue-anim-blueprint`: the blend space player, Aim Offset node and axis
+  bindings in an Animation Blueprint.
+- `ue-anim-sequence`: the sequences used as samples, additive settings for an
+  aim offset, sync markers.
 - `ue-assets`: finding, saving, renaming and deleting assets.
 - `unreagent-iterate`: starting the editor and waiting for the plugin.

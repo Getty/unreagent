@@ -10,270 +10,164 @@ toolkit_tools: [control_rig]
 # UE Control Rig: control_rig
 
 The UE LLM Toolkit plugin's **`control_rig`** tool reads a Control Rig
-Blueprint and edits its RigVM graph: it adds unit, template and variable
-nodes, links pins, sets pin defaults, adds member variables and recompiles the
-VM. Through the plugin's MCP bridge it is listed as `unreal_control_rig`. It
-works only while the editor is running and the plugin is reachable;
-`unreagent-iterate` covers the wait for the plugin.
+Blueprint and edits its RigVM graph: unit, template and variable nodes, links,
+pin defaults, member variables, recompile. Through the bridge it is listed as
+`unreal_control_rig`. It works only while the editor runs and the plugin is
+reachable (`unreagent-iterate`).
 
-This skill was written from the toolkit's C++ source. It has not been exercised
-against a running editor.
+Written from the toolkit's C++ source (`MCPTool_ControlRig.*`,
+`ControlRigEditor.cpp`) and the UE 5.8.4 engine source (RigVM controller,
+Control Rig units); not exercised against a running editor.
 
-What the tool cannot do:
+**What the tool cannot do:**
 
-- **It cannot create a Control Rig asset.** Every call loads an existing one.
-- **It cannot edit the hierarchy.** `inspect` lists bones, controls and nulls;
-  no operation adds, removes or moves one.
-- **It writes to one graph only**: the rig's default model. `inspect` lists
-  every graph model of the rig, but a node in any other graph cannot be
-  changed with this tool.
-- **It never saves.** See "Saving, compiling and undo".
+- **Create a Control Rig asset.** Every call loads an existing one.
+- **Edit the hierarchy.** `inspect` lists bones, controls, nulls and the rest
+  by type and name; nothing adds, removes, reparents or moves one.
+- **Edit any graph but the default model.** `inspect` lists every graph; the
+  writes go to `GetDefaultModel()` only (function graphs and collapsed graphs
+  are read-only here).
+- **Save.** It has no save operation. Save with `asset` `save_asset`.
+- **Report compile errors.** `recompile` succeeds whenever the rig loaded.
 
-This skill has three sections:
+## Sections
 
-| Section | Holds | Load it |
+| Section | What is in it | Load it when |
 |---|---|---|
-| `operations` | per single operation, the result fields, messages and errors: what `inspect` returns for a graph, node, pin, link and the hierarchy; `list_structs`, `list_templates`; the three add operations with the `cpp_type` list of `add_var_node`; `remove_node`; `link`, `unlink`, `unlink_all`; the member-variable operations; `recompile` | before you call an operation in a way the recipes do not show, and when you need a field of a result |
-| `batch` | `batch` in full: the key table per `op`, the result, what a failed entry does | before you call `batch` |
-| `failures` | the error table (error, cause) and the failure table (what you see, what it means, what to do) | when a call returns an error, or a result you did not expect |
+| `workflows` | step-by-step edits: read a rig, add a Get/Set Transform chain in Forwards Solve, drive a node from a member variable, insert a node into the execute chain, remove a node cleanly, verify | before your first edit of a rig |
+| `operations` | every single operation in full: `inspect` fields, the lists, the three add operations and the `cpp_type` list, links, defaults and value text, member variables, recompile | before a call the workflows do not show, or when you need a result field |
+| `batch` | `batch`'s own key names per `op`, its inverted defaults, its result | before you call `batch` |
+| `ue-facts` | RigVM and Control Rig background: solve events, the execute chain, hierarchy element types, units vs templates, pin paths and text forms, link rules, where errors go, versions — with sources | when you design a graph change, or a link or default is refused |
+| `failures` | error table and symptom → cause → fix table | when a call fails or a result is not what you expected |
 
-## Recipes
+## Before the first call
 
-Every call needs `rig_path` and `operation`. `rig_path` is left out of the
-calls below; it is the same in each.
-
-### Read a rig before changing it
-
-1. `{"operation": "inspect"}`. Take node names from `graph.graphs[].nodes[].path`
-   and pin names from each node's `pins[].name`. A pin path is
-   `<node path>.<pin name>`.
-
-### Add a unit node and wire it
-
-1. `{"operation": "list_structs", "filter": "<part of the name>"}`. Take `path`
-   from the entry you want.
-2. `{"operation": "add_node", "struct_path": "<path>", "node_name": "<name>", "x": 0, "y": 0}`.
-   Read the node's real name from `node.path` in the result, and its pins from
-   `node.pins`.
-3. `{"operation": "set_default", "pin_path": "<node>.<pin>", "value": "<text>"}`
-   for each input that is a constant.
-4. `{"operation": "link", "output_pin": "<node>.<pin>", "input_pin": "<node>.<pin>"}`
-   for each connection, the execute chain included.
-5. `{"operation": "recompile"}`.
-6. `{"operation": "inspect"}` and check `links` and the pins' `default_value`.
-7. Save with `asset` `{"operation": "save_asset", "asset_path": "<rig_path>"}`
-   (skill `ue-assets`).
-
-### Add a variable and use it in the graph
-
-1. `{"operation": "add_member_var", "var_name": "<name>", "cpp_type": "float"}`,
-   plus `is_public` and `default_value` when needed.
-2. `{"operation": "add_var_node", "var_name": "<name>", "is_getter": true}`.
-   The node is named `<name>_Get` (`<name>_Set` for a setter). Read its pins
-   from `node.pins` in the result.
-3. `link` it as above, then `recompile`, `inspect`, save.
-
-### Build several nodes in one call
-
-1. `{"operation": "batch", "operations": [ … ]}`. **The entries use other key
-   names than the single operations** (`op`, `struct`, `name`, `source`,
-   `target`, `pin`, …): see "batch".
-2. When the call is an error (`Batch: <ok> OK, <n> errors, <total> total`),
-   the entries that worked are in the graph. `inspect` to see which.
-3. `recompile` (it can be the last entry of the batch), `inspect`, save.
-
-### Run the rig in an Animation Blueprint
-
-Not this tool. `anim_blueprint_modify` adds the Control Rig node and takes the
-rig's generated class path (skill `ue-anim-blueprint`, section `anim-nodes`);
-`blueprint_modify` `add_node` type `ControlRig` takes the asset path (skill
-`ue-blueprints`, section `graphs`).
+- **Every call needs `rig_path` and `operation`** — the two lists too. The rig
+  must load. `rig_path` goes to the loader unchanged, no `/Game/` fallback.
+  Find rigs with `asset_search` (skill `ue-assets`); use the object path.
+- **Result shape.** Success is the message, a blank line, then JSON; through
+  the task queue the tool's fields sit under `data` (skill `ue-tasks`).
+  **Failure is only `Error: <message>`, with no data.**
+- **The engine's reason for a refusal is in the output log, not in the
+  result.** The tool's `Failed to …` errors give no reason; the RigVM
+  controller reports it as a `LogScript` error,
+  `Script Msg: <package> : <reason>` (for a link:
+  `Cannot link '<a>' to '<b>': <why>.`). Read it with `get_output_log`
+  (`filter: "Script Msg"`; skill `ue-pie-testing`). From the 5.8.4 source;
+  unverified on 5.6/5.7.
+- **Timeouts.** After 300 s: `Error: Task timed out after 300000ms …`. The work
+  may still finish. `inspect` before you retry — a repeated `add_node` or
+  `batch` adds its nodes again.
+- **Undo.** Graph writes run in an undo bracket `CR Edit: <operation>` (batch:
+  `CR Edit: batch`); the member-variable operations and `recompile` open none.
+  The tool has no undo; reverse with the inverse operation.
 
 ## Operations
 
-`operation` is lowercased before dispatch. `rig_path` is required by every
-operation, `list_structs` and `list_templates` included: the rig must load
-even though the lists do not depend on it. An unknown operation returns
-`Unknown operation: '<op>'. Valid: inspect, list_structs, …`.
-
-| Operation | Required | Optional (default) | Writes |
-|---|---|---|---|
-| `inspect` | — | — | nothing |
-| `list_structs` | — | `filter` | nothing |
-| `list_templates` | — | `filter` | nothing |
-| `add_node` | `struct_path` | `node_name`, `x` (0), `y` (0) | a unit node |
-| `add_template` | `notation` | `node_name`, `x` (0), `y` (0) | a template node |
-| `add_var_node` | `var_name` | `is_getter` (true), `cpp_type`, `x` (0), `y` (0) | a variable node |
-| `remove_node` | `node_name` | — | removes the node |
-| `link` | `output_pin`, `input_pin` | — | a link |
-| `unlink` | `output_pin`, `input_pin` | — | removes one link |
-| `unlink_all` | `pin_path` | `as_input` (true) | removes a pin's links |
-| `set_default` | `pin_path`, `value` | — | a pin default |
-| `set_expand` | `pin_path` | `expanded` (true) | the pin's expanded state |
-| `add_member_var` | `var_name`, `cpp_type` | `is_public` (true), `default_value` | a member variable |
-| `remove_member_var` | `var_name` | — | removes the variable |
-| `recompile` | — | — | recompiles the VM |
-| `batch` | `operations` | — | whatever its entries write |
-
-A missing or empty required string returns
-`Missing required parameter: <name>`. `value` is required as a non-empty
-string, so the single `set_default` cannot set an empty string. A `set_default`
-entry of a `batch` passes an empty `value` on to the engine.
-
-### rig_path
-
-The path goes to the engine's loader unchanged, with no `/Game/` fallback and
-no check against `/Engine/` paths. The tool's example is a package path,
-`/Game/Rigs/CR_FootIK`. Errors: `Failed to load Control Rig: <path>` and
-`Asset is not a ControlRigBlueprint: <path> (is <class>)`.
-
-### The single operations
-
-**Load section `operations` before you call an operation in a way the recipes
-above do not show, and when you need a field of a result**: it has, per
-operation, the result fields, the messages and the errors. What must not be
-missed is here. In the result of `inspect`:
-
-**Only top-level pins are listed.** Sub-pins, such as the members of a
-transform pin, do not appear; the header gives their path form as
-`NodeName.PinName.SubPin`. Node positions are not reported either.
-
-When the rig has no hierarchy object, `hierarchy` holds only
-`error: "Hierarchy not available"`, and the call is still a success.
-
-In `list_structs` and `list_templates`:
-
-**At most 500 entries are returned**, and then `truncated` is `true`.
-`total_available` counts everything before the filter, so it does not say how
-many matched. Always pass a `filter`.
-
-In the other operations:
-
-- A pin's `default_value` is in `inspect` only when it is neither empty nor
-  `()`. Its `direction` is one of `IN `, `OUT`, `I/O`, `HID` or `???`; `IN `
-  has a trailing blank.
-- `add_var_node` does not read `node_name`: the node is requested as
-  `<var_name>_Get` or `<var_name>_Set`. A `cpp_type` outside the list the
-  tool knows (section `operations`) is passed on without a type object, and
-  whether the engine accepts that is not visible in the tool's code: for
-  such a type, declare the member variable first and leave `cpp_type` out.
-- Without `node_name` the engine names the node. Take the name from
-  `node.path` in either case.
-- The `Failed to …` errors of the three add operations and of `link` give no
-  reason.
-
-### set_default and set_expand
-
-- `set_default` sets the default of `pin_path` to the string `value`. The
-  tool's code gives no value formats. Use the text form `inspect` reports in
-  `default_value` for a pin of the same type. Message: `<pin> = <value>`.
-  Error: `Failed to set default on <pin>`.
-- `set_expand` expands or collapses a compound pin in the graph editor. It
-  changes the display only. Message: `Expanded <pin>` or `Collapsed <pin>`.
-  Error: `Failed to set expansion on <pin>`.
-
-### batch
-
-**Load section `batch` before you call `batch`**: it has the keys per `op`,
-the result and what a failed entry does. Its warnings, so that they are not
-missed:
-
-- Each entry names its operation in `op` and uses **the batch's own keys, not
-  the parameter names above** (`struct`, `name`, `source`, `target`, `pin`,
-  `var`, `mode`, `direction`, `type`, `public`, `default`).
-- **Two defaults are the opposite of the single operations.** Without `mode`,
-  `add_var_node` adds a **setter**; without `direction`, `unlink_all` breaks
-  the **output** side.
-- **A top-level parameter name in an entry is not read. For an optional key,
-  the entry succeeds with the default**, and nothing tells you: `node_name`,
-  `default_value`, `is_public`, `is_getter`, `as_input`.
-- `list_structs` and `list_templates` run in a batch, but it counts them as
-  errors. Call them on their own.
-- **A batch is not a transaction.** A failing entry neither stops the batch
-  nor undoes the entries before it.
-- **When any entry failed, the whole call is an error**, and `results` does
-  not reach you. `inspect` the graph, or repeat the doubtful entries as
-  single operations, which return their own error.
-
-## Saving, compiling and undo
-
-- **Nothing is saved.** The tool has no save operation, and its code neither
-  saves nor marks the package dirty; whether the engine's graph controller
-  marks it dirty is not visible in the tool's code. So do not rely on
-  `asset` `save_all`, which saves dirty packages only. Save the rig by path:
-  `asset` `{"operation": "save_asset", "asset_path": "<rig_path>"}` (skill
-  `ue-assets`). Until then every change lives only in the running editor.
-- **No write compiles on its own in the tool's code.** `recompile` is the only
-  operation that asks for it. Whether the engine recompiles after a graph
-  change is up to the engine.
-- **`recompile` reports no compile errors.** It returns success whenever the
-  rig loaded. Compile errors, if any, are not in the result.
-- **Undo.** Each graph write runs inside an undo bracket named
-  `CR Edit: <operation>`, and `batch` inside one named `CR Edit: batch`.
-  `add_member_var`, `remove_member_var` and `recompile` open none as single
-  operations. The tool has no undo operation of its own; reverse a change with
-  the inverse operation (`remove_node`, `unlink`, `remove_member_var`).
-
-## What a success does not prove
-
-| Operation | Success means | It does not prove |
+| Operation | Required (besides `rig_path`) | Optional (default) |
 |---|---|---|
-| `inspect` | the rig loaded | that a hierarchy was read (`hierarchy.error`); sub-pin values |
-| `list_structs`, `list_templates` | the rig loaded | that the list is complete (`truncated`) |
-| `add_node`, `add_template`, `add_var_node` | the engine returned a node | that it has the name you asked for (read `node.path`), that it is linked into the execute chain, compiled or saved |
-| `remove_node`, `link`, `unlink`, `unlink_all` | the engine's controller reported success | compiled, saved |
-| `set_default` | the controller accepted the string | that the pin holds the value you meant: read it back with `inspect`. A sub-pin's value shows only inside its parent's `default_value` |
-| `set_expand` | the display state changed | anything about the rig's behavior |
-| `add_member_var` | the engine returned a variable name | that the name is the one you asked for: the message echoes your `var_name`, not the name the engine returned |
-| `remove_member_var` | the engine reported success | what happened to variable nodes that used it: `inspect` |
-| `recompile` | the rig loaded and the recompile was called | that the VM compiled without errors |
-| `batch` (success) | every entry reported success | the same limits as each entry |
-| `batch` (error) | at least one entry failed | that nothing was changed: the other entries were applied |
+| `inspect` | — | — |
+| `list_structs` | — | `filter` |
+| `list_templates` | — | `filter` |
+| `add_node` | `struct_path` | `node_name`, `x` (0), `y` (0) |
+| `add_template` | `notation` | `node_name`, `x` (0), `y` (0) |
+| `add_var_node` | `var_name` | `is_getter` (true), `cpp_type`, `x` (0), `y` (0) |
+| `remove_node` | `node_name` | — |
+| `link` | `output_pin`, `input_pin` | — |
+| `unlink` | `output_pin`, `input_pin` | — |
+| `unlink_all` | `pin_path` | `as_input` (true) |
+| `set_default` | `pin_path`, `value` | — |
+| `set_expand` | `pin_path` | `expanded` (true) |
+| `add_member_var` | `var_name`, `cpp_type` | `is_public` (true), `default_value` |
+| `remove_member_var` | `var_name` | — |
+| `recompile` | — | — |
+| `batch` | `operations` | — |
 
-Whether a rig that compiles also poses the character as intended is not
-something this tool reports at all.
+`operation` is lowercased; there are no aliases. Pin paths are
+`<node>.<pin>` and `<node>.<pin>.<subpin>`; `<node>` is the node's `path` from
+`inspect` or the add result.
 
-## Results through the bridge
+## Must not get wrong
 
-- **Success** is the tool's message, a blank line, then JSON. By default the
-  bridge goes through the task queue, so that JSON is a task envelope
-  (`task_id`, `status`, `success`, `message`, …), and the tool's own fields,
-  the ones named in this skill, sit under its `data` key. Skill `ue-tasks`
-  covers the task tools.
-- **Failure** is only `Error: <message>`, with no data.
-- **Timeouts.** After 300 s the bridge returns
-  `Error: Task timed out after 300000ms (task_id: …)`. That ends the wait, not
-  the work. Read the graph back with `inspect` before you retry: a repeated
-  `add_node` or `batch` adds its nodes a second time.
-- **Misspelt parameters.** Calls the bridge queues do not warn about a
-  parameter the tool does not declare (skill `ue-tasks`).
+1. **Read before you write.** Take node names from `graph.graphs[].nodes[].path`
+   and pin names from `pins[].name`; never guess them. A node may be named
+   otherwise than you asked; read `node.path` from the add result.
+2. **`link` replaces.** Linking into an input that already has a link breaks
+   the old link; linking **from an execute output** breaks that output's
+   existing link (an execute output drives one node). To insert a node into
+   the execute chain, link `prev → new` and `new → next`, in that order (section
+   `ue-facts`).
+3. **A node not on the execute chain of an event does nothing.** Mutable units
+   (Set Transform and the like) must be chained from Forwards Solve (or
+   another event); pure ones (Get Transform) only need their outputs used.
+4. **`inspect` lists top-level pins only.** Sub-pins (`Item.Name`,
+   `Value.Translation.X`) are not listed, and a default is shown only when it
+   is neither empty nor `()`. Read struct values from the parent pin's
+   `default_value`.
+5. **`set_default` takes the engine's text form**, e.g.
+   `(Type=Bone,Name="hand_r")` for a rig element key. Copy the form from a pin
+   of the same type in `inspect`; arrays are not resized by this call.
+6. **Batch entries use other key names** (`struct`, `name`, `source`,
+   `target`, `pin`, `var`, `mode`, …) and **two defaults are inverted**:
+   `add_var_node` without `mode: "get"` adds a **setter**; `unlink_all`
+   without `direction: "in"` breaks the **output** side.
+7. **A failed batch hides which entry failed**, and the entries that worked
+   stay applied.
+8. **`recompile` proves nothing.** After it, check `get_output_log` for
+   Control Rig / RigVM errors (whether every compiler message reaches the
+   log is unverified).
+9. **Save explicitly**: `asset` `{"operation":"save_asset","asset_path":"<rig_path>"}`.
+   The tool does not mark the package dirty itself, so do not rely on
+   `save_all`.
+
+## The edit loop
+
+1. **Read**: `inspect`. Note the event nodes (struct `RigUnit_BeginExecution` is
+   Forwards Solve), their execute pins, the chain and the hierarchy names you
+   will reference.
+2. **Find units**: `list_structs` with a `filter` (max 500 results, check
+   `truncated`); templates via `list_templates`.
+3. **Edit**: add nodes, set defaults, link — single calls while you learn the
+   pins, `batch` once you know them.
+4. **Recompile**: `recompile`, then `get_output_log` for errors.
+5. **Verify** with `inspect`: every new node present under the expected
+   `path`; `links[]` contains each `source → target` you made and the
+   execute chain is unbroken from the event; each pin you set shows the
+   `default_value` you meant (sub-pins via the parent).
+6. **Save** with `asset` `save_asset`.
+
+Seeing the rig pose the character is outside this tool: preview it in the
+editor, or run it in an Animation Blueprint and check in PIE (skills
+`ue-anim-blueprint`, `ue-pie-testing`, `ue-viewport`).
+
+## Decision rules
+
+- **Graph logic** (what the rig computes) → this tool. **Hierarchy** (new
+  bones, controls, nulls) → the Control Rig editor or Python (skill
+  `ue-python`); not this tool.
+- **Concrete unit** (`RigUnit_*`, fixed pin types) → `add_node`.
+  **Generic node** whose type resolves on link (math, some array nodes) →
+  `add_template` with a notation from `list_templates`.
+- **Value set once** → `set_default`. **Value tuned from outside** (an AnimBP,
+  Sequencer) → a public member variable + `add_var_node` getter.
+- **One edit whose error you need** → the single operation. **Many known edits**
+  → `batch`, followed by `inspect`.
+- **Running the rig on a character** → `anim_blueprint_modify` (Control Rig
+  node, skill `ue-anim-blueprint`, section `anim-nodes`) or `blueprint_modify`
+  `add_node` type `ControlRig` (skill `ue-blueprints`, section `graphs`).
 
 ## When a call fails
 
-When a call returns an error, or a result you did not expect, load section
-`failures`: the errors with their causes, and a table from what you see to
-what it means and what to do.
-
-## Engine versions
-
-The tool's code switches one include on UE 5.7 or later. No operation of this
-tool behaves differently by engine version in the tool's own code.
-
-## Background in the plugin
-
-- `Resources/domains/tooling.md` lists `control_rig` as "Inspect + 16 write
-  ops". The code has 16 operations in all: three that read, twelve that write,
-  and `batch`.
-- The plugin ships no `get_ue_context` category for Control Rig (skill
-  `ue-context`).
+Load section `failures`. First stop for a bare `Failed to …`: the
+`Script Msg` line in `get_output_log`.
 
 ## See also
 
 - `ue-anim-blueprint`: the Control Rig node in an AnimGraph
   (`control_rig_class`).
 - `ue-blueprints`: `blueprint_modify` `add_node` type `ControlRig`.
-- `ue-retarget`: IK Rigs and IK Retargeters, which are other assets than a
-  Control Rig.
+- `ue-retarget`: IK Rigs and IK Retargeters, which are other assets.
 - `ue-assets`: `asset_search` to find rigs, `save_asset` to save one.
+- `ue-pie-testing`: `get_output_log`.
 - `ue-tasks`: following up a call that timed out.
 - `unreagent-iterate`: starting the editor and waiting for the plugin.

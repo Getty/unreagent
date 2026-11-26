@@ -26,6 +26,11 @@ The bones are always the skeleton asset's, also when you pass a mesh. A mesh
 can have fewer bones than its skeleton; `anim_edit` `inspect_mesh` reads the
 mesh's own (skill `ue-anim-sequence`, section `meshes`).
 
+`bone_count` and `bones[]` come from the skeleton's reference skeleton as a
+whole (`GetNum`), which in the engine includes virtual bones (unverified);
+`inspect_ref_pose` on a mesh lists raw bones only. Indices therefore need not
+line up between the two results: match bones by name.
+
 ## inspect_ref_pose
 
 `asset_path` is tried as a skeletal mesh first, then as a Skeleton.
@@ -98,8 +103,12 @@ IK goal.
 
 The warnings read
 `PITFALL #15: IK goals present — batch retarget will fail. Remove all goals for pure FK retargeting.`
-and the same for solvers. That is the plugin's claim; this skill has not
-tested it. The tool has no operation that removes a goal or a solver.
+and the same for solvers. That is the plugin's claim, not tested here, and
+the UE 5.8.4 batch code contains no such refusal: it runs the retargeter's
+whole op stack, Run IK Rig included. Goals and solvers are what the engine's
+IK ops use to plant feet and hands; a rig without them gives a pure FK
+retarget. The tool has no operation that removes a goal or a solver; a rig
+made by `create_ik_rig` has none.
 
 Error: `Failed to get IK Rig controller`.
 
@@ -109,12 +118,17 @@ Creates an IK Rig asset `name` in `package_path`, assigns the skeletal mesh at
 `mesh_path`, sets the retarget root and adds chains. It adds no goals and no
 solvers.
 
-- `retarget_root` (optional) is a bone name. The result of setting it is not
-  checked, and the message repeats the name you sent. Read it back with
-  `inspect_ik_rig`.
+- `retarget_root` (optional) is a bone name, normally the pelvis or hips
+  (section `concepts`). The result of setting it is not checked, and the
+  message repeats the name you sent. In UE 5.8.4 source a bone the mesh does
+  not have sets the root to `None` without a failure. Read it back with
+  `inspect_ik_rig`. Left out, the tool sets nothing; what a new rig starts
+  with is the engine's (not read; check `retarget_root`).
 - `chains` (optional) is an array of `{name, start_bone, end_bone}`. An entry
   that is not an object, or lacks one of the three, is skipped. So is a chain
-  the engine refuses. Neither is reported.
+  the engine refuses — in UE 5.8.4 source, one whose start or end bone the
+  mesh does not have. Neither is reported. Two entries with the same `name`
+  both go in, the second renamed with a numeric suffix (see `add_chain`).
 
 Returns `asset_path` (an object path) and the message
 `Created IK Rig '<name>' with <n> chains, retarget root: <root>`. **`<n>` is
@@ -139,16 +153,23 @@ Adds a retarget chain `chain_name` from `start_bone` to `end_bone` to the rig
 at `rig_path`. The chain gets no IK goal.
 
 Message: `Added chain '<name>' (<start> -> <end>)`, where `<name>` is the name
-the engine returned. It can differ from the one you sent; the tool's code does
-not show when. Compare it.
+the engine stored. In UE 5.8.4 source it differs from the one you sent when
+the rig already has a chain of that name: the engine appends a number (FName
+numbering, shown like `Spine_0`). Such a chain pairs with nothing of that name
+on the other rig. Compare the name; on a mismatch, `remove_chain` both and
+`add_chain` once.
 
-Error: `Failed to add chain '<name>' (<start> -> <end>)`, with no reason. Check
-the bone names against `inspect_skeleton`.
+Error: `Failed to add chain '<name>' (<start> -> <end>)`, with no reason. In
+UE 5.8.4 source the engine refuses a start or end bone the rig's skeleton does
+not have; check the names against `inspect_skeleton` of the rig's mesh
+(`inspect_ik_rig` `skeletal_mesh`). Whether it also refuses an end bone that is
+not below the start bone was not found in that code (unverified).
 
 ## remove_chain
 
-Removes the chain `chain_name` from the rig at `rig_path`. Message
-`Removed chain '<name>'`; error
+Removes the chain `chain_name` from the rig at `rig_path`; the name is
+compared as an FName, which ignores case. Message `Removed chain '<name>'`;
+error
 `Chain '<name>' not found or could not be removed`.
 
 To rename a chain or change its bones, remove it and add it again. A

@@ -77,10 +77,25 @@ name you asked for) and `target_graph` when given; `message` is
 `Created state machine '<n>'` plus ` in layer graph '<g>'` with
 `target_graph`.
 
-- **The real name can differ from `name`.** The tool sets the name before the
-  state machine's own graph exists, and the plugin's domain notes report
-  internal names such as `AnimationStateMachineGraph_1`. Read the name back
-  with `get_info` and use that one in later calls.
+- **The name you pass is not applied.** A state machine's name is the name
+  of its own graph. The tool renames the node before that graph exists
+  (`AnimStateMachineEditor.cpp:104`, `OnRenameNode` before `Finalize`), and
+  then replaces the graph the engine created with one of its own, made
+  without a name (`AnimStateMachineEditor.cpp:108-123`). In the UE 5.8.4
+  source, `OnRenameNode` renames `EditorStateMachineGraph`, which is still
+  null at that point, and a graph made without a name gets a generated one
+  (`AnimGraphNode_StateMachineBase.cpp:243`,
+  `BlueprintEditorUtils.cpp:2221`). Expect a name such as
+  `AnimationStateMachineGraph_1`, as the plugin's domain notes report, and
+  the same title on the node in the editor. **Read the name with `get_info`
+  right after the call and use it** for every call that takes
+  `state_machine`. The tool has no rename operation.
+- **`node_id` still carries the name you asked for** (`StateMachine_Locomotion`)
+  and resolves, because lookups by ID read the node's comment. Use it with
+  `connect_anim_nodes`; use the real name with `state_machine`.
+- The engine's own graph for the node (named from `New State Machine` in the
+  engine source) is left behind in the parent graph's sub-graph list. What
+  that does in the editor or on compile is unverified.
 - There is no duplicate check: a second call with the same name adds a second
   state machine.
 - The new state machine is not connected to anything; use

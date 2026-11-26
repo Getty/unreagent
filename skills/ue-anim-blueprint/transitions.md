@@ -44,18 +44,21 @@ The three names are required:
 `state_machine, from_state, and to_state parameters required`.
 
 - **`add_transition` ignores `duration`**, although the tool declares it. Set
-  the blend time afterwards with `set_transition_duration`. The plugin's
-  domain notes say a new transition always gets 0.2 s; that is the engine's
-  default, which this skill has not traced.
+  the blend time afterwards with `set_transition_duration`. A new transition
+  gets the engine's defaults: `CrossfadeDuration` 0.2 s and `PriorityOrder` 1
+  (`AnimStateTransitionNode.cpp:84` and `:97` in the UE 5.8.4 source).
 - Both ends must be states of that state machine. A second transition between
   the same two states returns
   `Transition from '<a>' to '<b>' already exists`. Other errors:
   `Failed to create transition node`, `Failed to create transition graph`.
-- `set_transition_duration` sets the transition's crossfade duration in
-  seconds; `set_transition_priority` sets its priority order. The tool
-  describes priority as "higher = checked first"; which value wins when two
-  transitions can fire is decided by the engine's priority order setting.
-  Check it in the editor before you rely on it.
+- `set_transition_duration` sets the transition's `CrossfadeDuration` in
+  seconds; `set_transition_priority` sets its `PriorityOrder`.
+- **The lower number wins.** The tool's parameter text says
+  "higher = checked first"; that is wrong. When several transitions out of a
+  state are true in the same update, the one with the smallest priority order
+  is taken (Epic, "Transition Rules"; the `PriorityOrder` comment in
+  `AnimStateTransitionNode.h:32` of the UE 5.8.4 source). Give the transition
+  that must win, such as the jump out of locomotion, the smaller number.
 - `remove_transition` removes the transition and its graph.
 
 ## Reading a transition

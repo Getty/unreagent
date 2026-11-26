@@ -18,8 +18,8 @@ Reads one bone track at chosen frames. It changes nothing.
   other entry is skipped, and when none is left, `[0, -1]` is used.
   A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
   (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  Send JSON numbers. The main document names the engine source this rests
-  on.
+  Send JSON numbers. Section `reference` names the engine source this
+  rests on.
 
 Returns `animation` (the asset name), `bone`, `total_frames` and `frames`, one
 entry per sampled frame with `frame`, `position` `{x, y, z}`, `rotation`
@@ -65,16 +65,21 @@ Rebuilds every bone track of each sequence with a new key count.
   to the play length, with linear interpolation, and writes
   `round(length × target_fps) + 1` keys. It sets the number of frames to
   `round(length × target_fps)`.
-- **The frame rate is not changed.** The code never sets the sequence's frame
-  rate. The tool's description says `resample` "fixes metadata" and "preserves
-  animation length exactly"; the code does not set the rate, and the
-  plugin's `domains/assets.md` agrees that it changes key data only. In the
-  engine's animation data the length follows from frame count and frame rate,
-  so expect a resample to a rate other than the current one to change the play
-  length. This has not been checked against a running editor. For a real
-  frame-rate change, reimport the source with `asset_import` and
-  `custom_sample_rate` (skill `ue-assets`, section `import`), as the plugin's
-  notes recommend.
+- **The frame rate is not changed, so the length is.** The code never sets
+  the sequence's frame rate (`AnimTrackEditor.cpp:205-319`): it calls the data
+  controller's `SetNumberOfFrames(round(length × target_fps))` and writes the
+  new keys. In the engine the play length is the number of frames at the
+  model's frame rate (`UAnimDataController::ResizeNumberOfFrames`,
+  `Developer/AnimationDataController/Private/AnimDataController.cpp`, UE 5.8.4
+  source, read not run). A 1 s clip at 30 fps "resampled" to 60 therefore ends
+  up with 60 frames at 30 fps: 2 s long, half speed. The tool's description
+  ("fixes metadata", "preserves animation length exactly") does not match the
+  code; the plugin's own `domains/assets.md` agrees that it changes key data
+  only. The result's `play_length` is the length **before** the call. Check
+  the real length afterwards with `retarget` `inspect_anim` (`length`,
+  `num_frames`; skill `ue-retarget`). **Do not use `resample` to change a
+  rate.** Reimport the source with `asset_import` and `custom_sample_rate`
+  (skill `ue-assets`, section `import`), as the plugin's notes recommend.
 - A sequence already at exactly `target_fps` (a whole-number rate) is skipped
   and counted as a success: `Skipped <animation> — already at <fps> FPS`.
 - Only bone tracks are rewritten. The tool does nothing to curves or notifies.
@@ -134,13 +139,42 @@ Sets a sequence's additive animation type and base pose.
 | `ref_pose_seq` | — | the base pose sequence. Required for `AnimScaled` and `AnimFrame` |
 | `ref_frame_index` | `0` | the base pose frame |
 
+What the values mean (engine enum display names and comments, `AnimTypes.h`,
+`AnimEnums.h`):
+
+| Value | Editor name | Meaning |
+|---|---|---|
+| `None` | No additive | a normal, full-pose animation |
+| `LocalSpaceBase` | Local Space | difference to the base pose in each bone's local space; the usual choice for additive layers (breathing, hit reactions, leaning) |
+| `RotationOffsetMeshSpace` | Mesh Space | rotation difference in mesh space, translation still local; what aim offsets use |
+| base `RefPose` | Skeleton Reference Pose | difference to the skeleton's reference pose |
+| base `AnimScaled` | Selected animation scaled | difference to `ref_pose_seq`, frame by frame scaled over its length |
+| base `AnimFrame` | Selected animation frame | difference to one frame (`ref_frame_index`) of `ref_pose_seq` |
+| base `LocalAnimFrame` | Frame from this animation | difference to one frame of this sequence |
+
+**Aim offset poses** (Epic, "Aim Offset", UE 5.9 page): every pose is
+additive `RotationOffsetMeshSpace` with base `AnimFrame`, `ref_pose_seq` the
+base animation the aim offset previews on, and `ref_frame_index` 0 — the
+page says aim offsets only accept additive animations. One call per pose:
+
+```json
+{"operation": "set_additive_type", "asset_path": "/Game/Anims/Aim_LU",
+ "additive_anim_type": "RotationOffsetMeshSpace", "base_pose_type": "AnimFrame",
+ "ref_pose_seq": "/Game/Anims/Aim_Idle", "ref_frame_index": 0}
+```
+
 - Both type names are matched case-insensitively.
 - **Every call writes all four settings.** Leaving out `base_pose_type` sets
   `RefPose`, leaving out `ref_pose_seq` clears the sequence that was set, and
   leaving out `ref_frame_index` sets 0. Pass every setting you want to keep;
   the result's `old` shows what was there.
-- The tool does not require `ref_pose_seq` for `LocalAnimFrame`. Whether the
-  engine needs one there is not verified.
+- `LocalAnimFrame` ("Frame from this animation") uses a frame of the
+  sequence itself and needs no `ref_pose_seq`; `AnimFrame` and `AnimScaled`
+  need one (`EAdditiveBasePoseType`, `Engine/Classes/Animation/AnimEnums.h`).
+- **An additive type with `base_pose_type: "None"` is not a valid additive**:
+  the engine's `UAnimSequence::IsValidAdditive` returns false for any base
+  pose other than the four above (`AnimSequence.cpp`, UE 5.8.4 source), so the
+  sequence is not used as an additive. The tool accepts the combination.
 - After the change, the tool fires the engine's property-change notification
   for the additive type. The tool's description says this triggers
   recompression; that is the engine's part.
@@ -175,3 +209,25 @@ Points one or more sequences at another skeleton.
 Each entry has `path`, `success`, and `old_skeleton` (`None` when there was
 none) and `new_skeleton`, or `error`. The call's message is
 `Replace skeleton: <ok> succeeded, <failed> failed out of <total>`.
+
+**`replace_skeleton` or retarget?**
+
+| Situation | Use |
+|---|---|
+| Same rig, different skeleton asset: the same bone names and hierarchy (a pack imported with its own copy of the skeleton, a duplicated skeleton) | `replace_skeleton`, then check |
+| Same bone names, different proportions | the sequence's bone translations come from the old body; the skeleton's per-bone translation retargeting (editor only, not reachable through these tools; unverified here) or a retarget (skill `ue-retarget`) |
+| Different bone names or hierarchy (Mixamo, another vendor's rig onto the UE mannequin) | `retarget` with IK Rigs and an IK Retargeter (skill `ue-retarget`) |
+
+Bone tracks are stored by bone name in the animation data model
+(`IAnimationDataModel::GetBoneTrackNames`), so after a swap a track meets the
+new skeleton's bone of the same name; what plays for a track whose bone the
+new skeleton lacks is unverified here. Verify a swap: `inspect_track` on the
+root and a hand bone at `[0, -1]`, compare with the same frames before, and
+`retarget` `compare_bones` between a source and a target sequence (skill
+`ue-retarget`).
+
+Sources: toolkit `Private/MCP/Tools/MCPTool_AnimEdit.{h,cpp}` and
+`Private/AnimTrackEditor.cpp` (branch `main`); engine UE 5.8.4 source, read
+not run: `AnimDataController.cpp`, `AnimSequence.cpp`, `AnimEnums.h`,
+`AnimTypes.h`; Epic, "Aim Offset" (UE 5.9 page),
+https://dev.epicgames.com/documentation/en-us/unreal-engine/aim-offset-in-unreal-engine.

@@ -11,206 +11,105 @@ toolkit_tools: [character]
 # UE characters: character
 
 The UE LLM Toolkit plugin's **`character`** tool reads `ACharacter` actors in
-the level that is open in the editor and changes ten values of their movement
-component. Through the plugin's MCP bridge it is listed as
+the level that is open in the editor and changes ten values of their
+`UCharacterMovementComponent`. Through the plugin's MCP bridge it is listed as
 `unreal_character`. It works only while the editor is running and the plugin
 is reachable; `unreagent-iterate` covers the wait for the plugin.
 
+Five operations, no aliases: `list_characters`, `get_character_info`,
+`get_movement_params`, `set_movement_params`, `get_components`. Parameters,
+result fields and errors: section `operations`.
+
+## Must not get wrong
+
+- **It changes one placed actor, not the class.** Other actors of the same
+  Blueprint, and every character spawned at runtime (the player pawn the game
+  mode spawns at a Player Start among them), keep the class defaults. To
+  change what the game spawns, change the Blueprint (recipe 3).
+- **It reads and writes the editor world, also while Play In Editor runs.**
+  During PIE you see and change the level's actors, not their copies in the
+  game; `velocity`, `movement_mode`, `is_falling` and `can_jump` are then
+  not the game's state. Tune before `start_pie` (skill `ue-pie-testing`).
+- **Nothing is saved and nothing can be undone.** `set_movement_params`
+  marks the actor's package and the level dirty, records no editor
+  transaction, and saves nothing. Note the old values first; save with
+  `asset` `{"operation": "save_all"}` (skill `ue-assets`).
+- **Values are clamped silently, and an unreadable value is skipped.** The
+  call succeeds with the clamped value; a value that is not a number is left
+  out of `modified_params` without an error. Send JSON numbers and compare
+  the returned `movement` with what you sent.
+- **`character_name` is matched whole, first hit wins**, against the object
+  name (`BP_Hero_C_0`) or the outliner label (`BP_Hero`). A label with
+  `(`, `)` or another of `` <>|&;`$(){}[]!*?~ `` is refused before the
+  search: pass the object name from `list_characters`.
+- **Seven movement values are read-only here** (crouched speed, swim and fly
+  speed, falling braking, the separate-braking-friction flag, …). Section
+  `movement` says where each one is set instead.
+
 ## Recipes
 
-**Find a character and read what it is made of**
+**1. Find a character and read what it is made of**
 
-1. `{"operation": "list_characters"}`. Take `name` or `label` from an entry
-   of `characters`.
-2. `{"operation": "get_character_info", "character_name": "<name>"}` for
-   class, transform, mesh, capsule, animation class and movement values.
-3. `{"operation": "get_components", "character_name": "<name>"}` for the
-   component list; add `"component_class": "Skeletal"` to filter.
+1. `{"operation": "list_characters"}` (optionally `"class_filter": "BP_Hero"`).
+   Take `name` from an entry of `characters`; `total: 0` means none is placed
+   in the editor's level (recipe 3).
+2. `{"operation": "get_character_info", "character_name": "<name>"}`: class,
+   transform, mesh asset and bone count, scaled capsule, animation class,
+   movement values.
+3. `{"operation": "get_components", "character_name": "<name>"}`; add
+   `"component_class": "Skeletal"` to filter.
 
-**Tune the movement of a placed character**
+**2. Tune a placed character and prove it**
 
-1. `{"operation": "get_movement_params", "character_name": "<name>"}` and
-   note the old values.
-2. `{"operation": "set_movement_params", "character_name": "<name>", "max_walk_speed": 800, "jump_z_velocity": 600}`.
-   Pass only the values you change.
-3. Compare the returned `movement` with what you sent: values are clamped
-   without a message (see "set_movement_params").
-4. Save the level: `asset` with `{"operation": "save_all"}` (skill
-   `ue-assets`). The tool marks the level dirty and saves nothing.
+1. `{"operation": "get_movement_params", "character_name": "<name>"}`; keep
+   the `movement` object as your restore point.
+2. `{"operation": "set_movement_params", "character_name": "<name>", "max_walk_speed": 450, "jump_z_velocity": 600}`.
+   Pass only what changes.
+3. Check the result: every name you sent is in `modified_params`, and each
+   value in `movement` equals what you sent (or its clamp bound).
+4. `asset` `{"operation": "save_all"}`.
+5. To prove it persisted, open another level and then this one again (skill
+   `ue-levels`) and repeat step 1; the values should match step 3. This round
+   trip is the only check the tools offer that the value reached disk.
 
-**The character is not in the list**
+**3. Change the class instead (the usual case for a player pawn)**
 
-`list_characters` returned `total: 0`, or not the one you play. The tool reads
-the editor's level, not a running game. A pawn that the game mode spawns at a
-Player Start exists only during play and is never listed. Change that
-character's class instead: `blueprint_modify` with `set_component_default` on
-the Blueprint's movement component, whose name `blueprint_query`
-`get_components` shows (skill `ue-blueprints`, section `modify`).
-Which class the game spawns: `game_framework` `inspect_game_mode` (skill
-`ue-game-framework`).
+1. Which class the game spawns: `game_framework` `inspect_game_mode` (skill
+   `ue-game-framework`).
+2. `blueprint_modify` `{"operation": "set_component_default", "blueprint_path": "/Game/Characters/BP_Hero", "component_name": "CharMoveComp", "property": "MaxWalkSpeed", "value": 450}`
+   (skill `ue-blueprints`, section `modify`). `CharMoveComp`,
+   `CollisionCylinder` and `CharacterMesh0` are the object names `ACharacter`
+   gives its movement, capsule and mesh components; `property` is the C++
+   property name. The Blueprint compiles on the call.
+3. Verify with `blueprint_query` (skill `ue-blueprints`, section `query`),
+   then in play (skill `ue-pie-testing`).
 
-## What a success does not prove
+Section `workflows` holds these end to end, with the decision between
+instance and class, restoring, and the checks after each step.
 
-- **Nothing is saved.** `set_movement_params` writes the value into the actor
-  in memory and marks the actor's package and the level dirty. It is lost
-  when the level is closed without saving.
-- **It changes one placed actor, not the class.** Other actors of the same
-  Blueprint, and every character spawned later, keep the class defaults.
-- **It reads and writes the editor world, also while Play In Editor runs.**
-  Every operation takes the editor's own world. During PIE the tool still
-  shows and changes the level's actors, not their copies in the running game,
-  so `velocity`, `movement_mode`, `is_falling` and `can_jump` are not the
-  state of the game. What a change made during PIE does to the running
-  session cannot be read from the source; make it before `start_pie` (skill
-  `ue-pie-testing`).
-- **Values are clamped silently.** The call succeeds with the clamped value,
-  and `modified_params` still names the parameter.
-- **A value the tool cannot read as a number is skipped, not rejected.** It
-  does not appear in `modified_params`, and the call still succeeds when
-  another one was applied. The tool reads each value as a `double` with the
-  engine's `FJsonObject::TryGetNumberField`, which also takes a string made
-  of an optional sign, digits and at most one dot, such as `"800"`, and
-  `true` and `false` as 1 and 0. Any other string, such as `"800.0f"` or
-  `"1e3"`, is skipped, and so is `null`, an array or an object
-  (`TJsonValueString::TryGetNumber`,
-  `Engine/Source/Runtime/Json/Public/Dom/JsonValue.h`; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7).
-  A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-  (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
-  Send JSON numbers, and check `modified_params`.
-- **No undo.** The change is not recorded as an editor transaction. Restore
-  the values you read in step 1.
+## Sections
 
-## Operations
+Load one with the `skills` tool (`name: "ue-character"`, `section: "<name>"`)
+or read `<section>.md` next to this file.
 
-| Operation | Required | Optional |
+| Section | What is in it | Load it when |
 |---|---|---|
-| `list_characters` | — | `class_filter`, `limit`, `offset` |
-| `get_character_info` | `character_name` | — |
-| `get_movement_params` | `character_name` | — |
-| `set_movement_params` | `character_name`, at least one movement value | the ten movement values |
-| `get_components` | `character_name` | `component_class` |
-
-`operation` must be one of these names; there are no aliases. Anything else
-returns
-`Unknown operation: '<op>'. Valid: list_characters, get_character_info, get_movement_params, set_movement_params, get_components`.
-
-### character_name
-
-The actor's object name (`BP_Hero_C_0`) or its label in the outliner
-(`BP_Hero`), compared whole. The first actor that matches wins, so two actors
-with the same label are not told apart: use the object name. Only `ACharacter`
-actors are searched; any other actor returns `Character not found: <name>`.
-
-The name is checked before the search: at most 256 characters, no control
-characters, and none of `` <>|&;`$(){}[]!*?~ ``
-(`Actor name contains invalid character: '<c>'`). A label with one of these,
-such as `Hero (2)`, cannot be passed; use the object name.
-
-### list_characters
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `class_filter` | none | substring of the class name; a Blueprint class is named `BP_Hero_C` |
-| `limit` | 100 | clamped to 1–1000 |
-| `offset` | 0 | entries to skip; a negative value counts as 0 |
-
-The result has `characters`, `count` (entries returned), `total` (all
-matches), `offset` and `limit`. Each entry has `name`, `label`, `class`,
-`class_path`, `location`, `rotation`, `can_jump` and `is_crouched`. The
-message's "showing a-b of n" is wrong for an empty page; read `count` and
-`total`.
-
-### get_character_info
-
-Returns the fields of a list entry, plus:
-
-| Field | Present | Holds |
-|---|---|---|
-| `movement` | when the character has a movement component | the object described under "get_movement_params" |
-| `skeletal_mesh` | when the character has a mesh component | `asset` (only when a mesh is assigned), `visible`, `num_bones` |
-| `capsule` | when it has a capsule | `radius`, `half_height`, both scaled |
-| `anim_instance` | when the mesh component has a live animation instance | `class`, the instance's class path |
-| `anim_blueprint` | when the mesh component has an animation class set | that class path |
-
-### get_movement_params
-
-Returns `character_name` and `movement`:
-
-| Group | Fields |
-|---|---|
-| can be set | `max_walk_speed`, `max_acceleration`, `ground_friction`, `jump_z_velocity`, `air_control`, `gravity_scale`, `max_step_height`, `walkable_floor_angle`, `braking_deceleration_walking`, `braking_friction` |
-| read only | `max_walk_speed_crouched`, `air_control_boost_multiplier`, `walkable_floor_z`, `braking_deceleration_falling`, `use_separate_braking_friction`, `max_swim_speed`, `max_fly_speed` |
-| state | `movement_mode` (`Walking`, `Falling`, `Swimming`, `Flying`, `Custom`, otherwise `None`), `velocity`, `is_moving_on_ground`, `is_falling` |
-
-A character without a movement component returns
-`Character has no CharacterMovementComponent`.
-
-### set_movement_params
-
-| Parameter | Clamped to | Unit |
-|---|---|---|
-| `max_walk_speed` | 0–10000 | cm/s |
-| `max_acceleration` | 0–100000 | cm/s² |
-| `ground_friction` | 0–100 | — |
-| `jump_z_velocity` | 0–10000 | cm/s |
-| `air_control` | 0–1 | — |
-| `gravity_scale` | -10–10 | — |
-| `max_step_height` | 0–500 | cm |
-| `walkable_floor_angle` | 0–90 | degrees |
-| `braking_deceleration_walking` | 0–100000 | cm/s² |
-| `braking_friction` | 0–100 | — |
-
-The result has `character_name`, `modified_params` (the names that were
-applied) and `movement` (all values after the change). With no readable
-movement value the call returns
-`No movement parameters specified to modify`.
-
-The read-only fields above have no parameter. Set those on the Blueprint
-(skill `ue-blueprints`, section `modify`) or on the actor with the toolkit's
-actor tools (skill `ue-level-actors`).
-
-`braking_friction` is stored whatever `use_separate_braking_friction` says;
-the tool cannot set that flag.
-
-### get_components
-
-`component_class` is a substring of the component's class name
-(`SkeletalMeshComponent`, `CapsuleComponent`). The result has
-`character_name`, `components` and `count`. Each component has `name`,
-`class` and `active`; a scene component adds `visible`, `relative_location`,
-`relative_rotation` and, when attached, `attach_parent`. The list is not
-paged.
-
-## Results through the bridge
-
-Success is the tool's message, a blank line, then JSON. By default the bridge
-goes through the task queue, so that JSON is a task envelope, and the fields
-named here sit under its `data` key. A failure is only `Error: <message>`.
-Skill `ue-tasks` covers the envelope and timeouts.
-
-## Errors
-
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | `operation` or `character_name` is absent or empty |
-| `Character not found: <name>` | no `ACharacter` in the editor's level has that name or label |
-| `Character has no CharacterMovementComponent` | the movement operations need one |
-| `No movement parameters specified to modify` | no movement value was passed, or none could be read as a number |
-| `Actor name contains invalid character: '<c>'` | see "character_name" |
-| `No active world. Open a level in the editor first` | no level is open |
+| `operations` | every operation: parameters, defaults, clamps, result fields, the name check, bridge envelope, error strings | you build a call or read a result field you are not sure of |
+| `movement` | what each movement value does in the engine, its engine default and unit, the read-only ones and where to set them, braking and floor-angle details, Mover | you choose values, or a change "does nothing" in play |
+| `workflows` | end-to-end procedures: inspect, tune and verify, class vs instance, restore, characters that exist only in play | you do more than one call, or decide where a change belongs |
+| `failures` | symptoms with cause and fix: not found, change lost, no effect in play, clamped values, mesh and capsule surprises | a call fails, or succeeds without the effect you expected |
 
 ## Background in the plugin
 
-`unreal_get_ue_context` with `category: "character"` serves the plugin's notes
-on `ACharacter` and `UCharacterMovementComponent` (skill `ue-context`). Its
-example for this tool matches the code.
+`unreal_get_ue_context` with `category: "character"` serves the plugin's own
+notes on `ACharacter` and `UCharacterMovementComponent` (skill `ue-context`).
 
 ## See also
 
-- `ue-character-data`: character config assets and stats tables, and applying
-  a config to a placed character.
+- `ue-character-data`: the toolkit's character config assets and stats
+  tables, and applying a config to a placed character.
 - `ue-game-framework`: which pawn class the game mode spawns.
 - `ue-blueprints`: movement defaults of a character Blueprint.
 - `ue-level-actors`: other properties of a placed actor, and moving it.
+- `ue-anim-blueprint`: the animation class on the mesh.
 - `ue-pie-testing`: play-testing the result.

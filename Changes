@@ -228,6 +228,14 @@ Revision history for unreagent
     retarget, root motion and animation diagnosis with retarget, including
     which operations need UE 5.7 or later). Written from the UE LLM Toolkit
     source, not yet exercised against a running editor.
+  - The animation, rigging and character skills (ue-anim-blueprint,
+    ue-anim-montage, ue-anim-sequence, ue-blend-space, ue-control-rig,
+    ue-retarget, ue-character, ue-character-data) are checked against the
+    toolkit source and reworked: a state machine's name is not applied on
+    create, the smallest transition priority wins, a montage notify state needs
+    start_time and duration, resample changes the play length, and batch
+    retarget can succeed with empty copies. Each skill keeps the common path
+    in SKILL.md and moves reference material and workflows into sections.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.

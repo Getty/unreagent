@@ -19,7 +19,9 @@ FK Chains op also has:
 
 - `fk_chains[]`: `chain` (the target chain's name), `enable_fk`,
   `translation`, `rotation`, `rotation_alpha`, `translation_alpha`.
-  `translation` is `None`, `GloballyScaled`, `Absolute` or `Other`.
+  `translation` is `None`, `GloballyScaled`, `Absolute` or `Other`
+  (`Other` covers the stretch and orient-and-scale modes UE 5.8 has, which
+  this tool cannot set; section `concepts`).
   `rotation` is `None`, `Interpolated`, `OneToOne`, `OneToOneReversed`,
   `MatchChain`, `MatchScaledChain`, `CopyLocal` (UE 5.7 or later) or `Other`.
 - `chain_mapping[]`: `target` and `source` chain names. On UE 5.7 or later it
@@ -31,8 +33,18 @@ other ops are not returned.
 
 One warning exists:
 `PITFALL #11: Pelvis Motion op is present. DuplicateAndRetarget ignores this op — pelvis translation must come through FK chain with TranslationMode=GloballyScaled.`
-That is the plugin's claim; this skill has not tested it. When you see it,
-check the pelvis chain's `translation` in `fk_chains`.
+That is the plugin's claim, not tested here. Two things to know:
+
+- **It appears on every retargeter `create_retargeter` makes**: the engine's
+  default op set starts with Pelvis Motion (UE 5.8.4 source,
+  `AddDefaultOps`). Its presence is not a fault.
+- In UE 5.8.4 source the batch retarget runs the retargeter's whole op stack
+  (`FIKRetargetProcessor::RunRetargeter`); nothing there skips Pelvis Motion.
+  Whether older engines did is unverified.
+
+When you see it, check that the pelvis chain's `translation` in `fk_chains`
+is `GloballyScaled` (what `create_retargeter` sets), and judge the pelvis
+height of the output (section `workflows`, C).
 
 Error: `Failed to get retargeter controller`.
 
@@ -54,8 +66,14 @@ same call it:
 Returns `asset_path` (an object path) and the message
 `Created retargeter '<name>' with <n> ops, auto-mapped chains`.
 
-- **"auto-mapped" is not a count.** The message does not say how many chains
-  found a partner. Read `chain_mapping` with `inspect_retargeter`.
+- **"auto-mapped" is not a count, and "mapped" is not "right".** The message
+  does not say how many chains found a partner, and the fuzzy match maps
+  almost every target chain to *something* — the closest name by edit
+  distance (UE 5.8.4 source; section `concepts`). Read `chain_mapping` with
+  `inspect_retargeter`: with identical names on both rigs every pair reads
+  `source == target`; any other pair was guessed.
+- The default ops (UE 5.8.4 source): Pelvis Motion, FK Chains, Run IK Rig,
+  Root Motion, Curve Remap, so `<n>` is 5 on a new asset.
 - Step 6 matches by substring, so a chain named `RootIK` or `LeftHipsTwist` is
   set as well.
 - The tool sets no preview meshes on the retargeter, and has no operation for
@@ -89,6 +107,11 @@ same.
   can; create a new retargeter instead.
 - An op you named `Something_2` yourself is removed as a duplicate when an op
   `Something` exists.
+- Why duplicates appear at all: adding the default ops to a stack that has
+  them adds a second, renamed copy of each op that is not a singleton (UE
+  5.8.4 source: `AddRetargetOp` gives a unique name; Curve Remap is a
+  singleton and is skipped). Step 3 removes those copies again, so settings of
+  the original ops survive `setup_ops`; only the chain mapping is redone.
 
 ## configure_fk
 
@@ -99,7 +122,7 @@ Changes per-chain settings of the retargeter's first FK Chains op.
 | Key | Values |
 |---|---|
 | `chain_name` | a target chain name, compared without regard to case |
-| `translation_mode` | `None`, `GloballyScaled`, `Absolute` |
+| `translation_mode` | `None`, `GloballyScaled`, `Absolute` (the UE 5.8 stretch and orient-and-scale modes are not accepted) |
 | `rotation_mode` | `None`, `Interpolated`, `OneToOne`, `OneToOneReversed`, `MatchChain`, `MatchScaledChain`, and on UE 5.7 or later `CopyLocal` |
 | `rotation_alpha` | number |
 | `translation_alpha` | number |
@@ -155,7 +178,8 @@ Returns `retargeted_count`, `root_motion_count`, `new_assets[]` (`name`,
   search, replace or suffix at all. On UE 5.8 the engine call then keeps its
   default folder: a target folder is taken only when one is passed, and the
   "same folder as the source" option is off unless asked for. The default is
-  the content root, so the new assets land directly in `/Game`, not beside
+  the content root (`FNameDuplicationRule::FolderPath` is `/Game`), so the
+  new assets land directly in `/Game`, not beside
   the source animations and not beside the target mesh (UE 5.8.4 source, not
   run). The tool's own header comment says "auto-move results"; the tool's
   code moves nothing after the engine call, on any version. Take the paths
@@ -174,7 +198,22 @@ Returns `retargeted_count`, `root_motion_count`, `new_assets[]` (`name`,
   alone, unlike `set_root_motion`) and never turns root motion off. For an
   exact result, pass `"auto_root_motion": false` and call `set_root_motion`
   per asset.
-- The tool does not save the new assets.
+- The tool does not save the new assets. The engine's batch code marks them
+  dirty (UE 5.8.4 source), so `asset` `save_all` (skill `ue-assets`) picks
+  them up.
+- **A counted asset may hold no retargeted motion.** UE 5.8.4 source, in
+  order: the copies are made, put on the target skeleton and their bone tracks
+  cleared; only then is the retargeter's processor initialized. When that
+  fails (rigs that do not fit the meshes, for example), the engine logs
+  `Unable to initialize the IK Retargeter. Newly created animations were not retargeted!`
+  and stops — the copies stay, are counted in `retargeted_count`, and hold no
+  animation from the source. Other early stops log `Batch retarget aborted. …`
+  and produce nothing. Check with `sample_bones` over a few frames (section
+  `workflows`, C) and `get_output_log` (skill `ue-pie-testing`).
+- The engine's batch shows a progress dialog with a cancel button (UE 5.8.4
+  source). After a cancel the engine cleans up the copies
+  (`CleanupIfCancelled`); what the tool then reports is not defined by its
+  code. Read the state back with `find_anims`.
 - What the retarget itself does with IK goals, the Pelvis Motion op or
   mismatched proportions is the engine's work and cannot be read off the
   result. Check with `diagnose_anim` and `capture_viewport`.

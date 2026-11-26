@@ -11,275 +11,127 @@ toolkit_tools: [character_data]
 # UE character data: character_data
 
 The UE LLM Toolkit plugin's **`character_data`** tool manages two asset kinds
-that the plugin itself defines:
+that the plugin itself defines (`Public/CharacterDataTypes.h`):
 
-- a **character config**, a `UCharacterConfigDataAsset`: identity, mesh and
-  animation references, base movement and combat values, capsule size, tags;
-- a **stats table**, a DataTable whose rows are `FCharacterStatsRow`: vitals,
-  speeds, multipliers and a level per row.
+- a **character config**, a `UCharacterConfigDataAsset` (a `UDataAsset`):
+  identity, soft references to a skeletal mesh and an animation class, base
+  movement and combat values, capsule size, name tags, and an optional link
+  to a stats table;
+- a **stats table**, a `UDataTable` whose row struct is
+  `FCharacterStatsRow`: vitals, speeds, multipliers and a level per row.
 
-Both types live in the plugin's module, so the assets load only in a project
-that has the plugin. Nothing in the engine reads them: a game uses the values
-only where its own code or Blueprints do. Through the plugin's MCP bridge the
-tool is listed as `unreal_character_data`. It works only while the editor is
-running and the plugin is reachable; `unreagent-iterate` covers the wait.
+Through the plugin's MCP bridge the tool is listed as
+`unreal_character_data`. It works only while the editor is running and the
+plugin is reachable; `unreagent-iterate` covers the wait.
+
+## Is this the right tool?
+
+- **Both types live in the plugin's module, and that module is an Editor
+  module** (`"Type": "Editor"` in `UELLMToolkit.uplugin`). The assets load
+  only in the editor of a project with the plugin enabled (PIE included). A
+  packaged game does not load Editor modules, so it cannot load these assets
+  or anything that references their types — a consequence of the module type;
+  packaging was not run (unverified in practice). Treat them as editor-side
+  data. Game data that must ship belongs in the project's own row struct or
+  DataAsset class.
+- **Nothing in the engine reads them**: values reach a character only through
+  `apply_character_data` (editor, one placed actor) or code that reads them.
+  In the editor a Blueprint can read a config's fields and call its
+  `GetStatsRow(RowName)` (BlueprintCallable; an empty name uses
+  `DefaultStatsRowName`).
+- **For a project's own row struct or DataAsset class, use
+  `game_framework`** (skill `ue-game-framework`, section `datatables`). This
+  tool refuses any table whose row struct is not `FCharacterStatsRow`.
+- **For movement values on one placed character, `character` is enough**
+  (skill `ue-character`).
+
+## Must not get wrong
+
+- **Asset writes save to disk at once**, before the call returns:
+  `create_character_data`, `update_character_data`, `create_stats_table`,
+  `add_stats_row`, `update_stats_row`, `remove_stats_row`. No undo.
+- **Create does not check what is there.** Both creates build
+  `<package_path>/<asset_name>` and save it. An existing asset of the same
+  class is replaced; an object of another class under that name, loaded in
+  the editor, makes the engine stop with a fatal error ("Cannot replace
+  existing object of a different class", read in engine source, not run).
+  **Search first** (recipe 1). Keep `asset_name` a plain name: no `/`, no
+  `.`, and never a doubled `//` in the joined path (the engine's
+  `CreatePackage` stops with a fatal error on `//`).
+- **`apply_character_data` always writes the capsule**, also with every
+  flag `false`, and does not move the mesh to match; it saves nothing (it
+  marks the actor and level dirty).
+- **References are not validated.** `skeletal_mesh` and `anim_blueprint` are
+  stored as given; an animation Blueprint must be named by its generated
+  class, `/Game/Anim/ABP_Hero.ABP_Hero_C`. Check `applied_settings` after an
+  apply.
+- **Values are clamped silently, unreadable ones skipped.** Compare the
+  returned `config` or `row` with what you sent.
+- **The stats-table link (`stats_table`, `default_stats_row`) cannot be set
+  with this tool.** Section `config`, "Linking a stats table".
 
 ## Recipes
 
-**Create a character config**
+**1. Create a config**
 
-1. `{"operation": "query_character_data", "search_name": "DA_Hero"}` and an
-   `asset_search` for the name (skill `ue-assets`): the create operation does
-   not check whether something is already there.
-2. `{"operation": "create_character_data", "asset_name": "DA_Hero", "package_path": "/Game/Characters", "config_id": "hero", "display_name": "Hero", "base_walk_speed": 600, "base_health": 100, "is_player_character": true, "gameplay_tags": ["Player"]}`.
-3. `{"operation": "get_character_data", "asset_path": "/Game/Characters/DA_Hero"}`
-   and compare `config` with what you sent: values are clamped silently.
+1. `{"operation": "query_character_data", "search_name": "DA_Hero"}` and
+   `asset_search` for the name (skill `ue-assets`). Stop if anything is
+   there.
+2. `{"operation": "create_character_data", "asset_name": "DA_Hero", "package_path": "/Game/Characters", "config_id": "hero", "display_name": "Hero", "base_walk_speed": 500, "base_jump_velocity": 520, "capsule_radius": 42, "capsule_half_height": 96, "is_player_character": true, "gameplay_tags": ["Player"]}`.
+3. Verify: `{"operation": "get_character_data", "asset_path": "/Game/Characters/DA_Hero"}`
+   and compare `config` field by field.
 
-**Change a config**
+**2. Change a config**: `update_character_data` with `asset_path` and only
+the fields that change; `gameplay_tags` replaces the whole list.
 
-`{"operation": "update_character_data", "asset_path": "/Game/Characters/DA_Hero", "base_jump_velocity": 520}`.
-Only the fields you pass change, except `gameplay_tags`, which replaces the
-whole list.
+**3. Build a stats table**
 
-**Build a stats table**
-
-1. `{"operation": "create_stats_table", "asset_name": "DT_HeroStats"}`.
-2. `{"operation": "add_stats_row", "table_path": "/Game/Characters/DT_HeroStats", "row_name": "Level1", "stats_id": "lvl1", "max_health": 100, "walk_speed": 600, "level": 1}`,
+1. `{"operation": "create_stats_table", "asset_name": "DT_HeroStats", "package_path": "/Game/Characters"}`.
+2. `{"operation": "add_stats_row", "table_path": "/Game/Characters/DT_HeroStats", "row_name": "Level1", "level": 1, "max_health": 100, "walk_speed": 500}`,
    once per row.
-3. `{"operation": "query_stats_table", "table_path": "/Game/Characters/DT_HeroStats"}`.
-4. Later: `update_stats_row` with the fields to change, `remove_stats_row`
-   with `table_path` and `row_name`.
+3. Verify: `{"operation": "query_stats_table", "table_path": "/Game/Characters/DT_HeroStats"}`;
+   `total` equals the rows you added.
 
-**Apply a config to a placed character**
+**4. Apply a config to a placed character**
 
-1. `character` `{"operation": "list_characters"}` for the name (skill
-   `ue-character`).
-2. `{"operation": "apply_character_data", "asset_path": "/Game/Characters/DA_Hero", "character_name": "<name>", "apply_mesh": true, "apply_anim": true}`.
-3. Read `applied_settings`: it names what was written. A mesh or animation
-   class that did not load is left out without an error.
-4. Save the level: `asset` `{"operation": "save_all"}` (skill `ue-assets`).
+1. `character` `{"operation": "get_character_info", "character_name": "<name>"}`
+   and keep `movement`, `capsule` and the mesh's position (skill
+   `ue-character`) as your restore point.
+2. `{"operation": "apply_character_data", "asset_path": "/Game/Characters/DA_Hero", "character_name": "<name>"}`
+   (add `"apply_mesh": true`, `"apply_anim": true` when the config holds them).
+3. Verify: `applied_settings` lists every part you asked for; then
+   `character` `get_character_info` shows the new movement values and
+   capsule.
+4. Save the level: `asset` `{"operation": "save_all"}`.
 
-## What a success does not prove
+## Sections
 
-- **Asset writes are saved, at once.** `create_character_data`,
-  `update_character_data`, `create_stats_table`, `add_stats_row`,
-  `update_stats_row` and `remove_stats_row` write the package to disk before
-  they return. There is no separate save step and no undo.
-- **`apply_character_data` saves nothing.** It writes into the placed actor
-  in memory and marks the actor's package and the level dirty.
-- **A failed save leaves the change in memory.** `Failed to save asset: <file>`
-  comes after the asset was changed in the editor. Read the asset before you
-  retry, so a row is not added twice (`Row '<n>' already exists` then tells
-  you the first attempt reached memory).
-- **Create does not check for an existing asset.** Both create operations
-  build a new object at `<package_path>/<asset_name>` and save it, whatever
-  is there. Check first (recipe 1).
-- **References are not validated.** `skeletal_mesh` and `anim_blueprint` are
-  stored as given; a path that names nothing still succeeds.
-- **Values are clamped silently**, and a parameter the tool cannot read as
-  the type it expects is skipped, not rejected. The fields are read with the
-  engine's `FJsonObject::TryGetNumberField` (into a `double`),
-  `TryGetStringField` and `TryGetBoolField`, and those convert
-  (`Engine/Source/Runtime/Json/Private/Dom/JsonObject.cpp`, and
-  `TJsonValueString` in `Public/Dom/JsonValue.h`; read in the UE 5.8.4
-  source, not run, while the toolkit targets UE 5.6 and 5.7):
-  - a number field also reads `true` and `false` as 1 and 0, and a string
-    made of an optional sign, digits and at most one dot, such as `"600"`;
-    any other string is skipped.
-    A lone sign or dot, such as `"-"` or `"."`, passes too and reads as 0
-    (`TCString::IsNumeric`,
-    `Engine/Source/Runtime/Core/Public/Misc/CString.h`);
-  - a string field stores a number or a boolean as its text, `5` or `true`;
-  - **`is_player_character` reads any string and any number**: `true`, `yes`,
-    `on` and `false`, `no`, `off` in any case, and every other string as
-    `false` unless it starts with a non-zero integer. A typo writes `false`.
-    The editor language's words for True, Yes, False and No count as well
-    (`FToBoolHelper`, `Engine/Source/Runtime/Core/Private/Misc/CString.cpp`).
+Load one with the `skills` tool (`name: "ue-character-data"`,
+`section: "<name>"`) or read `<section>.md` next to this file.
 
-  Send strings, numbers and booleans as those JSON types.
-  `update_character_data` with no readable field still saves and succeeds.
-  Compare the returned `config` or `row`.
-- **The link to a stats table cannot be set.** `get_character_data` reports
-  `stats_table` and `default_stats_row`, but no parameter writes them. Set
-  them in the editor; `asset` `set_asset_property` (skill `ue-assets`) is
-  the tool to try, which this skill has not checked for these two fields.
-- **Applying a config changes one actor in the editor's level**, not the
-  class and not a running game. The header calls the target a "runtime
-  character"; the code takes the editor's world, as `character` does (skill
-  `ue-character`, "What a success does not prove").
-
-## Operations
-
-| Operation | Required | Optional |
+| Section | What is in it | Load it when |
 |---|---|---|
-| `create_character_data` | `asset_name` | `package_path`, the config fields |
-| `query_character_data` | — | `search_name`, `search_tags`, `limit`, `offset` |
-| `get_character_data` | `asset_path` | — |
-| `update_character_data` | `asset_path` | the config fields |
-| `create_stats_table` | `asset_name` | `package_path` |
-| `query_stats_table` | `table_path` | `row_name`, `limit`, `offset` |
-| `add_stats_row` | `table_path`, `row_name` | the row fields |
-| `update_stats_row` | `table_path`, `row_name` | the row fields |
-| `remove_stats_row` | `table_path`, `row_name` | — |
-| `apply_character_data` | `asset_path`, `character_name` | `apply_movement`, `apply_mesh`, `apply_anim` |
-
-`operation` must be one of these names; there are no aliases. Anything else
-returns `Unknown operation: '<op>'. Valid operations: <the ten names>`.
-
-## Paths
-
-- **`package_path`** is the folder, default `/Game/Characters`. It passes the
-  same check as Blueprint paths (skill `ue-blueprints`, "Paths"), with
-  messages that say "Blueprint path": no `/Engine/` or `/Script/`, no `..`,
-  none of `` <>|&;`$(){}[]!*?~ ``, at most 512 characters. **`asset_name` is
-  not checked.**
-- **`asset_path`** and **`table_path`** name an existing asset. The create
-  operations return the package path (`/Game/Characters/DA_Hero`);
-  `query_character_data` returns the object path
-  (`/Game/Characters/DA_Hero.DA_Hero`). The plugin's own example passes the
-  package path to the later calls. These two parameters are not checked
-  before the load; a path that does not load returns
-  `Failed to load character config: <path>` or
-  `Failed to load DataTable: <path>`.
-- A table with any other row type returns
-  `DataTable '<path>' does not use FCharacterStatsRow struct`. Use
-  `game_framework` for it (skill `ue-game-framework`).
-
-## Config fields
-
-For `create_character_data` and `update_character_data`. A new config starts
-from the defaults; an update leaves a field you do not pass as it is.
-
-| Parameter | Type | Default | Accepted |
-|---|---|---|---|
-| `config_id` | string | none | any |
-| `display_name` | string | empty | any |
-| `description` | string | empty | any |
-| `is_player_character` | boolean | `false` | — |
-| `skeletal_mesh` | string | none | a skeletal mesh path, not validated |
-| `anim_blueprint` | string | none | an animation class path, not validated; for an Animation Blueprint that is the generated class, `/Game/Anim/ABP_Hero.ABP_Hero_C` |
-| `base_walk_speed`, `base_run_speed` | number | 600, 1000 | clamped to 0–10000 |
-| `base_jump_velocity` | number | 420 | clamped to 0–5000 |
-| `base_acceleration` | number | 2048 | clamped to 0–100000 |
-| `base_ground_friction` | number | 8 | clamped to 0–100 |
-| `base_air_control` | number | 0.35 | clamped to 0–1 |
-| `base_gravity_scale` | number | 1 | clamped to -10–10 |
-| `base_health`, `base_stamina`, `base_damage`, `base_defense` | number | 100, 100, 10, 0 | a negative value becomes 0 |
-| `capsule_radius`, `capsule_half_height` | number | 42, 96 | clamped to 1–500 |
-| `gameplay_tags` | array of strings | empty | replaces the list; an entry the tool cannot read as a string is left out without an error. Send strings |
-
-The tags are plain names, not entries of the project's Gameplay Tag table.
-
-The returned `config` groups them: `config_id`, `display_name`,
-`description`, `is_player_character` and `gameplay_tags` at the top;
-`skeletal_mesh` and `anim_blueprint` only when set; the `base_…` movement
-values under `movement`, the four combat values under `combat`, the capsule
-values under `collision`; `stats_table` and `default_stats_row` only when a
-table is linked.
-
-`create_character_data` returns `asset_path`, `asset_name` and `config`;
-`get_character_data` and `update_character_data` return `asset_path` (as you
-passed it) and `config`.
-
-## query_character_data
-
-Lists the config assets the Asset Registry knows.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `search_name` | none | substring of the asset name |
-| `search_tags` | none | array of strings; a config matches when each is a substring of one of its tags. Loads every candidate asset |
-| `limit` | 25 | clamped to 1–1000 |
-| `offset` | 0 | entries to skip |
-
-The result has `configs`, `count`, `total`, `offset` and `limit`. Each entry
-has `asset_path` and `asset_name`, and `config_id`, `display_name` and
-`is_player_character` when the asset loads.
-
-## Stats rows
-
-For `add_stats_row` and `update_stats_row`. A new row starts from the
-defaults; an update leaves a field you do not pass as it is.
-
-| Parameter | Type | Default | Accepted |
-|---|---|---|---|
-| `stats_id` | string | none | any |
-| `display_name` | string | empty | any |
-| `base_health`, `max_health`, `base_stamina`, `max_stamina` | number | 100 each | a negative value becomes 0 |
-| `walk_speed`, `run_speed` | number | 600, 1000 | clamped to 0–10000 |
-| `jump_velocity` | number | 420 | clamped to 0–5000 |
-| `damage_multiplier`, `defense_multiplier`, `xp_multiplier` | number | 1 each | clamped to 0–10 |
-| `level` | number | 1 | truncated to an integer, at least 1 |
-| `tags` | array of strings | empty | replaces the list |
-
-`display_name`, `base_health` and `base_stamina` are also config fields; which
-one a call writes follows from the operation.
-
-- **`create_stats_table`** returns `table_path`, `asset_name` and
-  `row_struct: "FCharacterStatsRow"`.
-- **`query_stats_table`** takes `row_name` as a substring filter, `limit`
-  (default 25, clamped to 1–1000) and `offset`. The result has `table_path`,
-  `rows`, `count` and `total`; each row has `row_name` and the fields above.
-- **`add_stats_row`** returns `table_path` and `row`. An existing name
-  returns `Row '<n>' already exists`.
-- **`update_stats_row`** returns `table_path` and `row`; a missing row
-  returns `Row '<n>' not found`.
-- **`remove_stats_row`** returns `table_path` and `removed_row`; a missing
-  row returns `Row '<n>' not found`.
-
-## apply_character_data
-
-Copies values from a config onto one `ACharacter` in the editor's level.
-`character_name` is the actor's object name or label, checked as in skill
-`ue-character`, "character_name".
-
-| Part | Flag | Default | What is written |
-|---|---|---|---|
-| movement | `apply_movement` | `true` | walk speed, acceleration, jump velocity, ground friction, air control and gravity scale, from the six matching `base_…` fields |
-| capsule | none | always | radius and half height |
-| mesh | `apply_mesh` | `false` | the config's skeletal mesh, when set and loadable |
-| animation | `apply_anim` | `false` | the config's animation class, when set and loadable |
-
-**The capsule is always written**, also with every flag `false`.
-`base_run_speed`, the combat values, the tags and the stats table are not
-applied to anything.
-
-The result has `character_name`, `config_applied` (the path you passed) and
-`applied_settings`, a list out of `movement`, `capsule`, `skeletal_mesh` and
-`anim_blueprint`. The call succeeds whatever that list holds, so a requested
-part that is missing from it was not applied: the reference is empty or did
-not load, or the character lacks the component. Errors:
-`Character not found: <name>`, `Failed to load character config: <path>`.
+| `config` | config fields with types, defaults and clamps; `create`/`get`/`update`/`query_character_data` results; paths; how values are read; linking a stats table | you create, change or search a config |
+| `stats-table` | the row fields, the five table operations and their results, when to use `game_framework` instead | you build or edit a stats table |
+| `apply` | exactly what `apply_character_data` writes and skips, the capsule and mesh offset trap, verification and restore | you apply a config to a placed character |
+| `failures` | error strings and silent failures with cause and fix, retrying after a timeout | a call fails, or succeeds without the effect you expected |
 
 ## Results through the bridge
 
 Success is the tool's message, a blank line, then JSON. By default the bridge
-goes through the task queue, so that JSON is a task envelope, and the fields
-named here sit under its `data` key. A failure is only `Error: <message>`.
-After a timeout a write may still have been saved: read before you retry.
-Skill `ue-tasks` covers the envelope and timeouts.
-
-## Errors
-
-| Error | Cause |
-|---|---|
-| `Missing required parameter: <name>` | a required parameter is absent or empty |
-| `Failed to load character config: <path>` | no config asset at the path |
-| `Failed to load DataTable: <path>` | no DataTable at the path |
-| `DataTable '<path>' does not use FCharacterStatsRow struct` | not a stats table of this tool |
-| `Row '<n>' already exists` / `Row '<n>' not found` | use `update_stats_row` / `add_stats_row` |
-| `Failed to save asset: <file>` | changed in memory, not on disk |
-| `Failed to create package: <path>` | the package could not be created |
-| `Cannot access engine or script Blueprints` | `package_path` under `/Engine/` or `/Script/` |
+goes through the task queue, so the fields named here sit under the task
+envelope's `data` key. A failure is only `Error: <message>`. After a timeout
+a write may still have been saved: read before you retry. Skill `ue-tasks`.
 
 ## Background in the plugin
 
 `unreal_get_ue_context` with `category: "character"` shows both types as C++
-and a worked example (skill `ue-context`). Its step 5 says "runtime
-character"; see "What a success does not prove".
+and a worked example (skill `ue-context`). Its "apply to a runtime character"
+step works on the editor's level, not a running game.
 
 ## See also
 
-- `ue-character`: the characters in the level and their movement values.
+- `ue-character`: placed characters and their movement values.
 - `ue-game-framework`: DataTables with any row type.
 - `ue-assets`: finding assets, `save_all`, `set_asset_property`.
+- `ue-blueprints`: reading a config from a character Blueprint.
