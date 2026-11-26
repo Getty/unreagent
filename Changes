@@ -251,6 +251,11 @@ Revision history for unreagent
     add_graph_input and add_graph_output always crash the editor, lights the
     toolkit spawns are unitless, and gameplay_debug input injection bypasses
     mapping contexts. Each skill gains workflow and limits sections.
+  - New shipped skill ue-cpp (project layout, reflection, compile errors, Live
+    Coding), pre-loaded by the build-test agent. The ue-python, ue-tasks,
+    ue-context and unreagent-* skills are checked against the launcher and
+    toolkit and corrected (runtimes, file tools, setup, iterate, build), with
+    new sections on the editor's Python API and crash diagnosis.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.

@@ -25,7 +25,10 @@ and say in your report that the project is not set up.
 list, stop and tell the user that this setup covers C++ projects only. `init`
 does not flag this: it reports
 `project modules: the .uproject declares none, so there is nothing to build`
-as `[ok]`.
+as `[ok]`. If the user wants the project to become a C++ project, that is a
+change to their project to agree on first: skill `ue-cpp`, section
+`project-layout`, "A Blueprint-only project gets its first C++ module", has
+the files; then come back here.
 
 Two labels are used below. *Measured* means seen on one walk-through: Windows
 11, UE 5.8.4, one machine. *Unverified* means neither read in the launcher's
@@ -98,7 +101,8 @@ Read, in the project directory:
   another system
 - `unreagent.yaml` or `unreagent.yml`, `unreagent.local.yaml`, `CLAUDE.md`,
   `.claude/CLAUDE.md`, `.claude/`
-- the first lines of `unreagent.log` next to the `.uproject`: config or
+- the first lines of `unreagent.log` next to the `.uproject` (written only
+  when the launcher runs its own agent in a window, the default): config or
   built-in defaults, the `Engine:` and `Project:` lines, every `WARN`
 
 As soon as the first look finds an `unreagent.yaml`, a `CLAUDE.md`, or a
@@ -161,7 +165,10 @@ project that is none (a clone), and it names the branch.
 
 ### 4. Run `unreagent init`
 
-It writes only what does not exist, and its output names each file:
+It never overwrites `unreagent.yaml` or `CLAUDE.md`. The skills and the
+topic agents it writes again on every run, replacing older copies; for the
+agent files and the rules file its output counts how many are new, refreshed
+and unchanged. It names each file:
 
 - `unreagent.yaml`: the built-in defaults plus `skills.materialize: true`
 - `CLAUDE.md`: a starter with a kickstart block, only when the project has
@@ -185,7 +192,8 @@ It writes only what does not exist, and its output names each file:
 If `init` ends with an error you did not expect, load section `failures`.
 
 The launcher owns everything named `unreagent-*` in those three places and
-rewrites it at every start. Do not edit those files, and do not put project
+rewrites it at every start; an agent or rules file someone edited is left
+alone and warned about instead, and so no longer refreshed. Do not edit those files, and do not put project
 rules into `.claude/rules/unreagent.md`: an edited file is no longer
 refreshed. Project rules belong in `CLAUDE.md`.
 
@@ -211,6 +219,10 @@ a row, each within five minutes of its start.
    up 11 to 12 s after its start, and its log then held
    `LogUnrealClaude: MCP Server started on http://localhost:3000`. That line
    shows the plugin loaded, also in a session that has no toolkit tools yet.
+   Once, after each launcher start, the launcher log also says
+   `MCP server 'ue-llm-toolkit': in-editor server … is ready — the toolkit
+   lists <n> tools (project …, engine …).`: the plugin answered its status
+   route, so its tools can run.
    Skill `unreagent-iterate` for reading `status`. If the editor does not
    stay up after the build, load section `failures`.
 
@@ -278,3 +290,4 @@ was accepted and not fixed, and every step that is still theirs.
 - `unreagent-iterate`: `ue_start`, `ue_stop`, `status`, `logs`, the give-up
   rules, the launcher log.
 - `ue-context`: `unreal_status` and its result.
+- `ue-cpp`: a project's first C++ module, and the C++ loop after setup.

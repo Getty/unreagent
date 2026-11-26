@@ -44,9 +44,11 @@ When the rename fails, the new run is appended to `unreagent.log` and
 `unreagent.log.1` stays as it was. The warning that says so goes to the
 launcher's console before the agent takes it over, not into the log. Every
 launcher run opens its part of the file with a line that reads
-`unreagent <version> — Config: <path>` after the timestamp, so more than one
-such line in `unreagent.log` marks a failed rename; this run starts at the
-last one. Without a foreground agent (an external agent, as with `-no-agent`,
+`unreagent <version> — Config: <path>` after the timestamp, or
+`unreagent <version> — no config file (looked for <path>)` on built-in
+defaults, so more than one such line in `unreagent.log` marks a failed rename;
+this run starts at the last one. Without a `.uproject` found, the file is
+`unreagent.log` in the launcher's working directory instead. Without a foreground agent (an external agent, as with `-no-agent`,
 or headless), the log goes to the launcher's console, which no tool can read,
 and neither file is touched: such a run leaves no log file, and an
 `unreagent.log` on disk is an earlier run's. Each line starts with a
@@ -59,12 +61,39 @@ and neither file is touched: such a run leaves no log file, and an
 [ue] no automatic restart (policy=on-failure)
 [ue] failed 3 times in a row, each within 10s of its start — giving up (no automatic restart)
 [ue] failed 3 times in a row, each within 5m0s of its start — giving up (no automatic restart)
-The editor failed and is not restarted. Any crash dumps are in <project dir>\Saved\Crashes.
+The editor failed and is not restarted. Crash dumps are in <project dir>\Saved\Crashes.
 [ue] start failed: <error>
 [ue] program not found — no further attempt (check path / installation)
 [ue] stopped (manual)
 [ue] restarted (manual)
+[ue] start held until the last run's crash reporter has finished
+[ue] crash reporter still running — the job stays open up to 30s so it can finish the crash report
+[ue] crash reporter finished after <d> — job closed
+[ue] WARN crash reporter still running after 30s — ended with the job; the crash report may lack the call stack
+Recovery: PackageRestoreData.json removed
+Recovery: Saved/Crashes emptied
+Recovery: Saved/Crashes kept (<why>)
 ```
+
+With `maxRestarts` above 0 the restart line reads `[ue] restart N/M in D`.
+The dump sentence of the give-up line appears only when `Saved\Crashes` holds
+anything.
+
+Lines from before the first editor start that explain a failing editor:
+
+```
+Unreal: -unattended active (no crash dialog, no recovery prompt)
+WARN project modules look unbuilt: …          (or plugin modules, or both; names the compile fix)
+WARN plugin '<name>': its EngineVersion "<x>" does not match the engine's compatible version <v>, so … Remove "EngineVersion" from <path>, or set it to "<short>".
+MCP server '<name>': in-editor server <url> is ready — the toolkit lists <n> tools (project <p>, engine <v>).
+WARN MCP server '<name>': in-editor server <url>: port open, but the toolkit did not answer /mcp/status within 5m0s (last answer: HTTP <code>) — …
+WARN MCP server '<name>': in-editor server <url> not reachable after 5m0s — …
+```
+
+The plugin's readiness is checked once per launcher start, not after
+`ue_restart`: after a restart, `unreal_status` is the check. A plugin refused
+for its `EngineVersion` is skipped without a dialog under `-unattended`, and
+its port never opens.
 
 `restarted (manual)` is logged only when `ue_restart` spawned a new editor. A
 start that failed logs `start failed: …` instead.

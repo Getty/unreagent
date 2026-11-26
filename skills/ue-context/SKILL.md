@@ -23,12 +23,13 @@ reference. This skill does not repeat them.
 This skill was written from the plugin's bridge source and its documents. It
 has not been exercised against a running editor.
 
-This skill has three sections:
+This skill has four sections:
 
 | Section | Holds | Load it |
 |---|---|---|
 | `status-result` | every field of an `unreal_status` result, reachable and not, and the `Currently: …` text in the tool's description | before you rely on anything in that result beyond `connected` |
 | `injection` | the bridge's automatic context injection (`INJECT_CONTEXT`) and where unreagent sets it | when a tool result ends in a `## Relevant UE 5.7 API Context` block, or before you switch injection on |
+| `notes-vs-code` | where the plugin's notes say something its code does not do, and the toolkit's shell-wrapper habits (`ue-tool.sh`, `help <tool>`) translated to MCP; project domains | before you plan parallel toolkit calls from `parallel_workflows`, or when a document tells you to run a shell command or expects `get_ue_context` to return a domain file |
 | `failures` | the failure table: what you see, what it means, what to do | when a call from this skill returns an error or something you did not expect |
 
 ## Before the first call
@@ -115,20 +116,15 @@ To get the editor up, or to find out why it is down, use unreagent's tools
   `ue-python`.
 - **Where a context describes a toolkit tool**, the tool's own schema in the
   tool list is the authority. This skill did not check those passages.
-- **`parallel_workflows` differs from the code in two places.** It budgets a
-  subagent's calls against the 2-minute task limit, but each call through
-  the bridge is a task of its own with 300 s. The 2 minutes apply only to a
-  `task_submit` without `timeout_ms`. And four tasks may run at once, but they
-  take turns on the editor's one game thread, so parallel calls save waiting,
-  not editor time. Meanwhile each call's requests wait behind the other calls,
-  and one that waits 30 s may crash the editor (skill `ue-tasks`, "A 30 s
-  timeout can crash the editor").
+- **Where a note and the code disagree**, the code wins: section
+  `notes-vs-code` lists the places found (`parallel_workflows` on time limits
+  and concurrency, the domain documents on `get_ue_context`, the shell
+  wrapper the documents assume).
 
 ## The domain documents
 
-`domains/README.md` and `domains/meta.md` say that `get_ue_context` resolves
-domain files along with the contexts. The bridge has no code that does so. No
-query or category returns a domain document. Read them as files:
+`get_ue_context` never returns a domain document, whatever the documents
+say about it. Read them as files:
 
 | File | When to read it |
 |---|---|
@@ -139,19 +135,6 @@ query or category returns a domain document. Read them as files:
 | `debug.md` | before testing in Play In Editor, injecting input or reading the output log |
 | `tooling.md` | before extending the plugin |
 | `README.md` | how domains and contexts relate |
-
-Two habits in these documents do not carry over to MCP:
-
-- **`ue-tool.sh call <tool> '<json>'`** is a shell wrapper from the toolkit's
-  own repository. The MCP equivalent is the tool `unreal_<tool>` with the same
-  JSON as its arguments.
-- **"Run `help <tool>`"** belongs to that same wrapper. Over MCP, read the
-  tool's schema in the tool list instead.
-
-The documents also describe project domains: four files that a `prep one time
-init` session writes to `domains/` in the project root, from
-`prep-init-guide.md`. No bridge code loads them either. If they exist, read
-them like the plugin's own.
 
 ## Reading the files
 

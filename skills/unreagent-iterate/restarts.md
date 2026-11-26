@@ -13,12 +13,20 @@ start (a non-zero exit or a failed spawn). The launcher log says
 and `status` shows `running: false, desired: true` with the last `lastExit`
 (or `lastError`, when the spawn itself failed). Every failure the launcher
 does not restart (this give-up, `maxRestarts` used up, policy `never`) is
-followed by a line that names the dump folder:
-`The editor failed and is not restarted. Any crash dumps are in <project dir>\Saved\Crashes.`
-With `unreal.cleanOnRestart` on, the line ends
-`… Saved\Crashes — a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart).`
-Without an agent of the launcher's own, a quick failure gets a longer line
-that ends with the same hint. With `unreal.project` unset, no hint is logged.
+followed by `The editor failed and is not restarted.` When
+`Saved\Crashes` holds anything, the line goes on
+` Crash dumps are in <project dir>\Saved\Crashes.`; with
+`unreal.cleanOnRestart` on, that part ends
+`— a retry keeps them, a new launcher run empties them (unreal.cleanOnRestart).`
+Where the modules still look unbuilt, it goes on with
+`… still look unbuilt: …` and the compile fix. With `unreal.project` unset,
+no dump hint is logged.
+
+Without an agent of the launcher's own, a failed start or a run that failed
+within 10 s gets another line instead: with MCP serving,
+`The editor failed to start, or failed within 10s of starting, and is not restarted — the launcher keeps serving MCP: read the logs, fix the cause, retry with ue_start (Ctrl-C stops the launcher).`;
+with MCP not serving, `… no agent is configured and MCP is not serving — stopping everything.`,
+and the launcher exits 1. The 5-minute give-up below never ends the launcher.
 A second rule covers an editor that fails the same way on every run but
 takes longer than 10 s to do so (a plugin module that was never compiled, about
 80 s per run): 3 failed runs in a row, each ending within 5 minutes of its

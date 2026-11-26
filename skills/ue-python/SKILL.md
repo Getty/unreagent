@@ -26,12 +26,14 @@ that `execute_script` leaves behind.
 
 This skill was written from the toolkit's C++ and bridge source. It has not
 been exercised against a running editor. It covers how a script gets run and
-how to read what comes back, not the editor's Python API.
+how to read what comes back; section `editor-api` has what Epic documents
+of the editor's Python API.
 
-This skill has three sections:
+This skill has four sections:
 
 | Section | Holds | Load it |
 |---|---|---|
+| `editor-api` | the editor's `unreal` module as Epic documents it (each call cited, none run): undo transactions, progress dialogs, the asset and actor calls; how to go about a bulk edit; the script contents that trip the toolkit's error scan | before you write the script itself, above all one that changes many assets or actors |
 | `script-types` | the `script_type` values other than `python` (`console`, `cpp`, `editor_utility`): what each does, its results and its errors | before you send a script of one of these types |
 | `files-history` | where the script files and the history are kept and how the files are named; the parameter and the result fields of `get_script_history`; what `cleanup_scripts` deletes and answers | when you look for a script's file or the history on disk, want more history entries than `get_script_history` returns by default, or a field of its result needs explaining |
 | `failures` | the failure table (what you see, what it means, what to do) | when a call or a `task_result` returns an error, no answer comes for 10 minutes, or a result is not what you expect |
@@ -204,6 +206,15 @@ of one of these types: it has what each does, its results and its errors.
    read the traceback and any other line that matched.
 2. If the scan matched a word your script printed itself, change what it prints.
 3. Fix the script and run it again. Each run asks for approval again.
+
+**A bulk edit of assets or actors**
+
+1. Load section `editor-api`. Read the current state with the dedicated tools.
+2. A dry run: the script filters and prints a count, changes nothing.
+3. The real run: the same filter, the changes inside one
+   `unreal.ScopedEditorTransaction`, one `RESULT` line with the count.
+4. Save (`asset` `{"operation": "save_all"}`, skill `ue-assets`), then read
+   the state back.
 
 **Before handing the project back**
 

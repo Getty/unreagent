@@ -67,7 +67,12 @@ often used together (`-no-agent -files`), which is why they are easy to confuse.
 
 When file tools come up, the launcher logs
 `File tools active (read/write | read-only) under: <root>`. That line is the
-authoritative statement of the root and the mode in effect.
+authoritative statement of the mode, and of the root as configured: a
+relative `files.root` is made absolute against the launcher's working
+directory, and error messages quote that absolute form. File tools switched
+on while `mcp.enabled` is false log
+`WARN file tools not served: they need mcp.enabled` instead, and no tool
+exists.
 
 ## Root confinement
 
@@ -231,8 +236,10 @@ every occurrence. The result reports how many occurrences were replaced; a
 count higher than you expected means you hit more sites than intended, and the
 previous content is gone.
 
-The rewrite is not atomic: the file is read, replaced in memory and written
-back.
+The rewrite is not atomic: the whole file is read, replaced in memory and
+written back, with no size cap. Neither `edit_file` nor `write_file` limits
+the size; `write_file` creates files with mode 0644 and missing directories
+with 0755 (the modes matter only off Windows).
 
 ## When a call fails
 

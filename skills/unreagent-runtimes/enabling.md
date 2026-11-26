@@ -14,7 +14,7 @@ runtimes:
   node:
     enabled: true
     # node: "node"
-    # npm: "npm"           # used only by prepareOnStart
+    # npm: "npm"           # prepareOnStart, and the npm install of node-started MCP bridges
     # project: ""
 ```
 
@@ -22,4 +22,10 @@ runtimes:
 gives an absolute path. A machine-specific absolute path belongs in the
 git-ignored `unreagent.local.yaml`, not in the committed config. `project`
 accepts the usual placeholders, so `${PROJECT_DIR}` is the portable way to pin a
-runtime to the UE project directory.
+runtime to the UE project directory. A relative `project` is used as written,
+so it resolves against the launcher's working directory, not the project's.
+
+`npm` is not a Node-runtime setting only: the launcher also uses it for the
+`npm install` of an MCP bridge started by `node` under `mcp.extraServers`
+(such as the UE LLM Toolkit's), and `init` checks it, even with
+`runtimes.node.enabled: false`.

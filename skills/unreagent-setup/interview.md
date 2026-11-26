@@ -72,7 +72,10 @@ whether an agent may commit or only leaves changes for the user.
 
 Check the ignore rules while you are here, and propose what is missing:
 `unreagent.local.yaml` (machine values, perhaps a token), `unreagent.exe`,
-`unreagent.log` and `unreagent.log.1`. Whether `.claude/skills/unreagent-*`,
+`unreagent.log` and `unreagent.log.1`, and every MCP config file the launcher
+writes for an external agent (`mcp.writeConfig`, such as `.mcp.json`) when
+`mcp.token` is set: it holds the token, and the launcher warns at start when
+git does not ignore such a file. Whether `.claude/skills/unreagent-*`,
 `.claude/agents/unreagent-*.md` and `.claude/rules/unreagent.md` are committed
 is the user's decision: the launcher rewrites them at every start.
 

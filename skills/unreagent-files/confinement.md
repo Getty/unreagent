@@ -59,7 +59,7 @@ costs you:
 - **Windows reserved device names are refused** in any path component, on every
   host: `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9` (also with the
   superscript digits `¹ ² ³`), `CONIN$` and `CONOUT$`, in any letter case, also
-  with an extension or trailing spaces. `aux.h`, `NUL.txt` and
+  with an extension, a colon or trailing spaces. `aux.h`, `NUL.txt`, `CON:` and
   `Source/CON/x.txt` are all refused with
   `Error: path component "<component>" is a reserved Windows device name`.
   On Windows such a name opens a device instead of a file, and a file of that

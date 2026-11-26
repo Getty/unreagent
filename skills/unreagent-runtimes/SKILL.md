@@ -52,7 +52,8 @@ Each runtime is registered only when it is enabled in the launcher's config, and
 each defaults to off. A disabled runtime is not a refused call: the tool is
 absent from `tools/list`, and calling it returns `-32602 unknown tool:
 run_python`. There is no command-line flag for these — enabling them is a config
-edit by the user.
+edit by the user. Both tools also need the launcher's MCP server
+(`mcp.enabled`); without it no tool exists at all.
 
 The shipped `unreagent.example.yaml` enables both, so a project set up from it
 has them; a project with a hand-written config may not.
@@ -167,7 +168,8 @@ The script being a real file in the project has two side effects:
   observe an `unreagent-<digits>.py` / `.mjs` appear and vanish within one
   run.
 - **A hard kill leaves it behind.** Killing the launcher skips the deletion.
-  At the next start the launcher sweeps the runtime directories.
+  At the next start the launcher sweeps the directories of the runtimes that
+  are enabled then; a disabled runtime's leftovers stay.
 
 The project's own `.gitignore` should ignore these script files; the entries
 are in section `script-file`.
@@ -244,8 +246,9 @@ With `prepareOnStart: true` the launcher runs `npm install` once at startup
 when the working directory has a `package.json`, in the background, at the
 same time as the Python step. A failure is the same warning (section
 `prepare`).
-`runtimes.node.npm` is used for that step only — there is no
-tool that runs npm on demand. A package script belongs in the launcher's
+Besides that step, `runtimes.node.npm` serves only the launcher's own
+installs of node-started MCP bridges — there is no tool that runs npm on
+demand. A package script belongs in the launcher's
 `commands:` section and is then reachable through `run_command`.
 
 ## When a call fails

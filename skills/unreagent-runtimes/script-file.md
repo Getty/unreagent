@@ -10,7 +10,8 @@ Two side effects follow from the script being a real file in the project:
   observe an `unreagent-<digits>.py` / `.mjs` appear and vanish within one run.
 - **A hard kill leaves it behind.** The deletion is a deferred call in the
   launcher; killing the launcher skips it. At the next start the launcher sweeps
-  the runtime directories and logs one line per file it finds:
+  the directories of the runtimes enabled then (a disabled runtime's leftovers
+  stay) and logs one line per file it finds:
 
   ```
   Stale script file removed: <path>

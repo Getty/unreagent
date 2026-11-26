@@ -33,13 +33,14 @@ Three facts shape everything below:
    spawns no process is an error result. An editor that spawns and dies a
    moment later is not: `status` shows that afterwards, in `lastExit`.
 
-This skill has four sections:
+This skill has five sections:
 
 | Section | Holds | Load it |
 |---|---|---|
 | `restarts` | the two give-up rules with their launcher-log lines and what resets the count, which starts spare a crash's evidence, `unreal.cleanOnRestart` in full, `unreal.killCrashReporter` | when the editor failed and does not come back, when `restarts` keeps climbing, or before you start or restart an editor after a crash whose dumps you still need |
 | `process-tree` | how a stop ends the editor's process tree on Windows (the Job Object), the crash reporter that may outlive it, when children survive, the non-Windows build | when a process outlived a stop, a file stays locked after one, or the launcher log holds a `job object` or `job assign` WARN |
 | `logs` | `logs` in full (what `lines` accepts, the omitted-lines and omitted-bytes markers, the 48 KiB cut) and the launcher log file: `unreagent.log`, its rotation, `unreagent.log.1`, the launcher's lines to look for, reading a log's end with `read_file` | when `logs` starts with an `[... omitted` marker or rejects `lines`, and before you read `unreagent.log` or `unreagent.log.1` |
+| `crash-diagnosis` | reading a crash or a failed start: what each `lastExit` code means, the order of the evidence (`logs`, the editor's log file and its backups, the launcher log, `Saved/Crashes/`), what to look for, what to do | when `lastExit` is not `exit 0`, the launcher gave up, or the editor hangs without the plugin answering |
 | `failures` | the failure table (what you see, what it means, what to do), what an editor does when it is started before a successful compile, and what a compile meets while the editor is running (Live Coding, the loaded binaries) | when one of these tools returns an error, the editor does not come up or dies after a start, `unreal_status` stays `connected: false`, `logs` is empty, or a `compile` with the editor up failed on something other than your code |
 
 ## status
@@ -62,7 +63,7 @@ This skill has four sections:
 | `restarts` | automatic restarts since the last `ue_start` / `ue_restart`, which reset it to 0. `ue_stop` leaves it unchanged |
 | `lastError` | present only while the last start attempt failed: why no process was spawned (the executable is missing, cannot be run, …). A start that spawns a process removes it |
 | `lastExit` | how the last run that ended on its own ended, such as `"exit 1"`. Absent until one ends. `ue_start` and `ue_restart` remove it, the kill of `ue_stop` or `ue_restart` does not set it, and automatic restarts keep it |
-| `unresponsive` | present, as `true`, only when the service's control loop did not answer within 10 s. `running` and `pid` are then unknown and sent as `false` / `0` |
+| `unresponsive` | present, as `true`, only when the service's control loop did not answer within 10 s. Every other field is then unknown: `running`, `pid`, `desired` and `restarts` are sent as `false` / `0` / `false` / `0`, so do not read them |
 | `busy` | present, as `"pre-start"`, only next to `unresponsive`: the loop is running the pre-start step (the crash cleanup of `unreal.cleanOnRestart`; see Automatic restarts). A slow pre-start, not a hung loop: call `status` again |
 | `waiting` | present, as `"crash-reporter"`, while the editor's next start is held until the crash reporter of its last, failed run has finished (see Automatic restarts). The loop answers: `running: false`, `desired: true`. That start comes on its own, within 30 s at most: do not call `ue_start` for it |
 
@@ -223,9 +224,10 @@ leave the restart to the launcher, or call `ue_start` while `status` shows
 `running: false, desired: true`. Do not call `ue_stop` before that
 `ue_start`: a `ue_stop` during the restart delay cancels the pending restart,
 and the `ue_start` after it is a plain manual start and does not spare the
-evidence. Load section `restarts` before you start or restart an editor after
-a crash whose dumps you still need: it lists which starts count as following
-a crash.
+evidence. After a give-up (no restart coming), the first start spares it
+even with a `ue_stop` in between. Load section `restarts` before you start or
+restart an editor after a crash whose dumps you still need: it lists which
+starts count as following a crash.
 
 After a failed run whose crash reporter is still running, the start (the
 restart's, or one you ask for) is held until that reporter has finished, 30 s
@@ -298,7 +300,8 @@ where a crash is, with `read_file`.
 | C++ source, `*.Build.cs`, `*.Target.cs` | stop, compile, start |
 | `Config/*.ini`, `.uproject`, `.uplugin` | a restart, because most settings are read at startup. A C++ plugin newly enabled also needs a compile |
 
-For C++:
+For C++ (skill `ue-cpp` has the code side: reflection rules, compile errors,
+how to check a new class):
 
 1. **Save** open work through the in-editor plugin, because the stop is a
    kill.

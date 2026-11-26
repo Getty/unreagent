@@ -6,8 +6,8 @@
 | `ue_start` returns `Error: service "ue" did not start: …` with `desired: true, restarts: 1` | the spawn failed, and a retry is scheduled | the error names the cause |
 | `running: true` at start, then `lastExit`, a new `pid` or a higher `restarts` | the editor died during startup. The launcher restarts it, or gave up (next row) | `ue_stop`, then read `logs` |
 | `running: false, desired: true` and `lastExit` that stay past the restart delay | the editor failed and no restart is coming, for example after 3 quick failures in a row | read `logs` and `Saved/Crashes/`, fix the cause, then `ue_start` |
-| `restarts` climbs every few seconds | a crash loop of an editor that runs more than 5 minutes each time, or one under a `maxRestarts` limit | `ue_stop` breaks it |
-| `lastExit` is exit 1 some seconds after every start, and `logs` hold `Message dialog closed, result: Ok` with a module-not-found text (the form seen under the default arguments) or `Incompatible or missing module` (seen on a start without `-unattended`) | the project's C++ module is not built; the UE 5.8.4 source treats a module built for another engine version the same way (not run). The editor exits instead of waiting for a click while `-unattended` or `-stdout` is among its arguments; with neither (`unreal.unattended` off and an `unreal.args` list without `-stdout`) it stays running at a `Missing <Project> Modules` box instead (UE 5.8.4 source, not run) | `ue_stop`, `run_command` `compile`, then `ue_start` |
+| `restarts` keeps climbing | under the default `maxRestarts` 0: an editor that runs 5 minutes or more before each crash, or, every few seconds, policy `always` with an editor that exits 0 (an exit 0 resets the give-up count). With `maxRestarts` set, the count climbs to it | `ue_stop` breaks it; read `logs` for the cause |
+| `lastExit` is exit 1 some seconds after every start, and `logs` hold `Message dialog closed, result: Ok` with a module-not-found text (the form seen under the default arguments) or `Incompatible or missing module` (seen on a start without `-unattended`) | the project's C++ module is not built; the UE 5.8.4 source treats a module built for another engine version the same way (not run). The editor exits instead of waiting for a click while `-unattended` or `-stdout` is among its arguments; with neither (`unreal.unattended` off and an `unreal.args` list without `-stdout`) it stays running at a box that asks whether to rebuild instead (UE 5.8.4 source, not run) | `ue_stop`, `run_command` `compile`, then `ue_start` |
 | the editor runs, `unreal_status` stays `connected: false` for minutes, and `logs` or `Saved/Logs/` hold `Skipping load of '<plugin>'` or `'<plugin>' is Incompatible` | the plugin's `.uplugin` sets an `EngineVersion` other than this engine's compatible version (`<major>.<minor>.0`), and under `-unattended` the editor skips it instead of asking (UE 5.8.4 source; seen on Windows with UE 5.7.4 and 5.8.4) | removing the `EngineVersion` field from the `.uplugin` lifts the check, and so does setting it to `<major>.<minor>.0` of the engine: `5.8.0` for UE 5.8.4, not `5.8.4` (seen: `5.7.0` loads on 5.7.4). An engine build marked as a licensee version compares its own patch number instead (read in the UE 5.8.4 source, not run). The plugin must still be built for this engine. It is a change to a third-party plugin: ask the user, then `ue_restart` |
 | `ue_start`, `ue_stop` or `ue_restart` returns `Error: service "ue" is not responding: it did not take the request within 10s; nothing was done` | the control loop was busy for more than 10 s and never took the call | wait, call `status`, then retry |
 | a control call returns `Error: service "ue" is busy with its pre-start step and did not take the request within 10s; nothing was done, try again shortly` | the loop is running the pre-start step of another start and never took the call | wait a few seconds, then retry |
@@ -39,9 +39,9 @@ a click. The
 launcher then restarts the editor by its restart policy, and each start ends
 the same way: `ue_stop`, compile, `ue_start`.
 
-With neither flag, the editor asks in a Yes/No box titled
-`Missing <Project> Modules` whether to rebuild, and waits there for a human
-(read in the UE 5.8.4 source, not run). That takes both `unreal.unattended`
+With neither flag, the editor asks in a box whether to rebuild the modules
+now, and waits there for a human (read in the UE 5.8.4 source, not run; the
+box's exact title and buttons are unverified). That takes both `unreal.unattended`
 turned off and an `unreal.args` list without `-stdout`: setting `unreal.args`
 replaces the default list, so a config with its own list has only the flags
 it names. If the editor stays `running: true` after a start that came before

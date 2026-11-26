@@ -46,7 +46,10 @@ built-in commands:
   `Plugins/`, for example an in-editor plugin installed as source. Those build
   through the `UnrealEditor` target with `-Project=<.uproject>`. The built-in
   `compile` does not run that target, so building them needs a command the
-  user adds under `commands:`.
+  user adds under `commands:`. (The target rules in this item are standard
+  engine behaviour, not run or read here: the launcher itself only fills in
+  `${PROJECT_NAME}Editor`. A target exists only where a `<Name>.Target.cs`
+  declares it, normally `Source/<ProjectName>Editor.Target.cs`.)
 - **`package`** builds, cooks, stages and paks a Development Win64 game. It
   archives the result under `Packaged/` in the project directory.
 
@@ -168,8 +171,9 @@ in which stage.
   launcher serializes runs, and `status` does not show runs in progress.
   UnrealBuildTool serializes itself instead. The `compile` command line
   passes `-waitmutex`, and with it UnrealBuildTool waits, with no time limit,
-  for any other build, clean or project file generation on the same engine
-  installation to end, whoever started it (read in the UE 5.8.4 source, not run). A `compile`
+  for any other UnrealBuildTool run holding the installation-wide mutex to
+  end, whoever started it (read in the UE 5.8.4 source, not run; which of
+  UnrealBuildTool's modes take that mutex besides a build is unread). A `compile`
   that does not come back is therefore most likely waiting behind another
   build. Without the flag, as in a command the user wrote without it,
   UnrealBuildTool does not wait: while another UnrealBuildTool of the same
@@ -214,6 +218,12 @@ warnings that mean the job did not exist, and the non-Windows build.
   Stopping first rules both out.
   `unreagent-iterate` has the full stop → compile → start loop, including what
   a stop does to unsaved work.
+- **The launcher predicts an unbuilt module.** At its start, and in
+  `unreagent init`, it compares the `.uproject`'s modules and the enabled
+  project plugins' modules with the binaries on disk and logs
+  `WARN project modules look unbuilt: …` (or `plugin modules`, or both)
+  with the fix, usually `compile`. The editor's give-up line repeats it. Such
+  a WARN means: compile before the editor can start.
 - **A new build takes effect only in a newly started editor.** After a
   successful `compile`, use `ue_start`, or `ue_restart` if the editor kept
   running.
@@ -228,6 +238,7 @@ do.
 
 ## See also
 
+- `ue-cpp`: writing the C++ a `compile` builds, and what its errors mean.
 - `unreagent-iterate`: `ue_stop` / `ue_start` / `ue_restart`, `status`, `logs`,
   and the edit → compile → restart loop.
 - `unreagent-files`: reading and editing the C++ and config files before a build.

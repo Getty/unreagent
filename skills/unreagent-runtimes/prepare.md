@@ -30,3 +30,7 @@ the working directory has a `package.json`, logging `Runtime: preparing Node
 (npm install) …`. It runs in the background, at the same time as the Python
 step. A failure is the same warning, with the last 20 lines of npm's output:
 `WARN Runtime: preparing Node failed — npm install in <dir>: <cause>`.
+
+Without a `pyproject.toml` or a `package.json` in the working directory, the
+step is skipped without a log line, so a missing `Runtime: preparing …` line
+is not a failure.

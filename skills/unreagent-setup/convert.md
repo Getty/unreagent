@@ -38,7 +38,7 @@ launcher has written into this `.claude/` before:
 | The WARN says | `init` | The next start |
 |---|---|---|
 | `unreagent cannot tell are its own` | leaves them and writes no skills, agents or rules file. It still writes `unreagent.yaml` with `skills.materialize` on, if there is none | replaces and deletes them |
-| `not named like a shipped skill`, and `an earlier materialization there` | deletes them, after a line that starts `Deleting from <dir>` | deletes them |
+| `not named like a shipped skill`, and `an earlier materialization there` | deletes them, after a line that starts `Deleting from <dir>`; its own WARN then reads `skills.dir <dir> held … so init deleted them`, with the fix to get them back from version control or a backup | deletes them |
 
 These directories may be the user's own skills. Do not move, rename or edit
 them on your own, and do not run `unreagent init` while the WARN is there and
