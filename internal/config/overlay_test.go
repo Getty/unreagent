@@ -182,3 +182,35 @@ func TestLocalOverlaySkillsDisabled(t *testing.T) {
 		t.Errorf("enabled/ViaMCP/ViaFiles = %v/%v/%v; want false/false/false", boolVal(c.Skills.Enabled), c.Skills.ViaMCP(), c.Skills.ViaFiles())
 	}
 }
+
+// k264: unreal.mcp is a struct inside the unreal section, so the overlay
+// decodes it field by field like any other: a local port leaves the base's
+// enabled alone, and a local enabled: false turns the switch off over a base
+// that has it on. Unlike a list or a map, a struct is not reset by null:
+// yaml.v3 leaves it as the base set it, so enabled: false is the only way an
+// overlay turns the switch off.
+func TestLocalOverlayUnrealMCP(t *testing.T) {
+	t.Setenv("UE_ROOT", "/ue")
+	base := "unreal:\n  mcp: {enabled: true, port: 8100}\nmcp: {enabled: true}\n"
+	for _, tc := range []struct {
+		local   string
+		enabled bool
+		port    int
+	}{
+		{"unreal:\n  mcp: {port: 8200}\n", true, 8200},
+		{"unreal:\n  mcp: {enabled: false}\n", false, 8100},
+		{"unreal:\n  maxRestarts: 2\n", true, 8100},
+		{"unreal:\n  mcp: ~\n", true, 8100},
+	} {
+		c, info, err := Load(writeConfigFiles(t, t.TempDir(), base, tc.local))
+		if err != nil {
+			t.Fatalf("local %q: %v", tc.local, err)
+		}
+		if info.LocalPath == "" {
+			t.Fatalf("local %q: overlay was not picked up", tc.local)
+		}
+		if c.Unreal.MCP.Enabled != tc.enabled || c.Unreal.MCP.Port != tc.port {
+			t.Errorf("local %q: unreal.mcp = %+v; want enabled %v, port %d", tc.local, c.Unreal.MCP, tc.enabled, tc.port)
+		}
+	}
+}

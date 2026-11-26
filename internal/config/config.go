@@ -121,6 +121,31 @@ type UnrealConfig struct {
 	// console stop during that delay cancels the pending restart and ends the
 	// crash episode, so a later start empties the folder.
 	CleanOnRestart bool `yaml:"cleanOnRestart"`
+	// MCP switches Epic's Unreal MCP server (UE 5.8, plugin
+	// ModelContextProtocol) on in the editor. Default off.
+	MCP UnrealMCPConfig `yaml:"mcp"`
+}
+
+// UnrealMCPServerName is the name the agent gets Epic's Unreal MCP server
+// under, the one the plugin's own GenerateClientConfig writes. With
+// unreal.mcp.enabled an mcp.extraServers entry of this name is a load error.
+const UnrealMCPServerName = "unreal-mcp"
+
+// DefaultUnrealMCPPort is the plugin's own default port (ServerPortNumber).
+const DefaultUnrealMCPPort = 8000
+
+// UnrealMCPConfig is unreal.mcp: Epic's Unreal MCP server in the editor.
+type UnrealMCPConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Port the editor's server listens on; 0 = default 8000. Checked
+	// (1-65535, not mcp.address's port) only while Enabled.
+	Port int `yaml:"port"`
+}
+
+// URL is the address the agent reaches the editor's Unreal MCP server at.
+// The plugin listens on the loopback only, so the host is always 127.0.0.1.
+func (u UnrealMCPConfig) URL() string {
+	return "http://127.0.0.1:" + strconv.Itoa(u.Port) + "/mcp"
 }
 
 // AgentConfig describes the agent process (e.g. Claude Code).
@@ -472,6 +497,7 @@ func loadMode(explicitPath, dir string, engineOptional, forInit bool) (*Config, 
 // Zero is "not set" for the plain ints: a delay of 0 gets the default, so the
 // smallest delay that can be configured is 1 second — for the restart delay
 // that floor is what keeps a crashing process from restarting in a tight loop.
+// unreal.mcp.port 0 gets the plugin's default, 8000.
 // A nil list is "not set" too, and null in unreagent.local.yaml decodes to nil:
 // "unreal.args: ~" restores the default arguments, "unreal.args: []" clears
 // them.
@@ -491,6 +517,9 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 	if c.Unreal.Unattended == nil {
 		t := true
 		c.Unreal.Unattended = &t
+	}
+	if c.Unreal.MCP.Port == 0 {
+		c.Unreal.MCP.Port = DefaultUnrealMCPPort
 	}
 
 	if c.Agent.Command == "" {
@@ -583,6 +612,7 @@ func (c *Config) applyDefaults() (builtins map[string]bool) {
 // else stays literal on purpose: names and keys (env names, hermes.serverName),
 // enums, mcp.address, mcp.allowedOrigins and mcp.token (no placeholder forms
 // part of any of them, and a token must never change under the user's hands),
+// unreal.mcp (a switch and a port),
 // descriptions (prose), and engineRoot and unreal.project, from which the
 // placeholders are derived.
 //
@@ -832,6 +862,11 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	if c.Unreal.MCP.Enabled {
+		if err := c.validUnrealMCP(); err != nil {
+			return err
+		}
+	}
 	if c.MCP.Enabled {
 		for i, origin := range c.MCP.AllowedOrigins {
 			if err := validOrigin(origin); err != nil {
@@ -883,6 +918,30 @@ func validHermesServerName(name string) error {
 	}
 	if out, err := yaml.Marshal(name); err != nil || string(out) != name+"\n" {
 		return fmt.Errorf("agent.hermes.serverName invalid: %q (YAML may read it as a boolean or null rather than a name)", name)
+	}
+	return nil
+}
+
+// validUnrealMCP checks unreal.mcp while it is enabled: a port from 1 to
+// 65535; not the port of mcp.address while the launcher's own server listens
+// there (the hosts are not compared, since a wildcard or LAN address takes
+// the editor's loopback port too); and no hand-written mcp.extraServers entry
+// under UnrealMCPServerName, the name the launcher gives the editor's server
+// itself. validate has already checked mcp.address when mcp.enabled.
+func (c *Config) validUnrealMCP() error {
+	port := c.Unreal.MCP.Port
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("unreal.mcp.port invalid: %d (must be a number from 1 to 65535; default %d)", port, DefaultUnrealMCPPort)
+	}
+	if c.MCP.Enabled {
+		_, p, _ := net.SplitHostPort(c.MCP.Address)
+		// Compared as numbers: validMCPAddress takes a leading zero.
+		if n, err := strconv.ParseUint(p, 10, 16); err == nil && n == uint64(port) {
+			return fmt.Errorf("unreal.mcp.port %d is the port of mcp.address %q: the editor's Unreal MCP server and the launcher's MCP server cannot share it — set another unreal.mcp.port or mcp.address", port, c.MCP.Address)
+		}
+	}
+	if _, ok := c.MCP.ExtraServers[UnrealMCPServerName]; ok {
+		return fmt.Errorf("unreal.mcp.enabled and mcp.extraServers.%s are both set: with the switch on, the launcher hands the agent the %s entry itself — remove mcp.extraServers.%s, or set unreal.mcp.enabled: false to keep the hand-written entry", UnrealMCPServerName, UnrealMCPServerName, UnrealMCPServerName)
 	}
 	return nil
 }

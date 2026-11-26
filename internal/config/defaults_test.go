@@ -569,3 +569,31 @@ func TestLoadForPreflightStillFails(t *testing.T) {
 		}
 	})
 }
+
+// k264: neither the built-in defaults nor the document `unreagent init` writes
+// carry an unreal section, so unreal.mcp stays off until the user sets it.
+func TestDefaultsLeaveUnrealMCPOff(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("UE_ROOT", filepath.Join(dir, "engine"))
+	writeUProject(t, dir, "Game.uproject")
+	writeBridge(t, dir, "UELLMToolkit")
+	for name, encode := range map[string]func(string) ([]byte, []string, []string, error){
+		"DefaultYAML": DefaultYAML,
+		"InitYAML":    InitYAML,
+	} {
+		doc, _, _, err := encode(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text := "\n" + string(doc); strings.Contains(text, "\nunreal:") || strings.Contains(text, UnrealMCPServerName) {
+			t.Errorf("%s writes unreal.mcp:\n%s", name, doc)
+		}
+	}
+	c, _, err := LoadForInit("", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Unreal.MCP.Enabled || c.Unreal.MCP.Port != DefaultUnrealMCPPort {
+		t.Errorf("LoadForInit: unreal.mcp = %+v; want off, port %d", c.Unreal.MCP, DefaultUnrealMCPPort)
+	}
+}
