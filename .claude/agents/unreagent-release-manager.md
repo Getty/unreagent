@@ -4,7 +4,6 @@ description: "Owns unreagent's commits and release readiness — cuts commits fr
 model: sonnet
 skills:
   - getty-git-commit-style
-  - getty-git-usage
   - unreagent-core
   - unreagent-windows
   - kanban-issues-karr-ticket
