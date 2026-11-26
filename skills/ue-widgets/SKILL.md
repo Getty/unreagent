@@ -11,25 +11,28 @@ toolkit_tools: [widget_editor]
 # UE widgets: widget_editor
 
 The UE LLM Toolkit plugin's **`widget_editor`** tool reads and edits Widget
-Blueprints: the widget tree, each widget's properties and layout slot, brushes,
-delegate events, property bindings and widget animations. Through the plugin's
-MCP bridge it is listed as `unreal_widget_editor`. It works only while the
-editor is running and the plugin is reachable; `unreagent-iterate` covers the
-wait for the plugin.
+Blueprints (UMG): the widget tree, each widget's properties and layout slot,
+brushes, delegate events, property bindings and widget animations. Through the
+plugin's MCP bridge it is listed as `unreal_widget_editor`. It works only
+while the editor is running and the plugin is reachable; `unreagent-iterate`
+covers the wait for the plugin.
 
-The tool takes an `operation` string and lowercases it before dispatch.
-`reorder_children` is accepted for `reorder_child`. An unknown operation
-returns `Unknown operation: '<op>'. Valid: <list>`.
+It edits the **design** of a widget. It does not put a widget on screen, does
+not write the logic behind it, and does not change the input mode: those are
+`ue-game-framework` (in PIE), `ue-blueprints` (graphs) and game code.
 
-This skill has five sections:
+## Sections
 
-| Section | Covers | Load it |
+| Section | Holds | Load it |
 |---|---|---|
-| `properties` | the keys of `set_property`, `set_slot` and `set_brush`; color formats | before your first `set_property`, `set_slot` or `set_brush`: the keys are only there |
-| `events` | `list_events`, `bind_event`, `bind_property`, `unbind_property`, `list_bindings` | before you bind an event or a property |
-| `animations` | `list_animations`, `inspect_animation`, `create_animation`, `add_animation_track` | before you add an animation track: the track types and the keyframe form are only there |
+| `workflows` | end-to-end recipes: a HUD bound to gameplay data, a pause or main menu with buttons, and how to verify each (compile, PIE, capture, log) | before you build a HUD or a menu, or to check one you built |
+| `design` | decision rules: event-driven updates vs property bindings, Canvas vs box panels, C++ parent class vs Blueprint-only vs Python, UMG Viewmodel and Common UI | before you decide how a widget gets its data, or which panel to use |
+| `layout` | anchors, alignment, position and size on a Canvas Panel, box fill rules, padding, with ready slot objects for the common placements | before your first `set_slot` on a widget you want placed somewhere specific |
+| `properties` | the keys of `set_property`, `set_slot` and `set_brush`, color formats, which keys `get_properties` reports back | before your first `set_property`, `set_slot` or `set_brush`: the keys are only there |
+| `events` | `list_events`, `bind_event`, `bind_property`, `unbind_property`, `list_bindings`, and what `blueprint_modify` can and cannot wire in a Widget Blueprint graph | before you bind an event or a property, or wire a handler |
+| `animations` | `list_animations`, `inspect_animation`, `create_animation`, `add_animation_track`: track types, keyframe form, result fields | before you create an animation or add a track |
 | `tree` | `reparent_widget`, `reorder_child` and `clone_widget` in full: result fields and errors | when one of the three returns an error, or you need its result fields |
-| `failures` | the error table, and the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see after a call is not what you expect |
+| `failures` | the error table, and the failure table (what you see, what it means, what to do) | when a call returns an error you cannot place, or what you see is not what you expect |
 
 ## Paths
 
@@ -43,10 +46,20 @@ without the path checks and the `/Game/` fallback of the Blueprint tools
 - `Asset is not a Widget Blueprint: <path> (is <class>)`: the asset is
   something else, such as an ordinary Blueprint.
 
-`blueprint_query list` with `type_filter: "UserWidget"` finds Widget
-Blueprints.
+To find Widget Blueprints, use `blueprint_query list` with `type_filter`. It
+matches a substring of the parent class: `UserWidget` finds widgets made
+directly from `UserWidget`; one made from a C++ subclass or a Common UI class
+needs part of that class name (or `Widget`, which catches most).
+
+Where a class is wanted instead (`show_widget` in `ue-game-framework`, a
+`parent_class` made from another Widget Blueprint), pass the generated class:
+`/Game/UI/WBP_HUD.WBP_HUD_C`.
 
 ## Operations
+
+The tool takes an `operation` string and lowercases it before dispatch.
+`reorder_children` is accepted for `reorder_child`. An unknown operation
+returns `Unknown operation: '<op>'. Valid: <list>`.
 
 | Operation | Required besides `asset_path` | Optional |
 |---|---|---|
@@ -78,17 +91,13 @@ the code requires them. Pass them anyway. A missing string parameter returns
 `Missing required parameter: <name>`. A missing object or array names its
 type, such as `Missing required parameter: properties (JSON object)`.
 
-The keys that go into `properties`, `slot_properties` and `brush` are only
-in section `properties`, and the track types and the form of `keyframes`
-only in section `animations`: load the section before your first such call.
-Load section `events` before you bind an event or a property.
-
 ## Reading
 
 - **`inspect`** returns `asset_path`, `blueprint_name`, `total_widgets` and
   `widget_tree`: the root widget, or the string `empty`. Each widget has
   `name`, `class`, `slot_type` and `slot_properties` (not on the root),
-  `visual_properties`, `bindings` when it has any, and `children` for a panel.
+  `visual_properties`, `bindings` (`property`, `function`, `kind`) when it has
+  any, and `children` for a panel.
 - **`get_properties`** returns one widget: `widget_name`, `widget_class`,
   `visual_properties`, and `slot_type` with `slot_properties` unless it is the
   root. Error: `Widget not found: <n>`.
@@ -102,32 +111,45 @@ addresses widgets by them. Read the tree before you change it.
 2. **Read the tree.** `inspect`.
 3. **Change it.** `add_widget`, then `set_slot` and `set_property`, or several
    of these in one `batch`. Compare the keys listed in each result's message
-   with the keys you sent: unknown keys are dropped without an error
-   (section `properties`).
-4. **Compile.** Only `bind_event` compiles, and it reports no compile result.
-   `blueprint_modify compile` with the same `asset_path` compiles the Widget
-   Blueprint and reports errors and warnings (skill `ue-blueprints`).
+   with the keys you sent: unknown keys are dropped without an error.
+4. **Compile.** `blueprint_modify compile` with the same `asset_path` compiles
+   the Widget Blueprint and reports errors and warnings (skill
+   `ue-blueprints`). Only `bind_event` compiles by itself, and it reports no
+   compile result. Compile before PIE: play runs the compiled class.
 5. **Save.** No operation saves except `save`, not even `batch`. Until then
    every change lives only in the running editor. `save` writes the asset
    (`Saved: <path>`, or `Failed to save: <path>`). The `asset` tool's
    `save_asset` and `save_all` work as well.
+6. **Verify.** `inspect` again, then look at it: section `workflows`,
+   "Verifying".
 
 `widget_editor` has no undo. Remove a widget with `remove_widget`, a binding
 with `unbind_property`, and a bound event's node with
 `blueprint_modify delete_node`. There is no operation to remove an
 animation or a track.
 
-What the sections hold that shows no error:
+## Must not get wrong
 
-- **A color string that is not a known name or a 6- or 8-digit hex becomes
-  white.** Hex digits are read as linear values, without sRGB conversion
-  (section `properties`).
-- **`bind_property` checks neither the property name nor the function.** It
-  stores what you pass, so read the binding back with `list_bindings`
-  (section `events`).
-- **Each `add_animation_track` call adds a new track**, even for a widget
-  and track type that already have one. Send all keys of a track in one call
-  (section `animations`).
+- **Unknown keys and unparsable values are dropped silently.** Only when no
+  key applied do `set_property` and `set_slot` fail. Read the applied list in
+  the message (section `properties`).
+- **Colors: hex is read as linear, but reported as sRGB.** `#808080` in, a
+  different `hex` back from `get_properties`. A string that is not a known
+  name is read by length: 6 or 8 characters as hex with non-hex characters
+  as 0 (`purple` → near-black `#00000E`; the result is unpredictable), any other length white (section
+  `properties`).
+- **`set_slot` keys depend on the parent panel**, not on the widget. A widget
+  inside a `SizeBox`, `Border`, `Button` or `ScaleBox` has a slot `set_slot`
+  does not support. `padding` sides left out become 0.
+- **Canvas `position`/`size` mean margins once anchors stretch** (min ≠ max on
+  an axis). Section `layout` before you place anything.
+- **`bind_property` checks neither the property name nor the function.** Read
+  it back with `list_bindings`, then compile (section `events`).
+- **`bind_event` needs the widget to be a variable of the class.** Compile
+  first; if it still fails, Is Variable is off and no tool sets it.
+- **Each `add_animation_track` call adds a new track**, even for a widget and
+  track type that already have one. Send all keys of a track in one call.
+- **`batch` failure hides which op failed** (see below).
 
 ## create
 
@@ -135,8 +157,9 @@ Creates the asset `<package_path>/<name>`, for example `name: "WBP_HUD"` and
 `package_path: "/Game/UI"`. The result's `path` is the object path for every
 later call.
 
-- `parent_class` (default `UserWidget`): a class in `/Script/UMG`, given by its
-  short name, or the full path of a `UserWidget` subclass. Error:
+- `parent_class` (default `UserWidget`): a class in `/Script/UMG` by its short
+  name, or the path of a `UserWidget` subclass: `/Script/MyGame.MyHUDWidget`
+  for C++, `/Game/UI/WBP_Base.WBP_Base_C` for a Widget Blueprint. Error:
   `Could not find parent class: <p>`.
 - `root_widget_class` (default `CanvasPanel`): the root widget, named
   `RootPanel`. `None` creates no root.
@@ -161,34 +184,22 @@ later call.
 
 - `parent_name` empty or `root` means the root widget. With no root at all, the
   new widget becomes the root (`slot_type: "None (root)"`).
-- The result has `widget_name`, `widget_class`, `parent_name` and `slot_type`.
-  `slot_type` decides which `set_slot` keys apply.
+- The result has `widget_name`, `widget_class` (as you passed it),
+  `parent_name` and `slot_type`. `slot_type` decides which `set_slot` keys
+  apply.
 - Errors: `Unknown widget class: <c>`, `Widget with name '<n>' already exists`,
   `Parent widget not found: <p>`, `Parent '<p>' is not a panel widget (is <c>)`,
   `Root widget is not a panel — cannot add children`. `AddChild returned null slot`
-  means the engine gave the parent no slot for the child, most likely a
-  container that holds one child and already has it (not verified).
+  means the parent gave the child no slot, most likely a single-child
+  container that already has one (unverified).
 
 **`remove_widget`** removes a widget from the tree. Errors:
 `Widget not found: <n>`, `Failed to remove widget: <n>`. Run `inspect`
 afterwards to see what is left.
 
-**`reparent_widget`**, **`reorder_child`** and **`clone_widget`** move or
-copy a widget; their parameters are in the table under "Operations".
-
-- `reparent_widget` moves a widget to another panel. The widget gets a new
-  slot there; its old slot settings are not carried over, so set them again
-  with `set_slot`.
-- `reorder_child` clamps `new_index` to the valid range; the result's
-  `new_index` is the one used.
-- `clone_widget` deep-copies a widget and its children into `target_parent`,
-  by default the source's parent. The copy is named `new_name`, and its
-  children `<new_name>_<child name>`, made unique if needed. The copy and
-  each copied child get new slots; slot settings are not copied, so set them
-  with `set_slot`. Check the copy with `inspect`.
-
-Load section `tree` when one of the three returns an error, or you need its
-result fields.
+`reparent_widget`, `reorder_child` and `clone_widget` move or copy widgets.
+The moved or copied widget gets a new slot: set it again with `set_slot`.
+Section `tree` has their results and errors.
 
 ## batch
 
@@ -213,11 +224,10 @@ and `clone_widget`; `reorder_children` is not accepted here.
 - `batch` does not save, although the tool's description says so. Call `save`
   afterwards.
 - The message is `Batch: <n> OK, <m> errors, <t> total`. With every op
-  successful, the data has `results` (one result per op), `ok_count`,
-  `error_count` and `total`. **With one failed op, the call is an error, and
-  the bridge passes only that message**: which op failed, and why, does not
-  reach you. Run `inspect`, then repeat the missing change as a single
-  operation to get its error.
+  successful, the data has `results` (one per op), `ok_count`, `error_count`
+  and `total`. **With one failed op, the call is an error, and the bridge
+  passes only that message.** Run `inspect`, then repeat the missing change as
+  a single operation to get its error.
 
 ## Results through the bridge
 
@@ -229,30 +239,21 @@ and `clone_widget`; `reorder_children` is not accepted here.
 - **Failure** is only `Error: <message>`, with no data.
 - **Timeouts.** After 300 s the bridge returns
   `Error: Task timed out after 300000ms (task_id: …)`. That ends the wait, not
-  the work. Read the tree back with `inspect` before you retry (skill
-  `ue-tasks`).
-
-The messages of `set_property`, `set_slot` and `set_brush` list the keys they
-applied.
-
-## Errors and failure modes
-
-Load section `failures` when a call returns an error you cannot place, or
-what you see after a call is not what you expect: it has the error table and
-the failure table (what you see, what it means, what to do).
+  the work. Read the tree back with `inspect` before you retry.
 
 ## Background in the plugin
 
 The plugin's `Resources/domains/tooling.md` lists `widget_editor` among its
-tools. `unreal_get_ue_context` has no Widget Blueprint category: its `slate`
-category covers Slate UI in C++, not UMG.
+tools. `unreal_get_ue_context` has no UMG category: its `slate` category
+(also matched by the query `widget`) covers Slate in C++, not Widget
+Blueprints.
 
 ## See also
 
 - `ue-blueprints`: `blueprint_query` to find Widget Blueprints,
   `blueprint_modify` to compile them and to wire bound events.
-- `ue-enhanced-input`: input actions and mapping contexts for the controls a
-  widget reacts to.
-- `ue-game-framework`: `game_framework` `show_widget` puts a Widget Blueprint
-  on screen in a running PIE session, `remove_widget` takes it off.
+- `ue-game-framework`: `show_widget` / `remove_widget` in a running PIE
+  session, `set_input_mode`, `set_mouse_cursor`, `set_pause`.
+- `ue-enhanced-input`: the input actions a menu or HUD reacts to.
+- `ue-pie-testing`, `ue-viewport`: play the result and look at it.
 - `unreagent-iterate`: starting the editor and waiting for the plugin.

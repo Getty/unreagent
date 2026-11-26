@@ -236,6 +236,14 @@ Revision history for unreagent
     start_time and duration, resample changes the play length, and batch
     retarget can succeed with empty copies. Each skill keeps the common path
     in SKILL.md and moves reference material and workflows into sections.
+  - The asset, Blueprint, gameplay, input, widget and level skills (ue-assets,
+    ue-blueprints, ue-game-framework, ue-enhanced-input, ue-widgets,
+    ue-levels, ue-level-actors) are checked against the toolkit source and
+    reworked: short class names do not resolve in blueprint_modify, the
+    mapping-context-at-BeginPlay graph cannot be built, enhanced_input
+    triggers and modifiers are not saved, a taken spawn name is fatal, and
+    save_as duplicates a level that is already on disk. New sections cover
+    workflows, game mode, player controller, runtime setup and level types.
   - The shipped UE skills now reach the agent through a new `skills` MCP tool,
     on by default. Its description lists every skill, and the `section`
     argument fetches a skill's sub-documents.

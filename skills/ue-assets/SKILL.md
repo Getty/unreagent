@@ -14,26 +14,29 @@ Five tools of the UE LLM Toolkit plugin work on Content Browser assets:
 
 | Tool | For |
 |---|---|
-| `asset_search` | finding assets by class, folder and name |
+| `asset_search` | finding assets by class, folder and name (read-only) |
 | `asset` | 15 operations: info, listing, properties, saving, rename, duplicate, delete, migrate, folders, editors |
-| `asset_dependencies` | what an asset uses |
-| `asset_referencers` | what uses an asset |
+| `asset_dependencies` | what an asset uses (read-only) |
+| `asset_referencers` | what uses an asset (read-only) |
 | `asset_import` | FBX import, batch import, export, reimport, source-file info. `retarget` has an animation-only FBX import of its own (skill `ue-retarget`, section `import`) |
 
-Actors placed in a level are the subject of `ue-level-actors`, and levels of
-`ue-levels`.
+Placed actors are the subject of `ue-level-actors`, levels of `ue-levels`,
+Blueprint internals of `ue-blueprints`.
 
-This skill was written from the toolkit's C++ source. It has not been exercised
-against a running editor.
+This skill was written from the toolkit's C++ source; engine behaviour marked
+"engine source" was read in the UE 5.8.4 source. None of it has been
+exercised against a running editor.
 
-This skill has four sections:
+This skill has six sections:
 
 | Section | Holds | Load it |
 |---|---|---|
-| `operations` | the ten `asset` operations not described here: `list_assets`, `rename`, `duplicate`, `migrate`, `create_folder`, `rename_folder`, `delete_folder`, `open_editor`, `set_preview_mesh`, `get_hashes` | before you call one of them |
-| `import` | `asset_import` in full: `import`, `batch_import`, `export`, `reimport`, `get_source`, their errors, and the sequence for importing a character | before you call `asset_import` |
-| `json-types` | how the `asset` tool reads a boolean parameter, and a `set_asset_property` value, of the wrong JSON type | when a call behaved as if you had sent another value, or a write went through with a value you did not send |
-| `failures` | the failure table (what you see, what it means, what to do), the path checks of `asset`, the remaining errors of `set_asset_property` | when a call returns an error or a result you did not expect |
+| `workflows` | which tool for which job (and when Python), naming conventions, and end to end: batch import and verify, move or rename and redirectors, find unused assets and delete them, audit dependencies, bulk property edits, migrate | before a task of more than one call, or when no tool seems to fit |
+| `properties` | `set_asset_property` in full: the path walk, the value per property type, what cannot be set, its errors | before you call `set_asset_property` |
+| `operations` | the `asset` operations not described here: `list_assets`, `rename`, `duplicate`, `migrate`, `create_folder`, `rename_folder`, `delete_folder`, `open_editor`, `set_preview_mesh`, `get_hashes` | before you call one of them |
+| `import` | `asset_import` in full: every parameter with its default, Interchange and `mesh_type: "auto"`, errors, importing a character | before you call `asset_import` |
+| `json-types` | how the tools read a boolean parameter, and a `set_asset_property` value, of the wrong JSON type | when a call behaved as if you had sent another value |
+| `failures` | the failure table (what you see, what it means, what to do) and the path checks of `asset` | when a call returns an error or a result you did not expect |
 
 ## Before the first call
 
@@ -45,16 +48,40 @@ This skill has four sections:
   envelope (`task_id`, `status`, `success`, `message`, …), and the tool's own
   fields, the ones named in this skill, sit under its `data` key. Failure is
   `Error: <message>` with no data. Skill `ue-tasks` covers the task tools.
-- **No undo.** No tool here opens an editor transaction, so a change has no
-  undo entry. `delete`, `migrate` and an overwriting import are final.
-- **Timeouts.** After 300 s (`MCP_ASYNC_TIMEOUT_MS`) the bridge returns `Error:
-  Task timed out after 300000ms (task_id: …)`. That ends the wait, not the
-  work. Before you start the job again, follow the task up (`ue-tasks`). After
-  an import, also read the state back with `asset_search`, `path_filter` set to
-  the `dest_path`. A large import or `batch_import`, a `save_all` over many
-  dirty packages and a `migrate` of many packages each run as one call and can
-  hold the editor for more than 30 s; run them as skill `ue-tasks`, "A 30 s
-  timeout can crash the editor", describes.
+- **No undo.** No tool here opens an editor transaction. `delete`, `migrate`,
+  `rename`, the folder operations and an overwriting import are final.
+- **Timeouts.** After 300 s the bridge returns `Error: Task timed out after
+  300000ms (task_id: …)`. That ends the wait, not the work: follow the task up
+  (`ue-tasks`) and read the state back before you start it again. A large
+  import, a `save_all` over many packages and a big `migrate` each run as one
+  call; run them as skill `ue-tasks`, "A 30 s timeout can crash the editor",
+  describes.
+
+## What must not go wrong
+
+1. **Edits are in memory until saved.** `set_asset_property`,
+   `set_preview_mesh` and the other tools' edits only mark packages dirty.
+   Save with `asset` `save_all` and read `failed_count`; a partial failure is
+   still a success. Never the console command `SaveAll`: it opens a dialog.
+2. **Some operations save on their own.** `rename` and `rename_folder` save the
+   moved assets and every referencer they fix up (engine source); an import
+   saves unless `save: false`.
+3. **A non-forced `delete` is all or nothing** (engine source): one referenced
+   asset in the batch and nothing is deleted, reported as success with
+   `Deleted 0 of N assets`. `force: true` deletes anyway and leaves the
+   referencers broken; force-deleting a Blueprint also deletes its placed
+   instances.
+4. **`delete_folder` force-deletes everything inside, recursively** (engine
+   source), whatever its error text says about empty folders.
+5. **Never end a `set_asset_property` path with an array index** (`Tags.0`):
+   it writes into the asset object itself and can crash the editor.
+6. **`mesh_type: "auto"` imports static meshes only** when Interchange handles
+   FBX, the engine default (engine source). Pass `mesh_type` explicitly.
+7. **`asset_search` with an unresolved short class name finds nothing**, with
+   no error. Use `/Script/<Module>.<Class>` for classes outside Engine,
+   CoreUObject and Niagara.
+8. **`.uasset` files are binary**: never read or edit them as files (skill
+   `unreagent-files`).
 
 ## Asset paths
 
@@ -65,249 +92,92 @@ This skill has four sections:
 | Blueprint class path | `/Game/BP/BP_Door.BP_Door_C` |
 | content folder | `/Game/Meshes` |
 
-Which form each tool takes:
-
 - The `asset` operations that take `asset_path` load it as given, then retry
-  with `_C` appended. A package path and an object path both work: the tool's
-  own examples use package paths. Pass a Blueprint by its asset path, without
-  `_C`.
-- `migrate` and `get_hashes` take **package paths** in `asset_paths`. `delete`
-  loads each entry like `asset_path`.
+  with `_C` appended. Package and object paths both work. Pass a Blueprint by
+  its asset path, without `_C`. Aliases: `blueprint_path` and `path` for
+  `asset_path`, `asset_class` for `class_filter`.
+- `migrate` and `get_hashes` take **package paths** in `asset_paths`;
+  `delete` loads each entry like `asset_path`.
 - `asset_dependencies` and `asset_referencers` take either form.
-- `asset_import` takes a content folder in `dest_path`, and an asset path in
-  `asset_path`.
-
-`asset` checks `asset_path`, `directory`, `folder_path` and `new_folder_path`
-before it uses them, and rejects anything under `/Engine/` or `/Script/`.
-Engine content can still be found with `asset_search`. Section `failures`
-lists every check, the errors (which begin with "Blueprint path" even for
-assets that are not Blueprints) and the path parameters that are not checked
-at all.
-
-`asset` also accepts `blueprint_path` and `path` as aliases for `asset_path`,
-and `asset_class` for `class_filter`.
+- `asset_import` takes a content folder in `dest_path`, an asset path in
+  `asset_path`, and paths on the editor's machine for files.
+- `asset` rejects `/Engine/` and `/Script/` paths and some characters
+  (section `failures`); `asset_search` still finds engine content.
 
 ## asset_search
 
-Finds assets through the asset registry, without loading them. It is read-only.
+Finds assets through the asset registry, without loading them.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `class_filter` | — | class of the assets. Subclasses match too |
+| `class_filter` | — | class of the assets. Subclasses match too: `Blueprint` includes Widget and Animation Blueprints |
 | `path_filter` | `/Game/` | folder, searched recursively. `""` searches everywhere, engine and plugin content included |
-| `name_pattern` | — | case-insensitive substring of the asset name |
-| `search_term` | — | alias for `name_pattern`, used only when `name_pattern` is absent |
+| `name_pattern` | — | case-insensitive substring of the asset name. `search_term` is an alias, used only without `name_pattern` |
 | `limit` | `25` | 1 to 1000 |
 | `offset` | `0` | matches to skip |
 
-A `class_filter` without a leading `/` goes through four lookups:
+A short `class_filter` is looked up as `/Script/Engine.<name>`, then
+`/Script/CoreUObject.<name>`, then `/Script/Niagara.<name>`, then as given.
+That covers `StaticMesh`, `SkeletalMesh`, `Skeleton`, `Material`,
+`MaterialInstanceConstant`, `Texture2D`, `SoundWave`, `AnimSequence`,
+`AnimMontage`, `DataTable`, `Blueprint`, `World` (levels), `ObjectRedirector`
+and `NiagaraSystem`. Others need the full path, such as
+`/Script/UMGEditor.WidgetBlueprint` or `/Script/EnhancedInput.InputAction`.
 
-1. `/Script/Engine.<name>`;
-2. `/Script/CoreUObject.<name>`;
-3. `/Script/Niagara.<name>`;
-4. `FindObject<UClass>` on the name as given.
-
-The first three cover `StaticMesh`, `SkeletalMesh`, `Material`,
-`MaterialInstanceConstant`, `Texture2D`, `Blueprint`, `World` (levels) and
-`NiagaraSystem`. What the fourth finds is up to the engine.
-
-**If all four miss, the search silently matches nothing.** The tool falls back
-to `/Script/Engine.<name>` and returns an empty result rather than an error.
-For a class from any other module, pass the full class path, such as
-`/Script/UMGEditor.WidgetBlueprint` or `/Script/MyGame.MyDataAsset`.
-
-The result holds `assets[]` (`path` as an object path, `name`, `class` and
-`package_path`), `count`, `total`, `offset`, `limit` and `hasMore`. While more
-matches remain, it also holds `nextOffset`. **`package_path` is the content
-folder**, such as `/Game/Meshes`, not a package path. The package path is
-`path` before the dot: pass that to `migrate` and `get_hashes`. An empty result is a success:
-`No assets found matching the search criteria`.
+The result holds `assets[]` (`path` as an object path, `name`, `class`,
+`package_path`), `count`, `total`, `offset`, `limit`, `hasMore` and, while
+more remain, `nextOffset`. **`package_path` is the content folder**, not a
+package path; the package path is `path` before the dot. An empty result is a
+success: `No assets found matching the search criteria`.
 
 ## The asset tool
 
-`operation` is required and is lowercased. These aliases are accepted:
+`operation` is required and lowercased. Aliases: `get_info`, `info` →
+`get_asset_info`; `search`, `find`, `list` → `list_assets`; `property` →
+`set_asset_property`; **`save` → `save_all`**, not `save_asset`. An unknown
+operation gives `Unknown operation: '<op>'. Valid: …`, with a "Did you mean"
+when one is close.
 
-| Alias | Operation |
-|---|---|
-| `get_info`, `info` | `get_asset_info` |
-| `search`, `find`, `list` | `list_assets` |
-| `property` | `set_asset_property` |
-| `save` | **`save_all`**, not `save_asset` |
+**get_asset_info** — `asset_path`, `include_properties` (default `false`).
+The result holds `name`, `path`, `class`, `package` and `is_dirty`; a skeletal
+mesh adds `materials[]` (`slot`, `slot_name`, `material`). With
+`include_properties`, `properties[]` lists each editable property's `name`,
+`type` (`float`, `integer`, `bool`, `string`, `name`, `struct:<S>`,
+`object:<C>`, `array`, `other`) and `editable`: names and types, not values.
+A Blueprint reports the Blueprint object's properties, not its class defaults.
 
-An unknown operation gives `Unknown operation: '<op>'. Valid: …`, with a "Did
-you mean" suggestion when one is close.
+**set_asset_property** — `asset_path`, `property` (a dot path), `value`. Send
+the JSON type the property has: a wrong type is often a wrong write, not an
+error. Arrays, most structs, `enum class` and `FText` cannot be set. Load
+section `properties` first.
 
-Five of the 15 operations are described below: `get_asset_info`,
-`set_asset_property`, `save_asset`, `save_all` and `delete`. **Load section
-`operations` before you call any of the other ten**: `list_assets`, `rename`,
-`duplicate`, `migrate`, `create_folder`, `rename_folder`, `delete_folder`,
-`open_editor`, `set_preview_mesh` or `get_hashes`. Three of its warnings, so
-that they are not missed:
+**save_asset** — `asset_path`, `save` (default `true`), `mark_dirty`
+(default: the opposite of `save`). Saves one package without a dialog and
+clears its dirty flag. `{"save": false}` only marks it dirty. The result holds
+`asset_path`, `saved` and `marked_dirty`; check `saved`, because a wrong JSON
+type for `save` skips the save without an error (section `json-types`).
+Failure: `Failed to save asset: <path>`.
 
-- **Treat `delete_folder` as a recursive delete.**
-- **`migrate`'s result always says success.** Check the target folder on disk.
-- `duplicate` needs `new_name`: it is **required by the code**, although the
-  tool's description calls it optional.
+**save_all** — no parameters. Saves every dirty package except transient ones
+and those under `/Temp/` or `/Engine/`: levels, assets, plugin content. The
+result holds `saved_count`, `failed_count`, `total_dirty` and, on failures,
+`failed_packages[]`; the message is `Saved 12/12 dirty packages`. Only when
+every package fails is it an error (`All 3 packages failed to save`, list
+dropped). A never-saved level lives under `/Temp/` and is skipped: give it a
+path with `open_level save_as` (skill `ue-levels`).
 
-### get_asset_info
+**delete** — `asset_paths` (non-empty array), `force` (default `false`). Run
+`asset_referencers` on each asset first. The result holds `deleted_count`,
+`requested_count`, `requested_paths` (the paths that loaded), `not_found` and
+`success` (true when at least one was deleted). Compare `deleted_count` with
+`requested_count`. Errors: `Missing required parameter: asset_paths
+(non-empty array)`, `No valid assets found to delete`. Deleting the open
+level opens a modal dialog in the editor (engine source): open another level
+first.
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `asset_path` | required | the asset |
-| `include_properties` | `false` | add the asset's editable properties |
-
-The result holds `name`, `path`, `class`, `package` and `is_dirty`. A skeletal
-mesh adds `materials[]`, each entry with `slot`, `slot_name` and `material`.
-With `include_properties`, `properties[]` lists each editable property with
-`name`, `type` and `editable`. `type` is one of `float`, `integer`, `bool`,
-`string`, `name`, `struct:<Struct>`, `object:<Class>`, `array` or `other`.
-
-A Blueprint asset reports the properties of the Blueprint object, not the
-defaults of the class it generates.
-
-**A wrong JSON type for `include_properties` is never an error.** Send a
-JSON boolean. Section `json-types` says how every other type is read (read
-in the UE 5.8.4 source, not run); the same holds for `recursive` in
-`list_assets` and for `save` and `mark_dirty` in `save_asset`.
-
-### set_asset_property
-
-Writes one property on an asset, such as a mesh, a material instance or a data
-asset.
-
-| Parameter | Meaning |
-|---|---|
-| `asset_path` | required |
-| `property` | required. A dot path of letters, digits, `_` and `.`, at most 512 characters |
-| `value` | required. A missing one gives `Missing required parameter: value` |
-
-If the property is not found on the asset and the asset is a Blueprint, the tool
-tries the Blueprint's class defaults instead. The `ue-blueprints` skill covers
-Blueprint defaults in full.
-
-After the write, the tool sends the property-changed notification and marks the
-package dirty. It does not save. The result holds `asset_path`, `property` and
-`modified: true`.
-
-The path walk:
-
-- A part names a property. If more parts follow, it must be an object
-  reference, and the walk moves into the referenced object, or it must be an
-  array followed by a number.
-- A number indexes the array before it. For an array of objects, the walk moves
-  into that element.
-- **Struct members cannot be reached**:
-  `Cannot navigate into struct property: <part>. Set the entire struct instead.`
-- **An array of structs cannot be entered.** After `Materials.0`, the walk
-  stays on the asset, so `Materials.0.MaterialInterface` looks for
-  `MaterialInterface` on the mesh and fails with `Property not found`. The
-  tool's own description uses that path as an example, and it does not work.
-- **Never end a path with an array index, as in `Tags.0`.** At the last part,
-  the code writes to the wrong address: the asset object itself, not the array
-  element. It does not fail cleanly, and it can corrupt the asset in memory or
-  crash the editor. Set the whole array instead, which this operation cannot do
-  either (see below). For array contents on an asset, there is no safe route in
-  this tool.
-
-Values:
-
-| Property type | Pass |
-|---|---|
-| object reference | an object path string. `"None"` or `""` clears it. The loaded object must be of the property's class: `Object type mismatch. Expected <class>, got <class>` |
-| class reference | a class path. For a Blueprint, that is `/Game/BP/BP_Door.BP_Door_C`: the asset path loads the Blueprint, not its class, and fails the type check. `"None"` or `""` clears it |
-| number | a JSON number |
-| `TEnumAsByte` enum | its numeric value, as a JSON number. A name string is not refused: it is stored as 0, with no error (read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7; section `json-types`) |
-| `bool` | a JSON boolean |
-| `FString`, `FName` | a string |
-| `FVector`, `FRotator`, `FLinearColor` | an object: `{x, y, z}`, `{pitch, yaw, roll}`, `{r, g, b, a}`. Pass every key, because nothing is defaulted, not even `a` |
-| soft object or soft class reference | a path that loads. A path that does not load gives `Unsupported property type for: <path>`, not a load error |
-| `TMap` | a JSON object. It replaces the whole map |
-
-Some types cannot be set here at all:
-
-- `TArray`;
-- other structs, and the UE text form `"(X=1,…)"`;
-- `enum class` properties.
-
-All of these fail with `Unsupported property type for: <path>`. So does a
-value the tool cannot read as the property's type. The tool's reads accept
-more than the matching JSON type, though (read in the UE 5.8.4 source, not
-run, while the toolkit targets UE 5.6 and 5.7): section `json-types` lists
-what each property type accepts. Load it when a write went through with a
-value you did not send.
-
-So send the JSON type the property has: a wrong string in an integer or
-`bool` property is a wrong write, not an error. Read the value back with
-`get_asset_info` and `include_properties: true`.
-`set_property` (skill `ue-level-actors`) accepts more value forms, but for
-placed actors only.
-
-The other errors of `set_asset_property` are listed in section `failures`.
-
-### save_asset and save_all
-
-Neither shows a dialog.
-
-`save_asset` saves one asset's package:
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `asset_path` | required | the asset |
-| `save` | `true` | write the package to disk |
-| `mark_dirty` | the opposite of `save` | mark the package dirty |
-
-`{"save": false}` marks the asset dirty without saving it. The result holds
-`asset_path`, `saved` and `marked_dirty`. A failed save gives `Failed to save
-asset: <path>`.
-
-**A wrong JSON type for `save` can skip the save without an error.** Both
-parameters are read as `include_properties` is (section `json-types`):
-`null`, an array, an object or a string such as `"maybe"` for `save` reads as
-`false`: the package is not written, and it is marked dirty unless
-`mark_dirty` reads as `false`. `saved` in the result says which happened;
-check it.
-
-`save_all` takes no parameters. It saves every dirty package in memory except
-transient ones and those under `/Temp/` or `/Engine/`. That covers levels,
-assets and plugin content alike. The result holds `saved_count`,
-`failed_count`, `total_dirty` and, when some failed, `failed_packages[]`. The
-message is `Saved 12/12 dirty packages`.
-
-- **A partial failure is still a success.** Read `failed_count`, not just the
-  outcome. Only when every package fails does the call return `Error: All 3
-  packages failed to save`, and then the list of packages is dropped.
-- **A level that was never saved lives under `/Temp/`** and is skipped. Give it
-  a path with `open_level save_as` (skill `ue-levels`).
-
-The plugin's `domains/tooling.md` recommends `save_all` after every write
-operation, and warns against the console command `SaveAll`, which opens the
-engine's confirmation dialog.
-
-### delete
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `asset_paths` | required | a non-empty array of asset paths |
-| `force` | `false` | delete even when other assets reference them |
-
-Run `asset_referencers` on each asset first. The toolkit hands the deletion to
-the engine (`ObjectTools::DeleteObjects`, or `ForceDeleteObjects` with
-`force`) and reports only the count. A forced delete probably leaves the
-referencers with broken references.
-
-- **The call succeeds even when nothing was deleted.** Compare `deleted_count`
-  with `requested_count`. `success` in the data is `true` only when at least one
-  asset was deleted. The message is `Deleted 0 of 2 assets`.
-- `requested_paths` lists the paths that loaded, and `not_found` those that did
-  not.
-
-Errors: `Missing required parameter: asset_paths (non-empty array)`, and `No
-valid assets found to delete` when none of the paths loaded.
+The other ten operations: section `operations`.
 
 ## Dependencies and referencers
-
-`asset_dependencies` lists what an asset uses. `asset_referencers` lists what
-uses it. Both are read-only.
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -316,38 +186,30 @@ uses it. Both are read-only.
 | `limit` | `25` | 1 to 1000 |
 | `offset` | `0` | entries to skip |
 
-- **One level only.** Each call returns direct dependencies or direct
-  referencers. The `asset_dependencies` description promises "all
-  dependencies". To walk the tree, call again for each entry.
-- Packages under `/Script/` and `/Engine/` are left out, so native classes and
-  engine content never appear.
+- **One level only.** To walk the tree, call again for each entry.
+- `/Script/` and `/Engine/` packages are left out; plugin content is not.
 - Each entry holds `path` (a package path), plus `class` and `name` when the
-  registry knows the package.
-
-The result holds `asset_path`, `dependencies[]` or `referencers[]`, `count`,
-`total`, `offset`, `limit`, `hasMore`, `include_soft` and, while more remain,
-`nextOffset`. `Asset not found: <path>` means the registry has no asset at that
-path. An asset nothing references gives `No referencers found for '<path>' -
-this asset appears unused`.
+  registry knows the package. A level that places the asset shows up as a
+  referencer; in a World Partition level the referencer is probably an
+  actor's own package under `/Game/__ExternalActors__/` rather than the
+  `.umap` (unverified). A redirector pointing at the asset probably shows
+  up as a referencer too (unverified).
+- The result holds `asset_path`, `dependencies[]` or `referencers[]`,
+  `count`, `total`, `offset`, `limit`, `hasMore`, `include_soft` and, while
+  more remain, `nextOffset`. `Asset not found: <path>` means the registry has
+  no asset there. An unreferenced asset gives `No referencers found for
+  '<name>' - this asset appears unused`, which does not see references from
+  C++ or config (section `workflows`, "Find unused assets").
 
 ## asset_import
 
-`asset_import` has five operations: `import`, `batch_import`, `export`,
-`reimport` and `get_source`. **Load section `import` before you call it**: it
-has every parameter with its default, the errors, and the sequence for
-importing a character. What you must know even before that:
-
-- File paths in this tool are paths on the machine that runs the editor.
-- The parameter names are `fbx_path` and `dest_path`. The plugin's
-  `domains/assets.md` shows an example with `file_path` and `destination`,
-  but the code does not read those names.
-- `replace_existing` defaults to `true`: an import overwrites an asset of the
-  same name in `dest_path`, and that is final ("No undo" above).
-- A large import or `batch_import` can hold the editor for more than 30 s
-  ("Timeouts" above).
-- In `batch_import`, **no matching file gives a bare `Error: ` with an empty
-  message**, and **any failed file turns the whole call into an error**, with
-  the per-file `results[]` dropped.
+Five operations: `import`, `batch_import`, `export`, `reimport`,
+`get_source`. **Load section `import` before you call it.** The parameter
+names are `fbx_path`, `fbx_directory` and `dest_path`; the plugin's
+`domains/assets.md` example uses `file_path` and `destination`, which the code
+does not read. `replace_existing` defaults to `true` and overwrites finally.
+In `batch_import`, no matching file gives a bare `Error: `, and one failed
+file turns the whole call into an error without the per-file list.
 
 ## Typical sequences
 
@@ -360,28 +222,24 @@ importing a character. What you must know even before that:
 
 **Delete an asset safely**
 
-1. `asset_referencers` `{"asset_path": "<path>"}`. Anything listed probably
-   breaks if you force the delete.
+1. `asset_referencers` `{"asset_path": "<path>"}`: anything listed breaks if
+   you force the delete.
 2. `asset` `{"operation": "delete", "asset_paths": ["<path>"]}`.
 3. Compare `deleted_count` with `requested_count`.
 
-Importing a character: section `import`.
-
-## When a call fails
-
-When a call returns an error or a result you did not expect, load section
-`failures`: a table from what you see to what it means and what to do, the
-path checks of `asset`, and the remaining errors of `set_asset_property`.
+Importing, moving with redirectors, finding unused assets, auditing
+dependencies: section `workflows`.
 
 ## See also
 
 - `ue-level-actors`: placed actors, and `set_property` for their values.
-- `ue-levels`: opening and saving levels, and `open_level save_as` for a level
-  that `save_all` skips.
+- `ue-levels`: opening and saving levels, `open_level save_as`.
 - `ue-blueprints`: Blueprint classes, defaults and variables.
+- `ue-python`: `execute_script`, for what no asset tool does.
+- `ue-viewport`: `capture_viewport` to look at an imported asset.
 - `unreagent-files`: why `.uasset` files must never be edited as files.
 - The plugin's background notes on asset loading and references, served by
   `unreal_get_ue_context` with category `assets`
-  (`Plugins/UELLMToolkit/Resources/mcp-bridge/contexts/assets.md`). The
-  plugin's field notes on imports and asset operations are in
+  (`Plugins/UELLMToolkit/Resources/mcp-bridge/contexts/assets.md`), and its
+  field notes on imports and asset operations in
   `Plugins/UELLMToolkit/Resources/domains/assets.md`.

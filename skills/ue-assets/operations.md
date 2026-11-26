@@ -1,8 +1,9 @@
 # The other `asset` operations
 
 The ten operations of the `asset` tool that the main skill does not describe.
-It covers `get_asset_info`, `set_asset_property`, `save_asset`, `save_all`
-and `delete`, the path forms ("Asset paths") and the result shape.
+The main skill covers `get_asset_info`, `save_asset`, `save_all` and
+`delete`, the path forms ("Asset paths") and the result shape; section
+`properties` covers `set_asset_property`.
 
 ## list_assets
 
@@ -46,10 +47,20 @@ section `json-types`.
 | `new_name` | the new asset name |
 | `new_path` | the new folder, such as `/Game/Props`. At least one of `new_name` and `new_path` is required |
 
-The rename goes through the editor's asset tools. The header says it leaves a
-redirector at the old path. The result holds `old_path`, `new_path` (folder
-plus name) and `success`. Errors: `At least one of new_name or new_path is
-required`, and `Failed to rename asset <path> to <folder>/<name>`.
+The rename goes through the engine's asset tools (`IAssetTools::RenameAssets`).
+Read in the UE 5.8.4 source (`AssetRenameManager.cpp`), that shows no dialog,
+checks files out of revision control automatically, loads the referencing
+packages, rewrites their references and **saves** them together with the
+renamed asset. A rename is therefore on disk at once. A **redirector** stays
+at the old path only when a referencer could not be fixed up: a level that
+references the asset, a read-only or out-of-date file, or a collection. The
+tool's header and the plugin's `domains/assets.md` say it always creates one.
+Section `workflows`, "Move or rename", has the follow-up.
+
+The result holds `old_path`, `new_path` (folder plus name) and `success`.
+Errors: `At least one of new_name or new_path is required`, and
+`Failed to rename asset <path> to <folder>/<name>`, which the engine also
+causes while the asset registry is still scanning after editor start.
 
 ## duplicate
 
@@ -89,11 +100,22 @@ target folder on disk. Errors: `Target directory does not exist: <dir>`,
 | `rename_folder` | `folder_path`, `new_folder_path` | moves the folder with its assets. Errors: `Source folder does not exist: <path>`, `Failed to rename folder <a> to <b>` |
 | `delete_folder` | `folder_path` | errors: `Folder does not exist: <path>`, `Failed to delete folder: <path> (must be empty — delete contained assets first)` |
 
-**Treat `delete_folder` as a recursive delete.** The toolkit's text says the
-folder has to be empty. Epic's documentation describes the engine function it
-calls, `UEditorAssetLibrary::DeleteDirectory`, as deleting the assets inside
-as well; this skill has run neither case. List the folder with `list_assets`
-and `recursive: true` before you call it.
+**`delete_folder` is a recursive force delete.** The toolkit's error text says
+the folder has to be empty. The engine function it calls
+(`UEditorAssetSubsystem::DeleteDirectory`, read in the UE 5.8.4 source) loads
+every asset in the folder and its subfolders, **force-deletes** them whether
+referenced or not, then removes the folder. A force delete of a Blueprint
+also deletes its placed instances in loaded levels. The error comes when not
+every asset could be deleted, and some may be gone already. List the folder
+with `list_assets` and `recursive: true`, and run `asset_referencers` on what
+you find, before you call it.
+
+All three folder operations go through the engine's editor-scripting
+functions, which refuse to run during Play In Editor (the log says
+`The Editor is currently in a play mode.`). So does their existence check,
+so during PIE `create_folder` fails with `Failed to create folder: <path>`,
+and the other two report an existing folder as missing. `rename_folder`
+renames each asset as `rename` does, with the same saving and redirectors.
 
 ## open_editor and set_preview_mesh
 
@@ -115,7 +137,7 @@ Detects changes cheaply, without loading the assets.
 |---|---|
 | `asset_paths` | required. An array of **package paths** |
 
-Each entry in `assets[]` holds `path`, `hash`, `file_size`, `mtime` (ISO 8601)
+The result holds `count` and `assets[]`. Each entry holds `path`, `hash`, `file_size`, `mtime` (ISO 8601)
 and `is_dirty`, or `error: "file_not_found"`. The hash is built from the file
 size, the modification time and the dirty flag. It is not a content hash,
 although the tool's description calls it one. Compare the hashes of one asset

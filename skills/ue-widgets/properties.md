@@ -9,8 +9,11 @@ what you sent. When no key applied, `set_property` and `set_slot` fail with
 `No recognized properties were set. Check property names and widget type.` and
 `No recognized slot properties were set. Check property names and slot type.`
 
-`get_properties` and `inspect` report the current values under the same key
-names. Read them first and match their spelling.
+`get_properties` and `inspect` report most current values under the same
+key names (`visual_properties`). Some keys you can set are **not reported**:
+`justification` and `auto_wrap` of a `TextBlock`, `is_marquee` of a
+`ProgressBar`, and `brush_texture` of an `Image` (its texture shows under
+`brush.texture`). A `Button` reports only `brushes`, a `Border` its `brush`.
 
 ## Colors
 
@@ -21,12 +24,35 @@ names. Read them first and match their spelling.
 - hex: `#RRGGBB` or `#RRGGBBAA`, with or without `#`. The digits are read as
   linear values, without sRGB conversion.
 
-**Any other string becomes white** without an error.
+**Any other string is read by its length, without an error**
+(`WidgetEditor.cpp:152-160`; engine `FColor::FromHex`, `Color.cpp:309-334`,
+and `FParse::HexDigit`, `Parse.h:148`, UE 5.8.4):
+
+- **6 characters** (after an optional `#`): `FF` is appended for alpha and
+  each character read as a hex digit, a non-hex character as 0. A word of six
+  letters such as `purple` comes out near-black (`#00000E`), opaque; a word
+  holding `a`–`f` gives an unpredictable colour (`orange` → `#00A00E`).
+- **8 characters**: the same, alpha included, so eight non-hex characters
+  give transparent black.
+- **any other length**: white (`#FFF` too, and any unknown name that is not 6
+  or 8 characters long).
 
 In a brush (`set_brush`), `tint` also takes an object: `{"hex": "#RRGGBB"}`, or
 `{"r", "g", "b", "a"}` with values from 0 to 1 and 1 for any value left out.
+`set_property` takes no color object: a color key given an object is dropped.
 
-`inspect` and `get_properties` report colors as `{r, g, b, a, hex}`.
+`inspect` and `get_properties` report colors as `{r, g, b, a, hex}`: `r` to
+`a` are the stored linear values, and **`hex` is converted to sRGB**. So
+the `hex` you read back differs from the `hex` you sent, except for black,
+white and pure primaries: `#808080` in is stored as linear 0.5 and reported
+as about `#BCBCBCFF` (the reported `hex` always has 8 digits, alpha last). Compare the `r`, `g`, `b` numbers, not the hex.
+
+To get an sRGB color you picked (from a design or a color picker) on screen,
+convert each channel to linear first (roughly `(c/255)^2.2`; UE's sRGB curve,
+unverified as exactly this) and pass a brush `tint` object, or the hex of the
+converted bytes. Whether the widget draws the stored value as linear (so the
+reported sRGB `hex` is what you see) is the usual UMG behaviour, unverified
+for this skill.
 
 ## set_property keys
 
@@ -34,7 +60,7 @@ These keys work on every widget:
 
 | Key | Value |
 |---|---|
-| `visibility` | an `ESlateVisibility` name as `inspect` reports it, such as `Visible`, `Collapsed`, `Hidden` (skipped if unknown) |
+| `visibility` | `Visible`, `Collapsed`, `Hidden`, `HitTestInvisible` or `SelfHitTestInvisible`, as `inspect` reports it (skipped if unknown; meanings in section `design`) |
 | `render_opacity` | number |
 | `is_enabled` | boolean |
 
@@ -84,11 +110,11 @@ report its `slot_type`. Six slot types are supported. Any other one fails with
 - In the canvas objects (`position`, `size`, `anchors`, `alignment`), a field
   left out keeps its current value.
 - An unknown `size_rule` is still listed as set, but changes nothing.
+- Numbers for `z_order`, `row`, `column` and the spans are cut to integers.
 
-The tool passes these numbers to the slot unchanged. In UMG's usual reading,
-which this skill has not checked, anchors and alignment are fractions:
-`{min_x: 0.5, min_y: 0.5, max_x: 0.5, max_y: 0.5}` anchors to the parent's
-center, and `alignment {x: 0.5, y: 0.5}` centers the widget on its position.
+The tool passes these numbers to the slot unchanged. What anchors, alignment,
+position and size mean, and ready objects for the common placements, are in
+section `layout`.
 
 ## set_brush targets
 
@@ -121,6 +147,7 @@ stays as it is.
 | `tiling` | `NoTile`, `Horizontal`, `Vertical`, `Both` |
 | `margin` | `{left, top, right, bottom}`; a side left out becomes 0 |
 
+`draw_as` and `tiling` are case-sensitive: `box` is not `Box`.
 `set_brush` does not report unparsed values. A texture that does not load, or
 a `draw_as` or `tiling` value outside the list, still appears in the
 message's list of set fields. It also succeeds when no field applied. Check

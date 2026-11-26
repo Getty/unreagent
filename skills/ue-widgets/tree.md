@@ -23,9 +23,13 @@ result's `new_index` is the one used. Errors: `Parent widget not found: <p>`,
 by default the source's parent. The copy is named `new_name`, and its children
 `<new_name>_<child name>`, made unique if needed. The copy and each copied
 child get new slots; slot settings are not copied, so set them with
-`set_slot`. Check the copy with `inspect`. The result has `source_name`,
+`set_slot`. Property values are copied from the source (bindings and bound
+events are not; they are keyed by widget name). Check the copy with
+`inspect`. The result has `source_name`,
 `clone_name`, `widgets_cloned` and `target_parent`. Errors: `Source widget not found: <n>`,
 `Widget with name '<n>' already exists`, `Target parent not found: <p>`,
 `Target parent '<p>' is not a panel widget (is <c>)`,
 `No valid target parent (source widget has no parent and no target specified)`,
 `Failed to clone widget`, `Failed to add cloned widget to target parent`.
+In a `batch`, missing parameters show as `clone_widget: missing new_name`
+and the like, one form per op (`<op>: missing <param>`).

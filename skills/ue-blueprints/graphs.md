@@ -21,8 +21,12 @@ Each operation compiles the Blueprint after the change.
 `graph_name` and `is_function_graph` (default false) pick the graph:
 
 - No `graph_name`: the first event graph, or with `is_function_graph: true`
-  the first function graph. Errors: `No event graphs found`,
-  `No function graphs found`.
+  the first function graph, which in an Actor Blueprint is the construction
+  script, `UserConstructionScript` (UE 5.8.4 source). Name the function you
+  mean. Errors: `No event graphs found`, `No function graphs found`.
+- `graph_name: "UserConstructionScript"` with `is_function_graph: true` is the
+  construction script; its entry node is the `FunctionEntry` node
+  `find_nodes` lists in that graph.
 - `graph_name: "AnimGraph"`: the AnimGraph of an Animation Blueprint, whatever
   `is_function_graph` says: `AnimGraph not found. Is this an Animation Blueprint?`.
 - Any other name is looked up among the event graphs, or with
@@ -52,7 +56,7 @@ parameters:
 | `VariableGet` (also `GetVariable`) | `variable` (required) | a getter |
 | `VariableSet` (also `SetVariable`) | `variable` (required) | a setter |
 | `Sequence` | `num_outputs` (default and minimum 2) | an exec sequence |
-| `Add`, `Subtract`, `Multiply`, `Divide` | — | a float math call |
+| `Add`, `Subtract`, `Multiply`, `Divide` | — | **fails on UE 5**, see "Math" |
 | `ModifyBone` | `bone_name` (required), `translation_mode`, `translation_space` | AnimGraph: Modify Bone |
 | `TwoBoneIK` | `bone_name` (required), `effector_space` | AnimGraph: Two Bone IK |
 | `ControlRig` | `control_rig_class` (required) | AnimGraph: Control Rig |
@@ -62,42 +66,92 @@ The tool's description lists the types of the first nine rows. `ModifyBone`,
 not check the graph's kind. Any other type returns
 `Unknown node type: '<t>'. Supported: …`.
 
-**`CallFunction`.** The function is looked up in `target_class`, then in
-`KismetSystemLibrary`, `KismetMathLibrary`, `KismetStringLibrary` and
-`GameplayStatics`, in that order. `target_class` is tried as a loaded class
-name, and the short names `KismetSystemLibrary`, `KismetMathLibrary`,
-`KismetStringLibrary`, `AnimInstance` and `GameplayStatics` always resolve. A
-`target_class` that does not resolve is ignored, and a library function of the
-same name can be picked instead. Read the result's `pins` to see which
-function you got. Errors: `Function name is required`, `Function '<f>' not found`.
+**`CallFunction`.** The function is looked up in `target_class` (with its
+parent classes), then in `KismetSystemLibrary`, `KismetMathLibrary`,
+`KismetStringLibrary` and `GameplayStatics`, in that order.
+
+- **`target_class` needs a full class path** for every class but five:
+  `/Script/Engine.Actor`, `/Script/Engine.Pawn`,
+  `/Script/Engine.PlayerController`, `/Script/UMG.UserWidget`, or a Blueprint's
+  `/Game/BP/BP_Door.BP_Door_C` for its own functions. Only the short names
+  `KismetSystemLibrary`, `KismetMathLibrary`, `KismetStringLibrary`,
+  `AnimInstance` and `GameplayStatics` resolve without one; any other bare
+  name (`Actor`, `Character`) is looked up by a search that finds no class
+  (`BlueprintGraphEditor.cpp:718`, the same engine lookup as `parent_class`
+  in section `modify`).
+- A `target_class` that does not resolve is **ignored without an error**, and
+  a library function of the same name can be picked instead. Read the
+  result's `pins` to see which function you got.
+- `function` is the engine's function name, not the title the editor shows:
+  `K2_GetActorLocation` ("Get Actor Location"), `K2_SetActorLocation`,
+  `K2_DestroyActor`, `GetPlayerController`, `PrintString`, `Delay`,
+  `Add_DoubleDouble`. The C++ headers or a Python `dir()` on the class give
+  the names (unverified for each function named here beyond the UE 5.8.4
+  headers).
+- A member function (not a static library one) has a `self` pin. Left
+  unwired it targets the Blueprint itself, which compiles only when the
+  Blueprint is of that class. For another object, wire an object into
+  `self`.
+
+Errors: `Function name is required`, `Function '<f>' not found`.
 
 **`Event`.** `BeginPlay`, `Tick` and `EndPlay` map to the Actor events
-`ReceiveBeginPlay`, `ReceiveTick` and `ReceiveEndPlay`. Any other name must be
-a function of the parent class, such as `BlueprintUpdateAnimation` in an
-Animation Blueprint. There is no custom event type. The tool does not check
-whether the event already has a node. Run `find_nodes` first. Errors:
+`ReceiveBeginPlay`, `ReceiveTick` and `ReceiveEndPlay`, whatever the
+Blueprint's parent class is (`BlueprintGraphEditor.cpp:829`). In a Widget
+Blueprint or any other non-Actor Blueprint they give a node for an Actor
+event, which does not belong there; a widget's own `Tick` cannot be reached
+by that name at all. Widget events: skill `ue-widgets`, section `events`. Any other name is
+looked up as a function of the parent class by its engine name:
+`ReceiveActorBeginOverlap`, `ReceiveHit`, `ReceiveDestroyed`,
+`ReceivePossessed` (Pawn), `BlueprintUpdateAnimation` (Animation Blueprint).
+The tool accepts **any** function of the parent class there, not only
+events; a name that is not an overridable event gives a node that does not
+compile. There is no custom event type, and no event from an interface. The
+tool does not check whether the event already has a node. Errors:
 `Event name is required`, `Event '<e>' not found. Common events: BeginPlay, Tick, EndPlay`.
 
+**Pre-placed events.** A new Actor Blueprint already has disabled placeholder
+nodes for `ReceiveBeginPlay`, `ReceiveActorBeginOverlap` and `ReceiveTick`
+(section `modify`, `create`). Find them with `find_nodes`,
+`node_class: "K2Node_Event"`, and wire from them instead of adding a second
+node for the same event (what the compiler does with two is unverified).
+**Wiring a placeholder enables it and clears its comment, and with the
+comment goes the ID a query wrote there** (`UEdGraphPin::MakeLinkTo` in the
+UE 5.8.4 source, not run). After the first wire to such a node, run
+`find_nodes` again for its new ID, or use its engine object name
+(`K2Node_Event_0`), which every node lookup accepts.
+
 **`EnhancedInputAction`.** `action_path` is the Input Action asset, such as
-`/Game/Input/IA_Look` (skill `ue-enhanced-input`). The plugin's source
-comments name the node's pins: one exec output per trigger event (`Started`,
-`Ongoing`, `Triggered`, `Completed`, `Canceled`), plus `ActionValue`,
-`ElapsedSeconds`, `TriggeredSeconds` and `InputAction`. `Triggered` is the
-usual exec pin. Errors:
+`/Game/Input/IA_Look` (skill `ue-enhanced-input`). The node has one exec
+output per trigger event (`Started`, `Ongoing`, `Triggered`, `Completed`,
+`Canceled`), plus `ActionValue` (its type follows the action's value type:
+bool, real or a vector struct), `ElapsedSeconds`, `TriggeredSeconds` and
+`InputAction` (`K2Node_EnhancedInputAction::AllocateDefaultPins`, UE 5.8.4
+source). `Triggered` is the usual exec pin; the editor folds the others away
+as advanced pins, `get_node` still lists them. The node fires only when a
+mapping context with the action is on the player's Enhanced Input subsystem
+and the actor receives input (section `workflows`). Errors:
 `action_path is required for EnhancedInputAction (e.g. '/Game/Input/IA_Look')`,
 `InputAction '<p>' not found`.
 
 **`VariableGet`, `VariableSet`.** A getter takes a variable of the Blueprint or
 a property of its parent class. A setter takes only the Blueprint's own
-variables. Errors: `Variable name is required`,
+variables. Neither reaches a component added in the Blueprint or a widget of
+a Widget Blueprint's tree marked as variable: both are properties of the
+generated class, not Blueprint variables, and the lookup misses them
+(`BlueprintGraphEditor.cpp:888`). Errors: `Variable name is required`,
 `Variable '<v>' not found in Blueprint or parent class` (getter),
 `Variable '<v>' not found in Blueprint` (setter).
 
-**Math.** `Add`, `Subtract`, `Multiply` and `Divide` call the math library
+**Math.** `Add`, `Subtract`, `Multiply` and `Divide` look up the math library
 functions `Add_FloatFloat`, `Subtract_FloatFloat`, `Multiply_FloatFloat` and
-`Divide_FloatFloat`. When the engine has no such function, the error is
-`Math function '<f>' not found`. Then use `CallFunction` with
-`target_class: "KismetMathLibrary"` and a function the engine has.
+`Divide_FloatFloat` (`BlueprintGraphEditor.cpp:1004`). UE 5 names them
+`Add_DoubleDouble`, `Subtract_DoubleDouble`, `Multiply_DoubleDouble` and
+`Divide_DoubleDouble`; the old names survive only as load-time redirects in
+`BaseEngine.ini`, which a name lookup does not follow (UE 5.8.4 source). Expect
+`Math function 'Add_FloatFloat' not found` and use `CallFunction` with
+`target_class: "KismetMathLibrary"` and `function: "Add_DoubleDouble"` (or
+`Add_IntInt`, `Add_VectorVector`, …) instead.
 
 **AnimGraph nodes.**
 
@@ -114,6 +168,15 @@ functions `Add_FloatFloat`, `Subtract_FloatFloat`, `Multiply_FloatFloat` and
   `Control Rig '<p>' has no generated class (compile it first)`,
   `'<p>' is not a Control Rig (generated class is not a UControlRig subclass)`.
   The rig's own graph is edited with `control_rig` (skill `ue-control-rig`).
+
+**What the node types cannot build.** There is no node type for a cast, a
+custom event, an event dispatcher (bind, call, assign), an interface call or
+message, a timeline, a macro instance (`ForEachLoop`, `DoOnce`, `IsValid`),
+`SpawnActorFromClass`, `CreateWidget`, a "Get … Subsystem" node, `Select`,
+`Switch`, `MakeArray`, a struct's Make or Break node, or `Self`. A pure library
+function stands in for some (`MakeVector` and `BreakVector` from
+`KismetMathLibrary`, `IsValid` from `KismetSystemLibrary`); for the rest see section `workflows`, "What to do
+when a node type is missing".
 
 **Node IDs.** A new node's ID is `<node_type>_<detail>_<n>`: the type as you
 spelled it, then the function, event, action path, variable, math operation,
@@ -230,6 +293,16 @@ default-value format and cannot be empty. Error:
 then echoes your value, but the pin keeps its old one. Read the pin back with
 `blueprint_query get_node`, and match the format of the `default_value` shown
 there for pins of that type.
+
+Formats the engine's K2 schema takes (UE 5.8.4 source,
+`UEdGraphSchema_K2::GetPinDefaultValuesFromString`): numbers and booleans as
+text (`"0.5"`, `"true"`), a vector as `"1,2,3"` (unverified), an enum by its
+value name, and **an object or class pin by its full object path**,
+`/Game/Input/IMC_Default.IMC_Default`: only a path with the `.Object` part
+loads the asset; anything else is kept as text and the pin stays empty. An
+object pin set this way shows no `default_value` in `get_node` or in
+`get_node_connections` (both read only the text value; section `query`), so
+the read-back cannot confirm it: confirm it in play.
 
 ## layout_graph
 

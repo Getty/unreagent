@@ -5,6 +5,43 @@ work on any DataTable. None of them saves: `set_row` and `delete_row` mark
 the table's package dirty, and `asset` `save_asset` with the table's path
 writes it (skill `ue-assets`).
 
+## Workflow: change rows safely
+
+1. `list_data_tables` with the narrowest `folder_path` you know; take the
+   `path`.
+2. `inspect_data_table`: the column names (use these, not the editor's
+   display names), types, `row_names`.
+3. `get_row` for every row you will touch, and keep the result: it is your
+   undo.
+4. `set_row` with only the columns you change, each in the value form below.
+   Check `is_new_row` (`false` when you meant to update) and compare the
+   returned `row_data` with what you meant.
+5. `asset` `save_asset` with the table's path (skill `ue-assets`).
+6. If gameplay reads the table, run PIE (skill `ue-pie-testing`) and check
+   the behaviour and `get_output_log`. A running game reads the row when its
+   code calls `Get Data Table Row`; when that happens is the game's (code
+   that caches rows at start sees an edit only in the next session).
+
+Many rows: one `set_row` per row, then one save. There is no batch
+operation and no CSV/JSON import in this tool.
+
+## DataTable, Data Asset or variables
+
+| Use | When |
+|---|---|
+| DataTable | many rows of one struct, looked up by row name: items, enemy stats, dialogue lines; designers edit it as a table |
+| Data Asset (`UPrimaryDataAsset` subclass) | one record per asset, referenced directly, possibly with its own logic; asset manager loading |
+| Blueprint variables / class defaults | a handful of values that belong to one class |
+
+This tool edits existing DataTables only. Creating one needs a row struct
+(C++ `FTableRowBase` subclass, or a User Defined Struct asset) and a new
+DataTable asset with that row type; no toolkit tool does both for an
+arbitrary struct (the character stats tables of `character_data` are the
+exception, skill `ue-character-data`). Creating them is editor work by hand
+or through `execute_script` (skill `ue-python`), not exercised for this
+skill. Changing a User Defined Struct's columns changes every table using
+it: do it in the editor, then re-inspect.
+
 ## table_path
 
 The table's asset path, `/Game/Data/DT_Items`, or the object path that

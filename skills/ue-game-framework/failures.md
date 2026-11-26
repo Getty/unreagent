@@ -1,8 +1,9 @@
 # game_framework: when a call fails
 
-The recipes, "What a success does not prove" and the passage on each
-operation are in the skill itself. The errors of the DataTable operations
-are in section `datatables`.
+The must-not-get-wrong list is in the skill itself; each operation in full
+is in sections `game-mode`, `player-controller` and `datatables` (which has
+the DataTable errors). A character that does not play is in section
+`playable-character`, "When it does not work".
 
 ## set_game_mode_defaults errors
 
@@ -13,6 +14,16 @@ are in section `datatables`.
 | `Failed to load player controller class: <path>` | likewise |
 | `Failed to load HUD class: <path>` | likewise |
 | `No class overrides specified. Provide at least one of: default_pawn_class, player_controller_class, hud_class` | all three absent or empty |
+| `Failed to get game mode CDO` | the GameMode Override holds a class that is not a game mode, possible after `set_property` on `WorldSettings`, which does not check the base class (section `game-mode`) |
+| `Editor not available` / `No editor world available` | the editor is still starting or shutting down |
+
+## Other errors
+
+| Error | Cause |
+|---|---|
+| `Unknown operation: '<op>'. Valid: …` | not one of the twelve and not an alias (section `aliases`); the name shown is lowercased |
+| `Missing required parameter: <name>` | a required string absent or `""` |
+| `Unknown error` | the editor-side helper returned no message (unexpected) |
 
 ## How paused and show_cursor are read
 
@@ -43,3 +54,8 @@ source, not run, while the toolkit targets UE 5.6 and 5.7). Read `paused` or
 | the new pawn class is gone after an editor restart | the game mode asset was not saved, the game mode is a C++ class, or the value did not survive the Blueprint being compiled again, which this skill could not settle from the source | for a Blueprint game mode use `blueprint_modify` `set_cdo_default`, then compile and save (skill `ue-blueprints`, section `modify`); see "What a success does not prove" |
 | `No game mode configured. …` but the game plays | the level relies on the project's default game mode | set a GameMode Override in the level's World Settings, or read the project setting in the editor |
 | a row change is gone after a restart | the table was not saved | `asset` `save_asset` |
+| `set_row` reports `is_new_row: true` for an update | the `row_name` was misspelt or cased differently | `delete_row` the new row, retry with the name from `inspect_data_table` |
+| a struct or transform column did not change, no error | unknown keys inside a struct object are skipped; a transform in `get_row` form is skipped | section `datatables`, value forms; send UE text form, read back |
+| input stops working after `set_input_mode` `ui_only` | UI only blocks game input | `set_input_mode` `game_only` |
+| `inspect_game_mode` shows the old classes during PIE | it reads the editor world and class defaults, not the PIE session | expected; look at the session itself: `capture_pie` (skill `ue-pie-testing`) |
+| `Mixing AGameStateBase with AGameMode is not compatible` in the log | game mode and game state from different families | pair `GameMode`+`GameState` or `GameModeBase`+`GameStateBase` (section `game-mode`) |

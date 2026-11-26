@@ -23,3 +23,16 @@ are in the skill itself, under "Mappings".
 | `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight` | `Gamepad_DPad_Up`, `Gamepad_DPad_Down`, `Gamepad_DPad_Left`, `Gamepad_DPad_Right` |
 | `Start`, `Options`, `Menu` | `Gamepad_Special_Right` |
 | `Select`, `Share`, `View` | `Gamepad_Special_Left` |
+
+The aliases sit in a `TMap` keyed by `FString`, whose lookup ignores case,
+so `lmb` should work as well (read, not run); write them as shown. The list in
+the `Invalid key name` message names only some of them; this table is the
+whole list (`ParseKey`, `MCPTool_EnhancedInput.cpp`).
+
+Common engine key names, for reference: letters `A`–`Z`, `SpaceBar`,
+`LeftShift`, `LeftControl`, `LeftAlt`, `Tab`, `Escape`, `Enter`,
+`One`–`Zero` for the number row, `Up`/`Down`/`Left`/`Right` for the arrow
+keys, `Mouse2D` (mouse movement as one 2D value), `MouseX`, `MouseY`,
+`MouseWheelAxis`, `Gamepad_Left2D` / `Gamepad_Right2D` (a whole stick). Any
+key `FKey` knows is accepted; the result's `key` echoes what you sent, and
+`query_context` shows the engine name.

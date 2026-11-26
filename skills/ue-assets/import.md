@@ -29,17 +29,39 @@ code does not read those names.
 | `custom_sample_rate` | `0` | animation sample rate. At 0 or below the tool sets none |
 | `snap_to_frame_boundary` | `false` | animation option |
 
-`auto` starts from the static-mesh options and leaves it to the engine's FBX
-factory to switch to a skeletal mesh when the file holds one. For a skeletal
-mesh that must share an existing skeleton, use `mesh_type: "skeletal"` with
-`skeleton_path`.
+### Interchange, and mesh_type auto
 
-The options above belong to the legacy FBX factory. The plugin's
-`domains/assets.md` says UE 5.7 imports through Interchange. Whether every
-option still applies there cannot be seen in this code: check the result.
+The tool fills the legacy FBX options (`UFbxImportUI`) and hands them to the
+engine's import tasks. When Interchange handles FBX, the engine converts
+those options into its generic assets pipeline. Read in the UE 5.8.4 source:
+the switch is the console variable `Interchange.FeatureFlags.Import.FBX`,
+default `true` (`InterchangeFbxTranslator.cpp`), and the conversion
+(`InterchangeFbxAssetImportDataConverter.cpp`, `ConvertToInterchange`)
+carries `import_materials`, `import_textures`, `generate_collision`,
+`combine_meshes`, `normal_import`, the skeleton, `import_animations`,
+`custom_sample_rate` and `snap_to_frame_boundary` over. The plugin's
+`domains/assets.md` says UE 5.7 imports through Interchange; for 5.6 this has
+not been checked (forum reports date Interchange as the FBX default to 5.5).
+
+- **`auto` imports every mesh as a static mesh under Interchange.** It sets
+  the static-mesh type, and the conversion turns that into "force all meshes
+  to static mesh, no skeletal meshes". The legacy factory's switch to a
+  skeletal mesh does not happen there. Pass `mesh_type` explicitly: `static`
+  for props, `skeletal` with `skeleton_path` for a character. To give a
+  skinned mesh a new skeleton of its own, no `mesh_type` of this tool fits:
+  `skeletal` requires an existing one. Use the editor's Import, or Python
+  (skill `ue-python`).
+- Only FBX is this tool's documented case. `fbx_path` is checked for
+  existence only, so another file type reaches the engine's importer for its
+  extension with FBX options attached; what comes out is not verified. For
+  textures, sounds, glTF or USD see section `workflows`, "Which route".
 
 The result holds `imported_assets[]` (`name`, `path`, `class`), and the message
-is `Imported 2 asset(s) from SM_Rock`.
+is `Imported 2 asset(s) from SM_Rock`. An import also creates the materials
+and textures the FBX names unless you turn them off; whether they are listed
+in `imported_assets` has not been verified, so read the folder back. After
+an import, check the classes: a `StaticMesh` where you expected a
+`SkeletalMesh` means the type was wrong.
 
 | Error | Meaning |
 |---|---|
@@ -101,9 +123,16 @@ timestamps, but none are returned.
 | `import_translation` | `{x, y, z}`. Pass all three |
 | `import_uniform_scale` | a scale override. A value of 0 or below is ignored |
 
-The overrides are applied to the asset's FBX import data, or to its Interchange
-generic-assets pipeline. The result holds `asset_path`, `asset_class` and
-`new_source_path`.
+A key left out of `import_rotation` or `import_translation` counts as 0, not
+as the current value. The overrides are applied to the asset's FBX import
+data, or to its Interchange generic-assets pipeline. The result holds
+`asset_path`, `asset_class` and, only when you passed it, `new_source_path`.
+The plugin's `domains/assets.md` notes that the overrides do not change a
+skeleton's reference pose.
+
+**The new source path and the overrides are written before the reimport runs.**
+When the reimport then fails, the asset keeps them in memory (unsaved), and the
+next reimport uses them. Check with `get_source`.
 
 | Error | Meaning |
 |---|---|
@@ -118,5 +147,17 @@ generic-assets pipeline. The result holds `asset_path`, `asset_class` and
 
 1. `asset` `{"operation": "create_folder", "folder_path": "/Game/Characters/Hero"}`.
 2. `asset_import` `{"operation": "import", "fbx_path": "D:/Art/Hero.fbx", "dest_path": "/Game/Characters/Hero", "mesh_type": "skeletal", "skeleton_path": "/Game/Characters/Shared/SK_Base"}`.
-3. Note the skeletal mesh in `imported_assets`. Import the animations with
-   `mesh_type: "animation"` and the same skeleton.
+3. Check `imported_assets`: a `SkeletalMesh` (and possibly a `PhysicsAsset`),
+   not a `StaticMesh`. `get_asset_info` on the mesh lists its material
+   `slot`s.
+4. Import the animations with `mesh_type: "animation"` and the same skeleton,
+   one file per call or `batch_import` over their folder. For animations the
+   `retarget` tool has its own FBX import (skill `ue-retarget`, section
+   `import`); the plugin notes that root motion is not enabled by an import.
+5. `asset` `set_preview_mesh` on an animation to see it on the new mesh, then
+   `capture_viewport` (skill `ue-viewport`) to look at it.
+6. `asset` `save_all` if you passed `save: false`.
+
+`skeleton_path` may name the Skeleton or a SkeletalMesh that uses it. The
+FBX's bone hierarchy has to match that skeleton; a mismatch fails the import
+or produces a broken mesh (engine behaviour, not verified here).

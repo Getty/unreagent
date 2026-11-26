@@ -14,269 +14,171 @@ Two tools of the UE LLM Toolkit plugin work on levels as a whole:
 
 - `open_level` opens a level, creates one, saves the current level under a
   path, and lists the editor's level templates.
-- `level_query` surveys the open level. It lists the gameplay actors by class,
-  searches them, and dumps one actor in detail.
+- `level_query` surveys the open level: gameplay actors by class, a search,
+  and one actor in detail.
 
-Placing and changing single actors is the subject of `ue-level-actors`.
+Placing and changing single actors: skill `ue-level-actors`.
 
 This skill was written from the toolkit's C++ source. It has not been exercised
 against a running editor.
 
-This skill has two sections:
-
 | Section | Holds | Load it |
 |---|---|---|
-| `filtered-classes` | the class-name prefixes and the exact class names that `level_query` `list` and `find` leave out as engine infrastructure, and the light classes that `list` leaves out | before you conclude from `list` or `find` that the level holds no actor of a class, or when an actor you expect is missing from either |
-| `failures` | the checks a level path goes through, each with its error; the errors of `open`, `new` and `save_as` with their meaning; the failure table (what you see, what it means, what to do) | when a call returns an error or does not return, or a result is not what you expect |
+| `workflows` | worked sequences: create a level and give it a home, switch levels, populate and verify, repair after a bad edit | before you create, switch or rebuild a level |
+| `level-types` | World Partition versus classic levels, One File Per Actor and what a save writes, templates, sublevels and streaming (no tool) | before you work in a level you did not create, or when actors are missing from a query, or a save does not stick |
+| `filtered-classes` | every class prefix and name `level_query` `list` and `find` leave out, the light classes `list` leaves out, and the keys of `filtered_categories` | before you conclude from `list` or `find` that the level holds no actor of a class |
+| `failures` | the checks a level path goes through, the errors of `open`, `new` and `save_as`, the failure table | when a call returns an error or does not return, or a result is not what you expect |
 
 ## Before the first call
 
 - **Tool names.** The bridge lists them as `unreal_open_level` and
-  `unreal_level_query`, and your client may add its own prefix. This skill uses
-  the bare names, as the plugin's errors do.
-- **Result shape.** Success is the message, a blank line, then JSON. By
-  default the bridge goes through the task queue, so that JSON is a task
-  envelope (`task_id`, `status`, `success`, `message`, …), and the tool's own
-  fields, the ones named in this skill, sit under its `data` key. Failure is
-  `Error: <message>` with no data. Skill `ue-tasks` covers the task tools.
-- **The editor world.** Both tools act on the level open in the editor, never
-  on a Play-In-Editor session. `level_query` fails with `No active world. Open
-  a level in the editor first` when no level is open.
+  `unreal_level_query`; your client may add its own prefix.
+- **Result shape.** Success is the message, a blank line, then JSON. By default
+  the bridge goes through the task queue, so that JSON is a task envelope
+  (`task_id`, `status`, `success`, `message`, …) and the tool's own fields sit
+  under its `data` key. Failure is `Error: <message>` (skill `ue-tasks`).
+- **The editor world.** Both act on the level open in the editor, never on a
+  Play-In-Editor session.
+- **World Partition: only loaded actors exist for the tools.** In a World
+  Partition level the editor loads only part of the map, and `level_query`
+  (like the actor tools) sees only loaded actors. Section `level-types`.
 - **Timeouts.** After 300 s (`MCP_ASYNC_TIMEOUT_MS`) the bridge returns `Error:
   Task timed out after 300000ms (task_id: …)`. That ends the wait, not the
-  work: a level can still finish loading afterwards. Follow the task up
-  (`ue-tasks`) before you try again. Loading a large level can hold the editor
-  for more than 30 s; run `open_level` as skill `ue-tasks`, "A 30 s timeout
-  can crash the editor", describes.
+  work: a level can still finish loading. Follow the task up (`ue-tasks`)
+  before you retry. A large level can hold the editor for more than 30 s; run
+  `open_level` as skill `ue-tasks`, "A 30 s timeout can crash the editor",
+  describes.
 
 ## Level paths
 
-`open_level` takes the level's **package path**, not a file path and not an
-object path: `/Game/Maps/Arena`, without `.umap`. `asset_search` (skill
-`ue-assets`) finds levels with `class_filter: "World"`. Its `path` field is the
-object path `/Game/Maps/Arena.Arena`. The part before the dot is the package
-path.
+`open_level` takes the **package path**: `/Game/Maps/Arena`, not a file path,
+not an object path, and **without `.umap`** (a path ending in `.umap` skips
+the existence check and fails later). `asset_search` (skill `ue-assets`) finds
+levels with `class_filter: "World"`; its `path` is the object path
+`/Game/Maps/Arena.Arena`, and the part before the dot is the package path.
 
-A path is refused when it is empty, longer than 512 characters, under
-`/Engine/` or `/Script/`, holds `..` or one of
-`` < > | & ; ` $ ( ) { } [ ] ! * ? ~ ``, or does not start with `/Game/`. Each
-check has an error of its own (section `failures`).
+A path is refused when it is empty, over 512 characters, under `/Engine/` or
+`/Script/`, holds `..` or one of `` < > | & ; ` $ ( ) { } [ ] ! * ? ~ ``, or
+does not start with `/Game/`. A level in a plugin's content folder therefore
+cannot be opened or saved through `open_level`.
 
-A level inside a plugin's content folder therefore cannot be opened or saved
-through `open_level`.
+## The save prompt: never leave one open
 
-## Unsaved changes and the save prompt
+The tool says: "The editor will prompt to save unsaved changes before
+switching levels." `open` always uses the engine's save prompt; `new` prompts
+unless `save_current: false` (the code only hands that flag to the engine).
 
-The tool's own description says: "The editor will prompt to save unsaved
-changes before switching levels." By its parameter text, `open` always uses
-the engine's built-in save prompt, and `new` prompts unless you pass
-`save_current: false`. The code only hands that flag to the engine, so when
-the engine prompts has not been verified.
+A save prompt waits for a person. With nobody at the editor, expect the call
+not to return before the bridge gives up (unverified). So:
 
-A save prompt waits for a person to click. With nobody at the editor, nothing
-answers it, so expect the call not to return before the bridge gives up. This
-has not been verified against a running editor. Leave the prompt nothing to ask:
+1. Save first: `asset` `{"operation": "save_all"}` (skill `ue-assets`), or
+   `save_as` for a level never saved.
+2. Then `open`, or `new` with `save_current: false`.
 
-1. Save first: `asset` with `{"operation": "save_all"}` (skill `ue-assets`),
-   or `save_as` for a level that has never been saved.
-2. Then call `open`, or `new` with `save_current: false`.
-
-No parameter discards unsaved changes without a prompt. Changes you do not want
-have to be undone by hand, or dropped with an editor restart
+No parameter discards unsaved changes. Drop them with an editor restart
 (`unreagent-iterate`).
 
 ## open_level
 
-`action` is required. It is lowercased and trimmed, so `Open` works too. An
-unknown action gives `Unknown action: '<action>'. Use 'open', 'new',
-'save_as', or 'list_templates'.`
+`action` is required, lowercased and trimmed. Unknown: `Unknown action:
+'<action>'. Use 'open', 'new', 'save_as', or 'list_templates'.`
 
-The errors of each action, with their meaning, are in section `failures`.
+**`open`** — `level_path` (required). Replaces the current level. Result:
+`action`, `levelPath`, `mapName`, `worldName`; message `Opened level: Arena`.
 
-### open
+**`new`** — `template` (default: blank level), `save_current` (default
+`true`). Replaces the current level.
 
-Opens a level and replaces the current one.
+- Blank: result `action`, `template: "blank"`, `mapName`; message `Created new
+  blank map: <name>`. The level has no `/Game/` path yet: `save_as` it before
+  you rely on `save_all`, which skips packages under `/Temp/`.
+- With `template`: the **first** template, in `list_templates` order, whose
+  name equals the string (ignoring case) **or whose map path contains it**.
+  Pass a `name` exactly as listed; a short string can hit an earlier template.
+  The template's own map is **opened**, not copied: `save_as` to a `/Game/`
+  path before you change anything. `save_current` is not used on this branch.
 
-| Parameter | Meaning |
-|---|---|
-| `level_path` | required. Package path, such as `/Game/Maps/Arena` |
+**`save_as`** — `save_path` (required, checked like any level path). Saves the
+open level there through the engine's `FEditorFileUtils::SaveMap`. Result:
+`action`, `save_path`, `filename` (the file on disk), `mapName`; message
+`Saved level to: /Game/Maps/Arena`. What the engine does (read in the UE 5.8.4
+source, `FileHelpers.cpp` `SaveWorld`, not run):
 
-The result holds `action`, `levelPath`, `mapName` and `worldName`, and the
-message is `Opened level: Arena`.
+- **A level never saved** (after `new`) is renamed to the new path: you go on
+  editing it there, and `mapName` is the new name.
+- **A level already on disk** is **duplicated** to the new path; the editor
+  keeps editing the original, and `mapName` is the old name. `open` the copy
+  before editing it.
+- **Map files already at the destination are deleted first**: `save_as`
+  overwrites without asking. Check the path is free.
+- A World Partition level has all its actors loaded before the rename, which
+  can be slow and memory-heavy on a large map.
 
-### new
-
-Creates a new level and replaces the current one.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `template` | blank level | the name of a template from `list_templates` |
-| `save_current` | `true` | by its parameter text, `true` prompts to save the current level first. Pass `false` after you have saved |
-
-Without `template`, the result holds `action`, `template: "blank"` and
-`mapName`, and the message is `Created new blank map: <name>`. The new level
-has no package path yet: give it one with `save_as` before you rely on
-`save_all`, which skips packages under `/Temp/`.
-
-With `template`, the tool picks the first template whose name equals the string
-(ignoring case) or whose map path contains it. Pass a `name` exactly as
-`list_templates` returns it, because a short string can match more than one
-template.
-
-- **The template's own package is opened.** The code loads the template map
-  itself, not an untitled copy. Before you change anything, `save_as` to a
-  `/Game/` path. `save_all` skips `/Engine/` packages, so edits to an engine
-  template are not saved in place.
-- `save_current` is not used on this branch. Any prompt is the engine's own,
-  as for `open`.
-
-### save_as
-
-Saves the level that is open in the editor under a package path.
-
-| Parameter | Meaning |
-|---|---|
-| `save_path` | required. Package path, such as `/Game/Maps/Arena`, checked like any level path |
-
-The tool hands the engine's map save the file name for that path. The result
-holds `action`, `save_path`, `filename` (the file path on disk) and `mapName`,
-and the message is `Saved level to: /Game/Maps/Arena`. Whether the editor then
-goes on editing the level under the new path is not verified: compare
-`mapName` with the name you saved under, and if they differ, `open` the saved
-path before you go on editing, so that later saves land in the file you meant.
-
-### list_templates
-
-Takes no parameters. The result holds `action`, `count` and `templates[]`, each
-entry with `name` and `mapPath`. The message is `Found 4 available map
-templates.`
+**`list_templates`** — no parameters. Result: `action`, `count`,
+`templates[]` with `name` and `mapPath`.
 
 ## Saving a level
 
 | Situation | Call |
 |---|---|
-| a level that has never been saved (after `new`) | `open_level` `save_as` with a `/Game/` path |
-| a level that already has a `/Game/` path | `asset` `save_all` (skill `ue-assets`). It saves every dirty package without a dialog, the level and every changed asset included |
+| never saved (after `new`) | `open_level` `save_as` with a `/Game/` path |
+| already has a `/Game/` path | `asset` `save_all` (skill `ue-assets`): every dirty package, no dialog, the level and changed assets included |
 | a copy under a new path | `open_level` `save_as`, then check `mapName` |
+
+In a One File Per Actor level, actor changes live in the actors' own files;
+section `level-types` says what to check after a save.
 
 ## level_query
 
-`operation` is required. It is lowercased, and these aliases are accepted:
-`search` for `find`, and `get`, `get_info` and `inspect` for `info`. An
-unknown operation gives `Unknown operation: '<op>'. Valid: list, find, info`,
-with a "Did you mean" suggestion when one is close.
+Read-only. The open level is checked first (`No active world. Open a level in
+the editor first`), then `operation` (required, lowercased; aliases `search`
+→ `find`, `get` / `get_info` / `inspect` → `info`). Unknown: `Unknown
+operation: '<op>'. Valid: list, find, info`, plus ` Did you mean '<op>'?` when
+one is close. It works on **labels** (what the World Outliner shows) and
+leaves engine infrastructure out of `list` and `find`: landscapes, foliage,
+navigation data, World Partition and level-instance actors, game-mode
+classes, sky and fog actors, and more; `list` also leaves out the four light
+classes, `find` keeps them. Section `filtered-classes` has every rule.
 
-`level_query` is read-only. It works on **labels**, the names the World
-Outliner shows, and leaves engine infrastructure out of `list` and `find`.
+**`list`** — no paging; large on a large level. Result: `map_name`,
+`total_actors`, `gameplay_actors`, `filtered_count`; `by_class` (class name →
+array of `{label, class, location}`, classes and labels sorted); and, when
+anything was filtered, `filtered_categories` (counts). Message `37 gameplay
+actors (412 filtered)`.
 
-### What counts as infrastructure
+**`find`** — `pattern` (required: `'find' operation requires a 'pattern'
+parameter`): case-insensitive substring of label or class name. Result:
+`map_name`, `pattern`, `total_actors`, `match_count`, `matches[]` sorted by
+label, each with `label`, `class`, `location`, `rotation`, `scale` and, in an
+Outliner folder, `folder`.
 
-The filter goes by the actor's class name: by prefix, such as `Landscape`,
-`Foliage`, `NavMesh`, `WorldPartition` and `LevelInstance`, and by exact
-name, such as `WorldSettings`, `GameMode`, `HUD`, `SkyLight`,
-`ExponentialHeightFog` and `Brush`. `list` also leaves out the four light
-classes `DirectionalLight`, `PointLight`, `SpotLight` and `RectLight`; `find`
-includes them. Load section `filtered-classes` before you conclude from
-`list` or `find` that the level holds no actor of a class, or when an actor
-you expect is missing from either: it has every prefix and every class name.
-
-A level-instance actor or a landscape never shows up here. Use
-`get_level_actors` (skill `ue-level-actors`) for those.
-
-### list
-
-Takes no other parameters and has no paging. On a large level, the result is
-large.
-
-The result holds:
-
-- `map_name`, `total_actors`, `gameplay_actors` and `filtered_count`;
-- `by_class`, an object that maps each class name to an array of
-  `{label, class, location}`;
-- `filtered_categories`, counts of what the filter left out, lights under
-  `Lights` among them.
-
-The message is `37 gameplay actors (412 filtered)`.
-
-### find
-
-| Parameter | Meaning |
-|---|---|
-| `pattern` | required. Case-insensitive substring of the label or of the class name |
-
-A missing pattern gives `'find' operation requires a 'pattern' parameter`.
-Infrastructure is left out, but lights are included. The matches are sorted by
-label.
-
-The result holds `map_name`, `pattern`, `total_actors`, `match_count` and
-`matches[]`. Each match carries `label`, `class`, `location`, `rotation`,
-`scale` and, when the actor sits in an Outliner folder, `folder`.
-
-### info
-
-| Parameter | Meaning |
-|---|---|
-| `actor_label` | required. The actor's whole label, compared without regard to case. The object name does not work here |
-
-A missing label gives `'info' operation requires an 'actor_label' parameter`.
-The first actor with that label is used.
-
-The result holds:
-
-- `map_name`, `label`, `class` and `name`, the object name to use with the
-  `ue-level-actors` tools;
-- `blueprint_path`, for an actor of a Blueprint class;
-- `transform`, with `location`, `rotation` and `scale`;
-- `component_count` and `components[]`. Each component carries `name` and
-  `class`, plus `is_primitive: true` for components that render or collide;
-- `collision`: the collision setup of the actor's primitive components.
-
-`Actor '<label>' not found` is all you get when nothing matches. The plugin
-works out near-miss suggestions, but the tool returns only the error message
-and leaves them out. Run `find` with part of the label instead.
-
-### level_query or get_level_actors
+**`info`** — `actor_label` (required: `'info' operation requires an
+'actor_label' parameter`): the whole label, case ignored; the object name does
+not work. The first match is used. Result: `map_name`, `label`, `class`,
+`name` (the object name for the `ue-level-actors` tools), `blueprint_path` for
+a Blueprint class, `transform` (`location`, `rotation`, `scale`),
+`component_count`, `components[]` (`name`, `class`, `is_primitive: true` for
+components that render or collide) and, when there is one, `collision` for the
+primitive components. `Actor '<label>' not found` is all a miss returns; the
+plugin's suggestions are dropped. Run `find` with part of the label.
 
 | Need | Tool |
 |---|---|
-| an overview of the gameplay actors, grouped by class | `level_query` `list` |
-| a search by label or class name, without engine noise | `level_query` `find` |
-| components, collision and Blueprint origin of one actor | `level_query` `info` |
-| every actor, infrastructure included, paged (hidden ones with `include_hidden: true`) | `get_level_actors` |
-| object names, for addressing actors reliably | either: `info` returns `name`, and `get_level_actors` returns `name` for every actor |
-
-## Typical sequences
-
-**Create a level and give it a home**
-
-1. `asset` `{"operation": "save_all"}`, so the current level has nothing left to
-   save.
-2. `open_level` `{"action": "new", "save_current": false}`.
-3. `open_level` `{"action": "save_as", "save_path": "/Game/Maps/Arena"}`.
-4. Build the level (skill `ue-level-actors`), then `asset` `save_all`.
-
-**Switch to another level**
-
-1. `asset` `{"operation": "save_all"}`.
-2. `open_level` `{"action": "open", "level_path": "/Game/Maps/Arena"}`.
-3. `level_query` `{"operation": "list"}` to see what is there.
-
-**Inspect an actor before changing it**
-
-1. `level_query` `{"operation": "find", "pattern": "door"}`.
-2. `level_query` `{"operation": "info", "actor_label": "<label from step 1>"}`.
-3. Use the `name` from step 2 with `move_actor` or `set_property`.
+| gameplay actors grouped by class | `level_query` `list` |
+| search by label or class, without engine noise | `level_query` `find` |
+| components, collision, Blueprint origin of one actor | `level_query` `info` |
+| every actor, infrastructure and hidden ones included, paged | `get_level_actors` (skill `ue-level-actors`) |
+| object names, to address actors reliably | `info`'s `name`, or `get_level_actors` |
 
 ## When a call fails
 
-Load section `failures` when a call returns an error or does not return, or a
-result is not what you expect: it has the checks a level path goes through,
-each with its error, the errors of `open`, `new` and `save_as` with their
-meaning, and the failure table (what you see, what it means, what to do).
+Load section `failures`.
 
 ## See also
 
 - `ue-level-actors`: spawning, moving, deleting and editing actors.
-- `ue-assets`: `asset save_all`, `asset_search` for levels, and the asset
-  dependency tools.
+- `ue-assets`: `asset save_all`, `asset_search` for levels, dependencies.
+- `ue-lighting`: lights, sky and fog for a new level.
+- `ue-game-framework`: the level's game mode override (what spawns at play).
+- `ue-viewport`, `ue-pie-testing`: checking a level by eye and in play.
 - `unreagent-iterate`: what an editor stop or restart does to unsaved levels.

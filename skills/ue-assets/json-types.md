@@ -1,8 +1,9 @@
 # How the `asset` tool reads a wrong JSON type
 
-Two passages: the boolean parameters of the `asset` operations, and the
-`value` of `set_asset_property`. The rule in the main skill is to send the
-JSON type the parameter or property has; this is what happens otherwise.
+Three passages: the boolean parameters of the `asset` operations, the
+booleans of the other asset tools, and the `value` of `set_asset_property`.
+The rule in the main skill is to send the JSON type the parameter or property
+has; this is what happens otherwise.
 
 ## Boolean parameters
 
@@ -27,9 +28,19 @@ report a failure. The default applies only when the key is absent:
 `TJsonValueString::TryGetBool` in `Public/Dom/JsonValue.h`; read in the UE
 5.8.4 source, not run, while the toolkit targets UE 5.6 and 5.7.)
 
+## The booleans read with a fallback
+
+`force` (`delete`), `include_dependencies` and `overwrite` (`migrate`),
+`include_soft` (`asset_dependencies`, `asset_referencers`) and every boolean
+of `asset_import` are read with the toolkit's `ExtractOptionalBool`
+(`MCPToolBase.h`), through `FJsonObject::TryGetBoolField`. A number and a
+string are read as above. `null`, an array or an object fails the read, and
+**the default applies**, not `false`: `"overwrite": null` overwrites,
+`"replace_existing": null` replaces. Same sources as above.
+
 ## The `value` of `set_asset_property`
 
-A `TArray`, any struct the main skill's value table does not list and an
+A `TArray`, any struct the value table of section `properties` does not list and an
 `enum class` property cannot be set with `set_asset_property`.
 
 All of these fail with `Unsupported property type for: <path>`. So does a
@@ -56,4 +67,4 @@ not run, while the toolkit targets UE 5.6 and 5.7):
   (`TCString::IsNumeric`, `Engine/Source/Runtime/Core/Public/Misc/CString.h`).
 - An `FString` or `FName` property stores a number or a boolean as its text.
 
-So send the JSON type the property has (the main skill, "set_asset_property").
+So send the JSON type the property has (section `properties`).

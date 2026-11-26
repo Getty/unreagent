@@ -36,13 +36,23 @@ For a large graph, prefer `get_graph_summary`, `find_nodes`, `get_node`,
   subfolders. It passes the same path check as `blueprint_path`.
 - `type_filter` is matched, case-insensitively, as a substring of the
   **parent class path**, not of the Blueprint type. `Character` finds
-  Blueprints derived from a Character class, `UserWidget` finds widgets,
-  `AnimInstance` finds Animation Blueprints.
+  Blueprints derived directly from a class whose path contains it: the parent
+  class path stored with the asset, `/Script/Engine.Character` or
+  `/Game/BP/BP_Base.BP_Base_C`. `AnimInstance` finds Animation Blueprints on
+  the engine's base. `UserWidget` finds Widget Blueprints whose parent is
+  `UserWidget` itself, and misses one whose parent is a C++ or Common UI
+  widget class (`CommonActivatableWidget`) or another Widget Blueprint;
+  likewise a Blueprint whose parent is another Blueprint matches only that
+  Blueprint's name (`MCPTool_BlueprintQuery.cpp:156`). When in doubt, leave out
+  `type_filter`, filter by `name_filter` (`WBP_`, `BP_`) instead.
 - `name_filter` is a case-insensitive substring of the asset name.
 - `limit` defaults to 25 and is clamped to 1–1000.
 
 Returns `blueprints` (each with `name`, `path`, `blueprint_type`,
-`parent_class`), `count` and `total_matching`. `truncated: true` is added only
+`parent_class`), `count` and `total_matching`. `path` is the object path,
+`/Game/BP/BP_Door.BP_Door`; both tools accept it as `blueprint_path`, as they
+accept the plain asset path. `parent_class` is the bare class name, without
+its module path and without a `_C` suffix. `truncated: true` is added only
 when more Blueprints matched than were returned; a result without `truncated`
 is complete. When it is there, narrow the filters or raise `limit`.
 
@@ -51,16 +61,30 @@ is complete. When it is there, narrow the filters or raise `limit`.
 Returns `name`, `path`, `blueprint_type`, `parent_class`, `parent_class_name`
 and `generated_class`. The three flags each default to false and add:
 
-- `include_variables`: `variables`, each with `name`, `type`, `category`,
-  `is_instance_editable`, `is_blueprint_read_only`, `is_exposed_on_spawn` and
-  `default_value`.
-- `include_functions`: `functions`, each with `name`, `inputs` and `outputs`.
-- `include_graphs`: `graph_info`.
+- `include_variables`: `variables`, the Blueprint's own variables only (not
+  the parent class's), each with `name`, `type`, `category`,
+  `is_instance_editable`, `is_blueprint_read_only`, `is_exposed_on_spawn` and,
+  when set, `default_value`.
+- `include_functions`: `functions`. A function graph comes with `name`,
+  `type: "Function"`, and `inputs` and `outputs` (each `name`, `type`) when it
+  has an entry or result node. An Actor Blueprint lists its construction
+  script here as `UserConstructionScript`. Every event graph with at least
+  one event node is in the same list, as `type: "EventGraph"` with
+  `event_count` and `node_count`.
+- `include_graphs`: `graph_info`, the `get_graph` result.
+
+**`is_instance_editable` does not mean the editor's "Instance Editable".** It
+reports the engine flag `CPF_Edit`, which every Blueprint variable gets on
+creation; the editor's checkbox is the absence of `CPF_DisableEditOnInstance`,
+which the tool does not report. Read it as always true
+(`BlueprintUtils.cpp:111`; `FBlueprintEditorUtils::AddMemberVariable` in the
+UE 5.8.4 source, not run).
 
 ## get_graph
 
-Returns `total_nodes`, `total_events`, `function_count` and `graph_names` for
-the whole Blueprint. It reads no `graph_name`. Use it for the graph names you
+Returns `total_nodes`, `total_events`, `function_count`, `graph_names`,
+`blueprint_name` and `blueprint_path` for the whole Blueprint. `graph_names`
+lists the event graphs first, then the function graphs. It reads no `graph_name`. Use it for the graph names you
 then pass to the other operations.
 
 ## get_components
@@ -120,16 +144,32 @@ Returns `nodes` (each with `node_id`, `label`, `node_class`, `graph_name`,
 `graph_type`, `pos_x`, `pos_y`, `pin_count`, `connected_pin_count`, plus
 `state_machine` and `state_name` for nodes inside a state) and `count`.
 `graph_type` is `EventGraph`, `AnimGraph`, `StateMachine`, `StateGraph` or
-`Other`.
+`Other`. A function graph counts as `EventGraph` (it has an entry node), so
+`graph_type: "EventGraph"` also searches the functions and the construction
+script.
+
+The ID of a node found here for the first time is built from its kind:
+`Event_ReceiveBeginPlay_<n>`, `FunctionEntry_<name>_<n>`,
+`CallFunction_<function>_<n>`, `VarGet_<var>_<n>`, `Cast_<class>_<n>`, and so
+on, or `Node_<n>` for a kind the tool does not name.
 
 ## get_node
 
 Needs `node_id`. It searches every graph; `graph_name` is only where it looks
 first. Returns the node with `graph_name` and `graph_type`. For an ordinary
-Blueprint node, the pins come with `name`, `direction`, `type`, `connected`,
+Blueprint node, the result has `node_id`, `node_class`, `label`, `pos_x`,
+`pos_y` and `pins`, each with `name`, `direction`, `type`, `connected`,
 `linked_to` (`node_id` and `pin_name` per link) and `default_value`. Hidden
-pins are left out. A linked node that has no ID yet shows an empty `node_id`.
+pins are left out; pins the editor folds away as "advanced" are listed. A
+linked node that has no ID yet shows an empty `node_id`.
 Error: `Node '<id>' not found`.
+
+- `type` here is the engine's pin category (`exec`, `bool`, `real`, `struct`,
+  `object`, …), not the type names `add_node` returns (`float`, `FVector`,
+  `Actor*`).
+- `default_value` is the pin's text value only. An object or class pin set to
+  an asset keeps it as an object reference instead, so it shows **no**
+  `default_value` even when it is set (`BlueprintGraphReader.cpp:1207`).
 
 ## verify_connection
 
@@ -162,4 +202,6 @@ Needs `node_id`, normally an event or other entry node. Returns `start_node`,
 `start_label`, `chain_summary`, `nodes_in_chain`, `node_count` and
 `max_depth_reached`. `max_depth` (default 50) does not limit the walk in the
 current code. It only sets `max_depth_reached` when the walk visited at least
-that many nodes.
+that many nodes. An entry in `nodes_in_chain` that looks like
+`K2Node_CallFunction_3` is the engine's object name of a node without an ID;
+every operation that takes a node ID accepts it.

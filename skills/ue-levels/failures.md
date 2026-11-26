@@ -22,7 +22,8 @@ Each path goes through these checks, in order:
 
 | Error | Meaning |
 |---|---|
-| `Level not found: '<path>'. Use asset_search to find available maps.` | no package exists at that path |
+| `Missing required parameter: level_path` | absent or an empty string |
+| `Level not found: '<path>'. Use asset_search to find available maps.` | no package exists at that path. A path ending in `.umap` skips this check and fails at the next step instead |
 | `Could not resolve level path: '<path>'` | the path does not map to a file on disk |
 | `Failed to load level: '<path>'` | the engine returned no world |
 
@@ -40,6 +41,7 @@ Each path goes through these checks, in order:
 
 | Error | Meaning |
 |---|---|
+| `Missing required parameter: save_path` | absent or an empty string |
 | `Editor not available` | no editor |
 | `No world currently loaded` | no level is open |
 | `Failed to save level to: '<path>'` | the engine's save failed |
@@ -53,5 +55,11 @@ Each path goes through these checks, in order:
 | an `open` or `new` call that never returns | probably a save prompt with nobody to answer it | save first. Pass `save_current: false` to `new` |
 | `Error: Task timed out after …ms (task_id: …)` | the bridge stopped waiting, but the level may still be loading | `task_status` with the `task_id`, then `level_query list` |
 | your edits to a level from `new` are not saved by `save_all` | the level still lives under `/Temp/`, or is an engine template | `save_as` to a `/Game/` path |
-| `Actor '…' not found` from `info` | no actor with exactly that label | `find` with part of the label |
-| an actor you expect is missing from `list` | it is a light or infrastructure | `find` includes lights. `get_level_actors` includes everything |
+| `Actor '…' not found` from `info` | no actor with exactly that label (the object name does not count) | `find` with part of the label |
+| an actor you expect is missing from `list` | it is a light or infrastructure, or its class name starts with a filtered prefix (section `filtered-classes`) | `find` includes lights. `get_level_actors` includes everything |
+| actors you can see in the editor are missing from every query | a World Partition level: only loaded regions exist for the tools | section `level-types`; ask the user to load the region |
+| `No active world. Open a level in the editor first`, even for a mistyped operation | `level_query` checks the open level before anything else | open a level |
+| a template you named is not the one that opened | the first template whose name equals **or whose map path contains** the string won | pass the `name` exactly as `list_templates` returns it |
+| `mapName` after `save_as` is not the name you saved under | the level was already on disk, so the engine saved a duplicate and the editor stays on the original | `open` the saved path before further edits |
+| a level at the `save_as` path is gone | `save_as` deletes the destination's map files before saving | restore from version control; check paths with `asset_search` first |
+| a save does not stick after reopening | `/Temp/` or `/Engine/` package skipped by `save_all`, or (One File Per Actor) an actor file not written | `save_as` to `/Game/`; section `level-types` |

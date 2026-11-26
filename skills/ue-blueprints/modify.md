@@ -42,9 +42,15 @@ Creates a Blueprint asset at `package_path` + `/` + `blueprint_name`.
   with a letter or underscore, and is at most 128 characters. A bad name returns
   `Invalid Blueprint name: <reason>`.
 - `parent_class` is tried as a full class path first, then as a class in
-  `/Script/Engine.` and in `/Script/CoreUObject.`, then as a loaded class name.
-  `Actor`, `Pawn` or `Character` resolve through the engine prefix. A Blueprint
-  parent needs its generated class path, with the `_C` suffix:
+  `/Script/Engine.` and in `/Script/CoreUObject.`. `Actor`, `Pawn`,
+  `Character`, `PlayerController`, `GameModeBase`, `ActorComponent` resolve
+  through the engine prefix. **A class from any other module needs its full
+  path**: `/Script/UMG.UserWidget`, `/Script/AIModule.AIController`,
+  `/Script/<YourModule>.<Class>` for your own C++ class (the name without its
+  `A`/`U` prefix). The last fallback, a lookup by bare name, finds no class in
+  the UE 5.8.4 source (it searches top-level objects only;
+  `BlueprintLoader.cpp:337`, `UObjectHash.cpp`), so do not rely on it. A
+  Blueprint parent needs its generated class path, with the `_C` suffix:
   `/Game/Blueprints/BP_Base.BP_Base_C`. Failure: `Parent class not found: <name>`.
 - `blueprint_type` (default `Normal`): `Normal` (also `Actor`, `Object`),
   `FunctionLibrary` (also `function_library`), `Interface`, `MacroLibrary`
@@ -53,9 +59,18 @@ Creates a Blueprint asset at `package_path` + `/` + `blueprint_name`.
 
 The tool does not check whether an asset already exists at that path. Look
 with `blueprint_query list` first. It runs no compile step of its own: the
-result's `compiled: true` is a fixed value, not a compile result. When
-`set_cdo_default` or `blueprint_query get_defaults` then reports no generated
-class, run `compile`. The result has `blueprint_name`,
+result's `compiled: true` is a fixed value, not a compile result. (The
+engine's Blueprint factory compiles the new class once while creating it, in
+the UE 5.8.4 source; when `set_cdo_default` or `blueprint_query get_defaults`
+still reports no generated class, run `compile`.)
+
+What a new Blueprint already holds (UE 5.8.4 source, `Kismet2.cpp`, not run):
+an `EventGraph`; for an Actor-based parent a `UserConstructionScript`
+function graph and three **disabled placeholder events** in the event graph,
+`ReceiveBeginPlay`, `ReceiveActorBeginOverlap` and `ReceiveTick`, each with
+the comment "This node is disabled and will not be called." Wiring one of
+them enables it. Use them rather than adding a second node for the same
+event (section `graphs`, "Pre-placed events"). The result has `blueprint_name`,
 `blueprint_path`, `parent_class` and `blueprint_type`. The new asset is marked
 as modified but not saved.
 
@@ -86,17 +101,27 @@ old parent's members. Read the compile result.
 | containers | `TArray<T>`, `TSet<T>` with any of the above as `T` |
 
 For an object reference, the class name comes **without** its C++ prefix:
-`Actor*`, `StaticMeshComponent*`, `Object*`. The name is tried as a loaded
-class, then in `/Script/Engine.` and `/Script/CoreUObject.`. The `AActor*` in
-the tool's own description does not match a class name that way. A class from
-another module needs its object path: `/Script/UMG.UserWidget*`.
+`Actor*`, `StaticMeshComponent*`, `Object*`. A bare name resolves only in
+`/Script/Engine.` and `/Script/CoreUObject.` (the bare-name lookup before
+them finds nothing, as for `parent_class`). The `AActor*` in the tool's own
+description does not match a class name that way. A class from another
+module needs its path: `/Script/UMG.UserWidget*`,
+`/Script/EnhancedInput.InputAction*`. A Blueprint class
+(`/Game/BP/BP_Item.BP_Item_C*`) resolves only while it is loaded
+(unverified).
 
 There is no map type, no enum type, no class reference and no soft reference.
 Errors: `Unknown type: <t>`, `Unknown class: <c>`.
 
-`add_variable` sets only name and type. The tool sets no default value,
-category or flags; `blueprint_query inspect` with `include_variables: true`
-shows what the variable got. To give it a default value, run
+`add_variable` sets only name and type. The variable gets the engine's
+defaults for a new variable: category `Default`, not instance editable, not
+exposed on spawn, not replicated, public to other Blueprints (UE 5.8.4
+source). **No operation of either tool changes those flags**, the category,
+replication or a tooltip; `blueprint_query inspect` with
+`include_variables: true` shows what the variable got (but see section
+`query`, `inspect`, on `is_instance_editable`). A flag that matters is a
+manual step in the editor or a reason to declare the property in C++
+(section `decisions`). To give it a default value, run
 `set_cdo_default` with the variable name as `property` afterwards.
 `remove_variable` does not look for nodes that still use the variable. Run
 `blueprint_query find_nodes` with `search` set to the variable name first.
@@ -105,7 +130,16 @@ shows what the variable got. To give it a default value, run
 
 `add_function` creates an empty function graph with its entry node.
 `function_name` follows the same character rule. It takes no inputs, outputs or
-flags, so there is no way to add parameters through this tool. Fill the body
+flags, so there is no way to add parameters, a return value, `Pure` or `Const`
+through this tool: a function made here is an impure call without inputs
+that works on the Blueprint's variables. The graph is created as the engine
+creates its own graphs (`bIsUserCreated` false, `BlueprintEditor.cpp:131`):
+unlike the editor's "+ Function", the entry node is not marked editable and
+the function does not get the `Public` and `BlueprintEvent` flags (UE 5.8.4
+source; what that changes in the editor's details panel is unverified). The
+compiler still marks it callable. Call it from another graph with
+`CallFunction`, `target_class` set to the Blueprint's generated class path
+(`/Game/BP/BP_Door.BP_Door_C`; section `graphs`). Fill the body
 with the operations in section `graphs`, passing `graph_name` set to the
 function name and `is_function_graph: true`. Errors:
 `Function '<n>' already exists`, `Function '<n>' not found`.
@@ -116,8 +150,10 @@ function name and `is_function_graph: true`. Errors:
 works only on Actor-based Blueprints:
 `Blueprint has no SimpleConstructionScript (not an Actor-based BP?)`.
 
-- `component_class`: a class name such as `StaticMeshComponent`, or a class
-  path. Errors: `Component class '<c>' not found`,
+- `component_class`: a class name such as `StaticMeshComponent`,
+  `SpringArmComponent`, `CameraComponent`, `PointLightComponent`, or a class
+  path. Unlike the other class parameters, a bare name is searched in every
+  loaded module, native classes first. Errors: `Component class '<c>' not found`,
   `'<c>' is not an ActorComponent class`.
 - `component_name`: the variable name for the new component. Use the
   `component_name` that comes back in the result.
@@ -127,7 +163,10 @@ works only on Actor-based Blueprints:
   is not reported. Read `get_components` before you set it.
 - `socket_name`: the bone or socket on the parent to attach to.
 
-Without `attach_to`, the component is added at the top level. The result has
+Without `attach_to`, the component is added at the top level. Where a
+top-level scene component ends up when the parent class already has a root
+(a Character's capsule) is decided by the engine at construction and is not
+verified here: pass `attach_to` and check `get_components`. The result has
 `component_name`, `component_class`, and `attached_to` and `socket_name` when
 given.
 
@@ -188,7 +227,9 @@ Struct values:
 
 - **`FVector`**: `{"x": …, "y": …, "z": …}`. **`FRotator`**:
   `{"pitch": …, "yaw": …, "roll": …}`. Give every component: the struct is
-  built new from the object, not merged into the current value.
+  built new from the object, not merged into the current value, and a
+  component left out is not set at all, so it holds whatever the memory held
+  (`MCPTool_BlueprintModify.cpp:1761`).
 - **`FColor`**: `{"r", "g", "b"}` 0–255, `a` defaults to 255.
   **`FLinearColor`**: `{"r", "g", "b"}` 0–1, `a` defaults to 1. If any of r, g
   or b is above 1.5, r, g and b are read as 0–255, and so is `a` when it is
@@ -275,12 +316,14 @@ removes the nodes but cannot restore that link. Reconnect it with
 ## compile
 
 Compiles one Blueprint. **It always returns success**, also when the compile
-fails. The message is `Compile <path>: <status> (<n> errors, <m> warnings)`.
+fails. Like every compile of these tools, it first marks the Blueprint as
+structurally modified, so the package is dirty afterwards and wants a save. The message is `Compile <path>: <status> (<n> errors, <m> warnings)`.
 Read the result data:
 
 - `compiled`: true or false.
 - `compile_status`: `UpToDate`, `UpToDateWithWarnings`, `Error`, `Dirty` or
-  `Unknown`.
+  `Unknown`. `Dirty` (the engine left it uncompiled) counts as failed, like
+  `Error`.
 - `error_count`, `warning_count`, `compile_output` and `compile_messages`
   (each with `severity`, `message`, and `node` and `object_path` when known),
   present on failure or when there are warnings.

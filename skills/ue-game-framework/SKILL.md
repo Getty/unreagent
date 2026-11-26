@@ -13,118 +13,57 @@ toolkit_tools: [game_framework]
 
 The UE LLM Toolkit plugin's **`game_framework`** tool has three unrelated
 groups of operations: the game mode of the open level, the player controller
-of a running Play In Editor session, and DataTable assets. Through the
+of a running Play In Editor (PIE) session, and DataTable assets. Through the
 plugin's MCP bridge it is listed as `unreal_game_framework`. It works only
 while the editor is running and the plugin is reachable; `unreagent-iterate`
 covers the wait for the plugin.
 
-This skill has three sections:
+## Sections
 
 | Section | Holds | Load it |
 |---|---|---|
-| `datatables` | the five DataTable operations in full: the `table_path` forms, every result field, the value form `set_row` accepts for each column type, the errors | before your first `set_row`, and when a DataTable call returns an error |
+| `playable-character` | the whole sequence from empty level to a character the player moves: input assets, character, controller, game mode, level override, Player Start, save, PIE checks; Blueprint vs C++ vs Python; a symptom table | when you build or repair a playable character, or "nothing spawns / keys do nothing" in PIE |
+| `game-mode` | the engine's model (GameModeBase vs GameMode, game state pairing, where a level's game mode comes from, how the pawn is spawned), both game mode operations in full, and the durable routes (Blueprint defaults, the level's GameMode Override, the project default) | before you change which pawn, controller or game mode a level uses |
+| `player-controller` | the five PIE operations in full: what each input mode lets through, widget instances and z-order, what `remove_widget` really removes, pause and `Trigger when Paused` | before you drive a running PIE session |
+| `datatables` | the safe row-editing workflow, DataTable vs Data Asset, `table_path` forms, every result field, the value form `set_row` accepts per column type, the errors | before your first `set_row`, and when a DataTable call returns an error |
 | `aliases` | every short operation name the code accepts, and what it runs | when a call uses, or you are about to send, an operation name that is not one of the twelve |
-| `failures` | the errors of `set_game_mode_defaults`, how `paused` and `show_cursor` are read from a string or a number, and the failure table (what you see, what it means, what to do) | when `set_game_mode_defaults` returns an error, or what you see after a call is not what you expect |
+| `failures` | every error with its cause, how `paused` and `show_cursor` are read from a string or a number, and the failure table (what you see, what it means, what to do) | when a call returns an error, or what you see after a call is not what you expect |
 
-## Recipes
-
-**Find out what the level spawns**
-
-1. `{"operation": "inspect_game_mode"}`. The result names `game_mode_class`,
-   `default_pawn_class`, `player_controller_class`, `hud_class` and
-   `spectator_class`.
-2. `No game mode configured. …` means the level has no GameMode Override. The
-   tool does not read the project's default game mode (see "Game mode").
-
-**Make the level spawn another pawn, controller or HUD**
-
-1. `{"operation": "inspect_game_mode"}` and note the old values.
-2. `{"operation": "set_game_mode_defaults", "default_pawn_class": "/Game/Characters/BP_Hero.BP_Hero_C"}`.
-   Pass only the classes you change; each is a class path.
-3. `{"operation": "inspect_game_mode"}` to read the values back.
-4. Nothing is saved yet. For a Blueprint game mode, save its asset: `asset`
-   `{"operation": "save_asset", "asset_path": "<the game mode Blueprint>"}`
-   (skill `ue-assets`). The asset path is `game_mode_class` without its
-   last part: `/Game/GM/BP_GM.BP_GM_C` is the class, `/Game/GM/BP_GM` the
-   asset. Then read "What a success does not prove": this
-   operation is the quick route, not the durable one.
-
-**Show a widget in a running game**
-
-1. Start PIE and wait until `pie_status` reports `running: true` (skill
-   `ue-pie-testing`).
-2. `{"operation": "show_widget", "widget_class": "/Game/UI/WBP_Menu.WBP_Menu_C", "z_order": 10}`.
-3. For a menu: `{"operation": "set_input_mode", "input_mode": "ui_only"}` and
-   `{"operation": "set_mouse_cursor", "show_cursor": true}`.
-4. Look at it: `gameplay_debug` `capture_pie` (skill `ue-pie-testing`).
-5. Undo: `{"operation": "remove_widget", "widget_class": "<same path>"}`,
-   `set_input_mode` with `game_only`, `set_mouse_cursor` with
-   `show_cursor: false`.
-
-**Pause and resume a running game**
-
-`{"operation": "set_pause", "paused": true}`, later
-`{"operation": "set_pause", "paused": false}`. Always pass `paused`.
-
-**Read and change a DataTable row**
-
-1. `{"operation": "list_data_tables", "folder_path": "/Game/Data"}`, take a
-   `path`.
-2. `{"operation": "inspect_data_table", "table_path": "<path>"}` for the
-   column names and types and the row names.
-3. `{"operation": "get_row", "table_path": "<path>", "row_name": "<row>"}`.
-4. `{"operation": "set_row", "table_path": "<path>", "row_name": "<row>", "row_data": {"<column>": <value>}}`.
-   Only the columns you pass change. Load section `datatables` before your
-   first `set_row`: it has the value form for each column type.
-5. Save: `asset` `{"operation": "save_asset", "asset_path": "<path>"}` (skill
-   `ue-assets`).
-
-## What a success does not prove
+## Must not get wrong
 
 - **No operation of this tool saves.** `set_game_mode_defaults`, `set_row`
-  and `delete_row` change objects in memory and mark their package dirty.
-- **`set_game_mode_defaults` writes the game mode class's default object, in
-  memory.** It does not edit a Blueprint through the Blueprint editor and
-  does not compile. What the code does: assign the classes, then mark the
-  class's package dirty. From there:
-  - a **Blueprint** game mode has an asset that can be saved (recipe above).
-    Whether the values survive a later compile of that Blueprint cannot be
-    read from the plugin's source. The durable route is `blueprint_modify`
-    `set_cdo_default` with `property` `DefaultPawnClass`,
-    `PlayerControllerClass` or `HUDClass`, then compile and save (skill
-    `ue-blueprints`, section `modify`);
-  - a **C++** game mode has no asset to save. The change lasts at most
-    until the editor closes; make it in the class's constructor instead.
-- **It changes the class, not the level.** Every level that uses the same
-  game mode class gets the new pawn, controller or HUD.
-- **A failed `set_game_mode_defaults` can be half applied.** The classes are
-  loaded and assigned one after another: pawn, player controller, HUD. When
-  a later one fails to load, the earlier ones are already assigned, the call
-  returns an error, and nothing is marked dirty. Run `inspect_game_mode`
-  after an error.
-- **The PIE operations last as long as the session.** Input mode, pause,
-  cursor and shown widgets are state of the running game. Stopping PIE
-  discards them; nothing reaches the level or an asset.
-- **`set_pause` reports what it asked for.** The engine's answer to the pause
-  request is not checked: the result says `paused: true` also when the game
-  refuses to pause.
-- **`remove_widget` succeeds when it removed nothing.** Read `removed_count`.
-- **`set_row` can fail half way on an existing row.** Columns are written in
-  the order given; when one fails, the ones before it stay changed in memory,
-  and the table is not marked dirty. Run `get_row` after an error.
-- **Unknown keys inside a struct value are ignored** by `set_row`, without a
-  message. An unknown column is an error.
-- **A transform cannot be sent back the way `get_row` shows it.** `set_row`
-  skips its `location`, `rotation` and `scale` and still reports the column
-  as updated. Pass a transform as one string in UE text form, and read the
-  row back.
-- **A misspelt `row_name` in `set_row` creates a new row**; the tool has no
-  "must exist" switch. Check `is_new_row`. An empty `row_data` (`{}`) with a
-  new `row_name` adds a row of defaults.
-- **`set_row` also reads a JSON number or boolean as its text**, and a text
-  column stores that text (read in the UE 5.8.4 source, not run, while the
-  toolkit targets UE 5.6 and 5.7). Send each value in the JSON type the
-  table names.
+  and `delete_row` change memory and mark the package dirty; save with
+  `asset` `save_asset` (skill `ue-assets`).
+- **`set_game_mode_defaults` is the quick route, not the durable one.** It
+  writes the class defaults of the level's GameMode Override in memory: it
+  changes every level using that game mode class, a C++ game mode loses it
+  when the editor closes, and whether a Blueprint game mode keeps it through
+  a later compile cannot be read from the source. For anything that must
+  last use `blueprint_modify` `set_cdo_default` (section `game-mode`,
+  "Durable routes").
+- **`inspect_game_mode` does not read the project default game mode.**
+  `No game mode configured. …` means only that the level has no GameMode
+  Override; the game may still have a game mode (Project Settings → Maps &
+  Modes, `GlobalDefaultGameMode` in `Config/DefaultEngine.ini`). It reads
+  the editor world even while PIE runs; `from_pie` is not a PIE indicator.
+- **Class paths end in `_C`** for Blueprints: `/Game/UI/WBP_Menu.WBP_Menu_C`.
+  The asset path fails with the same message as a missing class.
+- **The PIE operations are a test harness.** Input mode, pause, cursor and
+  shown widgets end with the session; nothing reaches the level or an asset.
+  Each `show_widget` adds one more instance. `remove_widget` removes every
+  instance of the class and its subclasses in the viewport, the game's own
+  too, and succeeds with `removed_count: 0`.
+- **`ui_only` blocks game input**; put it back to `game_only`.
+- **Send `paused` / `show_cursor` as JSON booleans, and always pass
+  `paused`.** Its default is `true`, so the alias `unpause` alone pauses.
+  `set_pause` reports what it asked for, not what the engine did.
+- **`set_row` on a misspelt `row_name` adds a new row**: check `is_new_row`.
+  An error can leave an existing row half written: `get_row` after it.
+- **`set_row` does not accept everything `get_row` returns.** Arrays, maps
+  and sets go in as one UE text-form string; a transform in `get_row` form
+  is skipped without an error. Section `datatables`, value forms.
+- **The tool cannot create a DataTable, a game mode or a level override.**
+  Section `game-mode` and `datatables` name the routes that can.
 
 ## Operations
 
@@ -132,174 +71,103 @@ This skill has three sections:
 |---|---|---|---|
 | `inspect_game_mode` | — | — | an open level |
 | `set_game_mode_defaults` | at least one of `default_pawn_class`, `player_controller_class`, `hud_class` | — | a level with a GameMode Override |
-| `set_input_mode` | `input_mode` | — | PIE |
-| `show_widget` | `widget_class` | `z_order` | PIE |
+| `set_input_mode` | `input_mode`: `game_only`, `ui_only`, `game_and_ui` | — | PIE |
+| `show_widget` | `widget_class` | `z_order` (0) | PIE |
 | `remove_widget` | `widget_class` | — | PIE |
-| `set_pause` | — | `paused` (default `true`) | PIE |
-| `set_mouse_cursor` | — | `show_cursor` (default `true`) | PIE |
-| `list_data_tables` | — | `folder_path` (default `/Game`) | — |
+| `set_pause` | — | `paused` (`true`) | PIE |
+| `set_mouse_cursor` | — | `show_cursor` (`true`) | PIE |
+| `list_data_tables` | — | `folder_path` (`/Game`, with subfolders) | — |
 | `inspect_data_table` | `table_path` | — | — |
 | `get_row` | `table_path`, `row_name` | — | — |
-| `set_row` | `table_path`, `row_name`, `row_data` | — | — |
+| `set_row` | `table_path`, `row_name`, `row_data` (object) | — | — |
 | `delete_row` | `table_path`, `row_name` | — | — |
 
-`operation` is lowercased before dispatch. An unknown one returns
-`Unknown operation: '<op>'. Valid: <the twelve names>`, with the name after
-alias resolution.
+`operation` is lowercased before dispatch; short aliases exist (section
+`aliases`), but prefer these names. An unknown one returns
+`Unknown operation: '<op>'. Valid: <the twelve names>`.
 
-### Aliases
-
-The code accepts short names besides the twelve, such as `pause`, `unpause`,
-`inspect`, `list` and `get`; the tool's description does not list them.
-Prefer the full names: an alias changes the name only, never the parameters.
-So **`unpause` without `paused: false` pauses**, `remove_all_widgets` still
-needs `widget_class` and removes that class only, and `inspect` runs
-`inspect_game_mode`, not `inspect_data_table`. Load section `aliases` when a
-call uses, or you are about to send, an operation name that is not one of
-the twelve: it has every alias and what it runs.
+Main result fields: `inspect_game_mode` → `game_mode_class`,
+`default_pawn_class`, `player_controller_class`, `hud_class`,
+`spectator_class` (class path or `None`), `from_pie`;
+`set_game_mode_defaults` → `changes`; `show_widget` → `widget_class`,
+`z_order`; `remove_widget` → `removed_count`; `list_data_tables` → `tables`
+(`path`, `name`, `row_struct_name`), `count`; `inspect_data_table` →
+`row_struct`, `columns` (`name`, `type`, `is_editable`, `category`),
+`row_names`, `row_count`; `get_row` / `set_row` → `row_name`, `row_data`
+(+ `is_new_row`); `delete_row` → `deleted_row_name`.
 
 ## Class paths
 
 `default_pawn_class`, `player_controller_class`, `hud_class` and
-`widget_class` are handed to the engine's class loader. They take a class
-path:
+`widget_class` go to the engine's class loader and must derive from pawn,
+player controller, HUD or user widget respectively:
 
 | Class | Path |
 |---|---|
-| Blueprint | the generated class, with the `_C` suffix: `/Game/UI/WBP_Menu.WBP_Menu_C` |
-| C++ | `/Script/<Module>.<Class>` without the `A` or `U` prefix: `/Script/Engine.DefaultPawn` |
+| Blueprint | the generated class: `/Game/Characters/BP_Hero.BP_Hero_C` |
+| C++ | `/Script/<Module>.<Class>` without the `A`/`U` prefix: `/Script/Engine.DefaultPawn` |
 
-The asset path of a Blueprint (`/Game/UI/WBP_Menu`) is not a class path. The
-tool does not append `_C` for you, unlike `spawn_actor` (skill
-`ue-level-actors`). The class must derive from the expected base: a pawn, a
-player controller, a HUD actor, a user widget. Anything else fails with the
-same message as a path that does not exist.
+The tool does not append `_C` for you, unlike `spawn_actor` (skill
+`ue-level-actors`). `table_path` instead takes the asset path
+(`/Game/Data/DT_Items`) or the object path `list_data_tables` returns.
 
-## Game mode
+## Recipes
 
-Both operations read the level open in the editor.
+**What does the level spawn?** `inspect_game_mode`. On
+`No game mode configured`, read `GlobalDefaultGameMode` in
+`Config/DefaultEngine.ini` (skill `unreagent-files`).
 
-**`inspect_game_mode`** takes no parameters. It takes the class of a live
-game mode in the editor's world when there is one, otherwise the level's
-GameMode Override (World Settings), and reads the classes from that class's
-defaults.
-The result:
+**Make the level spawn another pawn or controller, for good:** section
+`game-mode`, "Durable routes" (`set_cdo_default` on the game mode Blueprint,
+then save; the level's override through `set_property` on `WorldSettings`).
+For a quick try in this session only: `set_game_mode_defaults` with the
+class paths you change, then `inspect_game_mode` to read them back.
 
-| Field | Holds |
-|---|---|
-| `game_mode_class` | class path of the game mode |
-| `default_pawn_class`, `player_controller_class`, `hud_class`, `spectator_class` | class path, or the string `None` |
-| `from_pie` | `true` when the editor's world has a live game mode object. The code asks the editor's world, not the PIE world; do not use this field to detect PIE, use `pie_status` (skill `ue-pie-testing`) |
+**A playable character from scratch:** section `playable-character`.
 
-A level without an override returns
-`No game mode configured. Neither AuthGameMode nor WorldSettings->DefaultGameMode is set.`
-The project's default game mode (Project Settings, Maps & Modes) is not
-consulted, so this error does not mean the game has no game mode.
+**Show a menu in a running game:**
 
-**`set_game_mode_defaults`** takes up to three class paths. An empty string
-counts as absent, so a class cannot be cleared to `None` with this operation.
-The spectator class has no parameter. The result has `changes`, a list of
-strings such as `DefaultPawnClass=/Game/Characters/BP_Hero.BP_Hero_C`, and the
-message `Updated <n> game mode defaults`. Load section `failures` when it
-returns an error: it has each error and its cause.
+1. Start PIE; wait until `pie_status` reports it running (skill
+   `ue-pie-testing`).
+2. `{"operation": "show_widget", "widget_class": "/Game/UI/WBP_Menu.WBP_Menu_C", "z_order": 10}`.
+3. `set_input_mode` `ui_only`, `set_mouse_cursor` `show_cursor: true`.
+4. Look: `gameplay_debug` `capture_pie` (skill `ue-pie-testing`).
+5. Undo: `remove_widget` with the same class, `set_input_mode` `game_only`,
+   `set_mouse_cursor` `show_cursor: false`.
 
-## Player controller (PIE only)
+**Pause and resume:** `{"operation": "set_pause", "paused": true}`, later
+`"paused": false`.
 
-These five need a running PIE session. Without one each returns
-`PIE is not running. Player Controller operations require Play-In-Editor.`
-`start_pie` is asynchronous: wait for `pie_status` (skill `ue-pie-testing`).
-
-Four of them act on the session's first player controller, and return
-`No player controller found in PIE world` when it has none. `remove_widget`
-uses no player controller and never returns that error.
-
-**`set_input_mode`** — `input_mode` is `game_only`, `ui_only` or
-`game_and_ui`, lowercased by the tool. Each sets the engine's plain input
-mode with its default settings: no widget is given focus, and no mouse lock
-or capture option can be passed. The result has `input_mode`. Any other value
-returns `Invalid input_mode: '<v>'. Valid: game_only, ui_only, game_and_ui`.
-The input mode does not show the cursor; that is `set_mouse_cursor`.
-
-**`show_widget`** — creates a new instance of `widget_class`, owned by the
-player controller, and adds it to the viewport at `z_order` (default 0). The
-result has `widget_class` and `z_order`. **Each call adds one more
-instance**; the tool does not check for one already showing. The widget's own
-variables cannot be set here, and no reference to the instance comes back.
-Errors: `Failed to load widget class: <path>`,
-`Failed to create widget of class: <path>`.
-
-**`remove_widget`** — removes every widget of `widget_class` that is in a
-viewport, whoever added it: the game's own HUD of that class goes too. (The
-engine call it uses also covers classes derived from `widget_class` by
-default.) The result has `removed_count` and `widget_class`. There is no
-operation that removes all widgets of all classes.
-
-**`set_pause`** — `paused`, default `true`. The result has `paused` as
-requested and the message `Game paused` or `Game unpaused`.
-
-**`set_mouse_cursor`** — `show_cursor`, default `true`. The result has
-`show_cursor`.
-
-For both, **send a JSON boolean, `true` or `false`.** A string or a number
-is not refused but read as a boolean: `"false"` is read as `false`, and a
-typo such as `"ture"` is read as `false` too. Only `null`, an array or an
-object is not read, and then the default `true` applies without an error
-(read in the UE 5.8.4 source, not run, while the toolkit targets UE 5.6 and
-5.7). Read `paused` or `show_cursor` in the result; when it is not what you
-sent, section `failures` has how every string and number is read.
-
-## DataTables
-
-Five operations work on any DataTable, whatever its row type:
-`list_data_tables`, `inspect_data_table`, `get_row`, `set_row` and
-`delete_row`. They need neither a level nor PIE. Parameters, results, value
-forms and errors are in section `datatables`. Load it before your first
-`set_row`, and when a DataTable call returns an error: `set_row` does not
-accept everything `get_row` returns, and an array, a map or a set goes in as
-one string in UE text form. In short:
-
-- `list_data_tables` searches `folder_path` and its subfolders and returns
-  `tables` (each `path`, `name`, and `row_struct_name` when known) and
-  `count`; a folder that does not exist returns `count: 0`, not an error;
-- `inspect_data_table` returns `columns` and `row_names`. Take column names
-  from here: a row type made in the editor carries generated internal column
-  names, longer than the ones the editor displays;
-- `get_row` returns `row_name` and `row_data`;
-- `set_row` updates the given columns of a row, or adds the row when the name
-  is new, and returns `row_data` and `is_new_row`;
-- `delete_row` returns `deleted_row_name`. There is no undo step in the
-  tool: keep the `get_row` result first, so the row can be written back with
-  `set_row`.
-
-The tool cannot create a DataTable or change its row type. For the toolkit's
-character stats tables, `character_data` creates the table and checks values
-(skill `ue-character-data`).
+**Change a DataTable row:** `list_data_tables` → `inspect_data_table` (column
+names) → `get_row` (keep it as your undo) → `set_row` with only the changed
+columns → check `is_new_row` and `row_data` → `asset` `save_asset`. Load
+section `datatables` before the first `set_row`.
 
 ## Results through the bridge
 
-Success is the tool's message, a blank line, then JSON. By default the bridge
-goes through the task queue, so that JSON is a task envelope, and the fields
-named here sit under its `data` key, next to a `success` and a `message`
-field of the tool's own. A failure is only `Error: <message>`. Skill
+Success is the tool's message, a blank line, then JSON: by default a task
+envelope whose `data` holds the fields named here, next to the tool's own
+`success` and `message`. A failure is only `Error: <message>`. Skill
 `ue-tasks` covers the envelope and timeouts.
-
-## Failure modes
-
-Load section `failures` when `set_game_mode_defaults` returns an error, or
-what you see after a call is not what you expect: it has the failure table
-(what you see, what it means, what to do) and how `paused` and `show_cursor`
-are read. DataTable errors are in section `datatables`.
 
 ## Background in the plugin
 
-`unreal_get_ue_context` has no category for this tool (skill `ue-context`).
-Its `actor` and `character` categories cover the classes a game mode spawns.
+`unreal_get_ue_context` has no category for this tool (skill `ue-context`);
+its `actor` and `character` categories cover the classes a game mode spawns.
+Epic's "Game Mode and Game State" page
+(dev.epicgames.com/documentation/en-us/unreal-engine/game-mode-and-game-state-in-unreal-engine)
+is the engine background summarized in section `game-mode`.
 
 ## See also
 
-- `ue-pie-testing`: starting PIE, `pie_status`, capturing the PIE viewport.
-- `ue-widgets`: building the Widget Blueprint that `show_widget` displays.
-- `ue-blueprints`: the durable way to set a Blueprint game mode's defaults.
-- `ue-character`, `ue-character-data`: characters in the level, and the
-  toolkit's character stats tables.
+- `ue-enhanced-input`: input assets, and (section `runtime-setup`) adding
+  the mapping context so keys work in play.
+- `ue-blueprints`: creating and editing the game mode, controller and
+  character Blueprints; `set_cdo_default`.
+- `ue-character`, `ue-character-data`: characters, and the toolkit's
+  character stats tables.
+- `ue-pie-testing`: starting PIE, `pie_status`, captures, input injection.
+- `ue-widgets`: the Widget Blueprint that `show_widget` displays.
+- `ue-level-actors`, `ue-levels`: Player Start, `WorldSettings`, saving the
+  level.
 - `ue-assets`: finding and saving assets.
