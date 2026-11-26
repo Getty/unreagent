@@ -121,7 +121,8 @@ agent:
   # maxRestarts: 0             # default 0
   # Seconds to wait before the agent is first started, and between restarts.
   # 0 or unset = the default; below 0 is a load error (the floor of 1 keeps a
-  # crashing agent from restarting in a tight loop).
+  # crashing agent from restarting in a tight loop). With unreal.mcp.enabled
+  # the first start instead waits for Unreal MCP (see "unreal:" below).
   # startDelaySeconds: 5       # default 5
   # restartDelaySeconds: 3     # default 3
   # env: extra environment variables for the agent (values take placeholders).
@@ -282,29 +283,9 @@ mcp:
   #     args: ["${PROJECT_DIR}/Plugins/UELLMToolkit/Resources/mcp-bridge/index.js"]
   #     env:
   #       UNREAL_MCP_URL: "http://127.0.0.1:3000"
-  #   # Unreal MCP, built into UE 5.8+ (experimental). Plain HTTP, no Node bridge.
-  #   # Needs BOTH: the "Unreal MCP" (ModelContextProtocol) and "All Toolsets"
-  #   # plugins enabled (both are off by default) AND the server started: it
-  #   # does not start on its own, only with -ModelContextProtocolStartServer
-  #   # on the editor command line (or its "Auto Start Server" setting).
-  #   # unreal.args REPLACES the default list ["-stdout", "-FullStdOutLogOutput"]
-  #   # as a whole, so write the defaults too (nested YAML, top level):
-  #   #   unreal:
-  #   #     args: ["-stdout", "-FullStdOutLogOutput",
-  #   #            "-ModelContextProtocolStartServer"]
-  #   # Default port 8000 — if you change it (Editor Preferences, or
-  #   # -ModelContextProtocolPort=<port> in unreal.args), change the URL too.
-  #   # HTTP / SSE entries get no smoke
-  #   # test, only a reachability watch: after bridge preparation the launcher
-  #   # tries a TCP connect to the URL's host and port for 5 minutes and logs
-  #   # "is reachable" or a warning (connect only, no MCP session; the agent
-  #   # still starts at once; scheme, host and path are logged, never user
-  #   # info or query). If Claude Code reports the server as failed because
-  #   # the editor was not up yet, reconnect with /mcp.
-  #   # Can run next to the Toolkit above.
-  #   unreal-mcp:
-  #     type: http
-  #     url: "http://127.0.0.1:8000/mcp"
+  #   # Epic's Unreal MCP (UE 5.8+) is NOT configured here: use unreal.mcp
+  #   # below ("unreal:"). A hand-written extraServers entry named
+  #   # "unreal-mcp" next to unreal.mcp.enabled is a load error.
   # NOTE: extraServers is a map keyed by server name — unreagent.local.yaml adds
   # servers and replaces a same-named server's whole definition; the other
   # servers defined here stay. (Lists, e.g. unreal.args, are replaced as a whole.)
@@ -365,6 +346,33 @@ mcp:
 #   # is always prepended) — give the full list. A list in local.yaml replaces it
 #   # too. Unset or "args: ~" = the default; "args: []" = no extra arguments.
 #   args: ["-stdout", "-FullStdOutLogOutput", "-nosplash"]
+#   # Epic's Unreal MCP server, built into UE 5.8+ (experimental, plain HTTP,
+#   # no Node bridge). A struct: unreagent.local.yaml overlays it field by
+#   # field; a null ("mcp: ~") does NOT reset it, switch it off there with
+#   # "enabled: false".
+#   # Needs the engine plugins "Unreal MCP" (ModelContextProtocol) and "All
+#   # Toolsets" (AllToolsets) enabled in the .uproject — both are off by
+#   # default and the launcher does not edit the file (it logs a startup WARN
+#   # when they do not look enabled).
+#   # With enabled: true the launcher
+#   #   - adds -ModelContextProtocolStartServer and -ModelContextProtocolPort=<port>
+#   #     to the editor's command line (each only when missing),
+#   #   - writes the http entry "unreal-mcp" (http://127.0.0.1:<port>/mcp, always
+#   #     loopback) into the agent's MCP config and every mcp.writeConfig file,
+#   #   - holds the agent's FIRST start until the server answers a ping: at most
+#   #     5 minutes, then one WARN and the agent starts anyway; at once (one WARN)
+#   #     when the editor ends and is not restarted. It replaces
+#   #     agent.startDelaySeconds for that start; no wait with
+#   #     unreal.manualStart or without agent.claudeIntegration. Another program
+#   #     on the port costs the full 5 minutes on every start: pick another port.
+#   # Load errors: enabled without mcp.enabled; a port outside 1-65535 or equal
+#   # to mcp.address's port; any element of unreal.args containing
+#   # "ModelContextProtocolPort=" other than exactly -ModelContextProtocolPort=<port>
+#   # (set the port here, not in args); an mcp.extraServers entry named
+#   # unreal-mcp. Not yet run on Windows.
+#   mcp:
+#     enabled: false          # default false
+#     port: 8000              # default 8000 (an explicit 0 also means 8000)
 #   # Restart policy: never | on-failure (default) | always. With maxRestarts: 0
 #   # (the default) a fast-fail rule applies: an editor that FAILS (non-zero
 #   # exit or failed start) 3 times in a row, each within 10s of its start, is

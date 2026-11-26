@@ -90,7 +90,9 @@ port opens, the launcher asks the toolkit's `GET /mcp/status` and logs the tool
 count, plus project and engine version when it reports them) — or a warning
 with the usual suspects if it doesn't. These checks run only for
 stdio entries (those with a `command`). An HTTP / SSE entry such as Unreal
-MCP gets only a reachability watch, see
+MCP written by hand gets only a reachability watch (a TCP connect for 5
+minutes, no wait for the agent). With the `unreal.mcp` switch the launcher
+pings the server instead and holds the agent's first start until it answers, see
 [Option A: Unreal MCP](#option-a-unreal-mcp-ue-58-built-in-experimental) below.
 
 The same config can additionally be written to a file for **external clients**
@@ -189,7 +191,7 @@ zip and start `unreagent.exe` — the MCP server will then run on
 |---|---|---|
 | UE editor | none (`ping` as a stand-in) | real UE 5.8 project (C++ module) |
 | Agent | off by default | Claude Code |
-| In-editor MCP | not wired | UE LLM Toolkit (submodule, fork branch `ue-5.8`); Unreal MCP as a commented entry |
+| In-editor MCP | not wired | UE LLM Toolkit (submodule, fork branch `ue-5.8`); Unreal MCP as a commented `unreal.mcp` switch |
 | Purpose | try the MCP server in isolation, no downloads | full reference setup, both MCP servers wired |
 
 Use `example/` to poke at the MCP server without installing UE or an agent.
@@ -408,8 +410,9 @@ up (below) and then prints a **preflight**.
 - The preflight lists the project, engine (with its version), the agent command
   on PATH, the toolkit (bridge path, `node`, `npm`, the bridge's dependencies),
   whether a project plugin's `EngineVersion` would make the editor refuse it,
-  whether the project's modules look built, whether the modules of its enabled
-  plugins look built (`plugin modules: built` / `WARN plugin modules: <names>
+  whether the project's modules look built, with `unreal.mcp` on whether the engine
+  plugins Unreal MCP needs look enabled in the `.uproject`, whether the modules
+  of its enabled plugins look built (`plugin modules: built` / `WARN plugin modules: <names>
   look unbuilt ...` with the compile fix; `info` `not checked` when the editor
   arguments carry `-NoEnginePlugins` or `-DisablePlugins=`; no line when no
   plugin has a module to check), what permissions off means, and the project
@@ -804,24 +807,25 @@ launcher run empties them.
 ## In-editor MCP: Unreal MCP or UE LLM Toolkit (Windows)
 
 For the agent to work **inside the editor**, the editor needs an in-editor MCP
-server. Two servers are available and they cover different sets: the Toolkit is
-the one for blueprints, assets, levels and UE Python (Unreal MCP has no tools
-for those, see Option A); Unreal MCP covers other areas. They can run side by
-side (Toolkit on `:3000`, Unreal MCP on `:8000`):
+server. Two servers are available and they cover different sets: the Toolkit has
+UE Python, console commands and the task queue; Unreal MCP (52 toolsets, 830
+tools) has PCG, Dataflow, GAS and more, and overlaps the Toolkit on blueprints,
+assets and Sequencer (see Option A). They can run side by side (Toolkit on
+`:3000`, Unreal MCP on `:8000`):
 
 | | Unreal MCP (built in) | UE LLM Toolkit (plugin) |
 |---|---|---|
 | Engine | UE 5.8 or newer | upstream: written for UE 5.6 and 5.7; UE 5.8 needs a source port (the reference project uses a fork branch, see Option B) |
 | Status | experimental (Epic) | third-party plugin |
 | Transport | JSON-RPC over HTTP POST, `http://127.0.0.1:8000/mcp` | HTTP `:3000` behind a Node stdio bridge |
-| Needs | two engine plugins enabled **and** a start flag (see Option A); no bridge | plugin in `Plugins/`, Visual Studio build once, Node.js |
+| Needs | two engine plugins enabled in the `.uproject`, and `unreal.mcp` on in the config (adds the start flag; see Option A); no bridge | plugin in `Plugins/`, Visual Studio build once, Node.js |
 
 The short version for the Toolkit: copy the plugin into the `Plugins/` folder,
 build once, and make sure the editor actually loads it — two things can stop
 that (an `EngineVersion` in the `.uplugin`, and the bridge's `npm install`),
-see Option B. For Unreal MCP: enable two plugins, start the server with a
-command-line flag, and add one `extraServers` entry. Neither is "drop it in and
-done".
+see Option B. For Unreal MCP: enable two plugins in the `.uproject` and set
+`unreal.mcp.enabled: true` (with `mcp.enabled`); the launcher adds the start
+flag and the agent's `unreal-mcp` entry. Neither is "drop it in and done".
 
 ### What the machine must have
 
@@ -836,7 +840,14 @@ done".
 ### Option A: Unreal MCP (UE 5.8+, built in, experimental)
 
 Source: [Unreal MCP in Unreal Editor](https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor).
-No Node bridge, no Visual Studio build, no plugin download.
+No Node bridge, no Visual Studio build, no plugin download. The launcher has a
+switch for it, `unreal.mcp`; one step stays yours: enabling the engine plugins.
+
+> **Windows status:** the launcher's wiring of Unreal MCP (editor arguments,
+> the `unreal-mcp` entry, the agent's wait) is covered by tests on Linux and
+> **has not yet been run on Windows**. The engine facts below (server start,
+> ping, toolset counts, permissions) were measured on UE 5.8.4 on Windows,
+> but without the switch.
 
 1. **Enable the plugins** (Edit -> Plugins): "Unreal MCP" (identifier
    `ModelContextProtocol`) and "All Toolsets" (`AllToolsets`). Both are
@@ -851,118 +862,175 @@ No Node bridge, no Visual Studio build, no plugin download.
    { "Name": "AllToolsets", "Enabled": true }
    ```
 
-   Whether a Launcher build of the engine ships these `NoRedist` plugins is
-   **unverified** — if they are missing from Edit -> Plugins, that is why.
-2. **Start the server — enabling the plugin does not start it.** The setting
-   "Auto Start Server" (`bAutoStartServer` of `UModelContextProtocolSettings`,
-   shown as "Model Context Protocol" under Editor Preferences, stored in
-   `EditorPerProjectUserSettings`) is **off** by default. The server starts only
-   when the editor command line carries `-ModelContextProtocolStartServer` or
-   that setting is turned on. The launcher can pass the flag for you:
-   `unreal.args` replaces the default list **as a whole**, so give the full
-   list, defaults included:
-
-   ```yaml
-   unreal:
-     args: ["-stdout", "-FullStdOutLogOutput", "-ModelContextProtocolStartServer"]
-   ```
-
-   The default list is `["-stdout", "-FullStdOutLogOutput"]`; the `.uproject`
-   is always prepended and `-unattended` is appended by the `unattended`
-   option. The server then listens on `http://127.0.0.1:8000/mcp` (path and
-   port from the same settings class; `-ModelContextProtocolPort=<port>`
-   overrides the port, a value outside 1-65535 is ignored with a warning). The
-   old spelling `-StartModelContextProtocolServer` still works but is
-   deprecated. The settings menu path is unverified (no menu text was found in
-   the engine source; look for the "Model Context Protocol" section).
-3. **Wire it into unreagent** — `mcp.extraServers` entries are passed through
-   to the agent in `.mcp.json` format, so an HTTP entry works as is:
+   Enabling them needed no rebuild of a C++ project (measured). Instead of
+   `AllToolsets` you can enable single toolset plugins. The launcher does not
+   edit the `.uproject`: when it starts the editor with `unreal.mcp` on and
+   the plugins do not look enabled, it logs a startup WARN, and
+   `unreagent init` prints a preflight line for the same check. Both are a
+   hint, not a block — the editor starts either way, and without the plugins
+   the server never comes up (see
+   [Troubleshooting](#troubleshooting-failed-to-reconnect--32000)). Whether a
+   Launcher build of the engine ships these `NoRedist` plugins is
+   **unverified** for builds other than 5.8.4; if they are missing from
+   Edit -> Plugins, that is why.
+2. **Turn the switch on.**
 
    ```yaml
    mcp:
-     enabled: true
-     extraServers:
-       unreal-mcp:
-         type: http
-         url: "http://127.0.0.1:8000/mcp"
-   ```
-
-   `extraServers` is a **map keyed by server name**: an `extraServers` block in
-   `unreagent.local.yaml` adds servers and replaces a same-named server's
-   whole definition, while the other servers from `unreagent.yaml` stay.
-   (Lists such as `unreal.args` or `permissions.deny` are replaced as a whole.)
-
-4. *Optional:* a different port. `unreal.args` **replaces** the default
-   `["-stdout", "-FullStdOutLogOutput"]` (the `.uproject` is always prepended),
-   so give the full list (including `-ModelContextProtocolStartServer`) and
-   match the URL:
-
-   ```yaml
+     enabled: true        # required: unreal.mcp needs the MCP config
    unreal:
-     args: ["-stdout", "-FullStdOutLogOutput", "-ModelContextProtocolStartServer", "-ModelContextProtocolPort=8010"]
-   mcp:
-     extraServers:
-       unreal-mcp:
-         type: http
-         url: "http://127.0.0.1:8010/mcp"
+     mcp:
+       enabled: true      # default false
+       port: 8000         # default 8000; an explicit 0 also means 8000
    ```
+
+   With the switch on, the launcher:
+
+   - adds `-ModelContextProtocolStartServer` and
+     `-ModelContextProtocolPort=<port>` to the editor's command line —
+     enabling the plugin alone does not start the server (the setting "Auto
+     Start Server", `bAutoStartServer`, is off by default). Each flag is added
+     only when missing, so a `-ModelContextProtocolStartServer` you already
+     have in `unreal.args` is kept (the old spelling
+     `-StartModelContextProtocolServer` counts too);
+   - writes the entry `unreal-mcp` (`type: http`,
+     `http://127.0.0.1:<port>/mcp`) into the agent's MCP config and into every
+     `mcp.writeConfig` file. The address is always loopback, because the
+     plugin listens only there; `mcp.address` plays no part;
+   - holds back the agent's first start until the server answers (below).
+
+   The load is strict, so a wrong combination fails at startup instead of
+   producing a server nobody can reach:
+
+   - `unreal.mcp.enabled` **without `mcp.enabled`** is a load error — the agent
+     gets the `unreal-mcp` entry only through the MCP config the launcher
+     writes, and it writes none then. (For an outside client without the
+     launcher's MCP server, put `-ModelContextProtocolStartServer` into
+     `unreal.args` yourself.)
+   - `unreal.mcp.port` outside 1-65535 is a load error, and so is a port equal
+     to the port of `mcp.address`. The check compares port numbers only: a
+     different host in `mcp.address` does not avoid it, since a wildcard or LAN
+     address takes the loopback port too.
+   - **The only port flag allowed in `unreal.args` is exactly
+     `-ModelContextProtocolPort=<unreal.mcp.port>`.** Any other element that
+     contains `ModelContextProtocolPort=` in any case is a load error that
+     quotes the element, unless it is `-` or `/`, the name in any case, `=`
+     and digits equal to `unreal.mcp.port` (leading zeros are fine). Another
+     number or a longer argument that embeds the name is refused.
+     The engine takes the first such name it finds on its command line, so the
+     launcher refuses instead of guessing which one wins. Change the port in
+     `unreal.mcp.port`, not in `unreal.args`.
+   - A hand-written `mcp.extraServers.unreal-mcp` entry next to the switch is a
+     load error naming both keys. The hand-written entry of earlier versions
+     is gone: delete it and use the switch. (With the switch off, an
+     `unreal-mcp` entry in `extraServers` still works as any other HTTP
+     server, but then you also own the start flag, and it gets only the plain
+     reachability watch with no wait for the agent.)
+
+   `unreal.mcp` is a **struct**: `unreagent.local.yaml` overlays it field by
+   field, so `unreal: {mcp: {port: 8010}}` changes the port and keeps `enabled`
+   from the base. A `null` does **not** reset it (`unreal: {mcp: ~}` leaves the
+   base values); to switch it off locally, write
+   `unreal: {mcp: {enabled: false}}`. (For comparison: a list such as
+   `unreal.args` is replaced as a whole, a map such as `mcp.extraServers` is
+   merged by server name — see the `unreal` and `mcp` rows of the
+   [configuration table](#configuration-quick-reference).)
+3. **Start.** The agent's first start now waits for the server, so the usual
+   order is editor first, agent after the server answers (about 16 s on a
+   warm start, about 44 s on a first start with fresh plugins, measured).
+
+**The agent's first-start wait.** Claude Code marks an HTTP server that does
+not answer when the session starts as failed for good, and a headless session
+never retries (an interactive one gets it back with `/mcp`). So the launcher
+holds the agent's first start until Unreal MCP answers a JSON-RPC `ping` (the
+server needs no session for it). An open port is not enough: on a first start
+with fresh plugins the port accepted connections about 12 s before the server
+answered, and a warm start took about 16 s in total (measured).
+
+- It waits at most **5 minutes**. If the server has not answered by then, the
+  launcher logs one WARN and starts the agent anyway; the agent then has no
+  Unreal MCP until it reconnects (`/mcp`).
+- If the editor ends and is not restarted while the launcher waits (it gave up
+  after repeated failures, or exited with code 0), the wait ends **at once**
+  with one WARN and the agent starts.
+- It **replaces** `agent.startDelaySeconds` for that first start; later
+  restarts of the agent use the delays as before and do not wait again.
+- There is **no wait** with `unreal.manualStart` (nothing says when such an
+  editor comes up) or without `agent.claudeIntegration` or `agent.enabled`
+  (the agent gets the entry only through the launcher's config). The launcher
+  still watches the server by ping then, and logs when it answers, or a
+  warning that it did not.
+
+Known limits of the wait:
+
+- **Another program on the port costs the full 5 minutes**, on every start
+  (what the editor's own server does then was not measured). 8000 is a common
+  dev-server port. Pick another one with `unreal.mcp.port`. (Another *editor*
+  already serving the port passes the wait at once and the agent starts, but
+  it talks to that other editor — give each project its own port.)
+- A `stop agent` typed at the launcher console during the wait is overridden:
+  the agent starts when the wait ends.
+- A manual `stop ue` during the wait does not end it; it runs to the 5-minute
+  end, because nothing tells the launcher the editor is not coming back.
 
 Things to know:
 
-- **Reachability watch only.** The launcher's startup checks (binary,
-  `node_modules`, `initialize` smoke test) run only for stdio entries with a
-  `command`. An HTTP / SSE entry is instead watched for reachability (the
-  in-editor `UNREAL_MCP_URL` gets a stricter watch, see
-  [Troubleshooting](#troubleshooting-failed-to-reconnect--32000)): once bridge preparation is done, the
-  launcher tries a TCP connect to the URL's host and port for 5 minutes and
-  logs one line, either
-  `MCP server 'unreal-mcp': http://127.0.0.1:8010/mcp is reachable.` or, if
-  nothing answered, a warning that names the URL (`... not reachable after
-  5m0s — is the server running, and does the url match its port and path?
-  The agent may have marked the server failed; once it answers, /mcp in
-  Claude Code reconnects it.`). The limits: it is a connect only, no HTTP
-  request and no MCP session, so "reachable" does not prove the server
-  speaks MCP; an `https` URL without a port probes 443; the agent still
-  starts at once and is never held back; and the watch ends with the
-  launcher. The log shows only scheme, host and path — user info and query
-  string are never logged, and headers are never read. A URL without a host
-  gets the warning `WARN MCP server '<name>': url is not a URL with a host —
-  its reachability is not checked.`
-- **Start order.** Epic's docs say to start the agent after the editor's
-  server is up; unreagent starts editor and agent together. If Claude Code
-  reports the `unreal-mcp` server as failed, wait until the editor has
-  finished loading and reconnect with `/mcp`.
+- **Three meta-tools, 830 tools behind them.** With "tool search" on
+  (`bEnableToolSearch`, the default) `tools/list` returns only `list_toolsets`,
+  `describe_toolset` and `call_tool`; the agent discovers a toolset's tools with
+  the first two and invokes them through `call_tool` (`toolset_name` plus the
+  tool name). With `AllToolsets` that is **52 toolsets with 830 tools**: 25
+  C++ toolsets and 27 Python toolsets, measured on UE 5.8.4 (Launcher build).
+  The Python toolsets are the large part and cover blueprints, assets,
+  materials, the scene and Sequencer / Control Rig (319 tools in the animation
+  package alone). With tool search off, every tool is registered natively as
+  `<Toolset>.<Function>` (852 tools in a 1.1 MB `tools/list`, which Claude Code
+  accepts); leave it on unless you need the per-tool permission rules below.
+- **`AllToolsets` is not everything.** It leaves out the Live Coding, MVVM,
+  Chaos Cloth Asset, Sequencer Anim Mixer and MetaHumanGenerator toolsets
+  (`LiveCodingToolset`, `MVVMToolset`, `ChaosClothAssetToolset`,
+  `SequencerAnimMixerToolset`, `MetaHumanGenerator`); each is a separate
+  plugin to add to the `.uproject` by name.
+- **Next to the Toolkit.** The two overlap (blueprints, assets, materials,
+  Niagara, UMG, Sequencer) and each has its own ground: Unreal MCP alone has
+  PCG, Dataflow, physics assets, GAS, Slate UI automation, automation tests,
+  config settings, plugin management, gameplay tags and Live Coding; the
+  Toolkit alone has a Python `execute_script`, console commands, the task
+  queue, Enhanced Input and audio. The shipped skill `ue-unreal-mcp` (see
+  [Skills](#skills)) lists the toolsets and the catches per tool. Run both
+  side by side.
+- **Permissions.** With tool search on, every call is the one tool
+  `mcp__unreal-mcp__call_tool`, whatever it does — the inner tool is an
+  argument, so a rule cannot name it. Only the bare `mcp__unreal-mcp__call_tool`
+  or `mcp__unreal-mcp__*` can grant it; a bracketed rule such as
+  `mcp__unreal-mcp__call_tool(...)` never grants, and as a deny rule it matches
+  every call, because the layer fails closed (see
+  [Permission layer](#permission-layer)). Allowing it allows **every** Unreal
+  MCP tool, plugin management and config changes included. To grant or deny
+  single tools, set `bEnableToolSearch=False` (section
+  `[/Script/ModelContextProtocolEngine.ModelContextProtocolSettings]` in
+  `Config/DefaultEditorPerProjectUserSettings.ini`): the tools then get native
+  names, `mcp__unreal-mcp__<Toolset>_<Class>_<Function>` (dots become
+  underscores; the longest measured name is 118 characters). To take toolsets
+  away from the agent altogether, add `+BlockedNames=<pattern>` in section
+  `[/Script/ToolsetRegistry.ToolsetRegistrySettings]` of the same file (a
+  case-insensitive substring, or `/regex/`). Measured with
+  `+BlockedNames=GameplayTagsToolset`: the toolset disappears from
+  `list_toolsets`, and `describe_toolset` and `call_tool` answer "not found".
 - **No authentication.** Unreal MCP listens on loopback by default and has no
   login; a request without an `Origin` header is accepted, and a browser
   `Origin` must be `localhost`, `127.0.0.1` or `[::1]`. See [Access from another machine](#access-from-another-machine)
   before changing the bind address.
-- **Three tools, not 278.** With "tool search" on (`bEnableToolSearch`, the
-  default) `tools/list` returns only `list_toolsets`, `describe_toolset` and
-  `call_tool`; the agent discovers a toolset's tools with the first two and
-  invokes them through `call_tool` (`toolset_name` plus the tool name). With
-  it off, every tool registers natively as `<Toolset>.<Function>`. The
-  roughly 278 tools in 21 toolset classes are a count from reading the 5.8.4
-  source, not from a running editor. Consequence for the
-  [permission layer](#permission-layer): every call is seen as
-  `mcp__unreal-mcp__call_tool` (the server key is part of the name); the real
-  tool is in the arguments.
-- **Not a Toolkit replacement.** From the source (nothing run): no tool
-  runs Python or a console command, and there are no tools for blueprint
-  graphs, assets, level actors, materials, animation, sequencer, control rig,
-  retarget or audio. It is deeper than the Toolkit for Niagara and UMG and
-  adds PCG, Dataflow, physics assets, GAS, Slate inspection, automation
-  tests, config settings and plugin management (MVVM needs its own plugin
-  entry, see below). Use it next to the Toolkit, not instead.
-- **`AllToolsets` is not everything.** It leaves out the Live Coding,
-  MVVM, Chaos Cloth Asset, Sequencer Anim Mixer and MetaHumanGenerator
-  toolsets (`LiveCodingToolset`, `MVVMToolset`, `ChaosClothAssetToolset`,
-  `SequencerAnimMixerToolset`, `MetaHumanGenerator`); each is a separate plugin
-  to add to the `.uproject` by name. Some toolset modules
-  (AnimationAssistant, StateTree, AIModule, Conversation)
-  looked empty in source; whether they carry tools in content is unverified.
+- **Do not run `ModelContextProtocol.GenerateClientConfig`** in an unreagent
+  project. The console command writes an `unreal-mcp` entry into `.mcp.json`,
+  but when `mcp.writeConfig` targets that file, the launcher's next start
+  replaces the file whole. With the switch on, the launcher writes its own
+  entry on every start.
 - **Sessions end with the editor.** The server hands out an `Mcp-Session-Id`;
-  after an editor restart the old id is answered with 404 ("reinitialize").
-  How Claude Code recovers is unverified; reconnect with `/mcp`.
+  after an editor restart the old id is answered with 404 ("reinitialize"),
+  and Claude Code reinitialized and completed the call without an error
+  (measured, Claude Code 2.1.330). What does not recover is a server that was
+  down when the *session started* — that is what the wait is for.
 - **One call at a time.** Tool calls run sequentially on the game thread.
 - **Offscreen rendering unverified.** How the server behaves with `-unattended`
   and offscreen rendering has not been checked.
@@ -1156,36 +1224,62 @@ suspects, in this order:
    — answer it in the editor window) or an editor that is still loading. If
    the port never opens, the plain "not reachable" warning appears.
 
-For **Unreal MCP** the chain is shorter, because there is no bridge process:
-if Claude Code shows the server as failed, the usual suspects are, in this
-order: the `-ModelContextProtocolStartServer` flag is missing from
-`unreal.args` (or you set `unreal.args` and dropped the defaults — it replaces
-the list as a whole), so the plugin loaded but the server never started; the
-"Unreal MCP" / "All Toolsets" plugins are not enabled (off by default); the
-editor was not up yet when the agent started (reconnect with `/mcp`); or the
-port or path in the `extraServers` URL does not match the "Model Context
-Protocol" settings (or `-ModelContextProtocolPort`). Since the launcher
-only watches HTTP entries for reachability (a TCP connect, not an MCP
-check; this is the extra-server watch, the toolkit's own port gets the
-status poll described in the chain above), `unreagent.log` tells you whether the port answered at all: a
-`... is reachable.` line means the editor's server was up (reconnect with
-`/mcp`), the `not reachable after 5m0s` warning means it never answered
-within 5 minutes, so check the plugins, port and path first. When the launcher
-knows its editor is not running at that point (stopped, given up on, or between
-runs), the warning says so (`the launcher's editor is not running ...`, with
-how the last run ended) instead of suggesting a firewall; then the editor's
-log, not the port, is where to look. It cannot tell you which of the remaining
-causes applies.
+For **Unreal MCP** the chain is shorter, because there is no bridge process.
+With the `unreal.mcp` switch the launcher starts the editor with the server
+flags and the agent's first start waits for the server (see Option A), so a
+missing `unreal-mcp` server in Claude Code has these usual suspects, in this
+order:
+
+- **The engine plugins are not enabled.** "Unreal MCP" (`ModelContextProtocol`)
+  and "All Toolsets" are off by default and the launcher does not edit the
+  `.uproject`. The launcher logs a startup WARN, and `unreagent init` a
+  preflight line, when they do not look enabled; without them the server
+  never starts. Enable them (Option A, step 1) and restart the editor.
+- **The wait ran out (5 minutes) and the agent started without the server.**
+  `unreagent.log` has one WARN saying so. The usual reasons: the editor is
+  still loading or never got that far (read its log), another program holds
+  the port (see below), or the plugins are missing. Once the server answers,
+  `/mcp` in Claude Code reconnects it; a headless session never retries, so
+  restart the agent.
+- **Another program holds the port** (8000 is a common dev-server port).
+  Every start then costs the full 5 minutes (what the editor's own server
+  does then is unverified). Set another `unreal.mcp.port`. Another editor
+  already serving the port passes the wait at once, and the agent then talks
+  to that editor.
+- **The editor ended first.** When the editor fails and is not restarted (or
+  exits with code 0) the wait ends at once with a WARN and the agent starts
+  without Unreal MCP; the editor's exit lines come first in the log.
+- **The load failed.** `unreal.mcp` without `mcp.enabled`, a port outside
+  1-65535 or equal to the launcher's own, a second port flag in
+  `unreal.args`, or a hand-written `extraServers.unreal-mcp` next to the switch
+  are load errors: the launcher does not start and the message names the keys.
+
+Without the switch (a hand-written HTTP entry in `extraServers`, or
+`unreal.manualStart`) the launcher cannot hold the agent back, and the
+suspects are the older ones: the `-ModelContextProtocolStartServer` flag is
+missing from `unreal.args` (or you set `unreal.args` and dropped the defaults
+— it replaces the list as a whole), the plugins are not enabled, the editor
+was not up yet when the agent started (reconnect with `/mcp`), or the entry's
+port or path does not match the "Model Context Protocol" settings. A
+hand-written entry is only watched by a TCP connect (the extra-server watch;
+the toolkit's own port gets the status poll described in the chain above):
+`unreagent.log` tells you whether the port answered at all. A `... is
+reachable.` line means the editor's server was up (reconnect with `/mcp`), the
+`not reachable after 5m0s` warning means it never answered within 5 minutes.
+When the launcher knows its editor is not running at that point (stopped,
+given up on, or between runs), the warning says so (`the launcher's editor is
+not running ...`, with how the last run ended) instead of suggesting a
+firewall; then the editor's log, not the port, is where to look.
 
 ## Configuration (quick reference)
 
 | Section | Purpose |
 |---|---|
-| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config <file>` (a private temp file, see Bearer auth) (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`; the logged `Agent command:` line shows the launcher's own `--mcp-config` file path, any other `--mcp-config` value as `<redacted>` and the token blanked in any other argument, while the agent itself gets the real arguments); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and 10 s fast-fail give-up as `unreal`, without its 5-minute rule); `startDelaySeconds` (0 = default 5) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
+| `agent` | agent command + args; `claudeIntegration` injects `--mcp-config <file>` (a private temp file, see Bearer auth) (+ the permission tool, only to a headless agent with `permissions.enabled`: see Permission layer); `window` (on by default) = interactive in the foreground (inherits console / TTY, launcher logs -> `unreagent.log`, the previous session's log is kept as `unreagent.log.1`; the logged `Agent command:` line shows the launcher's own `--mcp-config` file path, any other `--mcp-config` value as `<redacted>` and the token blanked in any other argument, while the agent itself gets the real arguments); on Windows, `claudeIntegration` additionally sets `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (`powershellTool: false` to disable); `restart` / `maxRestarts` (same policy and 10 s fast-fail give-up as `unreal`, without its 5-minute rule); `startDelaySeconds` (0 = default 5; replaced for the first start by the wait for Unreal MCP when `unreal.mcp` is on) and `restartDelaySeconds` (0 = default 3) — never below 0 (with `agent.enabled`, a negative value is a load error, so a crashing agent cannot restart in a tight loop); `args` is a list (replaced as a whole by the overlay), `env` a map (merged by key by the overlay) |
 | `permissions` | permission layer: `allow_all` / `allowlist` (default if unset) / `deny_all`, plus `allow` / `deny` rules; enforced only for a headless Claude Code agent with `claudeIntegration` (`-p`/`--print` with a task); for an interactive agent or with `claudeIntegration: false` the launcher logs a startup `WARN` and the policy is not applied (exceptions, and the open `agent.window: false` case: see Permission layer) — `Bash(...)` rules are matched per shell segment, see Permission layer below; `allow` / `deny` are lists (the overlay replaces them as a whole) and take the path placeholders; a path rule for a file tool must be absolute, see Permission layer |
 | `runtimes` | `python` (via `uv run`) and `node` for `run_python` / `run_node` |
-| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535 and a host that is empty, an IP address (IPv6 in brackets, without a zone such as `%eth0`) or a name of ASCII letters, digits, `-`, `_` and `.`; anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay |
-| `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded, but the 10 s fast-fail give-up and, for the editor, the 5-minute give-up apply, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error) |
+| `mcp` | MCP server on/off, `address` (default `127.0.0.1:8765`; must be `host:port` with a port from 1 to 65535 and a host that is empty, an IP address (IPv6 in brackets, without a zone such as `%eth0`) or a name of ASCII letters, digits, `-`, `_` and `.`; anything else is a load error; an empty or wildcard host (`:8765`, `0.0.0.0:8765`, `[::]:8765`) listens on every interface, and clients are given `http://127.0.0.1:<port>/mcp` (`[::1]` for `::`); a port that cannot be bound ends the launcher with exit 1), optional `token` (Bearer auth — auto-set by `hermes-setup`); every request needs `Content-Type: application/json` and, if present, an allowed `Origin` (loopback by default) — see MCP server hardening below; optional `allowedOrigins` (list of browser origins, `scheme://host[:port]`; absent = loopback only; a non-empty list *replaces* that built-in allowlist, and `unreagent.local.yaml` replaces the base list whole; an invalid entry is a load error while `mcp.enabled` is on); `extraServers` (map of in-editor / extra MCP servers in `.mcp.json` format, stdio or `type: http`) — `unreagent.local.yaml` adds servers by name and replaces a same-named one's whole definition; the others stay; an entry named `unreal-mcp` next to `unreal.mcp.enabled` is a load error |
+| `unreal` | *optional* — `project` (absolute, or relative to the config directory; must exist, no placeholders; default: the `.uproject` next to the config), editor `args` (unset or `~` = `-stdout -FullStdOutLogOutput`; `[]` = none; a list replaces the base list in the overlay), restart policy (`restart`: `never` / `on-failure` / `always`; `maxRestarts`, 0 = unbounded, but the 10 s fast-fail give-up and, for the editor, the 5-minute give-up apply, see Restart policy above), `restartDelaySeconds` (0 = default 3; negative is a load error), `mcp` (`{enabled, port}`, Epic's Unreal MCP server, see Option A: `enabled` default `false`, `port` default 8000 and an explicit 0 also means 8000; needs `mcp.enabled`, port 1-65535 and not `mcp.address`'s, and `-ModelContextProtocolPort=` in `args` only in exactly the form `-ModelContextProtocolPort=<port>`, else a load error; adds `-ModelContextProtocolStartServer` and the port flag to the editor, the `unreal-mcp` entry to the agent's config and every `mcp.writeConfig` file, and holds the agent's first start up to 5 minutes until the server answers a ping, replacing `agent.startDelaySeconds`; a struct, so `unreagent.local.yaml` overlays it field by field and a `null` does not reset it: switch it off with `enabled: false`; **not yet run on Windows**) |
 | `files` | file tools for the agent: `enabled` (default `false`; `-files` turns it on), `root` (default `${PROJECT_DIR}`; every path is confined to it, see File-tool confinement below), `readOnly` (default `false`; `true` = no `write_file` / `edit_file`) |
 | `commands` | *optional* — your own one-shot commands (map keyed by name; the overlay merges by key and replaces a same-named command whole). `compile` / `package` are built-in and offered only when both the engine and the project resolve; defining your own `compile` / `package` replaces the built-in |
 | `skills` | *optional* — how the shipped UE skill documents reach the agent, see [Skills](#skills). `enabled` (default `true`; `false` turns both paths off), `mcp` (default `true`: the `skills` MCP tool), `materialize` (default `false`: write the skills as files into `dir`), `dir` (default `${PROJECT_DIR}/.claude/skills`; takes the path placeholders; a relative path is taken relative to the agent working directory)), `agents` (default `true`; only with `materialize`: also write the shipped topic agents and the rules file to `.claude/agents/` and `.claude/rules/`, only when `dir` is `<project>/.claude/skills`; Claude Code only). `enabled: true` with `mcp: false` and `materialize: false` is a load error |
@@ -1450,6 +1544,15 @@ loads, since it can only block. To cover every path, write the bare tool name
 (`Write`). Other tools get no load error, but an allow rule that names no
 absolute path never grants a call that carries a path: `Grep(*)`, `Glob(*)`
 and `mcp__x__*(*)` do not (the bare name does).
+
+**Unreal MCP** (`unreal.mcp`, see Option A): with its default tool search every
+call is the single tool `mcp__unreal-mcp__call_tool`, so a rule cannot name the
+inner tool. Only the bare `mcp__unreal-mcp__call_tool` or `mcp__unreal-mcp__*`
+can grant it (a bracketed allow never grants; a bracketed deny matches every
+call, since the layer fails closed), and an allow rule there allows every
+Unreal MCP tool; for per-tool
+rules the project needs `bEnableToolSearch=False`, which gives the tools native
+names (details under Option A, "Permissions").
 
 On Windows write rules with a drive letter (`'Write(C:\Proj\*)'`, single
 quoted in YAML): a drive-less deny rule such as `Write(/etc/*)` loads but
