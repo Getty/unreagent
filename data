@@ -1,0 +1,47 @@
+---
+class: standard
+completed: 2026-11-26T04:12:59Z
+created: 2026-11-22T07:08:57Z
+id: 233
+priority: low
+started: 2026-11-26T03:36:58Z
+status: done
+tags:
+- onboarding
+- example
+title: unreagent-example as the project template
+updated: 2026-11-26T04:13:53Z
+---
+
+Part of k224; maintainer decision D2. Work happens in the unreagent-example repository (tracked here because that repo has no board of its own as far as known). After k215.
+
+Mark the repo as a template, add rename instructions (project and module name), drop the setup script npm workaround once k215 has landed, point the README at the unreagent quick start.
+
+Main agent 2026-11-23: absorbs k249 (archived, still readable with karr show 249): the five README/setup.ps1 mismatches measured in k226 — execution policy, 'c compile' in window mode, give-up before the build ends, build time, the launcher's npm install.
+
+Main agent 2026-11-26: maintainer asked to work the Linux-doable cards; started from Linux. Windows-native verification stays open and is labeled unverified.
+
+2026-11-26 03:39 Done in unreagent-example (uncommitted): README (quick-start pointer in the intro, Setup rewritten, new 'Use it as a template' rename table covering .uproject, Source folder, Build.cs, Target.cs x2, IMPLEMENT_PRIMARY_GAME_MODULE, DefaultGame.ini ProjectName/ProjectID, DefaultEngine.ini ActiveGameNameRedirects; ActiveClassRedirects and API-macro notes marked unverified, rename not built), setup.ps1/setup.sh now only init the submodule (npm workaround dropped: bridge.go installs itself, retries with --legacy-peer-deps, uses --no-save so the lock stays clean), .gitignore comment. k249: (1) -ExecutionPolicy Bypass in README+ps1, (2) 'c compile' replaced by 'tell the agent' in window mode, console route only for -no-agent/window:false, (3) give-up before build ends stated, start ue/ue_start after build, (4) build time ~6.5 min, (5) npm paragraph rewritten, (6) mcp.address override explained. Not done, maintainer's step: mark GitHub repo as template (Settings > General > Template repository), publish-gated. Unverified: nothing run on Windows, rename not built, Epic docs not consulted. German scan clean, bash -n setup.sh ok.
+
+2026-11-26 04:06 Review (unreagent-reviewer): CHANGES NEEDED. Reviewed unreagent-example uncommitted diff (README.md, scripts/setup.ps1, scripts/setup.sh, .gitignore) against unreagent main 3345996 and UE 5.8.4 source. Check run in unreagent at 3345996: gofmt -l empty, go vet, go test ./... (all ok), make windows ok. Example repo: bash -n scripts/setup.sh ok; no pwsh on the host, setup.ps1 read by hand (ASCII, valid PS 5.1 syntax, Assert-Exit kept for git); no German in added lines; nothing committed or pushed (main...origin/main); template switch left to the maintainer. Rename table complete: git grep -i UnreagentExample outside README hits exactly the table's places.
+Findings, most important first:
+1. BLOCKER, README.md:47 + setup.ps1/setup.sh step 1: users are sent to unreagent.exe 'from the release', but v0.0.9 (latest, 2026-11-13) contains none of k215 (d74e3fe), k242 (e47205b), k251, k229, k228/k252, k160. With v0.0.9 the launcher's npm install crashes on npm 10 with no retry, and the setup script's fallback is now gone, so the bridge is broken. Also init -check, the unbuilt-module WARN and the 5-min give-up are unreleased. Hold the example commit/push until the next unreagent release, or name the minimum unreagent version in README and script output. The workaround removal is safe only against main (bridge.go 232-240: marker, --no-save, legacy-peer-deps retry).
+2. README.md:60-63: 'gives up after three failed runs within five minutes (measured: 2:31 after the start)'. The rule (supervisor.go 664-688, k251) is 3 failed runs in a row, EACH ending within 5 min of its own start, not three within a 5-min span; and 2:31 was measured at 72beb67 under the old 10-s rule (7 starts) - under k251 this project should give up after the third run, far sooner. The k251 Windows run is pending: label it unverified, drop or re-attribute the 2:31.
+3. README.md:67: quoted WARN 'project modules look unbuilt'. On a fresh clone both the project module and the Toolkit plugin modules are unbuilt, so the line reads 'project and plugin modules look unbuilt' (modules.go 161-168).
+4. README.md:192-194: 'ends before ... anything is logged that you can read' contradicts k160 (ba742d5 on main): an error exit alone on its console now waits for Enter so the bind error stays readable (unverified on Windows). k249 item 6 itself cites k160.
+5. Nit, README.md:116: after the rename git grep still hits unreagent.yaml:47 (comment the table says need not change), not only README and the URL.
+6. Optional, README.md:119-131 'unverified' notes can be firmed up from UE 5.8.4 source: template creation writes exactly the two ActiveGameNameRedirects lines (Editor/GameProjectGeneration/Private/DefaultTemplateProjectDefs.cpp 48-53) and a fresh ProjectID (GameProjectUtils.cpp 1904-1905); ActiveClassRedirects syntax matches GameProjectUtils.cpp 1908-1912 (the engine writes bare class names there; the /Script/ form was not checked); <NAME>_API = Name.ToUpperInvariant()+'_API' (Programs/UnrealBuildTool/Configuration/UEBuildModule.cs 241); IMPLEMENT_PRIMARY_GAME_MODULE's third argument is deprecated (Runtime/Core/Public/Modules/ModuleManager.h 1094-1096). Still not built: the rename remains unverified as a build.
+Verified correct: window-mode routing (main.go 235/495-497: no console loop while the agent is interactive; window:false or -no-agent gives the console; 'stop ue', 'c compile', 'start ue' exist, lifecycle.go 632-650; moduleFix agent route 'ue_stop, run_command compile, ue_start'), the npm log line text (bridge.go 234), README anchors exist in unreagent README. Owner: OWNERS does not map the sibling repo; README/docs work goes to unreagent-doc-writer. Nothing on Windows was run - all Windows claims unverified.
+
+2026-11-26 04:07 Review round 1 addressed in unreagent-example README + setup scripts: (1) minimum unreagent 'newer than v0.0.9', build from source until next release (k248 untouched); (2) give-up rule reworded to 3 runs in a row each within 5 min, 2:31 kept only as an old-rule measurement, new count unverified on Windows; (3) warning text 'project and plugin modules look unbuilt'; (4) k160 Enter-wait paragraph, unverified on Windows; (5) leftover grep notes unreagent.yaml:47; (6) rename notes cite UE 5.8.4 files, /Script/ form of ActiveClassRedirects stays unverified, rename not built.
+
+2026-11-26 04:10 Review round 2 (unreagent-reviewer): READY. Re-checked the six round-1 findings in the unreagent-example uncommitted diff (README.md, scripts/setup.ps1, scripts/setup.sh, .gitignore). Check: unreagent 3345996 gofmt -l empty, go vet, go test ./... rc 0, make windows ok; example: bash -n scripts/setup.sh ok, no German in added lines, nothing committed or pushed.
+(1) fixed: README step 1 and both scripts require unreagent newer than v0.0.9 and point to building from source; the #building anchor exists on origin/main. The maintainer's ordering call stands: committing is fine, but publishing the example before the next unreagent release still sends v0.0.9 users to a broken bridge unless they read step 1.
+(2) fixed: README now says 3 runs in a row, each ending within 5 min of its start, labelled unverified on Windows, and 2:31 is attributed to the older rule.
+(3) fixed: 'project and plugin modules look unbuilt' (modules.go 161-168).
+(4) fixed: the k160 wait for Enter is described (exitpause.go hint; returns to an existing console) and labelled unverified on Windows.
+(5) fixed: the leftover unreagent.yaml:47 comment is named.
+(6) cited UE 5.8.4 source re-read and confirmed: DefaultTemplateProjectDefs.cpp 48-53 writes exactly the two ActiveGameNameRedirects forms the project has. TP_Blank's TemplateDefs.ini sets no TemplateProjectDefsClass, so the default defs apply (GameProjectUtils.cpp 1396-1416). GameProjectUtils.cpp 1904-1905 writes a fresh ProjectID; 1908-1912 writes (OldClassName="%s",NewClassName="%s") from bare template file names (1821). UEBuildModule.cs 241: Name.ToUpperInvariant()+"_API". ModuleManager.h 1094-1096 names the argument DEPRECATED_GameName ('no longer necessary').
+Nits, not blocking: README 'deprecated in 5.8': the source does not say since when, so 'deprecated' alone is accurate. The ActiveClassRedirects example has a space after the comma that the engine's Printf does not write, so 'syntax matches' is loose. README lines 69-70 are over-long after the edit (cosmetic). Unverified, as the README says: the rename has not been built, and nothing was run on Windows.
+
+2026-11-26 04:12 Committed in unreagent-example as 5f34640 (not pushed). Publishing should wait for the next unreagent release: v0.0.9 lacks the npm retry the README now relies on (maintainer decision k248). Marking the GitHub repo as a template (Settings > General > Template repository) is the maintainer's step. Windows-native verification and a build of the renamed project stay unverified.
